@@ -571,14 +571,19 @@ const retiredOverrideAgents = (content: string): ReadonlyArray<string> =>
         .map(([agent]) => agent),
   })
 
-/** A remote url without its scheme, user and `.git`: `git@host:owner/repo.git` is `host/owner/repo`. */
-const remoteName = (url: string) =>
-  url
-    .trim()
-    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
-    .replace(/^[^@/]+@/, "")
-    .replace(/^([^/:]+):(?!\/)/, "$1/")
-    .replace(/(\.git)?\/*$/, "")
+/**
+ * A remote url without its scheme, user and `.git`: `git@host:owner/repo.git`
+ * and `https://host/owner/repo` are `host/owner/repo`. A scheme url keeps its
+ * port (`ssh://git@host:2222/owner/repo` is `host:2222/owner/repo`); the
+ * scp form has none, so its colon only ends the host.
+ */
+const remoteName = (url: string) => {
+  const bare = url.trim().replace(/^"(.*)"$/, "$1")
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?(.*)$/i.exec(bare)?.[1]
+  let named = bare.replace(/^[^@/]+@/, "").replace(/^([^/:]+):/, "$1/")
+  if (Predicate.isNotUndefined(scheme)) named = scheme
+  return named.replace(/(\.git)?\/*$/, "")
+}
 
 /** The url of a git config's `[remote "origin"]`, as `git:<remoteName>`; none without one. */
 const originUrl = (config: string): Option.Option<string> => {

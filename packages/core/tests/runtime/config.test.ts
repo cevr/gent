@@ -183,13 +183,23 @@ describe("user configuration", () => {
           yield* fs.makeDirectory(path.join(rift, ".git"), { recursive: true })
           yield* fs.writeFileString(
             path.join(rift, ".git", "config"),
-            gitConfig("https://github.com/cevr/gent/"),
+            gitConfig('"https://github.com/cevr/gent.git/"'),
           )
           yield* fs.makeDirectory(worktree, { recursive: true })
           yield* fs.writeFileString(
             path.join(worktree, ".git"),
             `gitdir: ${path.join(main, ".git", "worktrees", "wt")}\n`,
           )
+          // A scheme url keeps its port; the scp form's colon only ends the host.
+          const ported = path.join(root, "ported")
+          const scp = path.join(root, "scp")
+          for (const [dir, origin] of [
+            [ported, "ssh://git@example.com:2222/owner/repo.git"],
+            [scp, "git@example.com:2222/owner/repo.git"],
+          ] as const) {
+            yield* fs.makeDirectory(path.join(dir, ".git"), { recursive: true })
+            yield* fs.writeFileString(path.join(dir, ".git", "config"), gitConfig(origin))
+          }
           // A repository with no origin is its root; a directory in none is itself.
           const local = path.join(home, "local")
           yield* fs.makeDirectory(path.join(local, ".git"), { recursive: true })
@@ -218,6 +228,8 @@ describe("user configuration", () => {
             expect(yield* cfg.project(path.join(main, "packages", "core"))).toBe(gent)
             expect(yield* cfg.project(rift)).toBe(gent)
             expect(yield* cfg.project(worktree)).toBe(gent)
+            expect(yield* cfg.project(ported)).toBe("git:example.com:2222/owner/repo")
+            expect(yield* cfg.project(scp)).toBe("git:example.com/2222/owner/repo")
             expect(yield* cfg.project(local)).toBe(local)
             expect(yield* cfg.project(plain)).toBe(plain)
             expect(yield* cfg.laneHolds("anthropic")).toEqual(

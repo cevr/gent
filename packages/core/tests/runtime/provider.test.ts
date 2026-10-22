@@ -6573,17 +6573,18 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
-  /** Admit a run of the plan model in `project` under `key` on `[a]`, with `holds`: "admitted", else the refusal's reason. */
+  /** Admit a run of the plan model in `project` under `key` on `scope`, with `holds`: "admitted", else the refusal's reason. */
   const startIn = (
     placement: Effect.Success<ReturnType<typeof makeCredentialPlacement>>,
     holds: ReadonlyMap<string, number>,
     project: string,
     key: string,
+    scope: Scope = [a],
   ) =>
     placement
       .admitLane({
         provider: "plan",
-        scope: [receiptOf(a)],
+        scope: Arr.map(scope, receiptOf),
         key,
         asker: Option.none(),
         model: Option.some(planModel),
@@ -6661,6 +6662,22 @@ describe("account lanes", () => {
       yield* placement.freeReservation("gent-1")
       yield* read(a, [{ window: "5h", utilization: 1, resetAt: now + 20 * HOUR, rejected: true }])
       expect(yield* startIn(placement, gentHeld, "gent", "gent-3")).toBe("Spent")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a hold is on the sign-in: a pin on another account takes no second held lane", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement, read } = fixture
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      // Twenty hours to the reset: neither account's pace carries a run.
+      yield* fuelBothWindows(fixture, now, 20 * HOUR)
+      yield* read(b, [{ window: "5h", utilization: 0.14, resetAt: now + 20 * HOUR }])
+      const gentHeld = new Map([["gent", 1]])
+      expect(yield* startIn(placement, gentHeld, "other", "other-b", [b])).toBe("Spent")
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-a", [a])).toBe("admitted")
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-b", [b])).toBe("Spent")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

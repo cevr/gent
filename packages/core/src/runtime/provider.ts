@@ -4861,9 +4861,31 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const reserving = (entry: { readonly until: number; readonly holders: number }, now: number) =>
     entry.holders > 0 || entry.until > now
   /**
+   * The runs holding a lane on `provider` that `counts`; `asker`'s own open
+   * turn is left out.
+   */
+  const lanesHeld = (
+    provider: string,
+    asker: Option.Option<SessionId>,
+    now: number,
+    counts: (held: {
+      readonly scope: ReadonlyArray<CredentialSlot>
+      readonly model: Option.Option<ModelId>
+      readonly project: Option.Option<string>
+    }) => boolean,
+  ) => {
+    let load = 0
+    for (const [sessionId, held] of running)
+      if (held.provider === provider && !Option.contains(asker, sessionId) && counts(held))
+        load += 1
+    for (const held of reserved.values())
+      if (held.provider === provider && reserving(held, now) && counts(held)) load += 1
+    return load
+  }
+  /**
    * The runs holding a lane on `provider` that share an account with
-   * `scope`, of `model` alone when one is named, and of `project` alone when
-   * one is named; `asker`'s own open turn is left out.
+   * `scope`, of `model` alone when one is named; `asker`'s own open turn is
+   * left out.
    */
   const laneLoad = (
     provider: string,
@@ -4871,32 +4893,18 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     model: Option.Option<ModelId>,
     asker: Option.Option<SessionId>,
     now: number,
-    project: Option.Option<string> = Option.none(),
-  ) => {
-    const shares = (held: {
-      readonly provider: string
-      readonly scope: ReadonlyArray<CredentialSlot>
-      readonly model: Option.Option<ModelId>
-      readonly project: Option.Option<string>
-    }) =>
-      held.provider === provider &&
-      held.scope.some((slot) => scope.includes(slot)) &&
-      Option.match(model, {
-        onNone: () => true,
-        onSome: (named) => Option.contains(held.model, named),
-      }) &&
-      Option.match(project, {
-        onNone: () => true,
-        onSome: (named) => Option.contains(held.project, named),
-      })
-    let load = 0
-    for (const [sessionId, held] of running) {
-      if (Option.contains(asker, sessionId)) continue
-      if (shares(held)) load += 1
-    }
-    for (const held of reserved.values()) if (reserving(held, now) && shares(held)) load += 1
-    return load
-  }
+  ) =>
+    lanesHeld(
+      provider,
+      asker,
+      now,
+      (held) =>
+        held.scope.some((slot) => scope.includes(slot)) &&
+        Option.match(model, {
+          onNone: () => true,
+          onSome: (named) => Option.contains(held.model, named),
+        }),
+    )
   /**
    * Whether a quota window of `slot` that bounds a run of `model` (`meters`)
    * read rejected and has not reset: the readings are the one record of it,
@@ -5805,9 +5813,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   ): Option.Option<LaneUnavailable> => {
     settle(request.provider, request.scope)
     const scope = request.scope.map((account) => account.slot)
-    // A hold counts the project's lanes on the accounts, whatever their model.
+    // A hold is on the sign-in: it counts the project's lanes on every
+    // account, whatever their model, so a pin cannot take a second one.
     const heldLoad = (project: string) =>
-      laneLoad(request.provider, scope, Option.none(), request.asker, now, Option.some(project))
+      lanesHeld(request.provider, request.asker, now, (held) =>
+        Option.contains(held.project, project),
+      )
     const underHold = Option.exists(
       request.project,
       (project) => heldLoad(project) < (request.holds.get(project) ?? 0),
