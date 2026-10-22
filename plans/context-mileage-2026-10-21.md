@@ -286,12 +286,9 @@ once it has passed (B2).
       no usage endpoint is documented. `/console/api/v1/usage` answers 404
       without auth, while the budgets path answers 401 (measured, curl). The
       docs do not say whether `spent` counts Go plan usage, extra usage or
-      both. **Probe before design:** one read with the owner's key, compared
-      with the console's usage page. If `spent` counts only extra usage, a
-      rise while gent sends Go requests means a Go window is spent, from any
-      client, and the adapter marks it `rejected` at once. That closes the
-      gap left by the outside spend. If `spent` counts both, it bounds the
-      monthly window only.
+      both. **Dropped (owner, 2026-10-22):** no budgets probe and no
+      budgets-endpoint adapter. The adapter keeps the derived lower bound
+      below.
     - **No usage is reported per request.** The page names no response header and no
       usage endpoint, only the console page. So the OpenCode adapter cannot
       read a reading. It derives one from gent's own priced spend per
