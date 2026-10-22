@@ -3025,22 +3025,40 @@ const compactionTarget = (params: {
 }
 
 /**
- * Whether `outcome` changes what the model reads. A summary always does. A
- * prune must move the cutoff inside the window; one that names a row outside
- * it, or the cutoff a stored line already set, changes nothing.
+ * Why the loop refuses a compactor's `outcome`, when it does; the chain then
+ * asks the next compactor. A summary is judged by the handoff that follows
+ * it. A prune is refused when its cutoff is not in the window or a stored
+ * line already set it (`PruneChangedNothing`), and when the window behind
+ * its line still omits a message or overflows the budget
+ * (`PruneOverBudget`): the turn projects once after a handoff.
  */
-const outcomeChangesWindow = (
-  outcome: CompactionOutcome,
-  window: ReadonlyArray<Message>,
-  stored: ReadonlyArray<Message>,
-  branchId: BranchId,
-): boolean => {
-  if (outcome._tag === "Summarized") return true
-  const line = pruneLineId(branchId, outcome.stubResultsBefore)
-  return (
-    window.some((message) => message.id === outcome.stubResultsBefore) &&
-    !stored.some((message) => message.id === line)
+const pruneRefusal = (params: {
+  readonly outcome: CompactionOutcome
+  readonly window: ReadonlyArray<Message>
+  readonly stored: ReadonlyArray<Message>
+  readonly line: (prune: typeof CompactionOutcome.cases.Pruned.Type) => Message
+  readonly budget: ModelContextBudget
+  readonly measure: Option.Option<StepMeasure>
+}): Option.Option<string> => {
+  const outcome = params.outcome
+  if (outcome._tag === "Summarized") return Option.none()
+  const line = params.line(outcome)
+  if (
+    !params.window.some((message) => message.id === outcome.stubResultsBefore) ||
+    params.stored.some((message) => message.id === line.id)
+  ) {
+    return Option.some("PruneChangedNothing")
+  }
+  const messages = [...params.stored, line]
+  const projection = projectModelContext(
+    modelVisibleWindow(messages),
+    params.budget,
+    measureInCurrentWindow(messages, params.measure),
   )
+  if (Result.isFailure(projection) || projection.success.omittedMessageIds.length > 0) {
+    return Option.some("PruneOverBudget")
+  }
+  return Option.none()
 }
 
 /**
@@ -3290,15 +3308,42 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   // a refused window drops its history.
   const compactor = yield* Effect.serviceOption(ModelContextCompactor)
   if (Option.isNone(compactor)) return yield* dropHistory(Option.none())
+  const pruneLine = (prune: typeof CompactionOutcome.cases.Pruned.Type) =>
+    pruneLineMessage({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      stubResultsBefore: prune.stubResultsBefore,
+      notice: prune.notice,
+      createdAt: now,
+    })
   // The walk runs each compactor of a chain and the chain as a whole (a lone
   // compactor is no chain). A failure it gave up on drops its cause, so an
-  // outer run passes it on instead of retrying or moving it again.
+  // outer run passes it on instead of retrying or moving it again. A prune
+  // the loop refuses (`pruneRefusal`) fails the same way, so the chain asks
+  // the next compactor.
   const run: CompactionRun = (compact) =>
     params.walkCredentials(compact).pipe(
       Effect.mapError((error) => {
         if (Predicate.isUndefined(error.cause)) return error
         return new ModelCompactionError({ modelId: error.modelId, reason: error.reason })
       }),
+      Effect.flatMap((outcome) =>
+        Option.match(
+          pruneRefusal({
+            outcome,
+            window,
+            stored: durableMessages,
+            line: pruneLine,
+            budget: params.budget,
+            measure: params.measure,
+          }),
+          {
+            onNone: () => Effect.succeed(outcome),
+            onSome: (reason) =>
+              Effect.fail(new ModelCompactionError({ modelId: params.modelId, reason })),
+          },
+        ),
+      ),
     )
   // The facts a compactor needs to keep the window instead of summarizing
   // it: why it hands off, and the size the kept window must get under.
@@ -3334,16 +3379,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
       estimateTokens: estimate,
       summaryModel: params.summaryModel,
     }),
-  ).pipe(
-    // A prune must move the cutoff inside the window; one that names a row
-    // outside it, or the cutoff a stored line already set, changes nothing.
-    Effect.filterOrFail(
-      (outcome) => outcomeChangesWindow(outcome, window, durableMessages, params.branchId),
-      () => new ModelCompactionError({ modelId: params.modelId, reason: "PruneChangedNothing" }),
-    ),
-    Effect.provideService(CompactionAttempt, { run }),
-    Effect.result,
-  )
+  ).pipe(Effect.provideService(CompactionAttempt, { run }), Effect.result)
   // A stop ends the compaction where it is: a backoff, a summary stream, or
   // the next compactor of the chain. A compaction that ends after the stop
   // stopped too, so its refusal never reads as a reason to truncate.
@@ -3383,15 +3419,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
     (value): value is typeof CompactionOutcome.cases.Pruned.Type => value._tag === "Pruned",
   )
   if (Option.isSome(pruned)) {
-    const line = yield* params.persist(
-      pruneLineMessage({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        stubResultsBefore: pruned.value.stubResultsBefore,
-        notice: pruned.value.notice,
-        createdAt: now,
-      }),
-    )
+    const line = yield* params.persist(pruneLine(pruned.value))
     return {
       durableMessages: [...durableMessages, line],
       compacted: true,

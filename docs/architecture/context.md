@@ -49,7 +49,9 @@
   `Requested`, `Refused`, `Overflow`, `RoleWindow`, `Cold`), the message
   tokens a kept window must get under (`targetTokens`) and the projection's
   estimate (`estimateTokens`). The loop refuses a prune whose cutoff is not
-  in the window or already has a line (`PruneChangedNothing`). The shipped
+  in the window or already has a line (`PruneChangedNothing`), or whose
+  window still omits a message or overflows (`PruneOverBudget`); a chain
+  then asks its next compactor. The shipped
   compactor stubs the results before the window's fifth-newest assistant
   step and prunes on `Overflow` and `RoleWindow` when that fits half the
   target, on `Cold` when it fits the target; otherwise it summarizes the

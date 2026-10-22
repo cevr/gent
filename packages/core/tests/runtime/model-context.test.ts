@@ -57,6 +57,7 @@ import {
   modelVisibleWindow,
   pruneCutoffOf,
   pruneLineMessage,
+  chainCompactors,
   modelInputCeilingTokens,
   outputReserveTokens,
   ModelCompactionError,
@@ -3396,14 +3397,16 @@ describe("pruned handoff", () => {
     reservedToolTokens: 0,
     reservedOutputTokens: 4_096,
   })
-  /** One overflowing projection whose compactor prunes before `cutoff`. */
-  const pruneAt = (messages: ReadonlyArray<Message>, cutoff: string) =>
+  /**
+   * One overflowing projection over a chain of compactors, the first asked
+   * first; each prunes before its cutoff.
+   */
+  const pruneAt = (messages: ReadonlyArray<Message>, ...cutoffs: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       const requests: Array<CompactionRequest> = []
       const persisted: Array<Message> = []
       const publisher = yield* recordingPublisher
-      const compactor = Layer.succeed(
-        ModelContextCompactor,
+      const pruner = (cutoff: string) =>
         ModelContextCompactor.of({
           compact: (request) => {
             requests.push(request)
@@ -3414,8 +3417,9 @@ describe("pruned handoff", () => {
               }),
             )
           },
-        }),
-      )
+        })
+      const chain = cutoffs.map(pruner).reduceRight((next, first) => chainCompactors(first, next))
+      const compactor = Layer.succeed(ModelContextCompactor, chain)
       const projected = yield* projectContextWindow({
         sessionId,
         branchId,
@@ -3519,6 +3523,39 @@ describe("pruned handoff", () => {
           ).toEqual([expect.stringContaining("PruneChangedNothing")])
         }
       }),
+  )
+
+  it.scopedLive("a prune whose window still overflows is refused, not projected", () =>
+    Effect.gen(function* () {
+      // Stubbing only the first result leaves three ~700-token results in a
+      // ~1.9k budget.
+      const refused = yield* pruneAt(
+        [prompt, ...step(1), ...step(2), ...step(3), ...step(4)],
+        "prune-call-2",
+      )
+      expect(refused.compacted).toBe(false)
+      expect(refused.persisted).toEqual([])
+      expect(refused.notices.map((event) => event._tag === "ErrorOccurred" && event.error)).toEqual(
+        [expect.stringContaining("PruneOverBudget")],
+      )
+    }),
+  )
+
+  it.scopedLive("a chain asks its next compactor when the loop refuses a prune", () =>
+    Effect.gen(function* () {
+      for (const refused of ["nowhere", "prune-call-2"]) {
+        const chained = yield* pruneAt(
+          [prompt, ...step(1), ...step(2), ...step(3), ...step(4)],
+          refused,
+          "prune-call-3",
+        )
+        expect(chained.requests).toHaveLength(2)
+        expect(chained.persisted.map((message) => message.id)).toEqual([
+          MessageId.make("context-prune:prune-branch:prune-call-3"),
+        ])
+        expect(chained.notices).toEqual([])
+      }
+    }),
   )
 })
 
