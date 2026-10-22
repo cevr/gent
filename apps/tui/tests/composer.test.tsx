@@ -418,6 +418,41 @@ describe("the status row anchors its right-hand labels", () => {
         expect(row.trimEnd()).toBe("ready · Claude Sonnet 5 · +120 -31")
       }).pipe(Effect.timeout("10 seconds")),
   )
+
+  // The costliest item is a detail of the anchored gauge: it gives way for the
+  // whole row, before the left group's cwd and model shorten.
+  it.scopedLive("the gauge's costliest item gives way before the model in the left group", () =>
+    Effect.gen(function* () {
+      const row = (width: number) =>
+        Effect.gen(function* () {
+          const ranked: StatusRowLabel[] = [
+            label("idle"),
+            { ...label("repo"), short: { text: "", rank: STATUS_YIELD.cwd } },
+            { ...label("Claude Sonnet 5"), short: { text: "Sonnet 5", rank: STATUS_YIELD.model } },
+            {
+              ...label("ctx 42% · read 12k"),
+              short: { text: "ctx 42%", rank: STATUS_YIELD.renter },
+            },
+            label("$12.34"),
+          ]
+          const setup = yield* renderScoped(() => <StatusRow labels={ranked} rightLabels={2} />, {
+            width,
+            height: 4,
+          })
+          yield* Effect.promise(() => setup.flush())
+          return (
+            setup
+              .captureCharFrame()
+              .split("\n")
+              .find((line) => line.includes("idle")) ?? ""
+          ).trimEnd()
+        })
+      expect(yield* row(80)).toMatch(
+        /^idle · repo · Claude Sonnet 5 +ctx 42% · read 12k · \$12\.34$/,
+      )
+      expect(yield* row(50)).toMatch(/^idle · repo · Claude Sonnet 5 +ctx 42% · \$12\.34$/)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })
 
 /**

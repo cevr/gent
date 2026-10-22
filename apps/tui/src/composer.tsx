@@ -66,7 +66,7 @@ import {
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
 import { type SessionIdentity, useClient, useRuntime } from "./client"
-import type { InteractionRendererComponent } from "./extensions/client-facets.js"
+import { type InteractionRendererComponent, STATUS_YIELD } from "./extensions/client-facets.js"
 import { PromptRenderer } from "./interaction-renderers"
 import {
   type ResolvedAutocomplete,
@@ -348,19 +348,26 @@ const groupWidth = (labels: readonly StatusRowLabel[]): number => {
 
 /**
  * The labels in the forms the budget needs. While the group does not fit,
- * the next label by `short.rank` takes its short form. Then each label that
- * gave way gets its full form back, the last to give way first, when the
- * group still fits with it: a cwd that yielded before the model shortened
- * comes back once the short model leaves it room. What still does not fit is
- * cut by `layout`.
+ * the next label by `short.rank` below `before` takes its short form. Then
+ * each label that gave way gets its full form back, the last to give way
+ * first, when the group still fits with it: a cwd that yielded before the
+ * model shortened comes back once the short model leaves it room. What still
+ * does not fit is cut by `layout`.
  */
-const fitForms = (labels: readonly StatusRowLabel[], budget: number): StatusRowLabel[] => {
+const fitForms = (
+  labels: readonly StatusRowLabel[],
+  budget: number,
+  before = Number.POSITIVE_INFINITY,
+): StatusRowLabel[] => {
   const order = labels
     .flatMap((label, index) =>
-      Option.match(Option.fromUndefinedOr(label.short), {
-        onNone: () => [],
-        onSome: (short) => [{ index, short }],
-      }),
+      Option.match(
+        Option.filter(Option.fromUndefinedOr(label.short), (short) => short.rank < before),
+        {
+          onNone: () => [],
+          onSome: (short) => [{ index, short }],
+        },
+      ),
     )
     .sort((left, right) => left.short.rank - right.short.rank)
   let forms = [...labels]
@@ -419,10 +426,14 @@ export function StatusRow(props: StatusRowProps) {
     const rightLabels = all.slice(all.length - reserved)
     const width = dimensions().width
 
-    // The right group is laid out first and keeps its columns; the left group
-    // spends what is left. A right group that cannot fit the row on its own
-    // still truncates rather than pushing the left group to nothing.
-    const right = layout(fitForms(rightLabels, width), width)
+    // A right label ranked before the cwd is a detail: it gives way for the
+    // whole row, so the right group's costliest item yields before the model.
+    // The left group decides its own forms against what the right leaves it.
+    // Then the right group is laid out first and keeps its columns; the left
+    // group spends what is left. A right group that cannot fit the row on its
+    // own still truncates rather than pushing the left group to nothing.
+    const details = fitForms([...leftLabels, ...rightLabels], width, STATUS_YIELD.cwd)
+    const right = layout(fitForms(details.slice(leftLabels.length), width), width)
     let rightGap = 0
     if (right.shown.length > 0) rightGap = SEPARATOR_WIDTH
     const leftBudget = Math.max(0, width - right.used - rightGap)
