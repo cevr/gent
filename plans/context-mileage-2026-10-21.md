@@ -151,6 +151,34 @@ once it has passed (B2).
     window, so the pace and the lanes stay one calculation. Accept: with one
     Anthropic and one ChatGPT account, the pool's free lanes add both, and a
     spent ChatGPT window refuses only ChatGPT models.
+
+    **OpenCode Go facts** (owner link, [Go usage limits](https://opencode.ai/v2/docs/console/go/#usage-limits),
+    read 2026-10-21):
+    - Limits are monthly dollar amounts **per model**, by plan (Go $10/month,
+      Go Plus $40/month). Each model has three windows: 5 hours at 20% of its
+      monthly amount, weekly at 50%, monthly at 100%. Examples: GLM-5.3 $15 on
+      Go and $120 on Go Plus; DeepSeek V4.1 Flash $80 and $160. Some models
+      are free and unlimited for a limited time.
+    - Spend is priced from the page's per-model token prices (input, output,
+      cached read, and cache write on some models). Go and Go Plus share the
+      prices. Some models price by context size (for example GPT 6 Luna above
+      272K tokens) or by time of day (DeepSeek peak and off-peak).
+    - **No usage is reported.** The page names no response header and no
+      usage endpoint, only the console page. So the OpenCode adapter cannot
+      read a reading. It derives one from gent's own priced spend per
+      (account, model) over each window, divided by that window's dollar
+      limit. It sees no spend outside gent, so its utilization is a lower
+      bound. A limit error marks the window `rejected` until its reset.
+    - The page does not say whether the windows roll or reset at a fixed
+      time. Guess: rolling, as Anthropic's are. Confirm with one live limit
+      error before the adapter trusts a reset time.
+    - At the limit, Go blocks requests, or bills the pay-as-you-go balance if
+      the owner turned on Extra usage. With Extra usage on, a spent window
+      costs money and is not a lane.
+    - **Seam change:** `QuotaReading` is per account today. Go's limits are
+      per model, so the reading gains an optional `model`, and a lane for
+      that account counts only requests for that model.
+
 12. **Model tier per role.** Intelligence is hard to measure, so gent does
     not score it. The owner names two ordered model lists beside the account
     order: `strongest` and `efficient`. Plan and review states take the first
