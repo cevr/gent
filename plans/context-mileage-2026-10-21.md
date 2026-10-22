@@ -128,11 +128,16 @@ once it has passed (B2).
    hysteresis. These tests do not exercise provider HTTP header parsing.
    Per-account under-pace ranking stays unchanged; pool admission forecasts
    future refills while rejected accounts stay ineligible now.
-9. **Held slots per project.** A project (a repository root) can hold N
+9. **Held slots per project. Merged at a4e8542a6 with its review fix 6163ad09f (2026-10-22).** A project (a repository root) can hold N
    lanes whatever the pace, and no more. Other work leaves room for held
    lanes that are not in use. The setting reads beside the account order.
    Accept: with gent held at 1 and the pool at free 0, a gent thread is
    admitted and a second is refused with `LaneUnavailable`.
+   The hold is `providers.<owner>.authHold` in the user file, by repository
+   path; a project is its origin url, else its root (docs/architecture/lanes.md).
+   Past its hold a project competes in the pool. Not done: `accounts.lanes`
+   does not show holds, a project file's `authHold` is ignored without a
+   warning, and git's url rewrites are not applied.
 10. **Cost per model.** Fuel per percent is fitted for each model, not only
     for each window, so an Opus unit and a Haiku unit cost what each burns.
     Whole-percent readings over short windows are too coarse to fit alone
