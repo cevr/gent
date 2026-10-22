@@ -73,10 +73,30 @@ finished unit. The baseline is the table above.
    whole. The model gets a head and tail preview plus its `context.read` id.
    Accept: results over 8k chars hold under 3% of W (F6). The re-reads that
    `context.read` adds are counted against the saving.
+   Built since 2026-09-07 (`boundToolResultForModel`, 8,000 characters, head
+   and tail per string, `context.read` locator). Not met, and no change made
+   (2026-10-22). A replay of the owner's data.db (523 sessions from
+   2026-09-08, 63.9M W) through the rent fold, measured: results over 8,000
+   raw characters hold 6.4% of W at their bounded size; results of 4,000 to
+   8,000 hold 8.1%. All are `cell` results, mostly several files read in one
+   call (raw p50 11,352, p90 23,963 characters), held 8.4 calls on average.
+   `context.read` was called 5 times in all. Of the 6.4%, 0.34% accrues after
+   the turn ends, so dropping old results at the next turn saves less than
+   the re-write it costs (up to 1.0%). A 4,000-character bound leaves them
+   about 3.2% (inferred, linear in size) and cuts file reads the turn still
+   needs. The 8,000 is already below the prior art: Codex keeps 10,000
+   tokens per result (`models.json` `truncation_policy`), Pi 50 KB
+   (`truncate.ts`). The rest
+   is the turn's working set: requirement 7 holds it for fewer calls.
 4. **Thinking leaves the context.** Thinking from replies older than the last
    turn is dropped at the next cache breakpoint, so the drop costs one
    re-write, not one per call. Accept: replies hold under 10% of W (F7), and
    the miss share does not rise (F8).
+   Met before this plan, no change made (2026-10-22). On the same replay
+   replies hold 9.6% of W (measured). Reasoning, with its provider state,
+   holds 0.04% of W after its turn ends, so the drop is worth less than one
+   re-write. A reply goes back with its provider state only after the last
+   model change (`reasoningReplayAt`).
 5. **TTL by expected idle.** A call before a known long wait (a gate, a
    `wait` on a process, a scheduled wake past 5 minutes) writes with the 1 h
    TTL. Other calls write with the 5 m TTL. The Anthropic extension
