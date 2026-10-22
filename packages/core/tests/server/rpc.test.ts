@@ -4855,6 +4855,114 @@ describe("AccountsRpcs", () => {
   )
 
   it.live(
+    "a step's fuel moves its own model's window, and a start admits against the windows of the model its route spends on",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const work = CredentialSlot.make("work")
+          const other = ModelId.make("anthropic/claude-haiku-5")
+          const resetAt = 1_800_000_000_000
+          const quota = (utilization: number) => [
+            { window: "5h", model: TEST_MODEL_ID, utilization, resetAt, rejected: false },
+            { window: "7d", model: TEST_MODEL_ID, utilization: 1, resetAt, rejected: true },
+            { window: "5h", model: other, utilization: 0.25, resetAt, rejected: false },
+          ]
+          // `lanes/auto` routes to its default, the test model. A tool admits
+          // a start on `lanes/auto`, then one on `other`.
+          const auto = ModelId.make("lanes/auto")
+          const admitted = yield* Ref.make<ReadonlyArray<string>>([])
+          const laneProbe = defineExtension({
+            id: "@test/lane-model",
+            setup: Effect.gen(function* () {
+              const host = yield* ExtensionHost
+              yield* host.register("modelRouter", {
+                id: "lanes",
+                name: "Lane router",
+                models: [
+                  {
+                    name: "auto",
+                    label: "Auto",
+                    choices: [{ model: TEST_MODEL_ID, reason: "default" }],
+                    fallback: 0,
+                  },
+                ],
+                route: () => Effect.succeed({ choice: 0, reason: "default" }),
+              })
+              yield* host.register(
+                "tool",
+                tool({
+                  id: "lane_model",
+                  description: "Admit a start on a virtual model, then one on another model",
+                  params: Schema.Struct({}),
+                  output: Schema.Struct({}),
+                  execute: Effect.fn("LaneModel.execute")(function* () {
+                    const ctx = yield* ExtensionContext
+                    for (const [message, modelId] of [
+                      [MessageId.make("lane-auto"), auto],
+                      [MessageId.make("lane-other"), other],
+                    ] as const) {
+                      const outcome = yield* ctx.Accounts.admit({
+                        message,
+                        cwd: ctx.cwd,
+                        modelId,
+                      }).pipe(
+                        Effect.as("admitted"),
+                        Effect.catchTag("LaneUnavailable", (refused) =>
+                          Effect.succeed(refused.reason),
+                        ),
+                      )
+                      yield* Ref.update(admitted, (outcomes) => [...outcomes, outcome])
+                      yield* ctx.Accounts.cancel(message)
+                    }
+                    return {}
+                  }),
+                }),
+              )
+            }),
+          })
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            { ...toolCallStep("lane_model", {}), quota: quota(0.25) },
+            { ...textStep("done"), quota: quota(0.27) },
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            extensionInputs: [...e2ePreset.extensionInputs, laneProbe],
+            providerLayer,
+            // $5 per million tokens: a tool step of 10 input and 20 output tokens is 30 fuel.
+            modelPricing: { input: 5, output: 5 },
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({
+                model: TEST_MODEL_ID,
+                providers: { anthropic: { authOrder: [work] } },
+              }),
+            ),
+          })
+          // The session runs on `lanes/auto` too: its steps' fuel names the routed model.
+          yield* client.session.updateSettings({
+            sessionId,
+            modelId: Option.some(auto),
+            reasoningLevel: Option.none(),
+          })
+          yield* client.message.send({ sessionId, branchId, content: "probe the lanes" })
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle" && hasText(current.messages, "done"),
+            5_000,
+            "the probed turn settles",
+          )
+          // The test model's week is spent; `other`'s windows have room.
+          expect(yield* Ref.get(admitted)).toEqual(["Spent", "admitted"])
+          const { providers } = yield* client.accounts.lanes()
+          const own = providers[0]?.accounts[0]?.windows.find(
+            (window) => window.window === "5h" && window.model === TEST_MODEL_ID,
+          )
+          // The first step's 30 fuel moved the route model's window 2 points.
+          expect(own?.fuelPerPct).toBeCloseTo(15, 6)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+  )
+
+  it.live(
     "a start admitted for a message that joins its session's running turn frees its lane as it joins",
     () =>
       Effect.scoped(

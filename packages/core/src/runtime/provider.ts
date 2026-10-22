@@ -3797,6 +3797,11 @@ interface LaneRequest {
   readonly key: string
   /** The session that asks: its own open turn holds no lane against it. */
   readonly asker: Option.Option<SessionId>
+  /**
+   * The model its turns run: that model's own windows count beside the
+   * account's. None when its route names none: the account's alone count.
+   */
+  readonly model: Option.Option<ModelId>
 }
 
 /** A turn that opened on a provider's accounts. */
@@ -3832,6 +3837,8 @@ interface PlacementFuel {
   readonly signedInAt: Option.Option<number>
   /** The session whose turn spent it: its lane's burn counts it. */
   readonly sessionId: SessionId
+  /** The model it ran: a window of one model counts that model's fuel alone. */
+  readonly model: ModelId
   /** None when unpriced: the open segments and the lane it falls in drop. */
   readonly costUsd: Option.Option<number>
   readonly usage: Option.Option<FuelUsage>
@@ -3890,6 +3897,8 @@ const WindowReading = Schema.Struct({
   slot: CredentialSlot,
   signedInAt: Schema.optionalKey(Schema.Finite),
   window: Schema.String,
+  /** The one model the window meters (`QuotaReading.model`). */
+  model: Schema.optionalKey(ModelId),
   utilization: Schema.Finite,
   /** Epoch ms. */
   resetAt: Schema.Finite,
@@ -3910,6 +3919,7 @@ const FuelSegment = Schema.Struct({
   slot: CredentialSlot,
   signedInAt: Schema.optionalKey(Schema.Finite),
   window: Schema.String,
+  model: Schema.optionalKey(ModelId),
   /** Epoch ms of the reading that closed it. */
   endedAt: Schema.Finite,
   fuel: Schema.Finite,
@@ -4008,7 +4018,7 @@ const fiveHourPoolCeiling = (
   const refills: Array<{ readonly hours: number; readonly gain: number }> = []
   let hasShort = false
   for (const week of weeks) {
-    const short = week.account.windows.find((window) => window.window === "5h")
+    const short = week.account.windows.find((window) => isAccountWindow(window, "5h"))
     if (Predicate.isUndefined(short)) continue
     if (Predicate.isUndefined(short.fuelPerPct)) return Option.none()
     hasShort = true
@@ -4148,6 +4158,28 @@ const fitWindow = (segments: ReadonlyArray<FuelSegment>): WindowFit => {
 /** Keys of the placement state's maps: fields joined by NUL, which no label or id holds. */
 const placementKey = (...parts: ReadonlyArray<string | number>) => parts.join("\u0000")
 
+/** A window's name, and the one model it meters when it meters one. */
+interface WindowName {
+  readonly window: string
+  readonly model?: ModelId
+}
+
+/** The key of a window of `slot`: a model's window is its own, beside the account's of the same name. */
+const windowKey = (provider: string, slot: CredentialSlot, name: WindowName) =>
+  placementKey(provider, slot, name.window, ...Option.toArray(Option.fromUndefinedOr(name.model)))
+
+/**
+ * Whether a window bounds a run of `model`: an account-wide window bounds
+ * every run, a model's window only that model's. With no model, only the
+ * account-wide windows do.
+ */
+const meters = (name: WindowName, model: Option.Option<ModelId>) =>
+  Predicate.isUndefined(name.model) || Option.contains(model, name.model)
+
+/** The account-wide window `window`: the one the pool's pace reads. */
+const isAccountWindow = (name: WindowName, window: string) =>
+  name.window === window && Predicate.isUndefined(name.model)
+
 /** Where the ledger persists: read once at start, replaced whole. Neither fails. */
 interface PlacementLedgerStore {
   readonly load: Effect.Effect<PlacementLedgerValue>
@@ -4230,22 +4262,24 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const held = new Map<string, number>()
   /** provider, starter, slot → the fresh children warming it. */
   const warming = new Map<string, Set<SessionId>>()
-  /** provider, slot, window → the window's latest reading. */
+  /** provider, slot, window (and its model, `windowKey`) → the window's latest reading. */
   const readings = new Map<string, WindowReading>()
   /**
-   * provider, slot, window → the segment open on the window: the
-   * utilization it opened at, and the fuel spent on the account since then,
-   * none once an unpriced request fell in it.
+   * provider, slot, window (`windowKey`) → the segment open on the window:
+   * the utilization it opened at, and the fuel spent since then on the
+   * account (on its `model` alone, for a model's window), none once an
+   * unpriced request fell in it.
    */
   const openSegments = new Map<
     string,
     {
       readonly from: number
+      readonly model: Option.Option<ModelId>
       readonly fuel: Option.Option<number>
       readonly tokens: FuelTokens
     }
   >()
-  /** provider, slot, window → its closed segments, oldest first. */
+  /** provider, slot, window (`windowKey`) → its closed segments, oldest first. */
   const segments = new Map<string, ReadonlyArray<FuelSegment>>()
   /**
    * session → the provider and accounts its open turn spends from, when it
@@ -4321,11 +4355,17 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     return load
   }
   /**
-   * Whether a quota window of `slot` read rejected and has not reset: the
-   * readings are the one record of it, so a restart that loads them holds
-   * the account as the server before it did.
+   * Whether a quota window of `slot` that bounds a run of `model` (`meters`)
+   * read rejected and has not reset: the readings are the one record of it,
+   * so a restart that loads them holds the account as the server before it
+   * did.
    */
-  const quotaHeld = (provider: string, slot: CredentialSlot, now: number) =>
+  const quotaHeld = (
+    provider: string,
+    slot: CredentialSlot,
+    model: Option.Option<ModelId>,
+    now: number,
+  ) =>
     readings
       .values()
       .some(
@@ -4333,16 +4373,18 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           reading.provider === provider &&
           reading.slot === slot &&
           reading.rejected &&
-          reading.resetAt > now,
+          reading.resetAt > now &&
+          meters(reading, model),
       )
   /**
    * Whether `slot` of `provider` is held for `model`'s runs: by a refusal
-   * for all or for that model, or by a rejected quota window.
+   * for all or for that model, or by a rejected quota window of the account
+   * or of that model.
    */
   const isHeld = (provider: string, slot: CredentialSlot, model: ModelId, now: number) =>
     held.has(placementKey(provider, slot)) ||
     held.has(placementKey(provider, slot, model)) ||
-    quotaHeld(provider, slot, now)
+    quotaHeld(provider, slot, Option.some(model), now)
   /** Whether `key` of a quota map, or a hold of one model, names `provider`'s `slot`. */
   const ofLabel = (key: string, provider: string, slot: CredentialSlot) =>
     key.startsWith(placementKey(provider, slot, ""))
@@ -4591,7 +4633,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       (left, right) => left.readAt - right.readAt,
     )
     for (const reading of storedReadings) {
-      readings.set(placementKey(reading.provider, reading.slot, reading.window), reading)
+      readings.set(windowKey(reading.provider, reading.slot, reading), reading)
       if (Predicate.isNotUndefined(reading.signedInAt))
         signIns.set(placementKey(reading.provider, reading.slot), {
           provider: reading.provider,
@@ -4600,7 +4642,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         })
     }
     for (const segment of stored.segments ?? []) {
-      const key = placementKey(segment.provider, segment.slot, segment.window)
+      const key = windowKey(segment.provider, segment.slot, segment)
       segments.set(key, [...(segments.get(key) ?? []), segment])
     }
     for (const burn of stored.burn ?? []) burns.set(burn.provider, burn)
@@ -4690,7 +4732,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * (`quotaHeld`).
    */
   const read = (provider: string, slot: CredentialSlot, reading: QuotaReading, now: number) => {
-    const key = placementKey(provider, slot, reading.window)
+    const key = windowKey(provider, slot, reading)
     const last = Option.fromUndefinedOr(readings.get(key))
     const signedInAt = Option.getOrUndefined(signedInOf(provider, slot))
     readings.set(key, {
@@ -4701,11 +4743,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       resetAt: reading.resetAt,
       readAt: now,
       rejected: reading.rejected,
-      ...omitUndefined({ signedInAt }),
+      ...omitUndefined({ signedInAt, model: reading.model }),
     })
     version += 1
     const fresh = {
       from: reading.utilization,
+      model: Option.fromUndefinedOr(reading.model),
       fuel: Option.some(0),
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }
@@ -4735,7 +4778,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         provider,
         slot,
         window: reading.window,
-        ...omitUndefined({ signedInAt }),
+        ...omitUndefined({ signedInAt, model: reading.model }),
         endedAt: now,
         fuel: open.value.fuel.value,
         deltaPct: moved * 100,
@@ -4768,13 +4811,21 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * admission takes max(expiring weekly floor, rolling seven-day supply),
    * capped before each weekly and 5h refill, then floors once in lane units.
    * A window with no rate of its own reads the provider's over every account.
+   * The lanes are those of a run of `model`: its own windows and the
+   * account's count (`meters`). With no model, the report lists every
+   * window and counts the account's alone.
    */
   const providerLanes = (
     provider: string,
     scope: ReadonlyArray<CredentialSlot>,
+    model: Option.Option<ModelId>,
     now: number,
   ): ProviderLanes => {
     const fuelPerHour = fuelPerHourOf(provider)
+    const counts = (name: WindowName) => meters(name, model)
+    /** A window's name across accounts: each model's windows pool apart. */
+    const poolKey = (name: WindowName) =>
+      placementKey(name.window, ...Option.toArray(Option.fromUndefinedOr(name.model)))
     const own = new Map<string, WindowFit>()
     const pooled = new Map<string, Array<FuelSegment>>()
     for (const [key, list] of segments) {
@@ -4782,7 +4833,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       if (Predicate.isUndefined(first) || first.provider !== provider) continue
       const fit = fitWindow(list)
       own.set(key, fit)
-      pooled.set(first.window, [...(pooled.get(first.window) ?? []), ...fit.kept])
+      pooled.set(poolKey(first), [...(pooled.get(poolKey(first)) ?? []), ...fit.kept])
     }
     const poolRate = new Map(
       [...pooled].map(([window, kept]) => [window, weightedRate(kept)] as const),
@@ -4791,16 +4842,21 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const reading of readings.values())
       if (reading.provider === provider) slots.add(reading.slot)
     const accounts = [...slots].map((slot): LaneAccount => {
-      const accountHeld = held.has(placementKey(provider, slot)) || quotaHeld(provider, slot, now)
+      const accountHeld =
+        held.has(placementKey(provider, slot)) || quotaHeld(provider, slot, model, now)
       const windows = readings
         .values()
-        .filter((reading) => reading.provider === provider && reading.slot === slot)
+        .filter(
+          (reading) =>
+            reading.provider === provider &&
+            reading.slot === slot &&
+            (Option.isNone(model) || counts(reading)),
+        )
         .map((reading): LaneWindow => {
-          const key = placementKey(provider, slot, reading.window)
-          const fit = Option.fromUndefinedOr(own.get(key))
+          const fit = Option.fromUndefinedOr(own.get(windowKey(provider, slot, reading)))
           const ownRate = Option.flatMap(fit, (found) => found.fuelPerPct)
           const fuelPerPct = Option.orElse(ownRate, () =>
-            Option.flatten(Option.fromUndefinedOr(poolRate.get(reading.window))),
+            Option.flatten(Option.fromUndefinedOr(poolRate.get(poolKey(reading)))),
           )
           // A window whose reset passed is full again, for its whole length.
           const reset = reading.resetAt <= now
@@ -4821,6 +4877,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           })
           return {
             window: reading.window,
+            ...omitUndefined({ model: reading.model }),
             utilization,
             resetAt: reading.resetAt,
             readAt: reading.readAt,
@@ -4838,9 +4895,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           }
         })
         .toArray()
-      const each = windows.map((window) => Option.fromUndefinedOr(window.sustainable))
+      const counted = windows.filter(counts)
+      const each = counted.map((window) => Option.fromUndefinedOr(window.sustainable))
       const fewest = Option.map(
-        Option.filter(Option.all(each), () => windows.length > 0),
+        Option.filter(Option.all(each), () => counted.length > 0),
         (values) => Math.min(...values),
       )
       // A held account carries no run, whatever its windows read.
@@ -4865,7 +4923,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       .values()
       .filter((account) => !held.has(placementKey(provider, account.slot)))
       .map((account) => {
-        const week = account.windows.find((window) => window.window === "7d")
+        const week = account.windows.find((window) => isAccountWindow(window, "7d"))
         if (Predicate.isUndefined(week) || Predicate.isUndefined(week.fuelPerPct))
           return Option.none()
         const full = 100 * week.fuelPerPct
@@ -4882,21 +4940,23 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       // A quota rejection alone does: its own window still supplies a reset.
       if (
         due.some(({ account }) =>
-          account.windows.some((window) => Predicate.isUndefined(window.sustainable)),
+          account.windows.some(
+            (window) => counts(window) && Predicate.isUndefined(window.sustainable),
+          ),
         )
       )
         return Option.none()
       const weekly = weeklyPoolPace(due)
       const short = fiveHourPoolCeiling(due, now)
       if (Option.isNone(short)) return Option.none()
-      // Other driver windows retain their current ceiling.
+      // Other driver windows, a model's own among them, retain their current ceiling.
       const otherWindows = new Map<string, number>()
       for (const account of scoped)
         for (const window of account.windows)
-          if (window.window !== "7d" && window.window !== "5h")
+          if (counts(window) && !isAccountWindow(window, "7d") && !isAccountWindow(window, "5h"))
             otherWindows.set(
-              window.window,
-              (otherWindows.get(window.window) ?? 0) + (window.sustainable ?? 0),
+              poolKey(window),
+              (otherWindows.get(poolKey(window)) ?? 0) + (window.sustainable ?? 0),
             )
       return Option.some(
         Math.max(
@@ -4911,7 +4971,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       )
     })
     let sustainable = accountCapacity
-    if (scoped.some((account) => account.windows.some((window) => window.window === "7d")))
+    if (scoped.some((account) => account.windows.some((window) => isAccountWindow(window, "7d"))))
       sustainable = rollingCapacity
     if (scoped.length > 0 && scoped.every((account) => account.held)) sustainable = Option.some(0)
     const capacity = Option.map(sustainable, (value) => Math.floor(value + 1e-9))
@@ -4971,9 +5031,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           )
         // A held account can report sustainable 0 with no reading. It is
         // not quota pace: an unread pool keeps the stage-0 ranking.
-        const accounts = providerLanes(request.provider, open, now).accounts.filter(
-          (account) => account.windows.length > 0,
-        )
+        const accounts = providerLanes(
+          request.provider,
+          open,
+          Option.some(request.model),
+          now,
+        ).accounts.filter((account) => account.windows.length > 0)
         const walk = rankPlacement({
           slots: Arr.map(open, (slot) => {
             const account = accounts.find((account) => account.slot === slot)
@@ -4984,7 +5047,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               held: isHeld(request.provider, slot, request.model, now) || warmedBySibling(slot),
               ...omitUndefined({
                 sustainable: account?.sustainable,
-                weeklyResetAt: account?.windows.find((window) => window.window === "7d")?.resetAt,
+                weeklyResetAt: account?.windows.find((window) => isAccountWindow(window, "7d"))
+                  ?.resetAt,
               }),
             }
           }),
@@ -5060,7 +5124,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         if (reserved.has(request.key)) return Option.none()
         settle(request.provider, request.scope)
         const scope = request.scope.map((account) => account.slot)
-        const lanes = providerLanes(request.provider, scope, now)
+        const lanes = providerLanes(request.provider, scope, request.model, now)
         const load = laneLoad(request.provider, scope, request.asker, now)
         const capacity = Option.fromUndefinedOr(lanes.capacity)
         if (Option.isSome(capacity) && load >= capacity.value) {
@@ -5190,6 +5254,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         if (Option.isNone(slot)) return
         for (const [key, open] of openSegments) {
           if (!key.startsWith(placementKey(spend.provider, slot.value, ""))) continue
+          // Another model's spend never moves a model's window.
+          if (Option.isSome(open.model) && open.model.value !== spend.model) continue
           openSegments.set(
             key,
             Option.match(priced, {
@@ -5230,6 +5296,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
                 onNone: () => [],
                 onSome: (accounts) => accounts.map((account) => account.slot),
               }),
+              Option.none(),
               now,
             ),
           ),

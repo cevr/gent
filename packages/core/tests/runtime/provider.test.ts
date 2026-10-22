@@ -27,6 +27,7 @@ import {
   type ApiClassRequest,
   AuthMethod,
   type CredentialReceipt,
+  type ProviderLanes,
   catalogModelEntry,
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
@@ -5584,6 +5585,7 @@ describe("account lanes", () => {
   const scopeOf = (scope: Scope) => (_provider: string) =>
     Effect.succeedSome(Arr.map(scope, receiptOf))
   const runner = SessionId.make("runner")
+  const planModel = ModelId.make("plan/model")
 
   /** One placement and the readings and fuel a test feeds it, on the provider `plan`. */
   const accounts = (ledger: Parameters<typeof makeCredentialPlacement>[0] = Option.none()) =>
@@ -5596,6 +5598,7 @@ describe("account lanes", () => {
           readonly utilization: number
           readonly resetAt: number
           readonly rejected?: boolean
+          readonly model?: ModelId
         }>,
       ) => {
         const { slot, signedInAt } = receiptOf(account)
@@ -5611,6 +5614,7 @@ describe("account lanes", () => {
         costUsd: Option.Option<number>,
         spent = usage,
         sessionId = runner,
+        model = planModel,
       ) => {
         const { slot, signedInAt } = receiptOf(account)
         return placement.noteFuel({
@@ -5618,6 +5622,7 @@ describe("account lanes", () => {
           slot,
           signedInAt: Option.fromUndefinedOr(signedInAt),
           sessionId,
+          model,
           costUsd,
           usage: spent,
         })
@@ -5638,25 +5643,26 @@ describe("account lanes", () => {
             ),
           ).pipe(Effect.orDie),
         )
-      /** Admit a start under `key` over `scope`: "admitted", else the refusal's reason. */
-      const admit = (scope: Scope, key: string) =>
+      /** Admit a start of `model` under `key` over `scope`: "admitted", else the refusal's reason. */
+      const admit = (scope: Scope, key: string, model = planModel) =>
         placement
           .admitLane({
             provider: "plan",
             scope: Arr.map(scope, receiptOf),
             key,
             asker: Option.none(),
+            model: Option.some(model),
           })
           .pipe(
             Effect.as("admitted" as const),
             Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(refused.reason)),
           )
-      /** Where a run of `session` goes over the pool `[a, b]`, in walk order. */
-      const place = (session: string) =>
+      /** Where a run of `session` and `model` goes over the pool `[a, b]`, in walk order. */
+      const place = (session: string, model = planModel) =>
         placement.place({
           provider: "plan",
           pool: [a, b],
-          model: ModelId.make("plan/model"),
+          model,
           sessionId: SessionId.make(session),
           preferred: Option.none(),
           starter: Option.none(),
@@ -6097,6 +6103,7 @@ describe("account lanes", () => {
             slot: a,
             signedInAt: Option.none(),
             sessionId: runner,
+            model: ModelId.make(`${provider}/model`),
             costUsd: Option.some(100),
             usage,
           })
@@ -6116,6 +6123,7 @@ describe("account lanes", () => {
               scope: [{ provider: ProviderId.make(provider), slot: a }],
               key: `start-${provider}`,
               asker: Option.none(),
+              model: Option.some(ModelId.make(`${provider}/model`)),
             })
             .pipe(
               Effect.as("admitted" as const),
@@ -6195,6 +6203,7 @@ describe("account lanes", () => {
                 slot: a,
                 signedInAt: Option.none(),
                 sessionId: runner,
+                model: planModel,
                 costUsd: Option.some(costUsd),
                 usage,
               })
@@ -6389,6 +6398,94 @@ describe("account lanes", () => {
         expect((yield* Ref.get(file)).readings?.length).toBe(2)
         const after = yield* accounts(store)
         expect(yield* after.place("second")).toEqual([b, a])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  /** A model of `plan` with windows of its own beside the account's, as a plan that meters one model reports. */
+  const glm = ModelId.make("plan/glm")
+  /** The fuel per point of the 5h window of `model` on `a`, or of the account's own with none. */
+  const fiveHourRate = (report: ProviderLanes, model?: ModelId) =>
+    report.accounts
+      .find((account) => account.slot === a)
+      ?.windows.find((window) => window.window === "5h" && window.model === model)?.fuelPerPct
+  /**
+   * Fuel both 5h windows of `a`: $1 of glm and $3 of the plan's model. The
+   * account's moves 4 points, glm's 2.
+   */
+  const fuelBothWindows = (fixture: Effect.Success<ReturnType<typeof accounts>>, now: number) =>
+    Effect.gen(function* () {
+      const resetAt = now + 5 * HOUR
+      yield* fixture.read(a, [
+        { window: "5h", utilization: 0.1, resetAt },
+        { window: "5h", model: glm, utilization: 0.1, resetAt },
+      ])
+      yield* fixture.spend(a, Option.some(1), usage, runner, glm)
+      yield* fixture.spend(a, Option.some(3))
+      yield* TestClock.adjust("1 minute")
+      yield* fixture.read(a, [
+        { window: "5h", utilization: 0.14, resetAt },
+        { window: "5h", model: glm, utilization: 0.12, resetAt },
+      ])
+    })
+
+  it.effect("a model's rejected window holds its account for that model's runs alone", () =>
+    Effect.gen(function* () {
+      const { read, admit, place, lanes } = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      yield* read(a, [
+        { window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR },
+        { window: "5h", model: glm, utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
+      ])
+      yield* read(b, [{ window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR }])
+      expect(yield* admit([a], "glm-start", glm)).toBe("Spent")
+      expect(yield* admit([a], "plan-start")).toBe("admitted")
+      expect(yield* place("glm-run", glm)).toEqual([b, a])
+      expect(yield* place("plan-run")).toEqual([a, b])
+      // The report lists the model's window beside the account's; it holds no account.
+      const account = (yield* lanes([a])).accounts.find((found) => found.slot === a)
+      expect(account?.held).toBe(false)
+      expect(
+        account?.windows.map((window) => [Option.fromUndefinedOr(window.model), window.rejected]),
+      ).toEqual([
+        [Option.none(), false],
+        [Option.some(glm), true],
+      ])
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a model's window fits that model's fuel alone; the account's fits every model's", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis)
+      const report = yield* fixture.lanes([a])
+      // 800,000 fuel over 4 points; glm's 200,000 over 2.
+      expect(fiveHourRate(report)).toBeCloseTo(200_000, 3)
+      expect(fiveHourRate(report, glm)).toBeCloseTo(100_000, 3)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a restart keeps a model's window apart from the account's of the same name, its hold and its fit",
+    () =>
+      Effect.gen(function* () {
+        const { file, store } = yield* ledgerRef
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        const before = yield* accounts(store)
+        yield* fuelBothWindows(before, now)
+        yield* before.read(a, [
+          { window: "5h", model: glm, utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
+        ])
+        yield* before.placement.flush
+        expect((yield* Ref.get(file)).readings?.length).toBe(2)
+        const after = yield* accounts(store)
+        expect(yield* after.admit([a], "glm-start", glm)).toBe("Spent")
+        expect(yield* after.admit([a], "plan-start")).toBe("admitted")
+        const report = yield* after.lanes([a])
+        expect(fiveHourRate(report)).toBeCloseTo(200_000, 3)
+        expect(fiveHourRate(report, glm)).toBeCloseTo(100_000, 3)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

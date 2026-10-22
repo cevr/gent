@@ -1689,32 +1689,38 @@ export const resolveSessionRoute = (params: {
 }
 
 /**
- * The driver a route's turn needs a credential for. A virtual model needs its
- * default choice's: the model its turn runs on when its router does not choose.
- * A route with no model needs none.
+ * The model a route's turn spends on. A virtual model spends on its default
+ * choice: the model its turn runs on when its router does not choose. A route
+ * with no model spends on none.
  */
+const routeSpendModel = (
+  route: SessionRoute,
+  profile: Parameters<typeof servedVirtualModel>[0],
+): Option.Option<ModelId> =>
+  Option.map(route.modelId, (selected) =>
+    servedVirtualModel(profile, selected).pipe(
+      Option.flatMap(Result.getSuccess),
+      Option.flatMap((served) => virtualDefaultModel(served.model)),
+      Option.getOrElse(() => selected),
+    ),
+  )
+
+/** The driver a route's turn needs a credential for: its spend model's (`routeSpendModel`). */
 export const routeCredentialDriver = (
   route: SessionRoute,
   profile: Parameters<typeof servedVirtualModel>[0],
 ): Option.Option<string> =>
-  Option.flatMap(route.modelId, (selected) =>
-    Option.match(
-      servedVirtualModel(profile, selected).pipe(
-        Option.flatMap(Result.getSuccess),
-        Option.flatMap((served) => virtualDefaultModel(served.model)),
-      ),
-      {
-        onNone: () => effectiveModelDriver(route.driverRef, selected).driverId,
-        onSome: (modelId) => effectiveModelDriver(route.driverRef, modelId).driverId,
-      },
-    ),
+  Option.flatMap(
+    routeSpendModel(route, profile),
+    (modelId) => effectiveModelDriver(route.driverRef, modelId).driverId,
   )
 
 /**
- * The lane a session's turns take: the sign-in their route spends from and
- * the accounts it is counted over, as `resolveSessionRoute` routes a turn of
- * a session with `admission` and `modelId` in `cwd`. None for a route with
- * no model, or a sign-in whose order does not read.
+ * The lane a session's turns take: the sign-in their route spends from, the
+ * accounts it is counted over and the model it spends on, as
+ * `resolveSessionRoute` routes a turn of a session with `admission` and
+ * `modelId` in `cwd`. None for a route with no model, or a sign-in whose
+ * order does not read.
  */
 const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
   readonly cwd: Option.Option<string>
@@ -1729,12 +1735,15 @@ const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
     config,
     session: omitUndefined({ modelId: Option.getOrUndefined(run.modelId) }),
   })
-  const driverId = routeCredentialDriver(route, registry.getResolved())
-  if (Option.isNone(driverId)) return Option.none()
+  const modelId = routeSpendModel(route, registry.getResolved())
+  if (Option.isNone(modelId)) return Option.none()
   const pin = Option.flatMap(run.admission, (admission) =>
     Option.fromUndefinedOr(admission.runSpec?.credentialSlot),
   )
-  return yield* credentialLane(driverId.value, pin, registry)
+  const driverId = effectiveModelDriver(route.driverRef, modelId.value).driverId
+  if (Option.isNone(driverId)) return Option.none()
+  const lane = yield* credentialLane(driverId.value, pin, registry)
+  return Option.map(lane, (found) => ({ ...found, modelId: modelId.value }))
 })
 
 /**
@@ -1810,6 +1819,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
         scope: lane.value.scope,
         key: run.message,
         asker: Option.some(asker),
+        model: Option.some(lane.value.modelId),
       })
     }),
     cancel: (message) => placement.freeReservation(message),
@@ -3207,16 +3217,18 @@ const readModelAttempts = (params: {
 const noteSummarySpend = Effect.fn("TurnHelpers.noteSummarySpend")(function* (
   sessionId: SessionId,
   summaryOn: Option.Option<CredentialReceipt>,
-  costUsd: Option.Option<number>,
+  summary: { readonly modelId: ModelId; readonly costUsd: Option.Option<number> },
   usage: Option.Option<Usage>,
 ) {
   if (Option.isNone(summaryOn)) return
+  const { costUsd } = summary
   const placement = yield* CredentialPlacement
   yield* placement.noteFuel({
     provider: summaryOn.value.provider,
     slot: summaryOn.value.slot,
     signedInAt: Option.fromUndefinedOr(summaryOn.value.signedInAt),
     sessionId,
+    model: summary.modelId,
     costUsd,
     usage,
   })
@@ -3819,8 +3831,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     yield* noteSummarySpend(
       params.sessionId,
       yield* credential,
-      compactionCostUsd,
-      Option.flatMap(summary, (value) => Option.fromUndefinedOr(value.usage)),
+      { modelId: summary.value.modelId, costUsd: compactionCostUsd },
+      Option.fromUndefinedOr(summary.value.usage),
     )
 
   const finalWindow = messagesInCurrentWindow(durableMessages)
@@ -5354,6 +5366,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           slot: credential.value.slot,
           signedInAt: Option.fromUndefinedOr(credential.value.signedInAt),
           sessionId: scope.sessionId,
+          model: params.resolved.modelId,
           costUsd,
           usage,
         })

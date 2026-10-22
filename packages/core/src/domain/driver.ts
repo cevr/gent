@@ -613,13 +613,16 @@ export const isContextOverflow = (cause: unknown): boolean => {
  * provider's own name for it (Anthropic's `5h`, `7d`), `utilization` the
  * fraction used (above 1 when usage ran past the window's cap), `resetAt` when
  * it is full again (epoch ms), and `rejected` that the provider refuses
- * requests on this window until then.
+ * requests on this window until then. `model` names the one model the window
+ * meters (OpenCode Go limits each model on its own); a window without one
+ * meters every request on the account.
  */
 export const QuotaReading = Schema.Struct({
   window: Schema.String,
   utilization: Schema.Finite,
   resetAt: Schema.Finite,
   rejected: Schema.Boolean,
+  model: Schema.optionalKey(ModelId),
 })
 export type QuotaReading = typeof QuotaReading.Type
 
@@ -670,6 +673,8 @@ export const reportProviderQuota = (readings: ReadonlyArray<QuotaReading>): Effe
 /** One quota window of one account, as `accounts.lanes` reports it. */
 export const LaneWindow = Schema.Struct({
   window: Schema.String,
+  /** The one model the window meters; absent when it meters the whole account. */
+  model: Schema.optionalKey(ModelId),
   /** The fraction used at the last reading; 0 once its reset passed. */
   utilization: Schema.Finite,
   resetAt: Schema.Finite,
@@ -691,9 +696,13 @@ export const LaneWindow = Schema.Struct({
 export const LaneAccount = Schema.Struct({
   slot: CredentialSlot,
   windows: Schema.Array(LaneWindow),
-  /** Held by a refusal or a rejected window: it carries no run now. */
+  /** Held by a refusal or a rejected account-wide window: it carries no run now. */
   held: Schema.Boolean,
-  /** The fewest runs any of its windows can carry; none when a window has no rate or nothing was read. */
+  /**
+   * The fewest runs any of its account-wide windows can carry; none when one
+   * has no rate or none was read. A model's window is listed but not counted:
+   * it bounds only that model's runs, and the report serves every model.
+   */
   sustainable: Schema.optionalKey(Schema.Finite),
 })
 
