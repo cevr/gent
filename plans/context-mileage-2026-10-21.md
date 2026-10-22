@@ -138,6 +138,12 @@ once it has passed (B2).
     Whole-percent readings over short windows are too coarse to fit alone
     (B4): the fit spans at least a day. Accept: the fitted cost of one account
     week is within 10% of B4's 930M W for the model mix B4 measured.
+    Merged at 58ef2b391 with its review fix ada56ce9b (2026-10-22). The
+    weights are fitted from the account windows' kept segments, each read
+    at its edges' rounding; the windows are judged at the weights, and the
+    two alternate until both settle. Each account window reports each
+    model's fuel per point (`LaneWindow.models`). Open: admission and
+    placement still count runs unweighted.
 11. **Every provider that reports usage joins the pool.** (ChatGPT plan
     merged at 415a2b09c (2026-10-22): the Codex client reads the
     `x-codex-primary-*` and `x-codex-secondary-*` headers on each answer,
