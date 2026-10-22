@@ -6,7 +6,7 @@ override, not the default for in-memory application sessions. This keeps the
 snapshot cursor aligned with replayed navigation and interaction events.
 
 Slow-client policy: the session PubSub registry in `domain/event.ts` gives each session one sliding
-PubSub of event ids, not envelopes. Publishing never waits for a subscriber, so a
+PubSub of notifications. Publishing never waits for a subscriber, so a
 stalled client cannot block tool execution. `makeCursorReplayStream` opens the
 subscription first, drains the durable store from the subscriber's cursor, and
 drains again on every notification burst. Lost or coalesced notifications cost
@@ -23,6 +23,17 @@ from the last id it saw neither skips nor repeats an event. The RPC
 specific event do not. The marker is never stored: both event stores reject it
 in `append`. The TUI feed reads it as the end of replay and keeps it out of its
 duplicate set, since it shares an id with the last replayed event.
+
+Live chunks: a `StreamChunk` is never stored, since its step's `MessageReceived`
+holds the answer. `publish` delivers it with the id of the newest stored event
+delivered before it, and the subscriber drains up to that id first, so a chunk
+never overtakes a stored event. A chunk carries its `offset` in the step's
+answer. The store keeps each branch's answer in progress, from `StreamStarted`
+to `StreamEnded` or `TurnCompleted`, and a subscription opens with it as one
+chunk at offset 0, after the marker. That chunk can repeat text a live chunk
+also carried, so every consumer appends only `unseenText(held, chunk)`: the TUI
+feed, headless output, the agents view and the btw pane. A restarted server
+runs no answer, so it opens with none.
 
 One interaction primitive: `ctx.Interaction.approve({ text, metadata? })` → `{ approved, notes?, editedContent? }`.
 

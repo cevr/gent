@@ -160,7 +160,12 @@ import {
   SqliteStorage,
   ToolCallBindingStorage,
 } from "../storage/storage.js"
-import { type AgentEvent, EventStore, type EventStoreService } from "../domain/event.js"
+import {
+  type AgentEvent,
+  EventStore,
+  type EventStoreService,
+  isTransientEvent,
+} from "../domain/event.js"
 import { LanguageModel, Model as AiModel } from "effect/ai"
 import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
 import { BunCrypto, BunHttpServer } from "@effect/platform-bun"
@@ -490,7 +495,8 @@ export const testLeafContext = (ctx: TestToolContext): ExtensionContextService =
  * The in-memory event store that also keeps each event it appends, in order,
  * in `events`, so a test asserts event order against the store semantics
  * production runs (sliding delivery, the synchronize marker). A publish
- * appends through the recording `append`.
+ * appends through the recording `append`; a live chunk is recorded as it
+ * is delivered, since the store never appends one.
  */
 export const recordingEventStore = (events: Ref.Ref<AgentEvent[]>): Layer.Layer<EventStore> =>
   Layer.effect(
@@ -508,6 +514,12 @@ export const recordingEventStore = (events: Ref.Ref<AgentEvent[]>): Layer.Layer<
         ...inner,
         append,
         publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
+          // A chunk is live only: the store delivers it and never appends it.
+          if (isTransientEvent(event)) {
+            yield* inner.publish(event)
+            yield* Ref.update(events, (all) => [...all, event])
+            return
+          }
           yield* inner.deliver(yield* append(event))
         }),
       })

@@ -713,6 +713,8 @@ export const collectModelTurnResponse = (params: {
   Effect.gen(function* () {
     const responseParts: Response.AnyPart[] = []
     let hasObservableOutput = false
+    // The step's answer streamed so far: each chunk names where it starts.
+    let answered = 0
 
     const streamFailed = yield* Stream.runForEach(
       params.turnStream.pipe(Stream.interruptWhen(Deferred.await(params.activeStream.interrupted))),
@@ -732,9 +734,11 @@ export const collectModelTurnResponse = (params: {
               EventStreamChunk.make({
                 sessionId: params.sessionId,
                 branchId: params.branchId,
+                offset: answered,
                 chunk: part.delta,
               }),
             )
+            answered += part.delta.length
           }
         }),
     ).pipe(

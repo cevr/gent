@@ -87,8 +87,9 @@ Without `--session`, a call names the newest conversation in `--cwd` (default:
 the current directory), on its active branch (`--branch` names another). A
 call prints one JSON value on stdout. An array of records in it prints one
 record per line, so `events --limit 3` prints five lines. `events` prints one
-compact record per event, and a run of `StreamChunk` events folds into one
-record; `--full` prints the stored envelopes. Each record's `id` is a cursor
+compact record per stored event; `--full` prints the stored envelopes. A
+`StreamChunk` is live only, so `events` never lists one, and `wait --until
+turn` reads its reply from the answers the turn stored. Each record's `id` is a cursor
 for `--since` and `--after`. `send --request-id <id>` makes a retry safe: the
 server admits one message per id, and with `--new` creates one session per id,
 so a repeated `send --new --request-id <id>` names the same session and

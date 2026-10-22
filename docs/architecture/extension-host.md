@@ -249,7 +249,7 @@ Other notes:
 
 ## Publishing events
 
-Runtime code yields `EventStore` (`domain/event.ts`) directly. `publish` appends an event and delivers the envelope to subscribers; `append` and `deliver` are also separate so a mutation can append inside its transaction and deliver after commit. The extension `State` facet publishes only `ExtensionStateChanged` on the same store. Publishing is cwd-agnostic; per-cwd extension behavior comes from the turn's profile.
+Runtime code yields `EventStore` (`domain/event.ts`) directly. `publish` appends an event and delivers the envelope to subscribers, except a `StreamChunk`, which it delivers live and never stores; `append` and `deliver` are also separate so a mutation can append inside its transaction and deliver after commit. The extension `State` facet publishes only `ExtensionStateChanged` on the same store. Publishing is cwd-agnostic; per-cwd extension behavior comes from the turn's profile.
 
 ## Extension State
 

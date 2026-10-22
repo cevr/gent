@@ -12,7 +12,7 @@ export {
   sameCredential,
 } from "./domain/driver.js"
 export { AuthAuthorization, AuthProviderInfo } from "./runtime/provider.js"
-export { AgentEvent, EventEnvelope, InteractionPresented } from "./domain/event.js"
+export { AgentEvent, EventEnvelope, InteractionPresented, unseenText } from "./domain/event.js"
 // A request's reply on the wire, and its decode by the request's output schema.
 export { decodeRequestReply, RequestReply } from "./domain/capability.js"
 // One decision schema; the client names its type `ApprovalResult`.

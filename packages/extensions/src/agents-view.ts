@@ -14,6 +14,7 @@ import {
   SessionId,
   sessionThread,
   tailChars,
+  unseenText,
 } from "@gent/core/extensions/api"
 import { openQuestionCount } from "./interaction-tools.js"
 import { Threads } from "./threads.js"
@@ -427,11 +428,13 @@ type RunningCall = typeof RunningCall.Type
 
 /**
  * What a running loop is doing now, folded from its event stream: the calls
- * still running, in start order, and the reply text streamed since its step began.
+ * still running, in start order, and the tail of the reply text streamed
+ * since its step began (`partial`), of `streamed` characters in all.
  */
 interface ActivityFold {
   readonly tools: ReadonlyArray<{ readonly id: string; readonly call: RunningCall }>
   readonly partial: string
+  readonly streamed: number
 }
 
 /** Characters of the streamed line, and of a call's command, path or pattern, the tray keeps. */
@@ -457,14 +460,18 @@ const boundedInput = (input: Option.Option<ActivityInput>): ActivityInput => {
   }
 }
 
-export const emptyActivity: ActivityFold = { tools: [], partial: "" }
+export const emptyActivity: ActivityFold = { tools: [], partial: "", streamed: 0 }
 
 export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFold => {
   switch (event._tag) {
     case "StreamStarted":
-      return { ...state, partial: "" }
+      return { ...state, partial: "", streamed: 0 }
     case "StreamChunk":
-      return { ...state, partial: tailChars(state.partial + event.chunk, 4 * ACTIVITY_CHARS) }
+      return {
+        ...state,
+        partial: tailChars(state.partial + unseenText(state.streamed, event), 4 * ACTIVITY_CHARS),
+        streamed: Math.max(state.streamed, event.offset + event.chunk.length),
+      }
     case "ToolCallStarted":
       return {
         ...state,

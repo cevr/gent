@@ -19,6 +19,7 @@ import {
   type SessionId,
   GentConnectionError,
   type GentNamespacedClient,
+  unseenText,
   userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
@@ -331,6 +332,8 @@ export const runHeadless = (
       // An error that is not a notice: without answer text, the turn failed.
       let failed = false
       let wroteText = false
+      // The step's answer written so far.
+      let answered = 0
       const activeTools = new Map<string, HeadlessToolCall>()
       // Cells whose admitted calls printed their own lines.
       const cellsWithPrintedOperations = new Set<string>()
@@ -420,10 +423,16 @@ export const runHeadless = (
             }
             if (!inOwnTurn()) return
             switch (event._tag) {
-              case "StreamChunk":
-                if (event.chunk.trim().length > 0) wroteText = true
-                yield* writeStdout(event.chunk)
+              case "StreamStarted":
+                answered = 0
                 break
+              case "StreamChunk": {
+                const text = unseenText(answered, event)
+                answered = Math.max(answered, event.offset + event.chunk.length)
+                if (text.trim().length > 0) wroteText = true
+                yield* writeStdout(text)
+                break
+              }
               case "ToolCallStarted":
                 yield* toolStarted(event)
                 break

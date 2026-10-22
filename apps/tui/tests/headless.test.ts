@@ -118,8 +118,10 @@ const opening = (id: MessageId, text: string) =>
       metadata: { fromClient: true },
     }),
   })
-const chunk = (text: string) =>
-  AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
+const chunk = (text: string, offset = 0) =>
+  AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset, chunk: text })
+const stepStarted = (step: number) =>
+  AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: OWN_TURN, step })
 const completed = (
   fields: {
     readonly unanswered?: boolean
@@ -335,6 +337,27 @@ describe("runHeadless", () => {
       expect(String(Cause.squash(exit.cause))).toContain(
         "the turn ended without an answer: provider unavailable",
       )
+    }),
+  )
+
+  // A subscription opens with the answer so far as one chunk, which can
+  // repeat text a live chunk already carried; each step's answer starts at 0.
+  headlessTest("each step's text prints once, however its chunks overlap", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [
+          stepStarted(1),
+          chunk("Hel"),
+          chunk("Hello"),
+          chunk("lo, world", 3),
+          stepStarted(2),
+          chunk(" Next step."),
+          completed(),
+        ],
+      })
+      const { stdout } = yield* captureStdout(run(client))
+      expect(stdout).toContain("Hello, world Next step.")
+      expect(stdout.split("Hel")).toHaveLength(2)
     }),
   )
 

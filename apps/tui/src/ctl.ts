@@ -191,12 +191,12 @@ const reportCtlError = (error: CtlError) =>
 
 // ── compact records ─────────────────────────────────────────────────────────
 
-/** A one-line view of an event. A run of `StreamChunk` events folds into one record. */
+/** A one-line view of an event. */
 const CompactEvent = Schema.Struct({
   id: Schema.Finite,
   tag: Schema.String,
-  /** Folded `StreamChunk` events. */
-  n: Schema.optionalKey(Schema.Int),
+  /** Where a live `StreamChunk` starts in its step's answer. */
+  offset: Schema.optionalKey(Schema.Int),
   role: Schema.optionalKey(Schema.String),
   message: Schema.optionalKey(Schema.String),
   text: Schema.optionalKey(Schema.String),
@@ -239,7 +239,7 @@ const eventFields = (event: AgentEvent): Omit<CompactEvent, "id" | "tag"> =>
       text: clip(messagePartsText(message.parts), TEXT_CLIP),
     }),
     StreamStarted: ({ step }) => ({ step }),
-    StreamChunk: ({ chunk }) => ({ n: 1, text: chunk }),
+    StreamChunk: ({ offset, chunk }) => ({ offset, text: chunk }),
     ModelRouted: ({ model }) => ({ model }),
     CredentialAssigned: () => ({}),
     StreamEnded: (e) => ({
@@ -309,39 +309,6 @@ const compactEvent = (envelope: EventEnvelope): CompactEvent => ({
   tag: envelope.event._tag,
   ...eventFields(envelope.event),
 })
-
-/**
- * Compact records for `envelopes`, in order. Consecutive `StreamChunk`
- * events fold into one record: its id is the last chunk's, so it is a cursor,
- * `n` counts the chunks, and `text` is their text clipped.
- */
-export const compactEvents = (
-  envelopes: ReadonlyArray<EventEnvelope>,
-): ReadonlyArray<CompactEvent> => {
-  const records: Array<CompactEvent> = []
-  let chunkText = ""
-  for (const envelope of envelopes) {
-    const record = compactEvent(envelope)
-    const previous = records.at(-1)
-    if (record.tag === "StreamChunk" && previous?.tag === "StreamChunk") {
-      chunkText += record.text ?? ""
-      records[records.length - 1] = {
-        ...previous,
-        id: record.id,
-        n: (previous.n ?? 1) + 1,
-        text: clip(chunkText, TEXT_CLIP),
-      }
-      continue
-    }
-    if (record.tag !== "StreamChunk") {
-      records.push(record)
-      continue
-    }
-    chunkText = record.text ?? ""
-    records.push({ ...record, text: clip(chunkText, TEXT_CLIP) })
-  }
-  return records
-}
 
 // ── results ─────────────────────────────────────────────────────────────────
 
@@ -623,7 +590,7 @@ const readEvents = Effect.fn("Ctl.events")(function* (
       envelopes: items,
     })
   }
-  const { items, more } = window(compactEvents(stored))
+  const { items, more } = window(stored.map(compactEvent))
   return CtlResult.cases.Events.make({ ...target, cursor: cursorOf(items), more, events: items })
 })
 
@@ -684,7 +651,7 @@ const watchEvents = <A>(
 
 /**
  * The end of a turn: the `TurnCompleted` that names `message`, or with no
- * message the next one. The reply is the text the turn streamed.
+ * message the next one. The reply is the text of the answers its steps stored.
  */
 const awaitTurn = (
   client: GentNamespacedClient,
@@ -710,8 +677,8 @@ const awaitTurn = (
         }
         return Option.none()
       }
-      if (event._tag === "StreamChunk") {
-        reply += event.chunk
+      if (event._tag === "MessageReceived" && event.message.role === "assistant") {
+        reply += messagePartsText(event.message.parts)
         return Option.none()
       }
       if (event._tag !== "TurnCompleted") return Option.none()

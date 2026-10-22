@@ -16,7 +16,9 @@ import {
   SessionSettingsUpdated,
   StreamChunk,
   StreamEnded,
+  StreamStarted,
   TurnCompleted,
+  unseenText,
 } from "../../src/domain/event"
 import { ModelId, ProviderId } from "../../src/domain/agent"
 import { sameCredential } from "../../src/domain/driver"
@@ -98,9 +100,25 @@ describe("event session routing", () => {
     const event = StreamChunk.make({
       sessionId: session,
       branchId: branch,
+      offset: 0,
       chunk: "hi",
     })
     expect(getEventSessionId(event)).toBe(session)
+  })
+})
+
+describe("stream chunk overlap", () => {
+  const at = (offset: number, text: string) =>
+    StreamChunk.make({ sessionId: session, branchId: branch, offset, chunk: text })
+  test("an answer adds only the text of a chunk it lacks", () => {
+    expect(unseenText(0, at(0, "hello"))).toBe("hello")
+    // The opening answer held "hel"; the live chunk for "lo" repeats nothing.
+    expect(unseenText(3, at(3, "lo"))).toBe("lo")
+    // The opening answer already held this chunk, or part of it.
+    expect(unseenText(5, at(3, "lo"))).toBe("")
+    expect(unseenText(4, at(3, "lo"))).toBe("o")
+    // After a gap the chunk is added whole.
+    expect(unseenText(2, at(3, "lo"))).toBe("lo")
   })
 })
 
@@ -303,8 +321,32 @@ const sessionId = SessionId.make("session-delivery")
 const branchId = BranchId.make("branch-delivery")
 const otherBranch = BranchId.make("branch-delivery-other")
 
-const chunk = (index: number, branch: BranchId = branchId) =>
-  AgentEvent.cases.StreamChunk.make({ sessionId, branchId: branch, chunk: `chunk-${index}` })
+// One stored event per index: the delivery tests read only its ids.
+const stored = (index: number, branch: BranchId = branchId) =>
+  AgentEvent.cases.ToolCallStarted.make({
+    sessionId,
+    branchId: branch,
+    toolCallId: ToolCallId.make(`call-${index}`),
+    toolName: "probe",
+  })
+
+const streamStep = (branch: BranchId) => ({
+  sessionId,
+  branchId: branch,
+  messageId: MessageId.make(`turn-${branch}`),
+  step: 1,
+})
+const started = (branch: BranchId = branchId) => StreamStarted.make(streamStep(branch))
+const ended = (branch: BranchId = branchId) => StreamEnded.make(streamStep(branch))
+
+const chunk = (offset: number, text: string, branch: BranchId = branchId) =>
+  StreamChunk.make({ sessionId, branchId: branch, offset, chunk: text })
+
+const tagged = (envelopes: ReadonlyArray<EventEnvelope>) =>
+  envelopes.map((env) => {
+    if (env.event._tag === "StreamChunk") return [Number(env.id), env.event.chunk]
+    return [Number(env.id), env.event._tag]
+  })
 
 const ids = (envelopes: ReadonlyArray<EventEnvelope>) => envelopes.map((env) => Number(env.id))
 
@@ -350,7 +392,7 @@ describe("event stream delivery", () => {
           )
           yield* Effect.yieldNow
           // Publishing must not wait for the stalled subscriber.
-          yield* Effect.forEach(range(1, total), (index) => eventStore.publish(chunk(index)), {
+          yield* Effect.forEach(range(1, total), (index) => eventStore.publish(stored(index)), {
             discard: true,
           }).pipe(Effect.timeout("5 seconds"))
 
@@ -364,14 +406,14 @@ describe("event stream delivery", () => {
         Effect.gen(function* () {
           yield* ensureSession
           const eventStore = yield* EventStore
-          yield* Effect.forEach(range(1, 50), (index) => eventStore.publish(chunk(index)), {
+          yield* Effect.forEach(range(1, 50), (index) => eventStore.publish(stored(index)), {
             discard: true,
           })
           const collector = yield* eventStore
             .subscribe({ sessionId, branchId })
             .pipe(Stream.take(150), Stream.runCollect, Effect.forkChild)
           // Race the backlog drain with live appends.
-          yield* Effect.forEach(range(51, 150), (index) => eventStore.publish(chunk(index)), {
+          yield* Effect.forEach(range(51, 150), (index) => eventStore.publish(stored(index)), {
             discard: true,
           })
           const received = yield* Fiber.join(collector).pipe(Effect.timeout("5 seconds"))
@@ -383,13 +425,13 @@ describe("event stream delivery", () => {
         Effect.gen(function* () {
           yield* ensureSession
           const eventStore = yield* EventStore
-          yield* eventStore.publish(chunk(1))
-          yield* eventStore.publish(chunk(2, otherBranch))
+          yield* eventStore.publish(stored(1))
+          yield* eventStore.publish(stored(2, otherBranch))
           const collector = yield* eventStore
             .subscribe({ sessionId, branchId })
             .pipe(Stream.take(2), Stream.runCollect, Effect.forkChild)
-          yield* eventStore.publish(chunk(3, otherBranch))
-          yield* eventStore.publish(chunk(4))
+          yield* eventStore.publish(stored(3, otherBranch))
+          yield* eventStore.publish(stored(4))
           const received = yield* Fiber.join(collector).pipe(Effect.timeout("5 seconds"))
           expect(ids(received)).toEqual([1, 4])
         }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
@@ -399,17 +441,17 @@ describe("event stream delivery", () => {
         Effect.gen(function* () {
           yield* ensureSession
           const eventStore = yield* EventStore
-          yield* eventStore.publish(chunk(1))
-          yield* eventStore.publish(chunk(2))
+          yield* eventStore.publish(stored(1))
+          yield* eventStore.publish(stored(2))
           // The marker carries the replay cursor even when the branch filter hid the last event.
-          yield* eventStore.publish(chunk(3, otherBranch))
+          yield* eventStore.publish(stored(3, otherBranch))
           // The live append happens only after the marker, so replay and live are distinct.
           const received = yield* eventStore
             .subscribe({ sessionId, branchId, after: EventId.make(1), synchronize: true })
             .pipe(
               Stream.tap((env) =>
                 Effect.gen(function* () {
-                  if (env.event._tag === "StreamSynchronized") yield* eventStore.publish(chunk(4))
+                  if (env.event._tag === "StreamSynchronized") yield* eventStore.publish(stored(4))
                 }),
               ),
               Stream.take(3),
@@ -417,9 +459,9 @@ describe("event stream delivery", () => {
               Effect.timeout("5 seconds"),
             )
           expect(received.map((env) => [Number(env.id), env.event._tag])).toEqual([
-            [2, "StreamChunk"],
+            [2, "ToolCallStarted"],
             [3, "StreamSynchronized"],
-            [4, "StreamChunk"],
+            [4, "ToolCallStarted"],
           ])
           expect(received[1]?.event).toMatchObject({ sessionId, branchId, lastEventId: 3 })
           // Plain subscribers keep the bare event sequence.
@@ -427,6 +469,132 @@ describe("event stream delivery", () => {
             .subscribe({ sessionId, branchId })
             .pipe(Stream.take(3), Stream.runCollect)
           expect(ids(plain)).toEqual([1, 2, 4])
+        }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
+      )
+
+      it.scopedLive("a chunk is never stored", () =>
+        Effect.gen(function* () {
+          yield* ensureSession
+          const eventStore = yield* EventStore
+          const error = yield* eventStore.append(chunk(0, "hi")).pipe(Effect.flip)
+          expect(error._tag).toBe("EventStoreError")
+          yield* eventStore.publish(started())
+          yield* eventStore.publish(chunk(0, "hi"))
+          yield* eventStore.publish(ended())
+          // A subscription opened after the step replays only what is stored.
+          const replayed = yield* eventStore
+            .subscribe({ sessionId, branchId, synchronize: true })
+            .pipe(Stream.take(3), Stream.runCollect, Effect.timeout("5 seconds"))
+          expect(tagged(replayed)).toEqual([
+            [1, "StreamStarted"],
+            [2, "StreamEnded"],
+            [2, "StreamSynchronized"],
+          ])
+        }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
+      )
+
+      it.scopedLive("a live chunk comes after every stored event published before it", () =>
+        Effect.gen(function* () {
+          yield* ensureSession
+          const eventStore = yield* EventStore
+          // The subscriber stalls, so the stored events reach it only by drain.
+          const gate = yield* Deferred.make<void>()
+          const stalled = yield* eventStore.subscribe({ sessionId, branchId }).pipe(
+            Stream.tap(() => Deferred.await(gate)),
+            Stream.take(6),
+            Stream.runCollect,
+            Effect.forkChild,
+          )
+          yield* Effect.yieldNow
+          yield* eventStore.publish(started())
+          yield* eventStore.publish(chunk(0, "hel"))
+          yield* eventStore.publish(stored(1))
+          yield* eventStore.publish(chunk(3, "lo"))
+          yield* eventStore.publish(chunk(0, "elsewhere", otherBranch))
+          yield* eventStore.publish(ended())
+          yield* eventStore.publish(stored(2))
+          yield* Deferred.succeed(gate, void 0)
+          const received = yield* Fiber.join(stalled).pipe(Effect.timeout("5 seconds"))
+          expect(tagged(received)).toEqual([
+            [1, "StreamStarted"],
+            [1, "hel"],
+            [2, "ToolCallStarted"],
+            [2, "lo"],
+            [3, "StreamEnded"],
+            [4, "ToolCallStarted"],
+          ])
+        }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
+      )
+
+      it.scopedLive(
+        "a chunk published after a subscription opened reaches it past its cursor",
+        () =>
+          Effect.gen(function* () {
+            yield* ensureSession
+            const eventStore = yield* EventStore
+            yield* eventStore.publish(started())
+            // Stored in a transaction, delivered after it commits.
+            const pending = yield* eventStore.append(stored(1))
+            const received = yield* eventStore
+              .subscribe({ sessionId, branchId, after: "latest", synchronize: true })
+              .pipe(
+                Stream.tap((env) =>
+                  Effect.gen(function* () {
+                    if (env.event._tag !== "StreamSynchronized") return
+                    yield* eventStore.publish(chunk(0, "hi"))
+                    yield* eventStore.deliver(pending)
+                  }),
+                ),
+                Stream.take(2),
+                Stream.runCollect,
+                Effect.timeout("5 seconds"),
+              )
+            expect(tagged(received)).toEqual([
+              [2, "StreamSynchronized"],
+              [1, "hi"],
+            ])
+          }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
+      )
+
+      it.scopedLive("a subscription opened mid-answer starts with the answer so far", () =>
+        Effect.gen(function* () {
+          yield* ensureSession
+          const eventStore = yield* EventStore
+          yield* eventStore.publish(started())
+          yield* eventStore.publish(chunk(0, "hel"))
+          yield* eventStore.publish(chunk(3, "lo"))
+          yield* eventStore.publish(started(otherBranch))
+          yield* eventStore.publish(chunk(0, "other", otherBranch))
+          const received = yield* eventStore
+            .subscribe({ sessionId, branchId, synchronize: true })
+            .pipe(
+              Stream.tap((env) =>
+                Effect.gen(function* () {
+                  if (env.event._tag === "StreamSynchronized")
+                    yield* eventStore.publish(chunk(5, " world"))
+                }),
+              ),
+              Stream.take(4),
+              Stream.runCollect,
+              Effect.timeout("5 seconds"),
+            )
+          expect(tagged(received)).toEqual([
+            [1, "StreamStarted"],
+            [2, "StreamSynchronized"],
+            [2, "hello"],
+            [2, " world"],
+          ])
+          expect(received[2]?.event).toMatchObject({ offset: 0 })
+          // A step that ended leaves no answer to open with.
+          yield* eventStore.publish(ended())
+          const after = yield* eventStore
+            .subscribe({ sessionId, branchId, synchronize: true })
+            .pipe(Stream.take(3), Stream.runCollect, Effect.timeout("5 seconds"))
+          expect(tagged(after)).toEqual([
+            [1, "StreamStarted"],
+            [3, "StreamEnded"],
+            [3, "StreamSynchronized"],
+          ])
         }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
       )
 

@@ -1864,6 +1864,7 @@ describe("useSessionFeed", () => {
         AgentEvent.cases.StreamChunk.make({
           sessionId,
           branchId,
+          offset: 0,
           chunk: "assistant text",
         }),
       )
@@ -1946,7 +1947,12 @@ describe("useSessionFeed", () => {
       const runtime = createMockRuntime()
       const { feed, dispose } = openFeed({
         snapshot: snapshotFor(sessionId, branchId),
-        events: uniqueEnvelopes.flatMap((envelope) => [envelope, envelope]),
+        // A stored event can arrive twice; a chunk is live only and arrives once.
+        events: uniqueEnvelopes.flatMap((envelope) =>
+          [envelope, envelope].filter(
+            (copy, index) => index === 0 || copy.event._tag !== "StreamChunk",
+          ),
+        ),
         runtime,
         client: {
           log: {
@@ -2110,7 +2116,12 @@ describe("useSessionFeed", () => {
         ),
         makeEnvelope(
           3,
-          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "the answer" }),
+          AgentEvent.cases.StreamChunk.make({
+            sessionId,
+            branchId,
+            offset: 0,
+            chunk: "the answer",
+          }),
         ),
       ]
       const { feed, dispose } = openFeed({
@@ -2787,8 +2798,8 @@ describe("useSessionFeed", () => {
         const toolCallId = ToolCallId.make("first-stream-tool")
         const events = [
           AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 1 }),
-          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "First " }),
-          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "answer" }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 0, chunk: "First " }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 6, chunk: "answer" }),
           AgentEvent.cases.ToolCallStarted.make({
             sessionId,
             branchId,
@@ -2803,7 +2814,7 @@ describe("useSessionFeed", () => {
             branchId,
           }),
           AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
-          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Next step" }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 0, chunk: "Next step" }),
           AgentEvent.cases.ToolCallSucceeded.make({
             sessionId,
             branchId,
@@ -2825,8 +2836,13 @@ describe("useSessionFeed", () => {
             messageId: nextInputId,
             step: 1,
           }),
-          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Follow-up " }),
-          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "answer" }),
+          AgentEvent.cases.StreamChunk.make({
+            sessionId,
+            branchId,
+            offset: 0,
+            chunk: "Follow-up ",
+          }),
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 10, chunk: "answer" }),
           AgentEvent.cases.TurnCompleted.make({
             streamFailed: false,
             sessionId,
@@ -2835,6 +2851,8 @@ describe("useSessionFeed", () => {
             durationMs: 0,
           }),
         ]
+        // Chunks are live only, so a reload's replay holds none.
+        const delivered = events.filter((event) => !saved || event._tag !== "StreamChunk")
         // The snapshot projects a cell's operations from the branch's stored receipts.
         const savedOperation: NonNullable<ToolInteraction["operations"]>[number] = {
           id: ToolCallId.make("saved-read-op"),
@@ -2889,12 +2907,12 @@ describe("useSessionFeed", () => {
               calls,
             )
           })
-          snapshot = SessionSnapshot.make({ ...snapshot, lastEventId: events.length, messages })
+          snapshot = SessionSnapshot.make({ ...snapshot, lastEventId: delivered.length, messages })
         }
         let applied = 0
         const { feed, dispose } = openFeed({
           snapshot,
-          events: events.map((event, index) => makeEnvelope(index + 1, event, index * 300)),
+          events: delivered.map((event, index) => makeEnvelope(index + 1, event, index * 300)),
           client: {
             applySessionEvent: () => {
               applied += 1
@@ -2907,7 +2925,7 @@ describe("useSessionFeed", () => {
 
         yield* waitUntil(
           () =>
-            applied === events.length &&
+            applied === delivered.length &&
             Option.isSome(feed) &&
             feed.value.messages().some((message) => message.content.includes("Follow-up answer")),
         ).pipe(
@@ -2960,8 +2978,8 @@ describe("useSessionFeed", () => {
       messageId: inputId,
       step: 1,
     })
-    const chunk = (text: string) =>
-      AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
+    const chunk = (text: string, offset: number) =>
+      AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset, chunk: text })
     const synchronized = (id: number) =>
       makeEnvelope(
         id,
@@ -2990,16 +3008,17 @@ describe("useSessionFeed", () => {
         midStepIds("feed-mid-step")
       const later = yield* Queue.unbounded<EventEnvelope>()
       const { feed, dispose } = openFeed({
-        // The snapshot's cursor covers the step's first chunk, not its answer.
-        snapshot: snapshotFor(sessionId, branchId, 2),
+        // The snapshot's cursor covers the step's start, not its answer.
+        snapshot: snapshotFor(sessionId, branchId, 1),
         session: {
+          // The subscription opens with the answer so far as one chunk.
           events: () =>
             Stream.concat(
               Stream.make(
                 makeEnvelope(1, started),
-                makeEnvelope(2, chunk("Hello ")),
-                synchronized(2),
-                makeEnvelope(3, chunk("world")),
+                makeEnvelope(1, chunk("Hello ", 0)),
+                synchronized(1),
+                makeEnvelope(1, chunk("world", 6)),
               ),
               Stream.fromQueue(later),
             ),
@@ -3060,13 +3079,13 @@ describe("useSessionFeed", () => {
           getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId, cursor)),
           events: () => {
             attempts += 1
-            cursor = 4
+            cursor = 1
             if (attempts === 1)
               return Stream.concat(
                 Stream.make(
                   makeEnvelope(1, started),
-                  makeEnvelope(2, chunk("Hello ")),
-                  synchronized(2),
+                  makeEnvelope(1, chunk("Hello ", 0)),
+                  synchronized(1),
                 ),
                 Stream.fail(
                   new RpcClientError({
@@ -3074,13 +3093,13 @@ describe("useSessionFeed", () => {
                   }),
                 ),
               )
-            // The chunks that streamed while the connection was down replay.
+            // The new subscription opens with the answer so far, which
+            // holds the text streamed while the connection was down.
             return Stream.concat(
               Stream.make(
-                makeEnvelope(3, chunk("big ")),
-                makeEnvelope(4, chunk("wide ")),
-                synchronized(4),
-                makeEnvelope(5, chunk("world")),
+                makeEnvelope(1, chunk("Hello big wide ", 0)),
+                synchronized(1),
+                makeEnvelope(1, chunk("world", 15)),
               ),
               Stream.never,
             )
@@ -3152,7 +3171,12 @@ describe("useSessionFeed", () => {
       const lateToolCallId = ToolCallId.make("late-tool-call")
       const events = [
         AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 1 }),
-        AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "First answer" }),
+        AgentEvent.cases.StreamChunk.make({
+          sessionId,
+          branchId,
+          offset: 0,
+          chunk: "First answer",
+        }),
         AgentEvent.cases.StreamEnded.make({
           messageId: MessageId.make("msg"),
           step: 1,
@@ -3160,7 +3184,12 @@ describe("useSessionFeed", () => {
           branchId,
         }),
         AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
-        AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Second answer" }),
+        AgentEvent.cases.StreamChunk.make({
+          sessionId,
+          branchId,
+          offset: 0,
+          chunk: "Second answer",
+        }),
         // The first step's tool receipt arrives after the second step began.
         AgentEvent.cases.ToolCallStarted.make({
           sessionId,
@@ -3248,6 +3277,7 @@ describe("useSessionFeed", () => {
           AgentEvent.cases.StreamChunk.make({
             sessionId,
             branchId,
+            offset: 0,
             chunk: "native response",
           }),
         )

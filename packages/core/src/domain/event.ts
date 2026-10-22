@@ -110,9 +110,19 @@ export const AgentEvent = Schema.TaggedUnion({
      */
     profileRevision: Schema.optional(Schema.String),
   },
+  /**
+   * Text of the answer a step streams. Live only: the store never holds it
+   * (`append` rejects it), and the step's `MessageReceived` holds the whole
+   * answer. `offset` is the length of the step's answer before the chunk,
+   * so a client that holds part of it already takes only the text it lacks
+   * (`unseenText`): a subscription opens with each answer in progress as
+   * one chunk at offset 0. Its envelope id is the newest stored event
+   * delivered before it, not an id of its own.
+   */
   StreamChunk: {
     sessionId: SessionId,
     branchId: BranchId,
+    offset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     chunk: Schema.String,
   },
   /**
@@ -522,6 +532,23 @@ export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
 const StreamSynchronized = AgentEvent.cases.StreamSynchronized
 
+/**
+ * An event a subscription carries and the store never holds: the marker
+ * describes one subscription's position, and a chunk is superseded by its
+ * step's stored answer.
+ */
+export const isTransientEvent: (event: AgentEvent) => boolean = Predicate.or(
+  Predicate.isTagged("StreamSynchronized"),
+  Predicate.isTagged("StreamChunk"),
+)
+
+/**
+ * The part of `chunk` an answer that holds `known` characters of it lacks:
+ * none when it holds the chunk already, all of it after a gap.
+ */
+export const unseenText = (known: number, chunk: StreamChunk): string =>
+  chunk.chunk.slice(Math.max(0, known - chunk.offset))
+
 // ── event envelope and store ────────────────────────────────────────────────
 
 export class EventEnvelope extends Schema.Class<EventEnvelope, { readonly brand: unique symbol }>(
@@ -575,12 +602,14 @@ export const makeSerializedEventDelivery = (
     yield* TxQueue.take(queue).pipe(
       Effect.flatMap((job) =>
         Effect.gen(function* () {
-          if (delivered.has(job.envelope.id)) {
+          // A live chunk's id names its place, not itself: it is never a duplicate.
+          const stored = !isTransientEvent(job.envelope.event)
+          if (stored && delivered.has(job.envelope.id)) {
             yield* Deferred.succeed(job.ack, void 0)
             return
           }
           const exit = yield* Effect.exit(broadcast(job.envelope))
-          if (exit._tag === "Success") {
+          if (exit._tag === "Success" && stored) {
             delivered.add(job.envelope.id)
             if (delivered.size > maxDeliveredIds) {
               const oldest = delivered.values().next().value
@@ -639,12 +668,15 @@ const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean =
 
 // EventStore Service
 
-/** The marker describes one subscription's position. Storing it would replay a lie. */
-const rejectStreamMarker = (event: AgentEvent) =>
+/**
+ * The marker describes one subscription's position: storing it would replay
+ * a lie. A chunk's text is in its step's stored answer.
+ */
+const rejectTransient = (event: AgentEvent) =>
   Effect.gen(function* () {
-    if (event._tag === "StreamSynchronized") {
+    if (isTransientEvent(event)) {
       return yield* new EventStoreError({
-        message: "StreamSynchronized is a subscription marker and is never stored",
+        message: `${event._tag} is live only and is never stored`,
       })
     }
   })
@@ -672,11 +704,56 @@ interface EventStoreBackend {
 
 export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: EventStoreBackend) {
   const registry = yield* makeSessionPubSubRegistry
-  const deliver = yield* makeSerializedEventDelivery(registry.broadcast)
+  // Per session, written by the delivery worker only: the newest stored
+  // event delivered, and each branch's answer in progress, from its step's
+  // `StreamStarted` to its end. Both are this process's: a restarted server
+  // runs no answer.
+  const delivered = new Map<SessionId, EventId>()
+  const answers = new Map<SessionId, Map<BranchId, string>>()
+  const branchAnswers = (sessionId: SessionId) => {
+    const found = answers.get(sessionId) ?? new Map<BranchId, string>()
+    answers.set(sessionId, found)
+    return found
+  }
+  const foldAnswer = (event: AgentEvent) => {
+    switch (event._tag) {
+      case "StreamStarted":
+        branchAnswers(event.sessionId).set(event.branchId, "")
+        return
+      case "StreamChunk": {
+        const open = branchAnswers(event.sessionId)
+        const text = open.get(event.branchId) ?? ""
+        open.set(event.branchId, text + unseenText(text.length, event))
+        return
+      }
+      case "StreamEnded":
+      case "TurnCompleted":
+        branchAnswers(event.sessionId).delete(event.branchId)
+        return
+    }
+  }
+  /** A chunk takes its place here: after every stored event delivered before it. */
+  const broadcast = (envelope: EventEnvelope) =>
+    Effect.gen(function* () {
+      const sessionId = getEventSessionId(envelope.event)
+      foldAnswer(envelope.event)
+      if (envelope.event._tag === "StreamChunk") {
+        return yield* registry.broadcast(
+          EventEnvelope.make({
+            id: delivered.get(sessionId) ?? EventId.make(0),
+            event: envelope.event,
+            createdAt: envelope.createdAt,
+          }),
+        )
+      }
+      delivered.set(sessionId, EventId.make(Math.max(delivered.get(sessionId) ?? 0, envelope.id)))
+      yield* registry.broadcast(envelope)
+    })
+  const deliver = yield* makeSerializedEventDelivery(broadcast)
 
   const service: EventStoreService = {
     append: Effect.fn("EventStore.append")(function* (event) {
-      yield* rejectStreamMarker(event)
+      yield* rejectTransient(event)
       const currentSpan = yield* Effect.currentParentSpan.pipe(Effect.option)
       return yield* backend.append(
         event,
@@ -687,8 +764,19 @@ export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: Ev
     deliver,
 
     publish: Effect.fn("EventStore.publish")(function* (event) {
-      const envelope = yield* service.append(event)
-      yield* deliver(envelope)
+      if (event._tag !== "StreamChunk") return yield* deliver(yield* service.append(event))
+      // A chunk before any delivery since the server started follows what is stored.
+      if (!delivered.has(event.sessionId)) {
+        const latest = yield* backend.latest(event.sessionId, Option.none())
+        if (!delivered.has(event.sessionId)) delivered.set(event.sessionId, latest)
+      }
+      yield* deliver(
+        EventEnvelope.make({
+          id: EventId.make(0),
+          event,
+          createdAt: yield* Clock.currentTimeMillis,
+        }),
+      )
     }),
 
     subscribe: (params) =>
@@ -698,6 +786,12 @@ export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: Ev
             const { sessionId, branchId, after, synchronize } = params
             if (backend.open) yield* backend.open(params)
             const subscription = yield* registry.subscribe(sessionId)
+            // Read together after subscribing: the answers hold every chunk
+            // delivered up to that event, and a later one is in the subscription.
+            const openedAt = Option.fromUndefinedOr(delivered.get(sessionId))
+            const opening = Array.from(answers.get(sessionId) ?? [], ([branch, chunk]) =>
+              StreamChunk.make({ sessionId, branchId: branch, offset: 0, chunk }),
+            )
             // Resolved after subscribing, so an event appended in between is
             // still loaded from the cursor.
             let afterId = EventId.make(0)
@@ -710,13 +804,20 @@ export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: Ev
               afterId,
               branchId,
               synchronize,
+              delivered: openedAt,
+              answers: opening,
               load: (afterId) => backend.load(sessionId, afterId),
             })
           }),
         ),
       ),
 
-    removeSession: registry.remove,
+    removeSession: (sessionId) =>
+      Effect.suspend(() => {
+        delivered.delete(sessionId)
+        answers.delete(sessionId)
+        return registry.remove(sessionId)
+      }),
   }
   return service
 })
@@ -770,31 +871,32 @@ export class EventStore extends Context.Service<EventStore, EventStoreService>()
 /**
  * Slow-client policy: bounded notification plus durable cursor replay.
  *
- * Each session owns one sliding PubSub of event ids. A publisher never waits
- * for subscribers, so a stalled client cannot block tool execution. A
- * subscriber that falls behind loses only notifications, never events: every
- * wake-up drains the durable store from the subscriber's own cursor, and the
- * newest notification always survives eviction, so a subscriber that missed
- * some notifications still drains once more.
+ * Each session owns one sliding PubSub of delivered envelopes. A publisher
+ * never waits for subscribers, so a stalled client cannot block tool
+ * execution. A subscriber that falls behind loses no stored event: a stored
+ * envelope is only a notification, every wake-up drains the durable store
+ * from the subscriber's own cursor, and the newest notification always
+ * survives eviction. It may lose live chunks: its answer in progress then
+ * lacks that text until the step's stored answer replaces it.
  */
-export const SESSION_NOTIFICATION_CAPACITY = 64
+export const SESSION_NOTIFICATION_CAPACITY = 512
 
 interface SessionPubSubRegistry {
   readonly subscribe: (
     sessionId: SessionId,
-  ) => Effect.Effect<PubSub.Subscription<EventId>, never, Scope.Scope>
+  ) => Effect.Effect<PubSub.Subscription<EventEnvelope>, never, Scope.Scope>
   readonly broadcast: (envelope: EventEnvelope) => Effect.Effect<void>
   readonly remove: (sessionId: SessionId) => Effect.Effect<void>
 }
 
 const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = Effect.gen(function* () {
-  const sessionsRef = yield* TxRef.make(HashMap.empty<SessionId, PubSub.PubSub<EventId>>())
+  const sessionsRef = yield* TxRef.make(HashMap.empty<SessionId, PubSub.PubSub<EventEnvelope>>())
 
-  const getOrCreate = (sessionId: SessionId): Effect.Effect<PubSub.PubSub<EventId>> =>
+  const getOrCreate = (sessionId: SessionId): Effect.Effect<PubSub.PubSub<EventEnvelope>> =>
     Effect.gen(function* () {
       const existing = HashMap.get(yield* TxRef.get(sessionsRef), sessionId)
       if (existing._tag === "Some") return existing.value
-      const fresh = yield* PubSub.sliding<EventId>(SESSION_NOTIFICATION_CAPACITY)
+      const fresh = yield* PubSub.sliding<EventEnvelope>(SESSION_NOTIFICATION_CAPACITY)
       // Race-safe install: re-check, install only if still missing.
       return yield* TxRef.modify(sessionsRef, (current) => {
         const found = HashMap.get(current, sessionId)
@@ -805,7 +907,7 @@ const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = Effect.g
 
   const subscribe = (
     sessionId: SessionId,
-  ): Effect.Effect<PubSub.Subscription<EventId>, never, Scope.Scope> =>
+  ): Effect.Effect<PubSub.Subscription<EventEnvelope>, never, Scope.Scope> =>
     Effect.gen(function* () {
       const ps = yield* getOrCreate(sessionId)
       return yield* PubSub.subscribe(ps)
@@ -815,7 +917,7 @@ const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = Effect.g
     const eventSessionId = getEventSessionId(envelope.event)
     return Effect.gen(function* () {
       const ps = yield* getOrCreate(eventSessionId)
-      yield* PubSub.publish(ps, envelope.id)
+      yield* PubSub.publish(ps, envelope)
     })
   }
 
@@ -823,7 +925,7 @@ const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = Effect.g
     Effect.gen(function* () {
       const removed = yield* TxRef.modify(sessionsRef, (current) => {
         const found = HashMap.get(current, sessionId)
-        if (found._tag === "None") return [Option.none<PubSub.PubSub<EventId>>(), current]
+        if (found._tag === "None") return [Option.none<PubSub.PubSub<EventEnvelope>>(), current]
         return [Option.some(found.value), HashMap.remove(current, sessionId)]
       })
       if (Option.isSome(removed)) yield* PubSub.shutdown(removed.value)
@@ -834,13 +936,18 @@ const makeSessionPubSubRegistry: Effect.Effect<SessionPubSubRegistry> = Effect.g
 
 /**
  * One ordered event stream from a durable cursor. The caller opens the
- * subscription before calling this, so an append during the first drain
- * leaves a notification behind and is drained next. Every drain reads the
- * session's events after the cursor, so notifications may be lost or
- * coalesced without losing or repeating events.
+ * subscription before calling this, so an event delivered during the first
+ * drain leaves a notification behind and is drained next. A stored event's
+ * notification drains the session's events after the cursor up to its id,
+ * so notifications may be lost or coalesced without losing or repeating
+ * events. A live chunk follows the stored events delivered before it: its
+ * envelope id names the newest, and the stream drains up to it first. A
+ * chunk delivered before the subscription opened is in its opening answers;
+ * one delivered later is sent even when the cursor is past it, as a caller's
+ * `after` can name an event stored but not yet delivered.
  */
 const makeCursorReplayStream = <E>(params: {
-  readonly subscription: PubSub.Subscription<EventId>
+  readonly subscription: PubSub.Subscription<EventEnvelope>
   readonly sessionId: SessionId
   readonly afterId: EventId
   readonly branchId?: BranchId
@@ -851,41 +958,79 @@ const makeCursorReplayStream = <E>(params: {
    * it; in-process consumers that only await specific events do not.
    */
   readonly synchronize?: boolean
+  /**
+   * The newest stored event delivered when the subscription opened: the
+   * replay stops there, and what is stored after it comes with its own
+   * notification. None before the first delivery since the server started.
+   */
+  readonly delivered: Option.Option<EventId>
+  /** The answers in progress when the subscription opened, each one chunk; sent after the replay. */
+  readonly answers: ReadonlyArray<StreamChunk>
   /** Session events with id greater than the cursor, ascending. */
   readonly load: (afterId: EventId) => Effect.Effect<ReadonlyArray<EventEnvelope>, E>
 }): Stream.Stream<EventEnvelope, E> =>
   Stream.unwrap(
     Effect.gen(function* () {
       let cursor = params.afterId
-      const drain = Effect.gen(function* () {
-        const batch = yield* params.load(cursor)
-        const last = batch[batch.length - 1]
-        if (Predicate.isNotUndefined(last)) cursor = last.id
-        return batch.filter((env) => matchesBranchFilter(env, params.branchId))
-      })
-      const initial = yield* drain
-      const marker = Effect.gen(function* () {
-        if (params.synchronize !== true) return []
-        const envelope = EventEnvelope.make({
-          id: cursor,
-          event: StreamSynchronized.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            lastEventId: cursor,
-          }),
-          createdAt: yield* Clock.currentTimeMillis,
+      /** The events after the cursor, up to `upTo` when given, on the subscribed branch. */
+      const drain = (upTo: Option.Option<EventId>) =>
+        Effect.gen(function* () {
+          if (Option.exists(upTo, (id) => id <= cursor)) return []
+          const loaded = yield* params.load(cursor)
+          const batch = Option.match(upTo, {
+            onNone: () => loaded,
+            onSome: (id) => loaded.filter((env) => env.id <= id),
+          })
+          const last = batch[batch.length - 1]
+          if (Predicate.isNotUndefined(last)) cursor = last.id
+          return batch.filter((env) => matchesBranchFilter(env, params.branchId))
         })
-        return [envelope]
-      })
+      const initial = yield* drain(params.delivered)
+      const openedAt = Option.getOrElse(params.delivered, () => EventId.make(0))
+      const createdAt = yield* Clock.currentTimeMillis
+      const opening: EventEnvelope[] = []
+      if (params.synchronize === true)
+        opening.push(
+          EventEnvelope.make({
+            id: cursor,
+            event: StreamSynchronized.make({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+              lastEventId: cursor,
+            }),
+            createdAt,
+          }),
+        )
+      for (const answer of params.answers) {
+        const envelope = EventEnvelope.make({ id: cursor, event: answer, createdAt })
+        if (answer.chunk.length > 0 && matchesBranchFilter(envelope, params.branchId))
+          opening.push(envelope)
+      }
+      /** One burst of notifications, in delivery order. */
+      const deliverBurst = (burst: ReadonlyArray<EventEnvelope>) =>
+        Effect.gen(function* () {
+          const out: EventEnvelope[] = []
+          let stored = Option.none<EventId>()
+          for (const envelope of burst) {
+            if (envelope.event._tag !== "StreamChunk") {
+              stored = Option.some(envelope.id)
+              continue
+            }
+            // Every stored event delivered before the chunk is at or below its id.
+            out.push(...(yield* drain(Option.some(envelope.id))))
+            stored = Option.none()
+            if (envelope.id >= openedAt && matchesBranchFilter(envelope, params.branchId))
+              out.push(envelope)
+          }
+          if (Option.isSome(stored)) out.push(...(yield* drain(stored)))
+          return out
+        })
       const live = Stream.fromSubscription(params.subscription).pipe(
-        // One durable read per burst of notifications.
+        // One durable read per burst of notifications, and none for chunks alone.
         Stream.chunks,
-        Stream.mapEffect(() => drain),
+        Stream.mapEffect(deliverBurst),
         Stream.flatMap(Stream.fromIterable),
       )
-      return Stream.concat(
-        Stream.fromIterable(initial),
-        Stream.concat(Stream.fromIterable(yield* marker), live),
-      )
+      return Stream.concat(Stream.fromIterable([...initial, ...opening]), live)
     }),
   )

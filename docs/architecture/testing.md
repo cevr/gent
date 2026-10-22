@@ -108,7 +108,7 @@ export const acceptance = Effect.gen(function* () {
 }).pipe(Effect.scoped, Effect.timeout("8 seconds"))
 ```
 
-Core tests record the event sequence for assertions with `recordingEventStore(ref)` (the in-memory store that also keeps each appended event in a `Ref`), imported by relative path from `packages/core/src/test-utils/harness.ts`.
+Core tests record the event sequence for assertions with `recordingEventStore(ref)` (the in-memory store that also keeps each published event, live chunks included, in a `Ref`), imported by relative path from `packages/core/src/test-utils/harness.ts`.
 
 ## Commands
 
@@ -144,7 +144,7 @@ One test file per source file. No god tests. Names match source owners.
 ## Important files
 
 - `packages/core/src/test-utils/harness.ts` — `recordingEventStore`, the
-  in-memory event store that keeps each appended event in a `Ref`;
+  in-memory event store that keeps each published event in a `Ref`;
   `baseLocalLayer`, a production-root preset over
   `createDependencies` with in-memory SQLite, storage-backed events, debug
   providers, and test service overrides; `createE2ELayer`, a preset that keeps

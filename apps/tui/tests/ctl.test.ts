@@ -3,21 +3,12 @@
  * against a real sqlite server on the scripted model in a scratch home. A
  * call finds that server through the data directory's lock, as a shell does.
  */
-import { describe, expect, it, test } from "effect-bun-test"
+import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
-import {
-  AgentEvent,
-  BranchId,
-  decodeRequestReply,
-  EventEnvelope,
-  MessageId,
-  RequestReply,
-  SessionId,
-} from "@gent/core/protocol"
+import { decodeRequestReply, RequestReply } from "@gent/core/protocol"
 import {
   BunGentPlatformLive,
-  EventId,
   makeTempDirectoryScoped,
   serveModelCatalogFixture,
   TEST_MODEL_ID,
@@ -38,7 +29,7 @@ import {
   Sink,
   Stdio,
 } from "effect"
-import { CTL_EXIT, compactEvents, CtlResult, runCtlCli } from "../src/ctl"
+import { CTL_EXIT, CtlResult, runCtlCli } from "../src/ctl"
 
 // ── harness ─────────────────────────────────────────────────────────────────
 
@@ -542,45 +533,3 @@ describe("gent ctl against a running server", () => {
 })
 
 // ── compact records ─────────────────────────────────────────────────────────
-
-describe("compact event records", () => {
-  const sessionId = SessionId.make("s-1")
-  const branchId = BranchId.make("b-1")
-  const envelope = (id: number, event: AgentEvent) =>
-    EventEnvelope.make({ id: EventId.make(id), event, createdAt: 0 })
-
-  test("a run of stream chunks folds into one record whose id is the last chunk's", () => {
-    const chunk = (chunk: string) =>
-      AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk })
-    const records = compactEvents([
-      envelope(
-        1,
-        AgentEvent.cases.StreamStarted.make({
-          messageId: MessageId.make("msg"),
-          step: 1,
-          sessionId,
-          branchId,
-        }),
-      ),
-      envelope(2, chunk("Hel")),
-      envelope(3, chunk("lo, ")),
-      envelope(4, chunk("world")),
-      envelope(
-        5,
-        AgentEvent.cases.TurnCompleted.make({
-          streamFailed: false,
-          sessionId,
-          branchId,
-          messageId: MessageId.make("m-1"),
-          durationMs: 12,
-          interrupted: true,
-        }),
-      ),
-    ])
-    expect(records).toEqual([
-      { id: 1, tag: "StreamStarted", step: 1 },
-      { id: 4, tag: "StreamChunk", n: 3, text: "Hello, world" },
-      { id: 5, tag: "TurnCompleted", message: "m-1", ms: 12, flags: ["interrupted"] },
-    ])
-  })
-})

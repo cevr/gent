@@ -7011,7 +7011,10 @@ describe("TUI renderer surfaces", () => {
         )
         yield* waitForFrame(setup, (next) => next.includes("✻ Thinking (7s)"), "back to the turn")
         // Answer text streams: the model generates.
-        yield* event(3, AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "ANSWER" }))
+        yield* event(
+          3,
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 0, chunk: "ANSWER" }),
+        )
         yield* waitForFrame(setup, (next) => next.includes("✻ Generating (7s)"), "the answer")
         // An ask inside the turn: the same turn, the same count.
         yield* Queue.offer(
@@ -7114,7 +7117,10 @@ describe("TUI renderer surfaces", () => {
             branchId,
           }),
         )
-        yield* event(3, AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "ANSWER" }))
+        yield* event(
+          3,
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 0, chunk: "ANSWER" }),
+        )
         const answering = yield* waitForFrame(
           setup,
           (next) => next.includes("✻ Generating") && next.includes("ANSWER"),

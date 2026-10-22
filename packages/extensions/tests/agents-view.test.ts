@@ -624,11 +624,17 @@ describe("agents view live activity", () => {
       toolName,
       input,
     })
-  const chunk = (text: string) =>
-    AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
+  const chunk = (text: string, offset = 0) =>
+    AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset, chunk: text })
 
   test("a streamed reply shows its last line", () => {
-    const state = fold([chunk("Reading the loader.\nChecking"), chunk(" the tests")])
+    const state = fold([chunk("Reading the loader.\nChecking"), chunk(" the tests", 28)])
+    expect(Option.getOrUndefined(activityOf(state))).toEqual({ line: "Checking the tests" })
+  })
+
+  test("an answer so far that repeats streamed text adds only the rest", () => {
+    // A subscription opens with the answer so far as one chunk from offset 0.
+    const state = fold([chunk("Checking"), chunk("Checking the"), chunk("the tests", 9)])
     expect(Option.getOrUndefined(activityOf(state))).toEqual({ line: "Checking the tests" })
   })
 
@@ -790,7 +796,7 @@ const scriptedLoop = Effect.gen(function* () {
     )
   const follow = followWith([loop])
   const chunk = (text: string) =>
-    Queue.offer(events, AgentEvent.cases.StreamChunk.make({ ...loop, chunk: text }))
+    Queue.offer(events, AgentEvent.cases.StreamChunk.make({ ...loop, offset: 0, chunk: text }))
   const turnCompleted = Queue.offer(
     events,
     AgentEvent.cases.TurnCompleted.make({ streamFailed: false, ...loop, durationMs: 1 }),

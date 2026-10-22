@@ -31,6 +31,7 @@ import {
   MessageId,
   request,
   SessionId,
+  unseenText,
 } from "@gent/core/extensions/api"
 
 // Test seam: only tests read these exports. foldForkEvent is the pure fold the
@@ -438,7 +439,7 @@ export const foldForkEvent = <
         error: Option.none(),
       }
     case "StreamChunk":
-      return { ...current, partial: current.partial + event.chunk }
+      return { ...current, partial: current.partial + unseenText(current.partial.length, event) }
     case "TurnCompleted":
       return { ...current, partial: "", partialMessage: Option.none(), replying: false }
     case "ErrorOccurred":

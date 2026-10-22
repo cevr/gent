@@ -204,6 +204,32 @@ describe("btw forks", () => {
       ),
     50_000,
   )
+  test("a step's reply holds each streamed character once", () => {
+    const sessionId = SessionId.make("btw-fold-session")
+    const branchId = BranchId.make("btw-fold-branch")
+    const chunk = (offset: number, text: string) =>
+      AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset, chunk: text })
+    const step = (step: number) =>
+      AgentEvent.cases.StreamStarted.make({
+        sessionId,
+        branchId,
+        messageId: MessageId.make("btw-fold-turn"),
+        step,
+      })
+    const idle = {
+      partial: "",
+      partialMessage: Option.none<MessageId>(),
+      replying: false,
+      error: Option.none<string>(),
+    }
+    // A subscription opens with the answer so far as one chunk from offset 0.
+    const first = [step(1), chunk(0, "Hel"), chunk(0, "Hello"), chunk(3, "lo, world")]
+    expect(first.reduce(foldForkEvent, idle).partial).toBe("Hello, world")
+    // The next step's answer starts again at offset 0.
+    const second = [...first, step(2), chunk(0, "Next")]
+    expect(second.reduce(foldForkEvent, idle).partial).toBe("Next")
+  })
+
   test("a notice leaves the fork replying; an error the turn ends on stops it", () => {
     const sessionId = SessionId.make("btw-fold-session")
     const branchId = BranchId.make("btw-fold-branch")

@@ -62,6 +62,7 @@ import {
   type QueueEntryInfo,
   type SessionSnapshot,
   type ToolInteraction,
+  unseenText,
   userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
@@ -2520,13 +2521,14 @@ export function useSessionFeed(
 
   // ── the answer in progress ──
   //
-  // Core publishes each chunk as a stored event and stores the step's answer
-  // (its `MessageReceived`) only when the step ends. So the answer in
-  // progress is built from chunks, stored and live alike: a `StreamStarted`
-  // opens it, its first content (a chunk, or a tool call) draws its row, each
-  // later chunk extends it, and the step's live `MessageReceived` replaces it
-  // with the stored answer (`applySettledEvent`). A step whose answer the
-  // snapshot holds is settled: its replayed chunks add nothing.
+  // Core stores the step's answer (its `MessageReceived`) only when the step
+  // ends, and its chunks are live only. So the answer in progress is built
+  // from live chunks: a `StreamStarted`, stored or live, opens it, its first
+  // content (a chunk, or a tool call) draws its row, each later chunk extends
+  // it, and the step's live `MessageReceived` replaces it with the stored
+  // answer (`applySettledEvent`). A subscription opens with each answer in
+  // progress as one chunk, so a feed that joins mid-answer shows its text so
+  // far. A step whose answer the snapshot holds is settled.
 
   /** The ids of the answers the latest snapshot holds. */
   let snapshotAnswers: ReadonlySet<string> = new Set()
@@ -2572,26 +2574,25 @@ export function useSessionFeed(
     })
 
   /**
-   * A chunk extends the open answer; the first one draws its row, dated when
-   * the answer's request went out. A replayed chunk with no open answer
-   * belongs to a settled step; a live one opens a local answer (a history
-   * stream with no start).
+   * A chunk extends the open answer by the text it lacks; the first one
+   * draws its row, dated when the answer's request went out. A chunk with no
+   * open answer opens a local one (a history stream with no start).
    */
   const appendStreamedChunk = (
-    chunk: string,
+    chunk: Extract<AgentEvent, { _tag: "StreamChunk" }>,
     stampedAt: number,
-    live: boolean,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const open = openAnswer()
-      if (!live && Option.isNone(open)) return
       if (Option.isNone(open)) answerStartedAt = stampedAt
       const id = yield* Option.match(open, {
         onNone: () => randomId,
         onSome: Effect.succeed,
       })
       setOpenAnswer(Option.some(id))
-      ensureAssistantMessage(setStore, chunk, id, answerStartedAt)
+      const held = store.messages.find((message) => message.id === id)?.content.length ?? 0
+      const text = unseenText(held, chunk)
+      if (text.length > 0) ensureAssistantMessage(setStore, text, id, answerStartedAt)
     })
 
   /**
@@ -2827,6 +2828,12 @@ export function useSessionFeed(
         })
         return
       }
+      // A chunk is live only: its id names its place, so it is never a replay or a duplicate.
+      if (envelope.event._tag === "StreamChunk") {
+        client.applySessionEvent(envelope)
+        yield* processEvent(envelope, key, "live")
+        return
+      }
       if (processedEnvelopeIds.has(envelope.id)) {
         client.log.debug("feed.event.duplicate", { key, eventId: envelope.id })
         return
@@ -2901,7 +2908,7 @@ export function useSessionFeed(
         case "StreamChunk":
           // The answer streams: the retry ran.
           settleRetryingEvents(setStore, "retried")
-          yield* appendStreamedChunk(event.chunk, stampedAt, live)
+          yield* appendStreamedChunk(event, stampedAt)
           break
 
         default:
