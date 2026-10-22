@@ -508,6 +508,56 @@ describe("goal stream failure", () => {
       }).pipe(Effect.timeout("14 seconds")),
     18_000,
   )
+
+  it.scopedLive(
+    "a failed turn charges the tokens its steps reported before the break",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        // Step one reports usage and is cut off, so the loop continues the
+        // turn; every later step breaks after partial output.
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(calls, (n) => n + 1)
+            if (call === 1) {
+              return Stream.fromIterable([
+                textDeltaPart("part one"),
+                finishPart({
+                  finishReason: "length",
+                  usage: { inputTokens: 30, outputTokens: 12 },
+                }),
+              ])
+            }
+            return Stream.concat(
+              Stream.fromIterable([textDeltaPart(`part ${call}`)]),
+              Stream.fail(
+                AiError.make({
+                  module: "Test",
+                  method: "streamText",
+                  reason: new AiError.UnknownError({ description: "connection reset" }),
+                }),
+              ),
+            )
+          }),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        yield* goalCommandOn({ client, sessionId, branchId }, "Write the pelican poem")
+        const paused = yield* waitFor(
+          goalOn({ client, sessionId, branchId }),
+          (goal) => Option.exists(goal, (value) => value.status === "paused"),
+          10_000,
+          "the failed turn pauses the goal",
+        )
+        expect(Option.map(paused, (goal) => goal.pausedReason)).toEqual(
+          Option.some(GOAL_PAUSED_STREAM_FAILED),
+        )
+        expect(Option.map(paused, (goal) => goal.tokensUsed)).toEqual(Option.some(42))
+      }).pipe(Effect.timeout("14 seconds")),
+    18_000,
+  )
 })
 
 describe("goal phase failure", () => {

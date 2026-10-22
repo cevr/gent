@@ -101,7 +101,7 @@ gent has durable rounds that reconcile, an interrupt cascade, and typed state. P
 - Lanes (docs/architecture/lanes.md): quota windows per sign-in from Anthropic and Codex headers, OpenCode Go spend limits, fuel per percent, model weights, capacity, `admitLane` gives `Busy` or `Spent` with `retryAt`, a project `authHold`, and a filled-account move with `coldHandoffPays`. (measured from the doc)
 - A thread can pin an account (`account`, `RunSpec.credentialSlot`; threads.md:84-89). `Threads.send` fails with `LaneUnavailable` and `retryAt` (threads.md:167-172). (measured)
 - Retry: the driver's `retryAt`. A usage-limit reset beyond `maxDelay` fails the step, and the turn reports `limitResetAt` (docs/architecture/runtime.md:165-180). gent does not park a plain session for a later resume. (measured from the doc; I did not find a park in the runtime)
-- Goal: the same model as PA. `tokenBudget`, `tokensUsed`, status `budget_limited` (packages/extensions/src/goal.ts:31-47). It counts the session's own input plus output (goal.ts:449). Children not counted. (measured)
+- Goal: the same model as PA when read. `tokenBudget`, `tokensUsed`, status `budget_limited` (packages/extensions/src/goal.ts:31-47 at `1b7d51794`). It counted the session's own input plus output. Children not counted. (measured) Since `8ce1dc30f` a goal has no budget: only its completion ends it, and `tokensUsed` is a report (owner, 2026-10-22).
 
 ### Verdict: gent already better on routing; copy the park only as a lane fallback
 
