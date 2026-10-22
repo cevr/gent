@@ -90,7 +90,8 @@ any directory by naming it. Core has no workspace concept: the seam is
   `ready` comes last. gent adopts, collects or removes a copy only when the
   record and the marker agree and the copy's real path lies in the
   directory its backend owns; never a path that is, holds or lies in the
-  origin. A directory it cannot prove is kept, and the call says so. A
+  origin, and never a directory that lies in the origin or holds it, but
+  for the rift storage beside an origin that is itself a rift copy. A directory it cannot prove is kept, and the call says so. A
   crash recovers by phase: `creating` with nothing there is made again; a
   marked half-made worktree is removed and made again (its base ref goes
   only from the recorded base); a half-made rift copy is retained.

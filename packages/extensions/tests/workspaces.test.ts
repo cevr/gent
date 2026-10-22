@@ -1092,6 +1092,46 @@ describe("a rift copy", () => {
     ),
   )
 
+  it.live(
+    "of an origin that is itself a rift copy lies beside it, and is adopted, collected and released",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const source = yield* dirtyRepository
+          const storage = storageOf(source)
+          const origin = `${storage}/first`
+          yield* sh(
+            source,
+            `mkdir -p ${storage} && cp -a ${source} ${origin} && printf 'rift-first\\n' > ${origin}/.rift`,
+          )
+          const home = yield* makeTempDirectoryScoped("ws-home-")
+          const rift = yield* riftStub("ok", { [origin]: [source] })
+          const { places, within, start, deleted, recordFile } = yield* installed(home, {
+            rift: rift.program,
+          })
+          const place = yield* start("call-1", origin)
+          expect(place.backend).toBe("rift")
+          expect(place.path).toBe(`${storage}/${place.name}`)
+          // A retry of the same start adopts the copy beside the origin.
+          const again = yield* start("call-1", origin)
+          expect(again.path).toBe(place.path)
+          yield* within(places.bind(place.name, childSession))
+          yield* sh(place.path, "printf 'child\\n' > child.txt")
+          const work = yield* within(places.collect(childSession))
+          expect(Option.map(work, (found) => found.branch)).toEqual(Option.some(place.branch))
+          expect(yield* sh(origin, `git show ${place.branch}:child.txt`)).toBe("child")
+          yield* deleted(childSession)
+          expect(yield* recordOf(recordFile(place.name))).toMatchObject({ phase: "retained" })
+          // A start whose session never came is released, and its copy stays, retained.
+          const unbound = yield* start("call-2", origin)
+          yield* within(places.release(unbound.name))
+          expect(yield* recordOf(recordFile(unbound.name))).toMatchObject({ phase: "retained" })
+          expect(yield* exists(unbound.path)).toBe(true)
+          expect(yield* exists(`${origin}/kept.txt`)).toBe(true)
+        }).pipe(Effect.provide(platformWith({ fs: APFS }))),
+      ),
+  )
+
   it.live("is the snapshot's backend on APFS, as macOS names its file system", () =>
     live(
       Effect.gen(function* () {

@@ -805,7 +805,12 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     if (copy !== path.join(record.root, named)) {
       return Option.some("it is not in the directory its record names")
     }
-    if (inside(path, record.origin, record.root) || inside(path, record.root, record.origin)) {
+    // An origin that is a rift copy lies in the directory of its own copies, one beside the other.
+    const sibling = record.backend === "rift" && path.dirname(record.origin) === record.root
+    if (
+      inside(path, record.root, record.origin) ||
+      (!sibling && inside(path, record.origin, record.root))
+    ) {
       return Option.some("its directory overlaps the origin")
     }
     if (
