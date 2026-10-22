@@ -20,6 +20,9 @@
  * - `MH_REPEAT_ANSWER`: once `<MH_CWD>/repeat.go` exists, the owner sends the
  *   run's recorded answer again (call id `again`), as a client whose reply a
  *   crash lost would.
+ * - `MH_PUSH` (a branch): a new owner session calls `integration.push` to
+ *   that branch (call id `push`) and does not wait for its result. The test
+ *   puts fake `gh` and `git` executables first on `PATH`.
  *
  * A hold is a trigger in the database file; a host drops each hold its
  * environment does not name.
@@ -29,8 +32,10 @@
  * - `calls.log`: every worker round's first model call, as
  *   `<state>:<visit> <round> <message>`, the round and its message read from
  *   `thread_rounds` by the round's text.
- * - `wakes.log`: every `wakeDue` fire of the machines extension, as
- *   `<cause> <sourceId> <answer>`.
+ * - `wakes.log`: every `wakeDue` fire of the machines and integration
+ *   extensions, as `<cause> <sourceId> <answer>`.
+ * - `requests.log`: every model request, as the first line of its last user
+ *   message.
  * - `ran.log`, `after.log`, and the pid files: what the commands write.
  *
  * Each event the test waits on is one stdout line that starts with `MH `.
@@ -219,6 +224,7 @@ const workerStep = (prompt: Prompt.Prompt, state: string, visit: number) => {
 const routedModels = (options: {
   readonly fs: FileSystem.FileSystem
   readonly callsLog: string
+  readonly requestsLog: string
   readonly database: Database
   readonly hang: Option.Option<string>
   /** The keys whose first call this process already made. */
@@ -227,6 +233,8 @@ const routedModels = (options: {
   LanguageModelLayers.testStream((request) =>
     Effect.gen(function* () {
       const prompt = request.prompt
+      const [asked = ""] = lastUserText(prompt).split("\n")
+      yield* appendRecord(options.fs, options.requestsLog, asked)
       if (!systemTextOf(prompt).includes("You are a worker thread")) return ownerStep(prompt)
       const text = lastUserText(prompt)
       const header = /^STATE (\S+) (\d+)$/m.exec(text)
@@ -282,6 +290,9 @@ const withWakeLog = <E extends (typeof BuiltinExtensions)[number]>(
     yield* extension.setup.pipe(Effect.provideService(ExtensionHost, logged))
   }),
 })
+
+/** The extensions whose `wakeDue` fires `wakes.log` records. */
+const WAKE_LOGGED: ReadonlySet<string> = new Set(["@gent/machines", "@gent/integration"])
 
 // ── the owner's calls ───────────────────────────────────────────────────────
 
@@ -378,6 +389,7 @@ const program = Effect.gen(function* () {
   const hang = yield* Config.option(Config.String("MH_HANG"))
   const answer = yield* Config.option(Config.String("MH_ANSWER"))
   const repeatAnswer = Option.isSome(yield* Config.option(Config.String("MH_REPEAT_ANSWER")))
+  const push = yield* Config.option(Config.String("MH_PUSH"))
   const storagePath = `${home}/gent.db`
   const fs = yield* FileSystem.FileSystem
   // The host's own reads and the holds, on a second connection to the root's file.
@@ -403,12 +415,13 @@ const program = Effect.gen(function* () {
       extensionInputs: BuiltinExtensions.filter(
         (extension) => extension.manifest.id !== "@gent/cell",
       ).map((extension) => {
-        if (extension.manifest.id !== "@gent/machines") return extension
+        if (!WAKE_LOGGED.has(extension.manifest.id)) return extension
         return withWakeLog(extension, `${cwd}/wakes.log`)
       }),
       providerLayer: routedModels({
         fs,
         callsLog: `${cwd}/calls.log`,
+        requestsLog: `${cwd}/requests.log`,
         database,
         hang,
         made: yield* Ref.make(HashSet.empty<string>()),
@@ -440,6 +453,15 @@ const program = Effect.gen(function* () {
       input: {},
     })
     yield* event("started")
+  }
+  if (Option.isSome(push)) {
+    const created = yield* client.session.create({})
+    yield* client.message.send({
+      sessionId: created.sessionId,
+      branchId: created.branchId,
+      content: `CALL integration.push push ${encodeJson({ ref: push.value })}`,
+    })
+    yield* event("push sent")
   }
   if (Option.isSome(answer)) {
     const run = (yield* waitFor(sql(askingRun), Option.isSome, 30_000, "a run asked")).value

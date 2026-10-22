@@ -6,8 +6,10 @@
  * to a role's thread through the `Threads` service with `notify: "none"`, so
  * a round's end moves the run and wakes nobody; its `thread.reply` value
  * names the next state. A `run` state spawns a command in the run's cwd. An
- * `ask` state asks the owner and waits for `machine.answer`. A `final` state
- * ends the run. `machine.define` writes a definition to
+ * `ask` state asks the owner and waits for `machine.answer`. An `integrate`
+ * state pushes the run's head through the `Integration` gate of
+ * `@gent/integration` and moves by the CI verdict for that push. A `final`
+ * state ends the run. `machine.define` writes a definition to
  * `.gent/machines/<name>.json`; `machine.start` snapshots it into a run.
  *
  * A run is one row in `machine_runs` and an append-only log in
@@ -83,6 +85,7 @@ import {
   runBashCommand,
   stopLostCommand,
 } from "./exec-tools.js"
+import { generationOf, Integration, type GateKey, type GateRecord } from "./integration.js"
 import {
   currentThreadPlace,
   StartParams,
@@ -169,6 +172,22 @@ const RunState = Schema.Struct({
 })
 type RunState = typeof RunState.Type
 
+/**
+ * Pushes the run's head (`HEAD` of its cwd) to `ref` through the integration
+ * gate, then moves by the CI verdict for that push. A gate that is not clear
+ * makes the run wait; a push the gate refuses (not a fast-forward) takes
+ * `red`. A visit after a red one passes that red generation as its repair.
+ */
+const IntegrateState = Schema.Struct({
+  kind: Schema.Literal("integrate"),
+  ref: Schema.String,
+  /** Default origin. */
+  remote: Schema.optionalKey(Schema.String),
+  on: Schema.Struct({ green: StateName, red: StateName }),
+  ...VisitCap,
+})
+type IntegrateState = typeof IntegrateState.Type
+
 const AskState = Schema.Struct({
   kind: Schema.Literal("ask"),
   ask: Template,
@@ -182,9 +201,13 @@ const FinalState = Schema.Struct({
   say: Schema.optionalKey(Template),
 })
 
-const MachineState = Schema.Union([ThreadState, RunState, AskState, FinalState]).pipe(
-  Schema.toTaggedUnion("kind"),
-)
+const MachineState = Schema.Union([
+  ThreadState,
+  RunState,
+  IntegrateState,
+  AskState,
+  FinalState,
+]).pipe(Schema.toTaggedUnion("kind"))
 type MachineState = typeof MachineState.Type
 
 const MachineDefinition = Schema.Struct({
@@ -251,6 +274,22 @@ const PendingAction = Schema.TaggedUnion({
     launch: LaunchRecord,
     process: Schema.optionalKey(ProcessRecord),
   },
+  /**
+   * `requestId` is the gate's idempotency key: a push again after a crash
+   * pushes nothing new. `repo`, `generation` and `sha` are set once the gate
+   * admitted the push; the run then waits for that generation's verdict.
+   * `notBefore` (epoch ms): the gate was not clear, the push is tried again then.
+   */
+  Integrate: {
+    state: StateName,
+    visit: PositiveInt,
+    requestId: Schema.String,
+    repairOf: Schema.optionalKey(PositiveInt),
+    repo: Schema.optionalKey(Schema.String),
+    generation: Schema.optionalKey(PositiveInt),
+    sha: Schema.optionalKey(Schema.String),
+    notBefore: Schema.optionalKey(Schema.Finite),
+  },
   Ask: {
     state: StateName,
     visit: PositiveInt,
@@ -266,6 +305,7 @@ type PendingAction = typeof PendingAction.Type
 type RoundAction = Extract<PendingAction, { readonly _tag: "Round" }>
 type CommandAction = Extract<PendingAction, { readonly _tag: "Command" }>
 type AskAction = Extract<PendingAction, { readonly _tag: "Ask" }>
+type IntegrateAction = Extract<PendingAction, { readonly _tag: "Integrate" }>
 
 /** The context templates read: each state's last value, and every value in order. */
 const RunContext = Schema.Struct({
@@ -307,9 +347,14 @@ const MachineStep = Schema.TaggedUnion({
   Interrupted: { state: StateName },
   /**
    * The pending round waits until `until`: the account had no lane for it
-   * (`lane`), or its worker died at a usage limit (`quota`). No visit is spent.
+   * (`lane`), or its worker died at a usage limit (`quota`). A pending
+   * integrate waits for a gate that is not clear (`integration`). No visit is spent.
    */
-  Waiting: { state: StateName, until: Schema.Finite, reason: Schema.Literals(["lane", "quota"]) },
+  Waiting: {
+    state: StateName,
+    until: Schema.Finite,
+    reason: Schema.Literals(["lane", "quota", "integration"]),
+  },
   Delivered: { askId: AskId },
   Answered: { askId: AskId, choice: Verdict, note: Schema.optionalKey(Schema.String) },
   Moved: { from: StateName, to: StateName, by: Schema.String },
@@ -381,6 +426,8 @@ const templatesOf = (state: MachineState): ReadonlyArray<string> => {
       return [state.say]
     case "run":
       return [state.run]
+    case "integrate":
+      return []
     case "ask":
       return [state.ask]
     case "final":
@@ -403,6 +450,12 @@ const targetsOf = (state: MachineState): ReadonlyArray<StateName> => {
         state.on.fail,
         ...Option.toArray(Option.fromUndefinedOr(state.exhausted)),
       ]
+    case "integrate":
+      return [
+        state.on.green,
+        state.on.red,
+        ...Option.toArray(Option.fromUndefinedOr(state.exhausted)),
+      ]
     case "ask":
       return Object.values(state.on)
     case "final":
@@ -410,8 +463,12 @@ const targetsOf = (state: MachineState): ReadonlyArray<StateName> => {
   }
 }
 
+/** A state with a visit cap: a thread, a run or an integrate state. */
+const isCapped = (state: MachineState): state is ThreadState | RunState | IntegrateState =>
+  state.kind === "thread" || state.kind === "run" || state.kind === "integrate"
+
 const exhaustedOf = (state: MachineState): Option.Option<StateName> => {
-  if (state.kind === "thread" || state.kind === "run") {
+  if (isCapped(state)) {
     return Option.fromUndefinedOr(state.exhausted)
   }
   return Option.none()
@@ -435,7 +492,7 @@ const stateProblems = (
       problems.push(`${name}: a thread state has exactly one of next and on`)
     }
   }
-  if (state.kind === "thread" || state.kind === "run") {
+  if (isCapped(state)) {
     if (Predicate.isNotUndefined(state.exhausted) && Predicate.isUndefined(state.maxVisits)) {
       problems.push(`${name}: exhausted needs maxVisits`)
     }
@@ -1232,16 +1289,26 @@ const isStepAction = Predicate.or(Predicate.isTagged("Round"), Predicate.isTagge
 const isRoundOrCommand = (pending: Option.Option<PendingAction>) =>
   Option.exists(pending, isStepAction)
 
-/** When the pending round may be sent: none when it does not wait. */
+/** When the pending round or push may be sent: none when it does not wait. */
 const waitsUntil = (pending: Option.Option<PendingAction>, now: number) =>
   Option.flatMap(pending, (action) => {
-    if (action._tag !== "Round" || Predicate.isUndefined(action.notBefore)) return Option.none()
+    if (action._tag !== "Round" && action._tag !== "Integrate") return Option.none()
+    if (Predicate.isUndefined(action.notBefore)) return Option.none()
     return Option.liftPredicate(action.notBefore, (until) => until > now)
   })
 
-/** A running run that takes a step now: not one whose round waits for its account. */
+/** A pushed integrate: the run waits for CI on the gate, holding nothing. */
+const watchesGate = (pending: Option.Option<PendingAction>) =>
+  Option.exists(
+    pending,
+    (action) => action._tag === "Integrate" && Predicate.isNotUndefined(action.generation),
+  )
+
+/** A running run that takes a step now: not one that waits for its account or for CI. */
 const takesStep = (run: Run, now: number) =>
-  run.status === "running" && Option.isNone(waitsUntil(run.pending, now))
+  run.status === "running" &&
+  Option.isNone(waitsUntil(run.pending, now)) &&
+  !watchesGate(run.pending)
 
 /** A row whose end is settled and whose seq is the one the driver last acted on. */
 const isDone = (run: Run, seq: number) =>
@@ -1309,7 +1376,8 @@ const stateIn = (definition: MachineDefinition, name: StateName) =>
     () => new MachineFault({ message: `The run is in no state ${name}` }),
   )
 
-const capOf = (state: ThreadState | RunState) => state.maxVisits ?? DEFAULT_MAX_VISITS
+const capOf = (state: ThreadState | RunState | IntegrateState) =>
+  state.maxVisits ?? DEFAULT_MAX_VISITS
 
 const visitsOf = (visits: Visits, state: StateName) => visits.counts[state] ?? 0
 
@@ -1337,6 +1405,8 @@ const choicesOf = (
     case "run":
       if (reason === "interrupted" && mayStillRun) return control(["pass", "fail", "stop"])
       return control(["pass", "fail", "retry", "stop"])
+    case "integrate":
+      return control(["green", "red", "retry", "stop"])
     case "final":
       return []
   }
@@ -1584,6 +1654,7 @@ const advancePending = (run: Run, signals: Signals) =>
           }),
         ),
       Command: (pending) => awaitCommand(run, pending, signals),
+      Integrate: (pending) => advanceIntegrate(run, pending, signals),
     }),
   )
 
@@ -1668,6 +1739,200 @@ const waitForAccount = (
     ),
   )
 
+// ── integrate ───────────────────────────────────────────────────────────────
+
+/** How long a push the gate did not admit (not clear, gh unready) waits before it is tried again. */
+const GATE_RETRY_WAIT = Duration.minutes(1)
+
+const integrationOf = Effect.gen(function* () {
+  const integration = yield* Effect.serviceOption(Integration)
+  return yield* Effect.fromOption(
+    integration,
+    () => new MachineFault({ message: "An integrate state needs the gate of @gent/integration" }),
+  )
+})
+
+const integrateStateOf = Effect.fn("Machines.integrateStateOf")(function* (
+  run: Run,
+  name: StateName,
+) {
+  const state = yield* stateIn(yield* definitionOf(run), name)
+  if (state.kind !== "integrate") {
+    return yield* new MachineFault({ message: `${name} is not an integrate state` })
+  }
+  return state
+})
+
+/** The red generation the state's last visit saved: the next push repairs it. */
+const repairOf = (context: RunContext, name: StateName): Option.Option<number> => {
+  const last = context.last[name]
+  if (!Predicate.isObject(last) || Array.isArray(last)) return Option.none()
+  if (last["outcome"] !== "red") return Option.none()
+  const generation = last["generation"]
+  return Option.liftPredicate(generation, Predicate.isNumber)
+}
+
+/** The pusher stops waiting on the gate: a stopped or failed run. */
+const releaseGate = (run: Run, action: IntegrateAction) =>
+  Effect.gen(function* () {
+    if (Predicate.isUndefined(action.repo)) return
+    const integration = yield* Effect.serviceOption(Integration)
+    if (Option.isNone(integration)) return
+    const state = yield* integrateStateOf(run, action.state)
+    yield* integration.value.release({ repo: action.repo, ref: state.ref })
+  })
+
+/** Moves the run out of its integrate state by `by`, the gate's outcome saved as the state's value. */
+const leaveIntegrate = (
+  run: Run,
+  action: IntegrateAction,
+  to: StateName,
+  by: string,
+  value: Schema.Json,
+) =>
+  commitMove(
+    run,
+    {
+      ...run,
+      state: to,
+      pending: Option.none(),
+      context: saved(run.context, action.state, value),
+    },
+    [MachineStep.cases.Moved.make({ from: action.state, to, by })],
+  )
+
+/**
+ * The move a pending integrate asks for. Before the gate admitted it: push,
+ * as the caller that polls its own gate (`poller: "caller"`), since a wake
+ * record fires for the extension that armed it. A gate that is not clear, or
+ * gh that is not ready, waits `GATE_RETRY_WAIT` under the run's own record; a
+ * refused push takes `red`. After: the verdict for its generation or a later
+ * one moves the run; until then the driver polls the gate when its record
+ * names the next poll due, and sleeps under the run's own record between.
+ */
+const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
+  run: Run,
+  action: IntegrateAction,
+  signals: Signals,
+) {
+  const now = yield* Clock.currentTimeMillis
+  const waits = waitsUntil(Option.some(action), now)
+  if (Option.isSome(waits)) return yield* waitOut(run, waits.value, signals)
+  const integration = yield* integrationOf
+  const state = yield* integrateStateOf(run, action.state)
+  if (Predicate.isUndefined(action.repo) || Predicate.isUndefined(action.generation)) {
+    const pushed = yield* integration
+      .push({
+        cwd: run.cwd,
+        ref: state.ref,
+        requestId: action.requestId,
+        poller: "caller",
+        notify: false,
+        ...omitUndefined({ remote: state.remote, repairOf: action.repairOf }),
+      })
+      .pipe(Effect.result)
+    if (pushed._tag === "Success") {
+      const { notBefore: _notBefore, ...ready } = action
+      const recorded = PendingAction.cases.Integrate.make({
+        ...ready,
+        repo: pushed.success.repo,
+        generation: pushed.success.generation,
+        sha: pushed.success.sha,
+      })
+      yield* commitMove(run, { ...run, pending: Option.some(recorded) }, [
+        MachineStep.cases.Recorded.make({ action: recorded }),
+      ])
+      return
+    }
+    const error = pushed.failure
+    switch (error._tag) {
+      case "IntegrationBlocked":
+      case "GhUnavailable": {
+        const until = now + Duration.toMillis(GATE_RETRY_WAIT)
+        yield* Effect.logInfo("machines.integrate.waiting").pipe(
+          Effect.annotateLogs({ run: run.run, state: action.state, error: error.message }),
+        )
+        yield* commitMove(
+          run,
+          {
+            ...run,
+            pending: Option.some(
+              PendingAction.cases.Integrate.make({ ...action, notBefore: until }),
+            ),
+          },
+          [MachineStep.cases.Waiting.make({ state: action.state, until, reason: "integration" })],
+        )
+        return
+      }
+      case "PushRefused":
+        yield* leaveIntegrate(run, action, state.on.red, "red", {
+          outcome: "refused",
+          message: error.message,
+        })
+        return
+      case "IntegrationError":
+        return yield* new MachineFault({ message: error.message })
+      default:
+        return yield* error
+    }
+  }
+  const key: GateKey = { repo: action.repo, ref: state.ref }
+  const found = yield* integration.read(key)
+  if (Option.isNone(found)) {
+    return yield* new MachineFault({ message: `The gate of ${key.repo}:${key.ref} is gone` })
+  }
+  const verdict = settledVerdict(found.value)
+  if (Option.isSome(verdict)) {
+    const outcome = verdict.value
+    const to = state.on[outcome.outcome]
+    yield* leaveIntegrate(run, action, to, outcome.outcome, outcome)
+    return
+  }
+  const due = found.value.nextPollAt ?? now
+  if (due <= now) {
+    // One poll; the next read of the row decides.
+    yield* integration.poll(key)
+    return
+  }
+  yield* waitOut(run, due, signals)
+})
+
+/** The gate's outcome for an integrate, saved as the state's value. */
+type GateOutcome =
+  | { readonly outcome: "green"; readonly generation: number; readonly sha?: string }
+  | {
+      readonly outcome: "red"
+      readonly generation: number
+      readonly sha: string
+      readonly failing: ReadonlyArray<string>
+    }
+
+/**
+ * The gate's outcome; none while CI runs. A gate's generation only grows, so
+ * a record read after the run's push is at its generation or a later one.
+ */
+const settledVerdict = (record: GateRecord): Option.Option<GateOutcome> => {
+  const state = record.state
+  switch (state._tag) {
+    case "Clear":
+      return Option.some({
+        outcome: "green",
+        generation: generationOf(record),
+        ...omitUndefined({ sha: state.sha }),
+      })
+    case "Red":
+      return Option.some({
+        outcome: "red",
+        generation: state.generation,
+        sha: state.sha,
+        failing: state.failing.map((check) => check.context),
+      })
+    case "Integrating":
+    case "AwaitingCi":
+      return Option.none()
+  }
+}
+
 /** Removes the run's core record once its end is settled. */
 const withdrawWake = Effect.fn("Machines.withdrawWake")(function* (run: Run) {
   const ctx = yield* ExtensionContext
@@ -1682,7 +1947,7 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
   const name = run.state
   const state = yield* stateIn(definition, name)
   const visit = visitsOf(run.visits, name) + 1
-  if (state.kind === "thread" || state.kind === "run") {
+  if (isCapped(state)) {
     const cap = capOf(state) + (run.visits.grants[name] ?? 0)
     if (visit > cap) {
       const exhausted = Option.fromUndefinedOr(state.exhausted)
@@ -1722,6 +1987,19 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
         MachineStep.cases.Dispatched.make({ action }),
       ])
       if (Option.isSome(committed)) yield* startCommand(committed.value, state, action)
+      return
+    }
+    case "integrate": {
+      // The push itself is the next move: the driver reads the action first.
+      const action = PendingAction.cases.Integrate.make({
+        state: name,
+        visit,
+        requestId: `machine:${run.run}:${run.seq + 1}`,
+        ...omitUndefined({ repairOf: Option.getOrUndefined(repairOf(run.context, name)) }),
+      })
+      yield* commitMove(run, { ...run, visits, pending: Option.some(action) }, [
+        MachineStep.cases.Dispatched.make({ action }),
+      ])
       return
     }
     case "thread": {
@@ -2267,6 +2545,9 @@ const stopPending = (run: Run, action: PendingAction) =>
           }
           return !(yield* stopLostAction(command))
         }),
+      // The push itself is never undone; the gate loses its waiter, and a
+      // later loop open adopts it.
+      Integrate: (integrate) => Effect.as(releaseGate(run, integrate), false),
     }),
   )
 
@@ -2450,6 +2731,10 @@ const moveFor = (state: MachineState, action: AskAction, choice: Verdict) => {
   if (state.kind === "run") {
     if (choice === "pass") return { stop: false, to: state.on.pass }
     return { stop: false, to: state.on.fail }
+  }
+  if (state.kind === "integrate") {
+    if (choice === "green") return { stop: false, to: state.on.green }
+    return { stop: false, to: state.on.red }
   }
   if (state.kind === "thread" || state.kind === "ask") {
     return { stop: false, to: state.on?.[choice] ?? action.state }

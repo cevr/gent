@@ -236,7 +236,7 @@
   data with no owner turn between its steps, built only on the public
   extension API, the `Threads` service and the core wake seam. A definition
   (`machine.define`, written to `.gent/machines/<name>.json`) names thread
-  roles and `thread`, `run`, `ask` and `final` states; `machine.define`
+  roles and `thread`, `run`, `integrate`, `ask` and `final` states; `machine.define`
   lists every problem at once, a cycle of `exhausted` edges among them.
   `machine.start` snapshots the definition into a run (`run-` and 16 hex of
   SHA-256 over the caller's session, branch and tool call id) and returns at
@@ -290,6 +290,8 @@
     record names a future quota reset. Settlement removes both records. A
     waiting driver rereads the committed run after arming its timer, before
     sleeping, so a stale arm cannot hide a committed stop.
+  - An `integrate` state pushes the run's head through the integration gate
+    and moves by `on.green` or `on.red` (Integration gate in `shipped-extensions.md`).
   - A client reads runs as a session of the owner's thread:
     `MachinesRpc.Status` (`run-status`, `gent ctl status --run`) and
     `MachinesRpc.Runs` (`run-list`). The TUI's lanes band

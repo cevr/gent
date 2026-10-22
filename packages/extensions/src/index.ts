@@ -30,6 +30,7 @@ import { McpExtension } from "./mcp.js"
 import { RouterExtension } from "./router.js"
 import { GuardExtension } from "./guard.js"
 import { MachinesExtension } from "./machines.js"
+import { IntegrationExtension } from "./integration.js"
 import { SessionToolsExtension } from "./session-tools.js"
 import { ExtensionAdminExtension } from "./extension-admin.js"
 import { InteractionToolsExtension } from "./interaction-tools.js"
@@ -83,6 +84,7 @@ export const BuiltinExtensions: ReadonlyArray<
   InteractionToolsExtension,
   SessionToolsExtension,
   MachinesExtension,
+  IntegrationExtension,
   ExtensionAdminExtension,
   AgentsExtension,
   AgentsViewExtension,

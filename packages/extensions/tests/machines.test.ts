@@ -86,6 +86,7 @@ import {
   toolCalls,
 } from "./helpers/routed-session"
 import { e2ePreset } from "./helpers/test-preset"
+import { CANDIDATE, fakeGitHub, REPO } from "./helpers/fake-github"
 
 // ── the routed models ───────────────────────────────────────────────────────
 
@@ -2497,3 +2498,189 @@ it.live("bash and a machine command share one named limit through process cleanu
     yield* waitForEnd(client, owner)
   }).pipe(Effect.provide(BunServices.layer), Effect.scoped, Effect.timeout("12 seconds")),
 )
+
+// ── integrate states ────────────────────────────────────────────────────────
+
+/** ship (integrate main) → done on green, broken on red. */
+const SHIP = {
+  name: "ship",
+  threads: {},
+  start: "ship",
+  states: {
+    ship: { kind: "integrate", ref: "main", on: { green: "done", red: "broken" } },
+    done: { kind: "final" },
+    broken: { kind: "final" },
+  },
+}
+
+/** The fake GitHub as a process resource beside the shipped extensions. */
+const githubBoundary = (layer: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>) =>
+  defineExtension({
+    id: ExtensionId.make("machine-github-boundary"),
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "resource",
+        defineResource({ id: "machine-github-process-boundary", scope: "process", layer }),
+      )
+    }),
+  })
+
+const RunContextView = Schema.Struct({
+  context_json: Schema.fromJsonString(
+    Schema.Struct({ last: Schema.Record(Schema.String, Schema.Json) }),
+  ),
+})
+const decodeRunContext = Schema.decodeUnknownSync(Schema.Array(RunContextView))
+const savedValue = (run: string, state: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql`SELECT context_json FROM machine_runs WHERE run = ${run}`
+    return decodeRunContext(rows)[0]?.context_json.last[state]
+  })
+
+/**
+ * CI time passes while no server runs: the poll the gate names and the
+ * run's record, armed for it, come due now.
+ */
+const pollDueNow = (run: string, repo: string, ref: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`UPDATE integration_gates
+      SET record_json = json_set(record_json, '$.nextPollAt', 0), version = version + 1
+      WHERE repo = ${repo} AND ref = ${ref}`
+    yield* sql`UPDATE branch_wakes SET at = 0, version = version + 1
+      WHERE source_id = ${`machine-run:${run}`}`
+  })
+
+const decodeGateTimes = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ next: Schema.Finite, at: Schema.NullOr(Schema.Finite) })),
+)
+/** The gate's next poll, and the time the run's record is armed for. */
+const gateTimes = (run: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql`SELECT json_extract(record_json, '$.nextPollAt') AS next,
+      (SELECT at FROM branch_wakes WHERE source_id = ${`machine-run:${run}`}) AS at
+      FROM integration_gates`
+    return decodeGateTimes(rows)[0]
+  })
+
+describe("an integrate state", () => {
+  for (const verdict of [
+    { conclusion: "success", to: "done", outcome: "green" },
+    { conclusion: "failure", to: "broken", outcome: "red" },
+  ] as const) {
+    it.live(
+      `pushes the run's head once, waits for CI across a restart, and takes ${verdict.outcome}`,
+      () =>
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const github = yield* fakeGitHub()
+          const boundary = githubBoundary(github.layer)
+          const models = yield* makeModels(trackWorker)
+          const layer = () => home.layerFor(machineModels(models), { extensionInputs: [boundary] })
+          const first = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(layer())
+              const owner = ownerOf(yield* client.session.create({}))
+              const run = yield* startRun(client, owner, SHIP, "ship")
+              yield* waitFor(
+                home.sql(runRow(run)),
+                (row) =>
+                  Option.exists(row, (found) =>
+                    (found.pending_json ?? "").includes('"generation":1'),
+                  ),
+                8_000,
+                "the gate admitted the push",
+              )
+              return { owner, run }
+            }),
+          )
+          expect(github.remote.pushes).toEqual([CANDIDATE])
+          // The run polls its own gate: its record is armed for the gate's next poll.
+          const times = yield* home.sql(gateTimes(first.run))
+          expect(times?.at).toBe(times?.next)
+          github.addRun({
+            name: "test",
+            head_sha: CANDIDATE,
+            status: "completed",
+            conclusion: verdict.conclusion,
+          })
+          yield* home.sql(pollDueNow(first.run, REPO, "main"))
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(layer())
+              // No client call: the run's own record activates its host, which polls the gate.
+              yield* waitFor(
+                home.sql(runRow(first.run)),
+                (row) => Option.exists(row, (found) => found.status === "final"),
+                15_000,
+                "the run took the verdict",
+              )
+              yield* waitForEnd(client, first.owner)
+            }),
+          )
+          expect(Option.map(yield* home.sql(runRow(first.run)), (row) => row.state)).toEqual(
+            Option.some(verdict.to),
+          )
+          expect(yield* home.sql(savedValue(first.run, "ship"))).toMatchObject({
+            outcome: verdict.outcome,
+            generation: 1,
+            sha: CANDIDATE,
+          })
+          expect(moves(yield* home.sql(stepsOf(first.run)))).toEqual([`ship→${verdict.to}`])
+          // The restart pushed nothing again.
+          expect(github.remote.pushes).toEqual([CANDIDATE])
+        }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    )
+  }
+
+  it.live(
+    "a gate it cannot claim makes the run wait with reason integration, holding nothing",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const github = yield* fakeGitHub({ gh: "signed-out" })
+        const models = yield* makeModels(trackWorker)
+        const { client } = yield* createRpcClient(
+          home.layerFor(machineModels(models), { extensionInputs: [githubBoundary(github.layer)] }),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRun(client, owner, SHIP, "ship")
+        const steps = yield* waitFor(
+          home.sql(stepsOf(run)),
+          (all) => all.some((step) => step._tag === "Waiting"),
+          8_000,
+          "the run waits for the gate",
+        )
+        expect(steps.find((step) => step._tag === "Waiting")).toMatchObject({
+          reason: "integration",
+        })
+        const row = Option.getOrThrow(yield* home.sql(runRow(run)))
+        expect(row).toMatchObject({ state: "ship", status: "running" })
+        expect(row.pending_json ?? "").toContain('"notBefore"')
+        expect(github.remote.pushes).toEqual([])
+        expect(yield* client.permits.list()).toEqual([])
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live("a push the gate refuses takes red with the reason saved", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub({ diverged: new Set([CANDIDATE]) })
+      const models = yield* makeModels(trackWorker)
+      const { client } = yield* createRpcClient(
+        home.layerFor(machineModels(models), { extensionInputs: [githubBoundary(github.layer)] }),
+      )
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, SHIP, "ship")
+      yield* waitForEnd(client, owner)
+      expect(Option.map(yield* home.sql(runRow(run)), (found) => found.state)).toEqual(
+        Option.some("broken"),
+      )
+      expect(yield* home.sql(savedValue(run, "ship"))).toMatchObject({ outcome: "refused" })
+      expect(github.remote.pushes).toEqual([])
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+})
