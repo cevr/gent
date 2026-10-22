@@ -138,7 +138,11 @@ once it has passed (B2).
     Whole-percent readings over short windows are too coarse to fit alone
     (B4): the fit spans at least a day. Accept: the fitted cost of one account
     week is within 10% of B4's 930M W for the model mix B4 measured.
-11. **Every provider that reports usage joins the pool.** The seam is already
+11. **Every provider that reports usage joins the pool.** (ChatGPT plan
+    merged at 415a2b09c (2026-10-22): the Codex client reads the
+    `x-codex-primary-*` and `x-codex-secondary-*` headers on each answer,
+    and a test shows both providers' lanes, with a spent ChatGPT window
+    refusing only openai. OpenCode Go is open.) The seam is already
     normal: a driver reports `QuotaReading` (`window`, `utilization` as a
     fraction, `resetAt`, `rejected`; `packages/core/src/domain/driver.ts:618`),
     and lanes fit fuel per percent for each window. Only the Anthropic
