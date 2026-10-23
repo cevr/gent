@@ -3825,7 +3825,9 @@ interface CredentialPlacementService {
    * a project under its hold is admitted whatever the pace, refused only
    * when every account of the scope is held. An admitted start holds its
    * lane, under `key`, until its turn opens, `freeReservation` names it, or
-   * 2 minutes pass. With no capacity read, every run is admitted.
+   * 2 minutes pass; admitted again under `key` on the same provider and
+   * model, it keeps that lane, and on another route it gives it up and is
+   * admitted afresh. With no capacity read, every run is admitted.
    */
   readonly admitLane: (request: LaneRequest) => Effect.Effect<void, LaneUnavailable>
   /** The session's turn opened on `provider`: it holds a lane until it ends, and the start admitted under `key` no longer does. */
@@ -6093,8 +6095,18 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       const refusal = yield* locked((): Option.Option<LaneUnavailable> => {
         trim(now)
         for (const [key, held] of reserved) if (!reserving(held, now)) reserved.delete(key)
-        // A start admitted again under its key keeps the lane it holds.
-        if (reserved.has(request.key)) return Option.none()
+        // A start admitted again under its key keeps the lane it holds, on
+        // the provider and model it was admitted for. Another route frees
+        // that lane and is admitted afresh: a held lane never admits a model
+        // its windows refuse.
+        const held = Option.fromUndefinedOr(reserved.get(request.key))
+        if (Option.isSome(held)) {
+          const sameRoute =
+            held.value.provider === request.provider &&
+            Option.getOrUndefined(held.value.model) === Option.getOrUndefined(request.model)
+          if (sameRoute) return Option.none()
+          reserved.delete(request.key)
+        }
         const refused = laneRefusal(request, now)
         if (Option.isSome(refused)) return refused
         reserved.set(request.key, {

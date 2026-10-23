@@ -6570,6 +6570,25 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect("a key held for one model admits another only as that model's windows would", () =>
+    Effect.gen(function* () {
+      const { admit, read, lanes } = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      yield* read(a, [
+        { window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR },
+        { window: "5h", model: glm, utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
+      ])
+      expect(yield* admit([a], "round")).toBe("admitted")
+      expect(yield* admit([a], "round")).toBe("admitted")
+      // The spent model is refused under the key the other model holds, and
+      // the lane that key held frees with the refusal.
+      expect(yield* admit([a], "round", glm)).toBe("Spent")
+      expect((yield* lanes([a])).load).toBe(0)
+      expect(yield* admit([a], "round")).toBe("admitted")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("a model's window counts that model's runs alone; the account's counts every run", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()

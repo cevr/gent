@@ -2332,7 +2332,9 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
       if (Option.isSome(retry)) {
         return RoundClaim.cases.Ready.make({ round: retry.value, fresh: false })
       }
-      yield* refuseOverCap(cap, roundId)
+      // A cap refusal frees the lane a sender admitted for this round first
+      // (`admitSend`): the round does not run now.
+      yield* refuseOverCap(cap, roundId).pipe(Effect.tapError(() => cancelLane(roundId)))
       yield* admitLane(roundId, lane)
       // Past the lane, a failed create or a claim that refuses (a busy
       // thread, the cap) runs no round: the lane it took frees with it.
@@ -2930,8 +2932,9 @@ const makeThreads = (rounds: ThreadRoundsService) => {
      * send's admission finds it held, as a retry under its key does. A
      * sender choosing among models admits each until one is free, so no
      * other round takes that lane between the choice and the send. Held as a
-     * start's lane is: until the round's turn opens, the send's claim
-     * refuses, or 2 minutes pass.
+     * start's lane is: until the round's turn opens, the send is refused
+     * (the cap, a busy thread), or 2 minutes pass. A send admitted again
+     * under `key` on another model gives the lane up and is admitted afresh.
      */
     admitSend: (key: string, lane: RoundLane) =>
       Effect.flatMap(roundIdOf("thread.send", key), (round) => admitLane(round, lane)),

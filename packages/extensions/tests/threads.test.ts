@@ -234,12 +234,29 @@ const accountsRig = (options: RigAccounts) =>
     })
     const threadRequests = Effect.sync(() => threadRequestCount)
     const cwd = yield* makeTempDirectoryScoped("gent-threads-")
+    const home = yield* Option.match(Option.fromUndefinedOr(options.maxRunning), {
+      onNone: () => Effect.succeedNone,
+      onSome: (maxRunning) =>
+        Effect.asSome(
+          Effect.gen(function* () {
+            const dir = yield* makeTempDirectoryScoped("gent-threads-home-")
+            const fs = yield* FileSystem.FileSystem
+            yield* fs.makeDirectory(`${dir}/.gent`, { recursive: true })
+            yield* fs.writeFileString(
+              `${dir}/.gent/config.json`,
+              `{"threads":{"maxRunning":${maxRunning}}}`,
+            )
+            return dir
+          }).pipe(Effect.provide(BunServices.layer)),
+        ),
+    })
     const harness = yield* createRpcHarness({
       ...e2ePreset,
       cwd,
       providerLayer,
       extensionInputs: [AgentsExtension, SessionToolsExtension, ...(options.extensions ?? [])],
       ...omitUndefined({
+        home: Option.getOrUndefined(home),
         modelPricing: options.pricing,
         configServiceLayer: Option.getOrUndefined(
           Option.map(Option.fromUndefinedOr(options.order), (order) =>
@@ -431,11 +448,14 @@ const startKeyProbe = defineExtension({
   }),
 })
 
-/** A round sent beside a send whose lane was admitted first, then the send under that key. */
-const SendAdmitted = Schema.Struct({ beside: LaneOutcome, admitted: LaneOutcome })
+/** A round sent beside a send whose lane was admitted first, if any, then the send under that key. */
+const SendAdmitted = Schema.Struct({
+  beside: Schema.optionalKey(LaneOutcome),
+  admitted: LaneOutcome,
+})
 const decodeSendAdmitted = Schema.decodeEffect(Schema.fromJsonString(SendAdmitted))
 
-/** Admits the first thread's send lane under a key, as a machine's tier pick does, then sends. */
+/** Admits a thread's send lane under a key, as a machine's tier pick does, then sends. */
 const admitSendProbe = defineExtension({
   id: "threads-admit-send-probe",
   setup: Effect.gen(function* () {
@@ -445,21 +465,24 @@ const admitSendProbe = defineExtension({
       tool({
         id: "probe.admit-send",
         description: "Admit a send's lane, then send beside it and under its key.",
-        params: Schema.Struct({ first: SessionId, second: SessionId }),
+        params: Schema.Struct({ thread: SessionId, beside: Schema.optionalKey(SessionId) }),
         output: SendAdmitted,
         execute: Effect.fn("AdmitSend.execute")(function* (params) {
           const threads = Option.getOrThrow(yield* Effect.serviceOption(Threads))
           const ctx = yield* ExtensionContext
           const send = (thread: SessionId, key: string) =>
             threads.send({ thread, message: THREAD_TASK, key, notify: "none" })
-          const modelId = yield* threads.model(params.first)
+          const modelId = yield* threads.model(params.thread)
           yield* threads.admitSend("send-admitted", {
             cwd: ctx.cwd,
             ...omitUndefined({ modelId: Option.getOrUndefined(modelId) }),
           })
-          const beside = yield* laneOutcome(send(params.second, "send-beside"))
-          const admitted = yield* laneOutcome(send(params.first, "send-admitted"))
-          return { beside, admitted }
+          const beside = yield* Option.match(Option.fromUndefinedOr(params.beside), {
+            onNone: () => Effect.succeedNone,
+            onSome: (thread) => Effect.asSome(laneOutcome(send(thread, "send-beside"))),
+          })
+          const admitted = yield* laneOutcome(send(params.thread, "send-admitted"))
+          return { admitted, ...omitUndefined({ beside: Option.getOrUndefined(beside) }) }
         }),
       }),
     )
@@ -477,6 +500,8 @@ interface RigAccounts {
   readonly usage?: StepUsage
   /** The quota windows the starter's `step`-th request names; threads' requests name none. */
   readonly quota?: (step: number) => ReadonlyArray<QuotaReading>
+  /** The running-thread cap the owner's config names; default: the shipped one. */
+  readonly maxRunning?: number
   readonly extensions?: ReadonlyArray<(typeof e2ePreset.extensionInputs)[number]>
 }
 
@@ -960,11 +985,56 @@ describe("threads", () => {
             expect(yield* lanesOf(rig)).toMatchObject({ scope: [work], capacity: 1, load: 0 })
             const probed = yield* rig.one(
               rig.starter,
-              rig.op("probe.admit-send", { first: first.thread, second: second.thread }),
+              rig.op("probe.admit-send", { thread: first.thread, beside: second.thread }),
             )
             expect(yield* decodeSendAdmitted(probed)).toEqual({ beside: "busy", admitted: "sent" })
             yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the admitted round")
             yield* loadIs(rig, 0, "the lane frees once the round ends")
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a send the running cap refuses frees the lane admitted for it under its key at once",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            // Ten hours to the reset: 89 points carry 2.6 runs, two lanes. The cap is one.
+            const rig = yield* accountsRig({
+              ...metered,
+              maxRunning: 1,
+              quota: (step) => [
+                {
+                  window: "7d",
+                  utilization: Option.getOrElse(
+                    Option.liftPredicate(0.1, () => step === 1),
+                    () => 0.11,
+                  ),
+                  resetAt: now + 10 * 3_600_000,
+                  rejected: false,
+                },
+              ],
+              extensions: [admitSendProbe],
+            })
+            const [idle] = yield* rig.act(rig.starter, [rig.op("thread.start", { name: "idle" })])
+            if (Predicate.isUndefined(idle) || !idle.ok)
+              return yield* Effect.die("thread.start failed")
+            const waiting = yield* decodeStarted(idle.output)
+            // The gate stays shut: the round runs and fills the cap.
+            yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            yield* loadIs(rig, 1, "the round holds a lane")
+            const probed = yield* rig.one(
+              rig.starter,
+              rig.op("probe.admit-send", { thread: waiting.thread }),
+            )
+            expect(yield* decodeSendAdmitted(probed)).toEqual({ admitted: "other" })
+            // Read at once: the refused send holds no lane.
+            expect((yield* lanesOf(rig))?.load).toBe(1)
+            yield* Deferred.succeed(rig.gate, true)
+            yield* loadIs(rig, 0, "every lane is free once the round ends")
           }).pipe(Effect.timeout("12 seconds")),
         ),
       15_000,
