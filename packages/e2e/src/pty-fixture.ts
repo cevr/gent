@@ -760,7 +760,7 @@ type DriveStep = typeof DriveStep.Type
  * cleanup stops at the end has no code to check. `sweep` names further sizes
  * the steps run at (`drivePasses`).
  */
-export const DriveScript = Schema.Struct({
+const DriveScriptFields = Schema.Struct({
   command: Schema.NonEmptyArray(Schema.String),
   cwd: Schema.optionalKey(Schema.String),
   env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
@@ -774,6 +774,31 @@ export const DriveScript = Schema.Struct({
   /** Further `[cols, rows]` the steps run at, after `cols`×`rows`. */
   sweep: Schema.optionalKey(Schema.NonEmptyArray(Schema.Tuple([Schema.Int, Schema.Int]))),
 })
+
+/**
+ * A sweep's passes each own a directory and a `resized` capture: its sizes,
+ * the first included, are distinct, and no step of a swept script names a
+ * capture `resized`.
+ */
+const sweepRefusal = (script: typeof DriveScriptFields.Type): boolean | string =>
+  Option.match(Option.fromUndefinedOr(script.sweep), {
+    onNone: () => true,
+    onSome: (sweep) => {
+      const sizes = [[script.cols, script.rows] as const, ...sweep].map(
+        ([cols, rows]) => `${cols}x${rows}`,
+      )
+      const repeated = Arr.findFirst(sizes, (size, index) => sizes.indexOf(size) !== index)
+      if (Option.isSome(repeated)) return `a sweep names ${repeated.value} twice`
+      const resized = script.steps.some(
+        (step) =>
+          (step[0] === "cap" || step[0] === "capAll" || step[0] === "cells" || step[0] === "raw") &&
+          step[1] === "resized",
+      )
+      return !resized || "a swept script leaves the capture name `resized` to its resize pass"
+    },
+  })
+
+export const DriveScript = DriveScriptFields.check(Schema.makeFilter(sweepRefusal))
 type DriveScript = typeof DriveScript.Type
 
 /** A script the runner can start: its `cwd` resolved. */
@@ -1433,10 +1458,25 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
           case "settle":
             return settlePty(session, { quietMs: step[1] ?? 500 }).pipe(Effect.as(ok))
           case "resize":
-            return Effect.sync(() => {
-              session.resize({ cols: step[1], rows: step[2] })
-              castEvent("r", `${step[1]}x${step[2]}`)
-            }).pipe(Effect.as(ok))
+            // A program that already exited has no screen to resize.
+            return exitWithin(session.pty.exited, "20 millis").pipe(
+              Effect.flatMap((exited): Effect.Effect<StepDone> =>
+                Option.match(exited, {
+                  onSome: (code) =>
+                    Effect.succeed(
+                      StepDone.Fail({
+                        reason: `the program exited ${code} before the resize`,
+                        detail: [],
+                      }),
+                    ),
+                  onNone: () =>
+                    Effect.sync(() => {
+                      session.resize({ cols: step[1], rows: step[2] })
+                      castEvent("r", `${step[1]}x${step[2]}`)
+                    }).pipe(Effect.as(ok)),
+                }),
+              ),
+            )
           case "cap":
             return capture(step[1], "viewport").pipe(
               Effect.map(({ file, text }) => saved(file, Option.some(text))),

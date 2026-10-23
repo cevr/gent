@@ -13,6 +13,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Option,
   Ref,
   Result,
   Schedule,
@@ -23,8 +24,9 @@ import {
 } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { fileURLToPath } from "node:url"
+import { DriveEnd, type DrivenPass, StepOutcome } from "../src/pty-fixture"
 import { type CommandRun, runCommand as run } from "../src/server-process-fixture"
-import { runVerifyCli } from "../src/verify"
+import { drivenPasses, runVerifyCli } from "../src/verify"
 
 const VERIFY = fileURLToPath(new URL("../src/verify.ts", import.meta.url))
 const CHECKOUT = fileURLToPath(new URL("../../..", import.meta.url))
@@ -460,5 +462,57 @@ describe("verify helpers", () => {
       }
       expect(yield* fs.exists(`${CHECKOUT}/.verify-refused`)).toBe(false)
     }).pipe(Effect.timeout("30 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a size whose recording does not play fails the drive, and each other size keeps its pass",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const out = yield* makeTempDirectoryScoped("gent-verify-")
+        const pass = (cols: number, rows: number, cast: string) =>
+          Effect.gen(function* () {
+            const dir = `${out}/${cols}x${rows}`
+            yield* fs.makeDirectory(dir)
+            yield* fs.writeFileString(`${dir}/home.txt`, "# home\n")
+            yield* fs.writeFileString(`${dir}/drive.cast`, cast)
+            const driven: DrivenPass = {
+              size: `${cols}x${rows}`,
+              script: {
+                command: ["true"],
+                cwd: out,
+                cols,
+                rows,
+                out: dir,
+                steps: [["cap", "home"]],
+              },
+              outcome: {
+                steps: [
+                  StepOutcome.cases.Ok.make({
+                    at: 0,
+                    step: "cap home",
+                    ms: 1,
+                    file: `${dir}/home.txt`,
+                  }),
+                ],
+                end: DriveEnd.cases.Stopped.make({ code: 0 }),
+                recording: Option.some(`${dir}/drive.cast`),
+              },
+            }
+            return driven
+          })
+        const passes = [
+          yield* pass(80, 24, ""),
+          yield* pass(60, 20, '{"version": 2, "width": 60, "height": 20}\n[0.5, "o", "home"]\n'),
+        ]
+        const error = yield* Effect.flip(drivenPasses(out, passes))
+        // The empty recording fails alone; the other plays.
+        expect([error._tag, error.message]).toEqual([
+          "VerifyFailed",
+          "header: Expected a valid JSON string",
+        ])
+        expect(yield* fs.exists(`${out}/80x24/passed`)).toBe(false)
+        expect(yield* fs.readFileString(`${out}/60x20/passed/home.txt`)).toBe("# home\n")
+      }).pipe(Effect.timeout("30 seconds"), Effect.provide(BunServices.layer)),
   )
 })

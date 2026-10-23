@@ -27,6 +27,7 @@ import { BunPlatformLive } from "@gent/core/host-bun"
 import { seedAuthKeys, serveModelCatalogFixture, TEST_MODEL_ID } from "@gent/core/test-utils"
 import { Gent, serverLock, dataPaths } from "@gent/sdk"
 import {
+  Array as Arr,
   Cause,
   Clock,
   Config,
@@ -908,14 +909,32 @@ const drive = Effect.fn("Verify.drive")(function* (options: {
     },
     { print: options.print, record: options.record },
   ).pipe(Effect.mapError(failed("drive")))
-  // A size that passed is checked and keeps its last pass, even when another failed.
-  const driven = yield* Effect.forEach(
+  return yield* drivenPasses(out, passes)
+})
+
+/**
+ * A drive's result from its passes: `DriveFailed` with each failed pass's
+ * problems, else `VerifyFailed` with each recording that does not play. A
+ * size that passed is checked and keeps its last pass, even when another failed.
+ */
+export const drivenPasses = Effect.fn("Verify.drivenPasses")(function* (
+  out: string,
+  passes: ReadonlyArray<DrivenPass>,
+) {
+  const checked = yield* Effect.forEach(
     passes.filter((pass) => passProblems([pass]).length === 0),
-    (pass) => drivenSize(out, pass),
+    (pass) => Effect.result(drivenSize(out, pass)),
   )
   const problems = passProblems(passes)
   if (problems.length > 0) return yield* new DriveFailed({ out, problems })
-  return Driven.make({ out, passes: driven })
+  const failures = Arr.getFailures(checked)
+  if (failures.length > 0) {
+    return yield* new VerifyFailed({
+      step: "recording",
+      message: failures.map((error) => error.message).join("; "),
+    })
+  }
+  return Driven.make({ out, passes: Arr.getSuccesses(checked) })
 })
 
 /** A pass that passed: its recording checked to play at the pass's size, its captures kept. */

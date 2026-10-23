@@ -673,5 +673,57 @@ describe("drive scripts", () => {
     ]) {
       expect(Exit.isFailure(decode({ ...base, steps: [step] }))).toBe(true)
     }
+    // A sweep's passes each own a directory, and its resize pass the capture `resized`.
+    const swept = { ...base, steps: [["cap", "home"]], sweep: [[60, 20]] }
+    expect(Exit.isSuccess(decode(swept))).toBe(true)
+    expect(Exit.isSuccess(decode({ ...base, steps: [["cap", "resized"]] }))).toBe(true)
+    for (const script of [
+      { ...swept, sweep: [[40, 6]] },
+      {
+        ...swept,
+        sweep: [
+          [60, 20],
+          [80, 24],
+          [60, 20],
+        ],
+      },
+      ...["cap", "capAll", "cells", "raw"].map((kind) => ({
+        ...swept,
+        steps: [[kind, "resized"]],
+      })),
+    ]) {
+      expect(Exit.isFailure(decode(script))).toBe(true)
+    }
   })
+
+  it.scopedLive(
+    "a sweep fails its resize pass when the program exited before the resize",
+    () =>
+      Effect.gen(function* () {
+        const out = yield* makeTempDirectoryScoped("gent-drive-")
+        const { result: passes } = yield* keepingStderr(
+          runDrivePasses(
+            {
+              command: ["/bin/sh", "-c", "printf drawn"],
+              cwd: out,
+              cols: 80,
+              rows: 8,
+              sweep: [[40, 8]],
+              out,
+              exit: 0,
+              steps: [
+                ["waitFor", "drawn", 5_000],
+                ["wait", 200],
+              ],
+            },
+            { record: false },
+          ),
+        )
+        // The sizes end as the script expects; only the resize finds no program.
+        expect(passProblems(passes)).toEqual([
+          "80x8-40x8: fail resize 40 8: the program exited 0 before the resize",
+        ])
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
 })
