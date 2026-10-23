@@ -444,7 +444,7 @@ describe("gent ctl against a running server", () => {
             provider: "anthropic",
             slot: "default",
             window: "5h",
-            utilization: 0.4,
+            utilization: 0.3,
             resetAt: now + 2 * 3_600_000,
             readAt: now - 60_000,
             rejected: false,
@@ -483,7 +483,7 @@ describe("gent ctl against a running server", () => {
             fuelPerPct: 120_000,
             samples: 2,
           })
-          // 60% left at 120k a point over 2 h, at 3.4 M an hour: one run, ±0.5/4 points.
+          // 60 points left to the 90% stop at 120k a point over 2 h, at 3.4 M an hour: one run, ±0.5/4 points.
           const line = yield* runCtl(seeded.home, ["lanes", "--line"])
           expect(line).toEqual({
             code: CTL_EXIT.ok,

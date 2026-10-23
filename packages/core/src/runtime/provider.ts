@@ -4142,9 +4142,24 @@ interface PoolWeek {
   readonly hours: number
 }
 
-const quotaRoom = (window: LaneWindow, full: number): number => {
-  if (window.rejected) return 0
-  return Math.max(0, 1 - window.utilization) * full
+/**
+ * The share of an account's 5h window gent spends: the pace stops at 90%,
+ * so a burst of running children never meets the hard limit.
+ */
+const FIVE_HOUR_SHARE = 0.9
+
+/** The share of a window gent spends: 90% of an account's 5h window, all of any other. */
+const windowShare = (name: WindowName): number => {
+  if (isAccountWindow(name, "5h")) return FIVE_HOUR_SHARE
+  return 1
+}
+
+/** A window's fuel up to its share, and the part of it still open. */
+const quotaFuel = (window: LaneWindow, fuelPerPct: number) => {
+  const share = windowShare(window)
+  const full = 100 * share * fuelPerPct
+  if (window.rejected) return { full, remaining: 0 }
+  return { full, remaining: Math.max(0, share - window.utilization) * 100 * fuelPerPct }
 }
 
 const quotaHours = (window: LaneWindow, now: number, length: number): number => {
@@ -4187,8 +4202,7 @@ const fiveHourPoolCeiling = (
     if (Predicate.isUndefined(short)) continue
     if (Predicate.isUndefined(short.fuelPerPct)) return Option.none()
     hasShort = true
-    const full = 100 * short.fuelPerPct
-    const remaining = quotaRoom(short, full)
+    const { full, remaining } = quotaFuel(short, short.fuelPerPct)
     const hours = quotaHours(short, now, 5)
     if (week.remaining > 0) {
       // Complementary windows on two accounts cannot combine into fuel: an
@@ -5728,7 +5742,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           // on a small plan while the plan still has room.
           const sustainable = Option.flatMap(horizon, (ms) => {
             if (reading.rejected && !reset) return Option.some(0)
-            const remaining = Math.max(0, 1 - utilization) * 100
+            const remaining = Math.max(0, windowShare(reading) - utilization) * 100
             return Option.map(fuelPerPct, (rate) => {
               const pace = (remaining * rate * 3_600_000) / (runRate * ms)
               if (Option.isSome(metered)) return Math.max(1, pace)
@@ -5787,11 +5801,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         const week = account.windows.find((window) => isAccountWindow(window, "7d"))
         if (Predicate.isUndefined(week) || Predicate.isUndefined(week.fuelPerPct))
           return Option.none()
-        const full = 100 * week.fuelPerPct
+        const { full, remaining } = quotaFuel(week, week.fuelPerPct)
         return Option.some({
           account,
           full,
-          remaining: quotaRoom(week, full),
+          remaining,
           hours: quotaHours(week, now, 168),
         })
       })

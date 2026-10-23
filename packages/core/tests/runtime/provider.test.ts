@@ -5807,11 +5807,12 @@ describe("account lanes", () => {
           { window: "7d", utilization: 1, resetAt: now + HOUR, rejected: true },
           { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
         ])
-        // 8 M lasts to +1h; then 28 M lasts to +4h: ceiling 7 M/h.
-        // The rolling week allows 8.5257 M/h. floor(7 / 3.4) = 2.
-        expect((yield* lanes([a, b])).capacity).toBe(2)
+        // A 5h window runs to 90%: a's 18 M holds 6 M, b's refill 18 M.
+        // 6 M lasts to +1h; then 24 M lasts to +4h: ceiling 6 M/h.
+        // The rolling week allows 8.5257 M/h. floor(6 / 3.4) = 1.
+        expect((yield* lanes([a, b])).capacity).toBe(1)
         yield* read(b, [{ window: "7d", utilization: 1, resetAt: now + 6 * HOUR, rejected: true }])
-        // Without that refill in view, 8 M must last to +4h: 2 M/h.
+        // Without that refill in view, 6 M must last to +4h: 1.5 M/h.
         expect((yield* lanes([a, b])).capacity).toBe(0)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
@@ -5819,12 +5820,13 @@ describe("account lanes", () => {
   it.effect("a weekly reset before the five-hour reset lifts the cap on unused short room", () =>
     Effect.gen(function* () {
       const { read, lanes, now } = yield* pacedAccounts(9_300_000, 1_000_000)
-      // 930 M week with 10 M left, resetting in 1h; 100 M of unused 5h room.
+      // 930 M week with 10 M left, resetting in 1h; 90 M of unused 5h room
+      // (a 5h window runs to 90% of its 100 M).
       yield* read(a, [
         { window: "7d", utilization: 1 - 10 / 930, resetAt: now + HOUR },
         { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
       ])
-      // 10 M lasts to +1h, then the 100 M short room to +5h: 10 M/h.
+      // 10 M lasts to +1h, then the 90 M short room to +5h: 10 M/h.
       // Capped at the weekly 10 M with no refill: 2 M/h, zero lanes.
       expect((yield* lanes([a])).capacity).toBe(2)
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
@@ -5841,9 +5843,9 @@ describe("account lanes", () => {
         { window: "7d", utilization: 1, resetAt: now + HOUR, rejected: true },
         { window: "5h", utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
       ])
-      // The weekly reset at +1h adds no short room. 8 M lasts to +2h:
-      // floor(4 M/h / 3.4 M/h) = 1, rather than two with a fresh 5h window.
-      expect((yield* lanes([a, b])).capacity).toBe(1)
+      // The weekly reset at +1h adds no short room. a's 6 M (to 90%) lasts
+      // to +2h: floor(3 M/h / 3.4 M/h) = 0, rather than one with a fresh 5h window.
+      expect((yield* lanes([a, b])).capacity).toBe(0)
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -6029,12 +6031,46 @@ describe("account lanes", () => {
         // ±half a 1% step over the 3 points moved.
         expect(window.band).toBeCloseTo(0.5 / 3, 6)
         expect(window.outsideShare).toBe(0)
-        // 87 points left at 200,000 fuel each, over 2 hours at 3.4 M fuel an hour.
-        expect(window.sustainable).toBeCloseTo((87 * 200_000) / (2 * 3_400_000), 6)
+        // 77 points left below 90% at 200,000 fuel each, over 2 hours at 3.4 M fuel an hour.
+        expect(window.sustainable).toBeCloseTo((77 * 200_000) / (2 * 3_400_000), 6)
         const report = yield* lanes([a])
         expect(report.capacity).toBe(2)
         expect(report.scope).toEqual([a])
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("an account's 5h window paces to 90%, its weekly window to the end", () =>
+    Effect.gen(function* () {
+      const { read, spend, lanes, windowOf } = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const start = yield* Clock.currentTimeMillis
+      const resetAt = start + 2 * HOUR + 60_000
+      const both = (utilization: number) => [
+        { window: "5h", utilization, resetAt },
+        { window: "7d", utilization, resetAt },
+      ]
+      // 200,000 fuel per point on both windows.
+      yield* read(a, both(0.8))
+      yield* spend(a, Option.some(1))
+      yield* TestClock.adjust("1 minute")
+      yield* read(a, both(0.81))
+      // 9 points to 90% on the 5h window, 19 to the end of the week.
+      expect((yield* windowOf([a], a, "5h")).sustainable).toBeCloseTo(
+        (9 * 200_000) / (2 * 3_400_000),
+        6,
+      )
+      expect((yield* windowOf([a], a, "7d")).sustainable).toBeCloseTo(
+        (19 * 200_000) / (2 * 3_400_000),
+        6,
+      )
+      yield* spend(a, Option.some(9))
+      yield* read(a, both(0.9))
+      // At 90% the 5h window carries no run, though no answer refused it.
+      const stopped = yield* lanes([a])
+      expect(stopped.accounts[0]?.held).toBe(false)
+      expect(stopped.accounts[0]?.windows.find((w) => w.window === "5h")?.sustainable).toBe(0)
+      expect(stopped.capacity).toBe(0)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
   it.effect(
@@ -6128,8 +6164,9 @@ describe("account lanes", () => {
           { window: "7d", utilization: 0.99, resetAt: now + 24 * HOUR },
         ])
         expect((yield* lanes([a, b])).capacity).toBeUndefined()
+        // A 5h window runs to 90%: b at 89% has 1 point left.
         yield* read(b, [
-          { window: "5h", utilization: 0.99, resetAt: now + HOUR },
+          { window: "5h", utilization: 0.89, resetAt: now + HOUR },
           { window: "7d", utilization: 0, resetAt: now + 24 * HOUR },
         ])
         const pooled = yield* lanes([a, b])
@@ -6519,15 +6556,17 @@ describe("account lanes", () => {
   ) =>
     Effect.gen(function* () {
       const resetAt = now + resetIn
+      // The account's window runs to 90%, so it starts 10 points lower than
+      // the model's to leave both 86 points.
       yield* fixture.read(a, [
-        { window: "5h", utilization: 0.1, resetAt },
+        { window: "5h", utilization: 0, resetAt },
         { window: "5h", model: glm, utilization: 0.1, resetAt },
       ])
       yield* fixture.spend(a, Option.some(1), usage, runner, glm)
       yield* fixture.spend(a, Option.some(3))
       yield* TestClock.adjust("1 minute")
       yield* fixture.read(a, [
-        { window: "5h", utilization: 0.14, resetAt },
+        { window: "5h", utilization: 0.04, resetAt },
         { window: "5h", model: glm, utilization: 0.12, resetAt },
       ])
     })
