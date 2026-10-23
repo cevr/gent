@@ -341,8 +341,10 @@ export const providerLabel = (
  * its catalog name (`Claude Sonnet 5.5`), and its provider's label after it
  * when another provider's model has the same name, so the name says which
  * provider runs, and bills, it. The label is `providerLabel` over the
- * catalog's `providerName`s: the catalog read carries them, so the first draw
- * spells `(Anthropic)` as `/auth` does, in every view.
+ * catalog's `providerName`s, one per provider: the catalog read carries them,
+ * so the first draw spells `(Anthropic)`, in every view. A driver name is
+ * told apart by its id only among the providers the catalog lists; `/auth`
+ * also counts signed-in providers with no listed model.
  */
 export const modelDisplayName = (model: Model, models: ReadonlyArray<Model>): string => {
   const shared = models.some(

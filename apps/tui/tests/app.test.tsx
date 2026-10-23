@@ -2343,12 +2343,13 @@ describe("App status and activity rows", () => {
     })
     expect(modelDisplayName(model, [model])).toBe("Claude Opus 5")
   })
-  // The catalog read carries the provider's name, so the first draw spells it
-  // as `/auth` does: no `(anthropic)` before the sign-in check answers.
+  // The catalog read carries the provider's name, so the first draw spells it:
+  // no `(anthropic)` before the sign-in check answers. A provider with several
+  // models still counts once, so its name stays bare of the id.
   test("a shared model name carries its provider's name from the catalog", () => {
-    const entry = (provider: string, name: Option.Option<string>) =>
+    const entry = (provider: string, name: Option.Option<string>, model = "claude-haiku-4-5") =>
       new Model({
-        id: ModelId.make(`${provider}/claude-haiku-4-5`),
+        id: ModelId.make(`${provider}/${model}`),
         name: "Claude Haiku 4.5",
         provider: ProviderId.make(provider),
         ...Option.match(name, { onNone: () => ({}), onSome: (providerName) => ({ providerName }) }),
@@ -2357,7 +2358,11 @@ describe("App status and activity rows", () => {
     const mirror = entry("mirror-a", Option.some("Mirror"))
     const twin = entry("mirror-b", Option.some("Mirror"))
     const bare = entry("bare", Option.none())
-    const models = [anthropic, mirror, twin, bare]
+    const opus = new Model({
+      ...entry("anthropic", Option.some("Anthropic"), "claude-opus-5"),
+      name: "Claude Opus 5",
+    })
+    const models = [anthropic, opus, mirror, twin, bare]
     expect(modelDisplayName(anthropic, models)).toBe("Claude Haiku 4.5 (Anthropic)")
     expect(modelDisplayName(mirror, models)).toBe("Claude Haiku 4.5 (Mirror (mirror-a))")
     expect(modelDisplayName(bare, models)).toBe("Claude Haiku 4.5 (bare)")
