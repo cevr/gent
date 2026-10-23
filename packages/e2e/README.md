@@ -7,9 +7,10 @@ Each file in `packages/e2e/tests/` is one area:
 - `packages/e2e/tests/machines-hard-kill.test.ts`: a machine run across a SIGKILL of its host (`packages/e2e/src/machine-host.ts`, a process entry with routed fake models): rounds, commands and answers run once, and the run goes on with no client call.
 - `packages/e2e/tests/drive.test.ts`: the drive-script runner below.
 - `packages/e2e/tests/pty-fixture.test.ts`: the fixture's screen reads on recorded frames, with no process.
+- `packages/e2e/tests/pty-host.test.ts`: the terminal host (`packages/e2e/src/pty-host.ts`), which keeps one program on the fixture's pty for other processes and answers them on a Unix socket; gamut runs the TUI on it. Its tests serve shell programs in the test process.
 - `packages/e2e/tests/verify.test.ts`: the verify-gent helpers (`packages/e2e/src/verify.ts`) as a shell runs them: launch, doctor, a `gent ctl` turn, stop.
 
-`bun run test:e2e` from the root runs them all, one file at a time. `bun run test` runs only the fixture test, the one that spawns nothing.
+`bun run test:e2e` from the root runs them all, one file at a time. `bun run test` runs the fixture test and the host test, whose programs are short shell scripts.
 
 Every wait for a gent that a test starts from source (the first frame, the server's ready line, a headless run's exit) has one bound, `GENT_START_BOUND_MS` from `@gent/core/test-utils`. The bound times a warm start, about 1.5 CPU-seconds: the test preload names one transform cache for the checkout (`XDG_CACHE_HOME`, `node_modules/.cache/gent-test`), and each `test:e2e` lane also preloads `packages/tooling/src/warm-source-start-boundary.ts`, which fills that cache before the first test. A start with a cold cache costs about 5.5 CPU-seconds and misses the bound once the load passes 30, so a bare `bun test` of one file, which skips the warm-up, can fail its first start on a loaded machine.
 

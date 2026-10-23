@@ -1389,14 +1389,14 @@ export const findProcessNames = (file: string, text: string): ReadonlyArray<Find
  * Guard: every e2e test file drives a subprocess.
  *
  * `packages/e2e` holds the tests that need process isolation: a PTY-hosted
- * TUI or a spawned `gent` server. A test file there that imports neither
- * fixture runs in-process inside the slow suite, and belongs in the owning
+ * TUI, the terminal host that serves a program on a pty, or a spawned `gent`
+ * server. A test file there that imports none of the fixtures runs in-process inside the slow suite, and belongs in the owning
  * package's `tests/` directory instead.
  */
 const E2E_TEST_FILE = /^packages\/e2e\/tests\/.*\.test\.ts$/
 
-/** The two subprocess fixture entry paths. */
-const FIXTURE_MODULE = /^\.\.\/src\/(?:server-process-fixture|pty-fixture)(?:\.js)?$/
+/** The subprocess fixture entry paths. */
+const FIXTURE_MODULE = /^\.\.\/src\/(?:server-process-fixture|pty-fixture|pty-host)(?:\.js)?$/
 
 export const findE2eFixtureImportFindings = (
   file: string,
@@ -1414,7 +1414,7 @@ export const findE2eFixtureImportFindings = (
       file,
       line: 1,
       message:
-        "e2e test files must import ../src/server-process-fixture or ../src/pty-fixture; an in-process test belongs in the owning package's tests/",
+        "e2e test files must import ../src/server-process-fixture, ../src/pty-fixture or ../src/pty-host; an in-process test belongs in the owning package's tests/",
     },
   ]
 }
@@ -4438,7 +4438,8 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
     packageJson: "packages/e2e/package.json",
     alias: "@gent/e2e",
     mustBePrivate: true,
-    entryPoints: [],
+    // The gamut testbed starts the terminal host and calls it.
+    entryPoints: ["./pty-host"],
   },
   {
     packageJson: "packages/tooling/package.json",

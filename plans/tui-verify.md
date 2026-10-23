@@ -57,7 +57,7 @@ The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1
 - Each assertion was broken in turn (8 probes); each break fails a test in `packages/e2e/tests/drive.test.ts` (measured).
 - `fits` reads the terminal's wrap flag (only while the row still ends on text at the last column; a row painted over keeps a stale flag) and the last two cells, skipping wide characters and keeping a combining mark with its letter. The cut rule is a guess: a word that ends exactly at the edge reads as cut. Old captures end on `$0.02`, `…` and borders at the last column, so only two letters at the edge count as a cut (measured on `tree-sections` captures).
 - Live: a drive with `expect`, `fits` and `stable` at 120x40, a resize to 60x20 and back passed 3/3 at 25 stderr lines (load 7.57 on 12 cores). `stable` right after `ready` caught the status row drawing `(anthropic)`, then `(Anthropic)` (1 of 3 runs); fixed 2026-10-23, the catalog read carries each model's `providerName`, so every view spells it from the first draw.
-- Open: the diff is row by row, so a block that moved shows every row it crossed; item 4 (gamut without herdr) and item 5 (scratch setup) are not started.
+- Open: the diff is row by row, so a block that moved shows every row it crossed; item 5 (scratch setup) is not started.
 
 ### Item 2 status (2026-10-23)
 
@@ -65,6 +65,14 @@ The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1
 - Tests: `drive.test.ts` (the expansion, and a fake program that fits 80 columns and wraps at 40: the 40 and resize passes fail, the 80 pass holds) and `verify.test.ts` (a sweep on the real TUI at 80x24, 60x20 and the resize). Six probes, each a broken part of the sweep, turn a test red (measured).
 - Live: `ready`, `fits`, `stable 1500`, `cap` and a ctl `sh` step at 120x40 with `sweep: [[60, 20]]` passed 3/3 (load 6.94 on 12 cores). A first try waited for `ready · work` and `stable` caught the model name drawing after it, at each size: a script error, fixed by waiting for the model name.
 - Review (counsel, four findings, all fixed): a sweep that names a size twice, the first included, or a script capture `resized` beside a sweep, is refused at decode; a `resize` fails when the program has already exited, so a sweep's resize pass cannot pass on a dead program; `verify:drive` checks every passing size's recording before it fails, so each other size keeps its `passed/` (`drivenPasses`). Each fix has a test, and four probes turn each red (measured).
+
+### Item 4 status (2026-10-23)
+
+- `packages/e2e/src/pty-host.ts` is the terminal host: a process entry that keeps one program on the pty fixture (`openHostedTerminal`) and answers `HostRpcs` (`type`, `keys`, `read`, `restart`, `down`) on a Unix socket with Effect RPC over NDJSON. `hostCall` is the client. The config file holds the TUI's whole environment; the host removes it once read.
+- `read` keeps a mark: the rows added since the last read across the scrollback and the screen (`rowsSince`, a longest common subsequence, so a live row that moved under new history is not new), how many rows of the last read are gone, and the exit code once the program exited. `read --full` is the screen. `restart` and `down` press ctrl+c every 300 ms for 15 s; `down` then kills.
+- `testbeds/gamut/gamut.ts` has no herdr call: the state file records `socket` and `hostPid`; `keys <name…>` is new; the TUI gets the terminal basics, `HOME`, `GENT_DATA_DIR` and the proxy variables, nothing else. A host that stopped is named with its log; `down` kills a recorded host id only while `ps` shows the host entry.
+- Tests: `packages/e2e/tests/pty-host.test.ts` (11) and the gamut CLI on a real host with a shell script in gent's place (`testbeds/gamut/tests/gamut.test.ts`, 9 new or rewritten). Four probes (an unlisted variable passed, the config kept, a stopped host not named, `down` skipping the host) each turn a test red (measured).
+- Known limits: no attach, so the owner watches with `read --full`; the socket lives in the run's scratch directory, and a path near the 104-byte macOS limit is a risk (a 130-character path worked, measured).
 
 ## Done when
 

@@ -33,6 +33,7 @@
     "@effect/sql-sqlite-bun": "catalog:",
     "@effect/tsgo": "0.56.0",
     "@gent/core": "workspace:*",
+    "@gent/e2e": "workspace:*",
     "@gent/extensions": "workspace:*",
     "@oxlint/plugins": "^1.89.0",
     "@types/bun": "^1.4.3",

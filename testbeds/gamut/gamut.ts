@@ -4,8 +4,9 @@
  *
  *   bun run gamut up <preset> [--prompt <file|text>] [--no-build]
  *   bun run gamut send "<text>"
+ *   bun run gamut keys <name…>
  *   bun run gamut interrupt
- *   bun run gamut read [lines]
+ *   bun run gamut read [--full]
  *   bun run gamut wait [seconds]
  *   bun run gamut status
  *   bun run gamut restart
@@ -14,9 +15,12 @@
  *
  * `up` copies `fixture/` (the ledgerline app in its red state) to a fresh
  * scratch directory, pins the preset's models, launches this checkout's
- * `apps/tui/bin/gent` in a herdr pane, and records the run in a state file.
- * Run state stays in that scratch directory. Offline catalog metadata is
- * read from a scratch copy of the selected gent database and its WAL.
+ * `apps/tui/bin/gent` on a pty that a detached terminal host keeps
+ * (`packages/e2e/src/pty-host.ts`), and records the run in a state file.
+ * Every later subcommand reaches the TUI through the host's socket; no
+ * terminal multiplexer is needed. Run state stays in that scratch directory.
+ * Offline catalog metadata is read from a scratch copy of the selected gent
+ * database and its WAL.
  *
  * A plain Bun script: it is a driver for a terminal program, not part of the
  * shipped runtime, and it builds no Effect layer. The pure parts it exports
@@ -38,12 +42,16 @@ import {
   readdirSync,
   symlinkSync,
   copyFileSync,
+  writeFileSync,
+  openSync,
+  closeSync,
 } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { homedir, tmpdir } from "node:os"
-import { Config, Effect, Option, Schema } from "effect"
+import { Cause, Config, Effect, Exit, Option, Schema } from "effect"
 import { resolveDataDir } from "@gent/core/host"
+import { HostConfig, type HostClient, type HostScreen, hostCall } from "@gent/e2e/pty-host"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CHECKOUT = resolve(HERE, "../..")
@@ -222,7 +230,7 @@ const loadCatalog = async (): Promise<Record<string, ReadonlyArray<string>>> => 
     )
   }
   try {
-    // curl, as the script shells out to herdr and git: it builds no Effect layer.
+    // curl, as the script shells out to git and bun: it builds no Effect layer.
     return decode(await $`curl -sf -m 15 ${MODELS_DEV_URL}`.quiet().text())
   } catch (error) {
     const dbPath = resolve(Effect.runSync(resolveDataDir(homedir())), "data.db")
@@ -311,7 +319,9 @@ const StateFile = Schema.fromJsonString(
     root: Schema.String,
     work: Schema.String,
     data: Schema.String,
-    pane: Schema.String,
+    /** The terminal host's socket, and its process id for a `down` that finds it wedged. */
+    socket: Schema.String,
+    hostPid: Schema.Finite,
     binary: Schema.String,
     preset: Schema.String,
     /**
@@ -342,7 +352,7 @@ export const decodeState = (text: string): GamutState => Schema.decodeSync(State
 /**
  * The filename carries the checkout name. `readState` also checks the
  * canonical checkout path: two checkouts with the same name must refuse
- * each other's run, not close its pane or remove its scratch tree.
+ * each other's run, not stop its TUI or remove its scratch tree.
  */
 export const stateFileFor = (checkoutRoot: string): string =>
   join(tmpdir(), `gent-gamut-${basename(checkoutRoot)}.json`)
@@ -380,44 +390,19 @@ const resolvePrompt = async (value: string): Promise<string> => {
   return value
 }
 
-// ── herdr pane ──────────────────────────────────────────────────────────
+// ── Terminal host ───────────────────────────────────────────────────────
 
-/** The `pane_id` out of a `herdr pane split` reply. */
-const SplitReply = Schema.fromJsonString(
-  Schema.Struct({ result: Schema.Struct({ pane: Schema.Struct({ pane_id: Schema.String }) }) }),
-)
+/** The host's entry; `isHost` also finds a run's host by it in `ps`. */
+const HOST_ENTRY = fileURLToPath(import.meta.resolve("@gent/e2e/pty-host"))
 
-export const paneIdFromSplit = (stdout: string): string => {
-  const reply = Schema.decodeOption(SplitReply)(stdout)
-  if (reply._tag === "None") throw new Error(`herdr pane split gave no pane id: ${stdout}`)
-  return reply.value.result.pane.pane_id
-}
+/** The size the TUI draws at: wide enough that the status line keeps every item. */
+const HOST_SIZE = { cols: 120, rows: 40 }
 
 /**
- * Single-quote one argument for the pane's shell.
- *
- * `herdr pane run` joins its command words into a line the pane's shell then
- * splits again, so a prompt with spaces arrives as several positional
- * arguments and gent rejects it. Quoting here is what survives that round
- * trip; the embedded-quote form closes the quote, escapes the `'`, reopens.
- */
-export const shellQuote = (argument: string): string => `'${argument.replaceAll("'", `'\\''`)}'`
-
-/** A herdr JSON error reply. */
-const ErrorReply = Schema.fromJsonString(
-  Schema.Struct({ error: Schema.Struct({ message: Schema.String }) }),
-)
-
-/**
- * The one line to show for a failed command. herdr answers a failed CLI call
- * with `{"error":{"message":...}}`; other commands say why on
- * stderr, so its last non-empty line wins, then stdout's.
+ * The one line to show for a failed command: its last non-empty stderr
+ * line, then its last stdout line.
  */
 export const failureText = (stdout: string, stderr: string): string => {
-  for (const text of [stdout, stderr]) {
-    const reply = Schema.decodeOption(ErrorReply)(text.trim())
-    if (reply._tag === "Some") return reply.value.error.message
-  }
   const lastLine = (text: string) =>
     text
       .split("\n")
@@ -427,99 +412,62 @@ export const failureText = (stdout: string, stderr: string): string => {
   return lastLine(stderr) ?? lastLine(stdout) ?? "no output"
 }
 
-/**
- * Fail before any copy or build when there is no herdr pane to split. `up`
- * splits the current pane, so the check is the same question herdr answers
- * for `--current`: is a server running, and is this shell inside one of its
- * panes.
- */
-const requireHerdrPane = async (): Promise<void> => {
-  const probe = await $`herdr pane current`.quiet().nothrow()
-  if (probe.exitCode === 0) return
-  const reason = failureText(probe.stdout.toString(), probe.stderr.toString())
-  throw new Error(`herdr has no current pane (${reason}); start herdr, then rerun from a pane`)
-}
-
-/** Ctrl-C as the raw byte, as a person would press it in the TUI. */
-const CTRL_C = "\x03"
-
-/** The foreground processes of this run's pane, independent of other runs. */
-const ProcessReply = Schema.fromJsonString(
-  Schema.Struct({
-    result: Schema.Struct({
-      process_info: Schema.Struct({
-        shell_pid: Schema.optional(Schema.NullOr(Schema.Finite)),
-        foreground_processes: Schema.Array(
-          Schema.Struct({
-            pid: Schema.Finite,
-            argv: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
-          }),
-        ),
-      }),
-    }),
-  }),
-)
-
-const MissingPaneReply = Schema.fromJsonString(
-  Schema.Struct({ error: Schema.Struct({ code: Schema.Literal("pane_not_found") }) }),
-)
-
-/** Bound and reap each Herdr subprocess within the quit's remaining budget. */
-const herdrBefore = async (deadline: number, args: ReadonlyArray<string>) => {
-  const remaining = deadline - Date.now()
-  if (remaining <= 0)
-    throw new Error("quit timed out after 15s; inspect the pane before relaunching")
-  const child = Bun.spawn(["herdr", ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: remaining,
-    killSignal: "SIGKILL",
-  })
-  try {
-    // oxlint-disable-next-line effect/noNewPromise -- the plain Bun driver drains both child pipes and reaps exit within its subprocess timeout
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ])
-    if (Date.now() >= deadline)
-      throw new Error("quit timed out after 15s; inspect the pane before relaunching")
-    return { stdout, stderr, exitCode }
-  } finally {
-    if (child.exitCode === null) child.kill("SIGKILL")
-    await child.exited
-  }
+/** Whether `pid` is still a terminal host, not a process that reused its id. */
+const isHost = async (pid: number): Promise<boolean> => {
+  const ps = await $`ps -o command= -p ${pid}`.quiet().nothrow()
+  return ps.exitCode === 0 && ps.stdout.toString().includes(HOST_ENTRY)
 }
 
 /**
- * Peel open UI and cancel work until the pane returns to its shell. The
- * number of layers is the TUI's concern; stop by observed exit with a 15s
- * deadline. Send nothing while another process owns the foreground.
+ * Call the run's host. A host that has stopped (the machine slept, a kill)
+ * is named as such, with the log that says why; any other failure keeps
+ * its own message (an unknown key, a TUI that will not quit).
  */
-const quitTui = async (state: GamutState): Promise<void> => {
-  const deadline = Date.now() + 15_000
-  while (Date.now() < deadline) {
-    const reply = await herdrBefore(deadline, ["pane", "process-info", "--pane", state.pane])
-    if (reply.exitCode !== 0) {
-      // `down` can clean an already-closed pane; `restart` still fails when its launch finds no pane.
-      if (Schema.decodeOption(MissingPaneReply)(reply.stdout)._tag === "Some") return
-      throw new Error(failureText(reply.stdout, reply.stderr))
-    }
-    const info = Schema.decodeSync(ProcessReply)(reply.stdout).result.process_info
-    if (
-      info.foreground_processes.length === 1 &&
-      info.foreground_processes[0]?.pid === info.shell_pid
+const callHost = async <A, E>(
+  state: GamutState,
+  use: (host: HostClient) => Effect.Effect<A, E>,
+): Promise<A> => {
+  const exit = await Effect.runPromiseExit(hostCall(state.socket, use))
+  if (Exit.isSuccess(exit)) return exit.value
+  if (!(await isHost(state.hostPid))) {
+    throw new Error(
+      `the run's terminal host has stopped (see ${join(state.root, "host.log")}); run: bun run gamut down`,
     )
-      return
-    if (info.foreground_processes.some((process) => process.argv?.[0] === state.binary)) {
-      const sent = await herdrBefore(deadline, ["pane", "send-text", state.pane, CTRL_C])
-      if (sent.exitCode !== 0) throw new Error(failureText(sent.stdout, sent.stderr))
-    }
-    await Bun.sleep(Math.min(300, Math.max(0, deadline - Date.now())))
   }
-  throw new Error(
-    `${state.pane} has not returned to its shell after 15s; inspect it before relaunching`,
-  )
+  const error = Cause.squash(exit.cause)
+  throw new Error(error instanceof Error ? error.message : String(error))
+}
+
+const encodeHostConfig = Schema.encodeSync(Schema.fromJsonString(HostConfig))
+
+/**
+ * Start the terminal host, detached so it outlives this command, and wait
+ * for its socket. The config holds the TUI's whole environment, proxy
+ * values included, so it is written owner-only and the host removes it
+ * once read; none of it reaches a process argument.
+ */
+const startHost = async (root: string, config: HostConfig): Promise<number> => {
+  const file = join(root, "host.json")
+  writeFileSync(file, encodeHostConfig(config), { mode: 0o600 })
+  const logPath = join(root, "host.log")
+  const log = openSync(logPath, "a")
+  const host = Bun.spawn([process.execPath, HOST_ENTRY, file], {
+    stdio: ["ignore", log, log],
+    detached: true,
+  })
+  closeSync(log)
+  host.unref()
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    if (host.exitCode !== null) {
+      const said = failureText("", await Bun.file(logPath).text())
+      throw new Error(`the terminal host exited ${host.exitCode}: ${said}`)
+    }
+    if (existsSync(config.socket)) return host.pid
+    await Bun.sleep(100)
+  }
+  host.kill("SIGKILL")
+  throw new Error(`the terminal host opened no socket within 10s; see ${logPath}`)
 }
 
 // ── up ──────────────────────────────────────────────────────────────────
@@ -532,7 +480,6 @@ const up = async (presetName: string, promptArg: string | undefined, build: bool
   if (existsSync(STATE_FILE)) {
     throw new Error(`a gamut run is already up (${STATE_FILE}). Run: bun run gamut down`)
   }
-  await requireHerdrPane()
   const preset = resolvePreset(named, await loadCatalog())
 
   const root = join(tmpdir(), `gent-gamut-${Date.now()}`)
@@ -553,8 +500,8 @@ const removeTree = async (path: string): Promise<void> => {
 }
 
 /**
- * The owner's `~/.gent` entries a pane never shares: the user config, which
- * five writers in a pane can reach (the first `/model` pick, a driver
+ * The owner's `~/.gent` entries a run never shares: the user config, which
+ * five writers in the TUI can reach (the first `/model` pick, a driver
  * override set or cleared, the auth order, a renamed auth slot), and the
  * database files, which `GENT_DATA_DIR` moves to the run's own directory.
  */
@@ -562,26 +509,26 @@ const isUnsharedGentEntry = (name: string): boolean =>
   name === "config.json" || name.startsWith("data.db")
 
 /**
- * Build the pane's home at `paneHome` from the owner's `ownerHome`. Each
+ * Build the run's home at `runHome` from the owner's `ownerHome`. Each
  * top-level entry links to the owner's, so the login, the skills, the
  * shell and git read as they do outside the run. `.gent` is the run's own
  * directory: its entries link to the owner's too, except the user config,
  * which is a copy the run's writers change, and the database files.
  * A link is removed as a link, so `down` never reaches the owner's files.
  */
-const buildPaneHome = (ownerHome: string, paneHome: string): void => {
-  mkdirSync(join(paneHome, ".gent"), { recursive: true })
+const buildRunHome = (ownerHome: string, runHome: string): void => {
+  mkdirSync(join(runHome, ".gent"), { recursive: true })
   for (const entry of readdirSync(ownerHome)) {
-    if (entry !== ".gent") symlinkSync(join(ownerHome, entry), join(paneHome, entry))
+    if (entry !== ".gent") symlinkSync(join(ownerHome, entry), join(runHome, entry))
   }
   const ownerGent = join(ownerHome, ".gent")
   if (!existsSync(ownerGent)) return
   for (const entry of readdirSync(ownerGent)) {
     if (!isUnsharedGentEntry(entry))
-      symlinkSync(join(ownerGent, entry), join(paneHome, ".gent", entry))
+      symlinkSync(join(ownerGent, entry), join(runHome, ".gent", entry))
   }
   const config = join(ownerGent, "config.json")
-  if (existsSync(config)) copyFileSync(config, join(paneHome, ".gent", "config.json"))
+  if (existsSync(config)) copyFileSync(config, join(runHome, ".gent", "config.json"))
 }
 
 const prepareAndLaunch = async (
@@ -634,33 +581,67 @@ const prepareAndLaunch = async (
 
   const prompt = promptArg === undefined ? DEFAULT_PROMPT : await resolvePrompt(promptArg)
 
-  // GENT_DATA_DIR redirects `data.db`, and HOME gives the pane a home of its
-  // own (`buildPaneHome`): the run writes a copy of the user config, while
+  // GENT_DATA_DIR redirects `data.db`, and HOME gives the run a home of its
+  // own (`buildRunHome`): the run writes a copy of the user config, while
   // the login and the other tools' files stay the owner's.
-  // Split down, not right: a right split of an already split pane leaves the
-  // TUI about 55 columns wide and the status line drops its leading items.
   const home = join(root, "home")
-  buildPaneHome(homedir(), home)
-  const split =
-    await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data} --env HOME=${home} ${Effect.runSync(proxyEnv)}`.text()
-  const pane = paneIdFromSplit(split)
+  buildRunHome(homedir(), home)
+  const socket = join(root, "host.sock")
+  const hostPid = await startHost(root, {
+    socket,
+    cwd: work,
+    command: [BINARY, "-p", prompt],
+    env: {
+      ...Effect.runSync(terminalEnv),
+      HOME: home,
+      GENT_DATA_DIR: data,
+      ...Effect.runSync(proxyEnv),
+    },
+    ...HOST_SIZE,
+  })
 
   const state: GamutState = {
     root,
     work,
     data,
-    pane,
+    socket,
+    hostPid,
     binary: BINARY,
     preset: presetName,
     sendMark: 0,
     awaitsTurn: true,
   }
   await Bun.write(STATE_FILE, encodeState(state))
-
-  await $`herdr pane run ${pane} ${shellQuote(BINARY)} -p ${shellQuote(prompt)}`.quiet()
-  console.log(`pane  ${pane}`)
+  console.log(`host  ${hostPid} on ${socket}`)
   console.log(`state ${STATE_FILE}`)
 }
+
+/** The caller's variables among `names`, by name; an empty variable reads as unset. */
+const callerVariables = (
+  names: ReadonlyArray<string>,
+): Effect.Effect<Readonly<Record<string, string>>> =>
+  Effect.forEach(names, (name) =>
+    Config.option(Config.NonEmptyString(name)).pipe(
+      Effect.orElseSucceed(() => Option.none<string>()),
+      Effect.map((value) =>
+        Option.match(value, {
+          onNone: () => [],
+          onSome: (text) => [[name, text] as const],
+        }),
+      ),
+    ),
+  ).pipe(Effect.map((entries) => Object.fromEntries(entries.flat())))
+
+/**
+ * The caller's terminal basics, which the TUI's otherwise empty environment
+ * starts from. The host passes nothing else through: the run's home, its
+ * data directory and the proxy variables (`proxyEnv`) are added by name.
+ */
+const TERMINAL_VARIABLES = ["PATH", "SHELL", "USER", "LOGNAME", "TMPDIR", "LANG"] as const
+
+const terminalEnv: Effect.Effect<Readonly<Record<string, string>>> = callerVariables(
+  TERMINAL_VARIABLES,
+).pipe(Effect.map((variables) => ({ ...variables, COLORTERM: "truecolor" })))
 
 // ── status ──────────────────────────────────────────────────────────────
 
@@ -1002,20 +983,35 @@ const send = async (text: string) => {
       awaitsTurn: sendAwaitsTurn(text),
     }),
   )
-  // The pane is running the TUI, not a shell: the text goes into the composer
-  // verbatim and Enter submits it. No shell quoting — that would be typed too.
-  await $`herdr pane send-text ${state.pane} ${text}`.quiet()
-  await $`herdr pane send-keys ${state.pane} Enter`.quiet()
+  // The text goes into the composer verbatim and Enter submits it.
+  await callHost(state, (host) =>
+    host.type({ text }).pipe(Effect.andThen(host.keys({ names: ["enter"] }))),
+  )
 }
 
-const interrupt = async () => {
+/** Press named keys in order (`ctrl+c`, `esc`, `down`, `tab`, …). */
+const pressKeys = async (names: ReadonlyArray<string>) => {
   const state = await readState()
-  await $`herdr pane send-text ${state.pane} ${CTRL_C}`.quiet()
+  await callHost(state, (host) => host.keys({ names }))
 }
 
-const read = async (lines: number) => {
+/**
+ * What `read` prints: the rows added since the last read (`(no change)` when
+ * none), or the whole screen with `--full`, then how many rows of the last
+ * read are gone and, once it has exited, the TUI's exit code.
+ */
+export const screenText = (screen: HostScreen, full: boolean): string => {
+  const lines = [...screen.rows]
+  if (!full && lines.length === 0) lines.push("(no change)")
+  if (screen.gone > 0) lines.push(`(${screen.gone} rows of the last read are gone)`)
+  if (screen.exited !== undefined) lines.push(`(gent exited ${screen.exited})`)
+  return lines.join("\n")
+}
+
+const read = async (full: boolean) => {
   const state = await readState()
-  console.log(await $`herdr pane read ${state.pane} --lines ${lines}`.text())
+  const scope = full ? "full" : "changes"
+  console.log(screenText(await callHost(state, (host) => host.read({ scope })), full))
 }
 
 /**
@@ -1023,7 +1019,7 @@ const read = async (lines: number) => {
  * sessions have a turn that has not ended. A turn starts with a user-role
  * `MessageReceived` (a prompt, a wake, a child's completion) or a
  * `StreamStarted`. It ends with `TurnCompleted` alone, a failed turn too.
- * The pane shows the agents tray only while it is on screen, so a
+ * The screen shows the agents tray only while it is on screen, so a
  * child still working can be invisible there; the events are the record.
  */
 export interface RunRecord {
@@ -1093,7 +1089,7 @@ const runRecordIn = (dataDir: string, sendMark: number): RunRecord =>
 const latestEventIn = (dataDir: string): number => readRunDb(dataDir, 0, latestEventId)
 
 /**
- * Whether the pane shows a working child: a running child's tray row starts
+ * Whether the screen shows a working child: a running child's tray row starts
  * with its pulse (`◇◈◆◈`, `workingIconFrame` in `apps/tui/src/utils.ts`).
  * `◆` is also a done thread's glyph, so only the other two frames read busy:
  * idle needs several reads in a row, and the record's open turns cover a
@@ -1101,19 +1097,19 @@ const latestEventIn = (dataDir: string): number => readRunDb(dataDir, 0, latestE
  * stored. The TUI's agents tests render the tray and check this predicate on
  * the frame, so a change to the row turns them red.
  */
-export const paneShowsWorkingChild = (paneText: string): boolean =>
-  paneText.split("\n").some((line) => /^[◇◈] /.test(line.trim()))
+export const screenShowsWorkingChild = (screenText: string): boolean =>
+  screenText.split("\n").some((line) => /^[◇◈] /.test(line.trim()))
 
 /**
- * Whether the run is idle: every turn has ended in the record and the pane
- * shows no working child. The record holds the turn state; no pane row
- * stands for it. The live line and the turn line share the `✻` glyph, so a
- * pane check on it read a finished turn as busy. The footer cannot say idle
+ * Whether the run is idle: every turn has ended in the record and the
+ * screen shows no working child. The record holds the turn state; no screen
+ * row stands for it. The live line and the turn line share the `✻` glyph, so
+ * a screen check on it read a finished turn as busy. The footer cannot say idle
  * either: its first slot shows `idle`, `ready`, a held error or an extension
  * notice (`apps/tui/src/app.tsx`, `phaseLabels`), the last two free text.
  */
-const isIdle = (paneText: string, record: RunRecord): boolean =>
-  record.open.length === 0 && !paneShowsWorkingChild(paneText)
+const isIdle = (screenText: string, record: RunRecord): boolean =>
+  record.open.length === 0 && !screenShowsWorkingChild(screenText)
 
 /** Where a wait stands: idle reads in a row with and without proof the send was handled. */
 interface WaitProgress {
@@ -1131,7 +1127,7 @@ export const WAIT_START: WaitProgress = { settledReads: 0, quietReads: 0 }
 export const QUIET_READS = 5
 
 /**
- * Fold one pane read into the wait. An idle read counts only with proof the
+ * Fold one screen read into the wait. An idle read counts only with proof the
  * send was handled: a turn started after it for a prompt, any stored event
  * after it for a slash command (its record, a note, a queued prompt). Two such
  * reads in a row settle: a background child's result starts a new turn by
@@ -1140,11 +1136,11 @@ export const QUIET_READS = 5
  */
 export const waitStep = (
   progress: WaitProgress,
-  paneText: string,
+  screenText: string,
   record: RunRecord,
   awaitsTurn: boolean,
 ): WaitProgress => {
-  if (!isIdle(paneText, record)) return WAIT_START
+  if (!isIdle(screenText, record)) return WAIT_START
   const handled = awaitsTurn ? record.started : record.stored
   if (handled) return { settledReads: progress.settledReads + 1, quietReads: 0 }
   if (awaitsTurn) return WAIT_START
@@ -1175,26 +1171,15 @@ const PROXY_VARIABLES = [
 ] as const
 
 /**
- * The caller's proxy variables as `herdr pane split` flags. The pane takes no
- * environment from the caller, so `eval "$(teamclaude env --mitm)"` (or
+ * The caller's proxy variables, for the TUI's environment. The TUI takes no
+ * other variable from the caller, so `eval "$(teamclaude env --mitm)"` (or
  * `--no-mitm`, which sets `ANTHROPIC_BASE_URL`) before `up` reaches the run
  * only through these: its Anthropic requests then go through the TeamClaude
  * account pool, not the owner's own account. An empty variable reads as
  * unset.
  */
-export const proxyEnv: Effect.Effect<ReadonlyArray<string>> = Effect.forEach(
-  PROXY_VARIABLES,
-  (name) =>
-    Config.option(Config.String(name)).pipe(
-      Effect.orElseSucceed(() => Option.none<string>()),
-      Effect.map((value) =>
-        Option.match(value, {
-          onNone: () => [],
-          onSome: (text) => ["--env", `${name}=${text}`],
-        }),
-      ),
-    ),
-).pipe(Effect.map((flags) => flags.flat()))
+export const proxyEnv: Effect.Effect<Readonly<Record<string, string>>> =
+  callerVariables(PROXY_VARIABLES)
 
 const wait = async (timeoutSeconds: number) => {
   const state = await readState()
@@ -1202,7 +1187,11 @@ const wait = async (timeoutSeconds: number) => {
   let progress = WAIT_START
   let record: RunRecord = { started: false, open: [], stored: false }
   while (Date.now() < deadline) {
-    const text = await $`herdr pane read ${state.pane} --lines 12`.text()
+    const screen = await callHost(state, (host) => host.read({ scope: "screen" }))
+    if (screen.exited !== undefined) {
+      throw new Error(`gent exited ${screen.exited}; read --full shows its last screen`)
+    }
+    const text = screen.rows.slice(-12).join("\n")
     record = runRecordIn(state.data, state.sendMark)
     progress = waitStep(progress, text, record, state.awaitsTurn)
     if (isSettled(progress)) return
@@ -1217,18 +1206,29 @@ const wait = async (timeoutSeconds: number) => {
 
 const restart = async () => {
   const state = await readState()
-  await quitTui(state)
-  await $`herdr pane run ${state.pane} ${shellQuote(state.binary)} resume`.quiet()
-  console.log(`relaunched in ${state.pane}`)
+  await callHost(state, (host) => host.restart({ command: [state.binary, "resume"] }))
+  console.log("relaunched: gent resume")
 }
 
+/**
+ * Stop the TUI and its host, then remove the run. A host that has stopped
+ * already, or does not answer, is killed by its recorded process id once
+ * `ps` shows it is still the host.
+ */
 const down = async () => {
   const state = await readState()
-  await quitTui(state)
-  await $`herdr pane close ${state.pane}`.quiet().nothrow()
+  const stopped = await Effect.runPromiseExit(
+    hostCall(state.socket, (host) => host.down()).pipe(Effect.timeout("25 seconds")),
+  )
+  if (Exit.isSuccess(stopped) && stopped.value.killed) {
+    console.log("gent did not quit on ctrl+c within 15s; killed it")
+  }
+  const deadline = Date.now() + 2000
+  while ((await isHost(state.hostPid)) && Date.now() < deadline) await Bun.sleep(100)
+  if (await isHost(state.hostPid)) process.kill(state.hostPid, "SIGKILL")
   await removeTree(state.root)
   rmSync(STATE_FILE, { force: true })
-  console.log(`closed ${state.pane}, removed ${state.root}`)
+  console.log(`stopped the host, removed ${state.root}`)
 }
 
 /** The presets with each family resolved, as `up` would run them today. */
@@ -1246,14 +1246,15 @@ const list = async () => {
 // ── entry ───────────────────────────────────────────────────────────────
 
 const USAGE = `usage: bun run gamut <command>
-  up <preset> [--prompt <file|text>] [--no-build]   fresh scratch run in a new pane
-  send <text>                                       type text + Enter into the pane
-  interrupt                                         send one Ctrl-C
-  read [lines]                                      print the pane tail (default 60)
+  up <preset> [--prompt <file|text>] [--no-build]   fresh scratch run on its own terminal host
+  send <text>                                       type text + Enter into the TUI
+  keys <name…>                                      press named keys (ctrl+c, esc, down, tab, …)
+  interrupt                                         press ctrl+c once
+  read [--full]                                     print the rows added since the last read, or the screen
   wait [seconds]                                    block until the run is idle with no working child (default 600)
   status                                            sessions, models, prompts, tool calls, bun test
   restart                                           quit the TUI and resume the session
-  down                                              quit, close the pane, remove the scratch dir
+  down                                              quit, stop the host, remove the scratch dir
   list                                              presets`
 
 /** `up`'s arguments. `--prompt` takes the next argument, which may not be a flag. */
@@ -1280,10 +1281,13 @@ const main = async (argv: ReadonlyArray<string>): Promise<void> => {
     }
     case "send":
       return send(rest.join(" "))
+    case "keys":
+      if (rest.length === 0) throw new Error("keys needs at least one key name")
+      return pressKeys(rest)
     case "interrupt":
-      return interrupt()
+      return pressKeys(["ctrl+c"])
     case "read":
-      return read(parseCount("read lines", rest[0] ?? "60"))
+      return read(rest.includes("--full"))
     case "wait":
       return wait(parseCount("wait seconds", rest[0] ?? "600"))
     case "status":
@@ -1300,7 +1304,7 @@ const main = async (argv: ReadonlyArray<string>): Promise<void> => {
 }
 
 /**
- * One line per failure. A failed herdr, git or bun call throws a `ShellError`
+ * One line per failure. A failed git or bun call throws a `ShellError`
  * whose default print is a source frame and a stack; the reader needs the
  * exit code and what the command said.
  */

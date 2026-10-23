@@ -698,7 +698,16 @@ describe("e2e fixture import guard", () => {
     ).toEqual([])
   })
 
-  test("flags an e2e test file that imports neither fixture", () => {
+  test("accepts a terminal host import", () => {
+    expect(
+      findE2eFixtureImportFindings(
+        "packages/e2e/tests/pty-host.test.ts",
+        `${noFixtureSource}\nimport { hostCall, serve } from "../src/pty-host"\n`,
+      ),
+    ).toEqual([])
+  })
+
+  test("flags an e2e test file that imports no fixture", () => {
     expect(
       findE2eFixtureImportFindings(
         "packages/e2e/tests/workspace-isolation.test.ts",
@@ -709,7 +718,7 @@ describe("e2e fixture import guard", () => {
         file: "packages/e2e/tests/workspace-isolation.test.ts",
         line: 1,
         message:
-          "e2e test files must import ../src/server-process-fixture or ../src/pty-fixture; an in-process test belongs in the owning package's tests/",
+          "e2e test files must import ../src/server-process-fixture, ../src/pty-fixture or ../src/pty-host; an in-process test belongs in the owning package's tests/",
       },
     ])
   })
@@ -3890,7 +3899,7 @@ const VALID_MANIFESTS: ReadonlyArray<readonly [string, PackageJson]> = [
   ],
   ["packages/sdk/package.json", { exports: { ".": "./src/index.ts" } }],
   ["apps/tui/package.json", { exports: { "./extensions": "./src/extensions.ts" } }],
-  ["packages/e2e/package.json", { private: true }],
+  ["packages/e2e/package.json", { private: true, exports: { "./pty-host": "./src/pty-host.ts" } }],
   ["packages/tooling/package.json", { private: true }],
   ["examples/package.json", { private: true }],
   ["apps/site/package.json", { private: true }],
@@ -4107,7 +4116,6 @@ describe("package entry points", () => {
 
   test("a leaf package that gains an exports map is reported", () => {
     for (const file of [
-      "packages/e2e/package.json",
       "packages/tooling/package.json",
       "examples/package.json",
       "apps/site/package.json",
@@ -4117,6 +4125,22 @@ describe("package entry points", () => {
         file,
       ).toEqual([expect.stringContaining("may only expose its supported entry points: none")])
     }
+  })
+
+  test("the e2e harness exposes only the terminal host", () => {
+    expect(
+      messages(
+        packageSurface([
+          [
+            "packages/e2e/package.json",
+            {
+              private: true,
+              exports: { "./pty-host": "./src/pty-host.ts", ".": "./src/pty-fixture.ts" },
+            },
+          ],
+        ]),
+      ),
+    ).toEqual([expect.stringContaining("may only expose its supported entry points: ./pty-host")])
   })
 
   test("a workspace package with no row is reported", () => {

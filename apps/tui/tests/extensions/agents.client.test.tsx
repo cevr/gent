@@ -54,7 +54,7 @@ import { useCommand } from "../../src/commands"
 import { useScopedKeyboard } from "../../src/terminal"
 import { waitForFrame, waitUntil, waitUntilAdvancing } from "../helpers-boundary"
 // oxlint-disable-next-line gent/declared-workspace-imports -- the gamut live-check driver is in no workspace; its pane predicate is checked on this renderer's frames
-import { paneShowsWorkingChild } from "../../../../testbeds/gamut/gamut"
+import { screenShowsWorkingChild } from "../../../../testbeds/gamut/gamut"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
@@ -3153,7 +3153,7 @@ describe("Subagent tray", () => {
           (next) => next.includes(`${pulse} delegate: busy task`),
           `pulse ${pulse}`,
         )
-        expect(paneShowsWorkingChild(frame)).toBe(true)
+        expect(screenShowsWorkingChild(frame)).toBe(true)
       }
       const thread: AgentRowEntry = {
         ...root("release", "idle"),
@@ -3163,7 +3163,7 @@ describe("Subagent tray", () => {
       }
       const done = yield* tray([], [thread])
       const frame = yield* waitForFrame(done, (next) => next.includes("◆ release notes"), "done")
-      expect(paneShowsWorkingChild(frame)).toBe(false)
+      expect(screenShowsWorkingChild(frame)).toBe(false)
     }),
   )
 

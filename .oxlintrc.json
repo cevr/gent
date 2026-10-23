@@ -298,8 +298,10 @@
     },
     {
       // The gamut driver is a plain Bun script, not an Effect program: it
-      // drives herdr, git and SQLite with async shell calls, and its polls
-      // wait one step at a time, and it reads the file system through Node.
+      // drives git and SQLite with async shell calls, its polls wait one step
+      // at a time, and it reads the file system through Node. It is the
+      // Promise edge of the terminal host's Effect client, which it runs once
+      // per call.
       // Type assertions stay banned (`effect/noAs`,
       // `typescript/no-unsafe-type-assertion`): the driver decodes the SQLite
       // rows it reads. Its tests keep every rule, with line suppressions where
@@ -347,6 +349,7 @@
         "effect/noNewError": "off",
         "effect/noNodeBuiltinImport": "off",
         "effect/noNullish": "off",
+        "effect/noRunPromise": "off",
         "effect/noTernary": "off",
         "effect/noThrowStatement": "off",
         "effect/noTryCatch": "off",

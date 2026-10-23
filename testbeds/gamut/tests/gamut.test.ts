@@ -8,7 +8,17 @@ import {
 } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import { runProcess } from "@gent/core/extensions/api"
-import { Config, ConfigProvider, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
+import {
+  Config,
+  ConfigProvider,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schedule,
+  Schema,
+} from "effect"
 import { SqlClient } from "effect/sql"
 import { it } from "effect-bun-test"
 import {
@@ -35,12 +45,11 @@ import {
   rereadEstimate,
   sessionStatuses,
   userMessageTexts,
-  paneIdFromSplit,
   presetConfigJson,
   PRESETS,
   rewriteRoster,
   rosterBlock,
-  shellQuote,
+  screenText,
   stateFileFor,
   testSummary,
   type GamutState,
@@ -199,7 +208,8 @@ describe("gamut state file", () => {
     root: "/tmp/gent-gamut-1",
     work: "/tmp/gent-gamut-1/work",
     data: "/tmp/gent-gamut-1/data",
-    pane: "wZ:p9",
+    socket: "/tmp/gent-gamut-1/host.sock",
+    hostPid: 4242,
     binary: "/checkout/apps/tui/bin/gent",
     preset: "sol-luna",
     sendMark: 7,
@@ -224,31 +234,17 @@ describe("gamut state file", () => {
   })
 })
 
-describe("gamut shell quoting", () => {
-  // The pane's shell re-splits the command line, so an unquoted prompt with
-  // spaces reached gent as several positional arguments and was rejected.
-  test("a prompt with spaces stays one argument", () => {
-    expect(shellQuote("Reply with the single word ready.")).toBe(
-      "'Reply with the single word ready.'",
-    )
-  })
-
-  test("an embedded single quote is escaped, not left to close the quote", () => {
-    expect(shellQuote("don't stop")).toBe(`'don'\\''t stop'`)
-  })
-})
-
 describe("gamut proxy environment", () => {
-  // The pane takes no environment from the caller, so a run started under
+  // The TUI takes no environment from the caller, so a run started under
   // `teamclaude env --mitm` reached Anthropic on the owner's own account.
-  const flagsUnder = (env: Record<string, string>) =>
+  const variablesUnder = (env: Record<string, string>) =>
     proxyEnv.pipe(
       Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env })),
     )
 
-  it.effect("each of the eight proxy variables becomes one pane flag, in a fixed order", () =>
+  it.effect("each of the eight proxy variables reaches the TUI by name, and no other does", () =>
     Effect.gen(function* () {
-      const flags = yield* flagsUnder({
+      const variables = yield* variablesUnder({
         no_proxy: "localhost",
         NODE_EXTRA_CA_CERTS: "/ca.pem",
         http_proxy: "http://h:2",
@@ -259,49 +255,39 @@ describe("gamut proxy environment", () => {
         ANTHROPIC_BASE_URL: "http://localhost:3456",
         PATH: "/bin",
       })
-      expect(flags).toEqual([
-        "--env",
-        "HTTPS_PROXY=http://H:1",
-        "--env",
-        "https_proxy=http://h:1",
-        "--env",
-        "HTTP_PROXY=http://H:2",
-        "--env",
-        "http_proxy=http://h:2",
-        "--env",
-        "NO_PROXY=LOCALHOST",
-        "--env",
-        "no_proxy=localhost",
-        "--env",
-        "NODE_EXTRA_CA_CERTS=/ca.pem",
-        "--env",
-        "ANTHROPIC_BASE_URL=http://localhost:3456",
-      ])
+      expect(variables).toEqual({
+        HTTPS_PROXY: "http://H:1",
+        https_proxy: "http://h:1",
+        HTTP_PROXY: "http://H:2",
+        http_proxy: "http://h:2",
+        NO_PROXY: "LOCALHOST",
+        no_proxy: "localhost",
+        NODE_EXTRA_CA_CERTS: "/ca.pem",
+        ANTHROPIC_BASE_URL: "http://localhost:3456",
+      })
     }),
   )
 
-  it.effect("an unset or empty proxy variable adds no flag", () =>
+  it.effect("an unset or empty proxy variable is left out", () =>
     Effect.gen(function* () {
-      expect(yield* flagsUnder({ HTTPS_PROXY: "http://H:1", HTTP_PROXY: "" })).toEqual([
-        "--env",
-        "HTTPS_PROXY=http://H:1",
-      ])
-      expect(yield* flagsUnder({ PATH: "/bin" })).toEqual([])
+      expect(yield* variablesUnder({ HTTPS_PROXY: "http://H:1", HTTP_PROXY: "" })).toEqual({
+        HTTPS_PROXY: "http://H:1",
+      })
+      expect(yield* variablesUnder({ PATH: "/bin" })).toEqual({})
     }),
   )
 })
 
-describe("gamut pane id", () => {
-  test("reads the pane id out of a herdr split reply", () => {
-    expect(
-      paneIdFromSplit(
-        `{"id":"cli:pane:split","result":{"pane":{"pane_id":"wZ:pH"},"type":"pane"}}`,
-      ),
-    ).toBe("wZ:pH")
+describe("gamut read output", () => {
+  test("a read with no new rows says so, and a full read prints the screen as it is", () => {
+    expect(screenText({ rows: [], gone: 0 }, false)).toBe("(no change)")
+    expect(screenText({ rows: ["> "], gone: 0 }, true)).toBe("> ")
   })
 
-  test("a reply with no pane id is refused", () => {
-    expect(() => paneIdFromSplit(`{"result":{}}`)).toThrow("no pane id")
+  test("the rows gone since the last read, then the exit code, follow the rows", () => {
+    expect(screenText({ rows: ["bye"], gone: 2, exited: 3 }, false)).toBe(
+      "bye\n(2 rows of the last read are gone)\n(gent exited 3)",
+    )
   })
 })
 
@@ -420,12 +406,7 @@ describe("gamut command-line counts", () => {
 })
 
 describe("gamut failure line", () => {
-  test("a herdr error reply gives its message", () => {
-    const reply = `{"id":"cli:pane:current","error":{"code":"server_not_running","message":"no herdr server is running"}}`
-    expect(failureText("", reply)).toBe("no herdr server is running")
-    expect(failureText(reply, "")).toBe("no herdr server is running")
-  })
-  test("another command gives its last stderr line, then its last stdout line", () => {
+  test("a command gives its last stderr line, then its last stdout line", () => {
     expect(failureText("building\n", "warning\nerror: no such file\n\n")).toBe(
       "error: no such file",
     )
@@ -751,36 +732,32 @@ describe("gamut reads the schema gent builds", () => {
   )
 })
 
-describe("gamut CLI cleanup", () => {
-  const missingPane =
-    '#!/usr/bin/env bun\nconsole.log(\'{"error":{"code":"pane_not_found","message":"pane not found"}}\')\nprocess.exit(1)\n'
-  const stalledHerdr =
-    "#!/usr/bin/env bun\nrequire('node:fs').writeFileSync(process.env.HERDR_TEST_PID, String(process.pid))\nawait Bun.sleep(60000)\n"
+/** Kill `pid` once `ps` shows it is still a terminal host, so a failed test leaves no host behind. */
+const reapHost = (pid: number) =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const ps = yield* runProcess("ps", ["-p", String(pid), "-o", "args="])
+    if (ps.stdout.includes("pty-host")) yield* platform.signal(pid, "SIGKILL").pipe(Effect.ignore)
+  }).pipe(Effect.orDie)
+
+/** Repeat `probe` until `done` holds, failing loudly when it never does. */
+const pollUntil = <A, E, R>(
+  probe: Effect.Effect<A, E, R>,
+  done: (value: A) => boolean,
+  what: string,
+) =>
+  probe.pipe(
+    Effect.repeat({ until: done, schedule: Schedule.spaced("100 millis") }),
+    Effect.timeoutOrElse({
+      duration: "8 seconds",
+      orElse: () => Effect.die(new Error(`${what} never happened`)),
+    }),
+  )
+
+describe("gamut CLI with a stopped host", () => {
   for (const scenario of [
-    {
-      name: "a closed pane allows cleanup",
-      command: "down",
-      herdr: missingPane,
-      stalled: false,
-      exit: 0,
-      kept: false,
-    },
-    {
-      name: "a closed pane cannot restart",
-      command: "restart",
-      herdr: missingPane,
-      stalled: false,
-      exit: 1,
-      kept: true,
-    },
-    {
-      name: "a stalled Herdr process is reaped at the quit deadline",
-      command: "down",
-      herdr: stalledHerdr,
-      stalled: true,
-      exit: 1,
-      kept: true,
-    },
+    { name: "a stopped host allows cleanup", command: "down", exit: 0, kept: false },
+    { name: "a stopped host cannot restart", command: "restart", exit: 1, kept: true },
   ]) {
     it.scopedLive(
       scenario.name,
@@ -792,35 +769,20 @@ describe("gamut CLI cleanup", () => {
           const scratch = yield* makeTempDirectoryScoped("gent-gamut-cli-")
           const driver = yield* path.fromFileUrl(new URL("../gamut.ts", import.meta.url))
           const root = path.join(scratch, "run")
-          const herdrPath = path.join(scratch, "herdr")
-          const pidPath = path.join(scratch, "herdr-pid")
           const statePath = path.join(
             scratch,
             `gent-gamut-${path.basename(path.resolve(path.dirname(driver), "../.."))}.json`,
           )
           yield* fs.makeDirectory(root)
-          // Only the external Herdr boundary is simulated; Gamut runs as a real CLI over real files/processes.
-          yield* fs.writeFileString(herdrPath, scenario.herdr)
-          yield* fs.chmod(herdrPath, 0o755)
-          // Reap the test-owned boundary process even when the old driver hangs and the outer timeout fires.
-          yield* Effect.acquireRelease(Effect.void, () =>
-            Effect.gen(function* () {
-              if (!(yield* fs.exists(pidPath))) return
-              const pid = yield* fs.readFileString(pidPath)
-              const child = yield* runProcess("ps", ["-p", pid, "-o", "args="])
-              if (child.stdout.includes(herdrPath)) {
-                const number = yield* Schema.decodeEffect(Schema.FiniteFromString)(pid)
-                yield* platform.signal(number, "SIGKILL").pipe(Effect.ignore)
-              }
-            }).pipe(Effect.orDie),
-          )
           yield* fs.writeFileString(
             statePath,
             encodeState({
               root,
               work: root,
               data: root,
-              pane: "wTest:closed",
+              // No host listens here, and process 1 is never a terminal host.
+              socket: path.join(root, "host.sock"),
+              hostPid: 1,
               binary: path.join(path.resolve(path.dirname(driver), "../.."), "apps/tui/bin/gent"),
               preset: "offline",
               sendMark: 0,
@@ -828,20 +790,15 @@ describe("gamut CLI cleanup", () => {
             }),
           )
           const result = yield* runProcess(yield* platform.execPath, [driver, scenario.command], {
-            env: {
-              PATH: `${scratch}:${yield* Config.String("PATH")}`,
-              TMPDIR: scratch,
-              HERDR_TEST_PID: pidPath,
-            },
+            env: { TMPDIR: scratch },
             extendEnv: true,
-          }).pipe(Effect.timeout("22 seconds"))
+          }).pipe(Effect.timeout("20 seconds"))
           expect(result.exitCode).toBe(scenario.exit)
           expect(yield* fs.exists(root)).toBe(scenario.kept)
           expect(yield* fs.exists(statePath)).toBe(scenario.kept)
-          if (scenario.stalled) {
-            expect(result.stderr).toContain("quit timed out after 15s")
-            const pid = yield* fs.readFileString(pidPath)
-            expect((yield* runProcess("ps", ["-p", pid, "-o", "pid="])).exitCode).toBe(1)
+          if (scenario.kept) {
+            expect(result.stderr).toContain("the run's terminal host has stopped")
+            expect(result.stderr).toContain(path.join(root, "host.log"))
           }
         }).pipe(
           Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
@@ -855,7 +812,7 @@ describe("gamut CLI cleanup", () => {
 describe("gamut CLI ownership", () => {
   for (const command of ["down", "restart", "send"]) {
     it.scopedLive(
-      `a foreign ${command} leaves the pane, state and tree untouched`,
+      `a foreign ${command} leaves the host, state and tree untouched`,
       () =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
@@ -880,38 +837,29 @@ describe("gamut CLI ownership", () => {
             root,
             work: root,
             data: root,
-            pane: "wTest:foreign",
+            socket: path.join(root, "host.sock"),
+            hostPid: 1,
             binary: path.join(owner, "apps", "tui", "bin", "gent"),
             preset: "offline",
             sendMark: 0,
             awaitsTurn: false,
           })
           yield* fs.writeFileString(statePath, state)
-          const calls = path.join(scratch, "calls")
-          const herdr = path.join(scratch, "herdr")
-          yield* fs.writeFileString(
-            herdr,
-            '#!/usr/bin/env bun\nrequire(\'node:fs\').appendFileSync(process.env.HERDR_TEST_CALLS, JSON.stringify(process.argv.slice(2)) + \'\\n\')\nif (process.argv.includes(\'process-info\')) { console.log(\'{"error":{"code":"pane_not_found","message":"pane not found"}}\'); process.exit(1) }\n',
-          )
-          yield* fs.chmod(herdr, 0o755)
           const result = yield* runProcess(
             yield* platform.execPath,
             [copiedDriver, command, "hello"],
             {
               env: {
-                PATH: scratch + ":" + (yield* Config.String("PATH")),
                 TMPDIR: scratch,
                 HOME: scratch,
                 GENT_DATA_DIR: root,
                 GENT_AUTH_DIRECTORY: path.join(scratch, "auth"),
-                HERDR_TEST_CALLS: calls,
               },
               extendEnv: true,
             },
           )
           expect(result.exitCode).toBe(1)
           expect(result.stderr).toContain("belongs to another checkout")
-          expect(yield* fs.exists(calls)).toBe(false)
           expect(yield* fs.readFileString(statePath)).toBe(state)
           expect(yield* fs.readFileString(marker)).toBe("foreign scratch tree")
         }).pipe(
@@ -923,86 +871,113 @@ describe("gamut CLI ownership", () => {
   }
 })
 
-// A pane can reach five writers of the user config (the first `/model` pick,
+/**
+ * A checkout of its own for `up`: the driver and the fixture copied, the
+ * dependencies linked, and `gent` a shell script the host runs in the TUI's
+ * place, under an owner home with a user config, an auth directory and
+ * another tool's files. Only models.dev and the fixture install are
+ * simulated; the host is real. The scope takes the run down and kills a
+ * host that outlives it.
+ */
+const liveRun = (gent: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const platform = yield* GentPlatform
+    const scratch = yield* makeTempDirectoryScoped("gent-gamut-host-")
+    const driver = yield* path.fromFileUrl(new URL("../gamut.ts", import.meta.url))
+    const checkout = path.resolve(path.dirname(driver), "../..")
+    const current = path.join(scratch, "checkout", "gent")
+    const copiedDriver = path.join(current, "testbeds", "gamut", "gamut.ts")
+    const binary = path.join(current, "apps", "tui", "bin", "gent")
+    yield* fs.makeDirectory(path.dirname(binary), { recursive: true })
+    yield* fs.writeFileString(binary, gent)
+    yield* fs.chmod(binary, 0o755)
+    yield* fs.copy(path.join(checkout, "testbeds", "gamut"), path.dirname(copiedDriver))
+    yield* fs.symlink(path.join(checkout, "node_modules"), path.join(current, "node_modules"))
+    const owner = path.join(scratch, "owner")
+    yield* fs.makeDirectory(path.join(owner, ".gent", "auth"), { recursive: true })
+    yield* fs.makeDirectory(path.join(owner, ".claude", "skills"), { recursive: true })
+    yield* fs.writeFileString(path.join(owner, ".gent", "config.json"), '{"model":"owner/model"}\n')
+    yield* fs.writeFileString(path.join(owner, ".gent", "data.db"), "owner database")
+    const body = path.join(scratch, "catalog.json")
+    const catalogBody = yield* Schema.encodeEffect(
+      Schema.fromJsonString(
+        Schema.Record(
+          Schema.String,
+          Schema.Struct({ models: Schema.Record(Schema.String, Schema.Struct({})) }),
+        ),
+      ),
+    )({ openai: { models: { "gpt-6.1-sol": {} } } })
+    yield* fs.writeFileString(body, catalogBody)
+    // Shell scripts: a `#!/usr/bin/env bun` one would run the stand-in `bun`.
+    const tools = { curl: `#!/bin/sh\ncat '${body}'\n`, bun: "#!/bin/sh\nexit 0\n" }
+    for (const [name, script] of Object.entries(tools)) {
+      yield* fs.writeFileString(path.join(scratch, name), script)
+      yield* fs.chmod(path.join(scratch, name), 0o755)
+    }
+    const statePath = path.join(scratch, "gent-gamut-gent.json")
+    const execPath = yield* platform.execPath
+    const callerPath = yield* Config.String("PATH")
+    const gamut = (args: ReadonlyArray<string>, env: Record<string, string> = {}) =>
+      runProcess(execPath, [copiedDriver, ...args], {
+        env: { PATH: `${scratch}:${callerPath}`, TMPDIR: scratch, HOME: owner, ...env },
+        extendEnv: true,
+      }).pipe(Effect.timeout("30 seconds"))
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        if (!(yield* fs.exists(statePath))) return
+        const state = decodeState(yield* fs.readFileString(statePath))
+        yield* gamut(["down"]).pipe(Effect.ignore)
+        yield* reapHost(state.hostPid)
+      }).pipe(Effect.orDie),
+    )
+    const runState = fs.readFileString(statePath).pipe(Effect.map(decodeState))
+    return { gamut, runState, statePath, owner }
+  })
+
+// A run can reach five writers of the user config (the first `/model` pick,
 // driver overrides, the auth order, a renamed auth slot). The run gives its
-// pane a home of its own, so each writes a copy, never the owner's file.
-describe("gamut CLI pane home", () => {
+// TUI a home of its own, so each writes a copy, never the owner's file.
+describe("gamut CLI on a live host", () => {
   it.scopedLive(
-    "up gives the pane a home whose user config is a copy, with the owner's other files linked",
+    "up runs gent on its own host, in a home of its own, with only the variables it names",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-        const platform = yield* GentPlatform
-        const scratch = yield* makeTempDirectoryScoped("gent-gamut-home-")
-        const driver = yield* path.fromFileUrl(new URL("../gamut.ts", import.meta.url))
-        const checkout = path.resolve(path.dirname(driver), "../..")
-        // A checkout of its own: the driver, the fixture and a stand-in binary.
-        const current = path.join(scratch, "checkout", "gent")
-        const copiedDriver = path.join(current, "testbeds", "gamut", "gamut.ts")
-        yield* fs.makeDirectory(path.join(current, "apps", "tui", "bin"), { recursive: true })
-        yield* fs.writeFileString(path.join(current, "apps", "tui", "bin", "gent"), "")
-        yield* fs.copy(path.join(checkout, "testbeds", "gamut"), path.dirname(copiedDriver))
-        yield* fs.symlink(path.join(checkout, "node_modules"), path.join(current, "node_modules"))
-        // The owner's home: a user config, an auth directory and another tool's files.
-        const owner = path.join(scratch, "owner")
-        const ownerConfig = path.join(owner, ".gent", "config.json")
-        yield* fs.makeDirectory(path.join(owner, ".gent", "auth"), { recursive: true })
-        yield* fs.makeDirectory(path.join(owner, ".claude", "skills"), { recursive: true })
-        yield* fs.writeFileString(ownerConfig, '{"model":"owner/model"}\n')
-        yield* fs.writeFileString(path.join(owner, ".gent", "data.db"), "owner database")
-        // Only the external boundaries are simulated: herdr, models.dev and the fixture install.
-        const calls = path.join(scratch, "calls")
-        const body = path.join(scratch, "catalog.json")
-        const catalogBody = yield* Schema.encodeEffect(
-          Schema.fromJsonString(
-            Schema.Record(
-              Schema.String,
-              Schema.Struct({ models: Schema.Record(Schema.String, Schema.Struct({})) }),
-            ),
-          ),
-        )({ openai: { models: { "gpt-6.1-sol": {} } } })
-        yield* fs.writeFileString(body, catalogBody)
-        // Shell scripts: a `#!/usr/bin/env bun` one would run the stand-in `bun`.
-        const tools = {
-          herdr: `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\ncase " $* " in *" split "*) printf '%s\\n' '{"result":{"pane":{"pane_id":"wT:p1"}}}' ;; esac\n`,
-          curl: `#!/bin/sh\ncat '${body}'\n`,
-          bun: "#!/bin/sh\nexit 0\n",
-        }
-        for (const [name, script] of Object.entries(tools)) {
-          yield* fs.writeFileString(path.join(scratch, name), script)
-          yield* fs.chmod(path.join(scratch, name), 0o755)
-        }
-        const result = yield* runProcess(
-          yield* platform.execPath,
-          [copiedDriver, "up", "sol", "--no-build"],
-          {
-            env: {
-              PATH: scratch + ":" + (yield* Config.String("PATH")),
-              TMPDIR: scratch,
-              HOME: owner,
-            },
-            extendEnv: true,
-          },
+        const { gamut, runState, statePath, owner } = yield* liveRun(
+          `#!/bin/sh\n{ env; printf 'cwd=%s\\n' "$(pwd -P)"; } > "$GENT_DATA_DIR/seen.part"\nmv "$GENT_DATA_DIR/seen.part" "$GENT_DATA_DIR/seen"\nexec sleep 60\n`,
         )
-        expect(result.stderr).toBe("")
-        expect(result.exitCode).toBe(0)
-        const state = decodeState(
-          yield* fs.readFileString(path.join(scratch, "gent-gamut-gent.json")),
-        )
+        const up = yield* gamut(["up", "sol", "--no-build"], {
+          ANTHROPIC_BASE_URL: "http://localhost:3456",
+          GAMUT_TEST_UNLISTED: "the owner's only",
+        })
+        expect(up.stderr).toBe("")
+        expect(up.exitCode).toBe(0)
+        const state = yield* runState
         const home = path.join(state.root, "home")
-        const split = (yield* fs.readFileString(calls))
-          .split("\n")
-          .filter((line) => line.startsWith("pane split "))
-        expect(split).toHaveLength(1)
-        expect(split[0]).toContain(` --env HOME=${home}`)
-        expect(split[0]).toContain(` --env GENT_DATA_DIR=${state.data}`)
-        // The user config is the run's own copy: a pane write leaves the owner's file as it was.
-        const paneConfig = path.join(home, ".gent", "config.json")
-        expect((yield* fs.stat(paneConfig)).type).toBe("File")
-        expect(yield* fs.readLink(paneConfig).pipe(Effect.option)).toEqual(Option.none())
-        expect(yield* fs.readFileString(paneConfig)).toBe('{"model":"owner/model"}\n')
-        yield* fs.writeFileString(paneConfig, '{"model":"picked/in-pane"}\n')
+        const seenPath = path.join(state.data, "seen")
+        yield* pollUntil(fs.exists(seenPath), (seen) => seen, "the stand-in gent's start")
+        const seen = (yield* fs.readFileString(seenPath)).split("\n")
+        expect(seen).toContain(`HOME=${home}`)
+        expect(seen).toContain(`GENT_DATA_DIR=${state.data}`)
+        expect(seen).toContain("ANTHROPIC_BASE_URL=http://localhost:3456")
+        expect(seen).toContain(`cwd=${yield* fs.realPath(state.work)}`)
+        expect(seen.some((line) => line.startsWith("GAMUT_TEST_UNLISTED="))).toBe(false)
+        // The config held the proxy value: the host removed it, and its arguments never had it.
+        expect(yield* fs.exists(path.join(state.root, "host.json"))).toBe(false)
+        const hostArgs = (yield* runProcess("ps", ["-p", String(state.hostPid), "-o", "args="]))
+          .stdout
+        expect(hostArgs).toContain("pty-host")
+        expect(hostArgs).not.toContain("localhost:3456")
+        // The user config is the run's own copy: a write in the run leaves the owner's file as it was.
+        const runConfig = path.join(home, ".gent", "config.json")
+        const ownerConfig = path.join(owner, ".gent", "config.json")
+        expect((yield* fs.stat(runConfig)).type).toBe("File")
+        expect(yield* fs.readLink(runConfig).pipe(Effect.option)).toEqual(Option.none())
+        expect(yield* fs.readFileString(runConfig)).toBe('{"model":"owner/model"}\n')
+        yield* fs.writeFileString(runConfig, '{"model":"picked/in-run"}\n')
         expect(yield* fs.readFileString(ownerConfig)).toBe('{"model":"owner/model"}\n')
         // The login and the other tools' files are the owner's; the database is not.
         expect(yield* fs.readLink(path.join(home, ".gent", "auth"))).toBe(
@@ -1010,11 +985,42 @@ describe("gamut CLI pane home", () => {
         )
         expect(yield* fs.readLink(path.join(home, ".claude"))).toBe(path.join(owner, ".claude"))
         expect(yield* fs.exists(path.join(home, ".gent", "data.db"))).toBe(false)
-      }).pipe(
-        Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
-        Effect.timeout("20 seconds"),
-      ),
-    25_000,
+        const down = yield* gamut(["down"])
+        expect(down.exitCode).toBe(0)
+        expect(yield* fs.exists(state.root)).toBe(false)
+        expect(yield* fs.exists(statePath)).toBe(false)
+        expect(
+          (yield* runProcess("ps", ["-p", String(state.hostPid), "-o", "pid="])).exitCode,
+        ).toBe(1)
+      }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer))),
+    40_000,
+  )
+
+  it.scopedLive(
+    "send, read and keys reach the program through the host, and a read after it exits says so",
+    () =>
+      Effect.gen(function* () {
+        const { gamut } = yield* liveRun(
+          `#!/bin/sh\nprintf 'ready\\n'\nwhile read line; do echo "got $line"; done\n`,
+        )
+        expect((yield* gamut(["up", "sol", "--no-build"])).exitCode).toBe(0)
+        const screen = gamut(["read", "--full"]).pipe(Effect.map((read) => read.stdout))
+        yield* pollUntil(screen, (text) => text.includes("ready"), "the program's first row")
+        expect((yield* gamut(["read"])).stdout).toBe("(no change)\n")
+        expect((yield* gamut(["send", "hello there"])).exitCode).toBe(0)
+        yield* pollUntil(screen, (text) => text.includes("got hello there"), "the sent line")
+        expect((yield* gamut(["read"])).stdout).toBe("(no change)\n")
+        const refused = yield* gamut(["keys", "nope"])
+        expect(refused.exitCode).toBe(1)
+        expect(refused.stderr).toContain("no key named nope")
+        expect((yield* gamut(["interrupt"])).exitCode).toBe(0)
+        yield* pollUntil(screen, (text) => text.includes("(gent exited"), "the program's exit")
+        const late = yield* gamut(["send", "too late"])
+        expect(late.exitCode).toBe(1)
+        expect(late.stderr).toContain("the program exited")
+        expect((yield* gamut(["down"])).exitCode).toBe(0)
+      }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer))),
+    40_000,
   )
 })
 

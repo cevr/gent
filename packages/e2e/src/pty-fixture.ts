@@ -109,7 +109,7 @@ const encodeRaw = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 /** The raw stream, JSON-escaped, for a failure message only: the assertion reads the screen. */
 export const rawForFailure = (stream: PtyStream): string => encodeRaw(stream[RAW]())
 
-interface PtyCommand {
+export interface PtyCommand {
   readonly command: string
   readonly args: ReadonlyArray<string>
   readonly cwd: string
@@ -687,6 +687,36 @@ const cursorCells = (session: LivePtyContext): string => {
   )
   return `cursor=${buffer.cursorX},${buffer.cursorY} ${cells.join(" ")}`
 }
+
+// ── Hosted terminal ──
+
+/** A program on a live pty that `pty-host.ts` keeps for other processes. */
+export interface HostedTerminal {
+  readonly pid: number
+  /** Write bytes as typed. A program that has exited takes nothing. */
+  readonly write: (bytes: string) => Effect.Effect<void>
+  /** The rows of the screen as drawn now, or of the scrollback and the screen, trailing blanks trimmed. */
+  readonly rows: (scope: keyof typeof captureRanges) => Effect.Effect<ReadonlyArray<string>>
+  /** The exit code, when the program exits within `within`. */
+  readonly exitedWithin: (within: Duration.Input) => Effect.Effect<Option.Option<number>>
+}
+
+/**
+ * Start `spec` on a live pty for a host: the screen a reader asks for is the
+ * emulator's after every byte so far, as on a dark terminal (`openLivePty`).
+ * Closing the scope stops the program as `openPty` does.
+ */
+export const openHostedTerminal = (
+  spec: PtyCommand,
+): Effect.Effect<HostedTerminal, never, Scope.Scope> =>
+  openLivePty(spec, "dark").pipe(
+    Effect.map((session) => ({
+      pid: session.pty.pid,
+      write: (bytes) => ignoreSyncDefect(() => session.pty.write(bytes)),
+      rows: (scope) => drained(session.screen).pipe(Effect.map(() => screenRows(session, scope))),
+      exitedWithin: (within) => exitWithin(session.pty.exited, within),
+    })),
+  )
 
 // ── Drive scripts ──
 
