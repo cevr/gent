@@ -1422,13 +1422,17 @@ const driverServices = (platform: typeof testPlatform) =>
     Effect.provide(FetchHttpClient.layer),
   )
 type DriverArgs = Parameters<typeof buildAnthropicModelDriverLive>
-/** The driver over the test platform; its markers ask for `promptCacheTtl`, 1 hour unless a test sets the switch. */
+/**
+ * The driver over `platform`, the test platform unless a test sets one; its
+ * markers ask for `promptCacheTtl`, 1 hour unless a test sets the switch.
+ */
 const buildAnthropicModelDriver = (
   credentialCellRef: DriverArgs[0],
   envApiKey: DriverArgs[1],
   promptCacheTtl: DriverArgs[3] = "1h",
+  platform = testPlatform,
 ) =>
-  driverServices(testPlatform).pipe(
+  driverServices(platform).pipe(
     Effect.map((services) =>
       buildAnthropicModelDriverLive(credentialCellRef, envApiKey, services, promptCacheTtl),
     ),
@@ -1649,7 +1653,11 @@ describe("Anthropic cache warming", () => {
       )
       return { usage: yield* Ref.get(usage), quota: reported.quota }
     })
-  const anthropicModel = (authInfo: ProviderAuthInfo, hints: ProviderHints) =>
+  const anthropicModel = (
+    authInfo: ProviderAuthInfo,
+    hints: ProviderHints,
+    platform = testPlatform,
+  ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
         makeDurableCell(
@@ -1657,9 +1665,40 @@ describe("Anthropic cache warming", () => {
           yield* Clock.currentTimeMillis,
         ),
       )
-      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const driver = yield* buildAnthropicModelDriver(
+        credentialCellRef,
+        Option.none(),
+        "1h",
+        platform,
+      )
       return yield* driver.resolveModel("claude-haiku-4-5", authInfo, hints)
     })
+
+  it.live(
+    "ANTHROPIC_BASE_URL takes each sign-in path's requests, its warmer's too, with or without /v1",
+    () =>
+      Effect.gen(function* () {
+        const proxied = (baseUrl: string) =>
+          AnthropicPlatform.of({ ...testPlatform, env: { baseUrl } })
+        for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
+          for (const [platform, root] of [
+            [testPlatform, "https://api.anthropic.com"],
+            [proxied("http://localhost:3456"), "http://localhost:3456"],
+            [proxied("http://localhost:3456/v1"), "http://localhost:3456"],
+          ] as const) {
+            const state = makeFakeFetchState()
+            const step = yield* stepOf(yield* anthropicModel(authInfo, marked, platform), state)
+            yield* readOf(step, state, warmingAnswer())
+            expect(state.captured.map((request) => new URL(request.url).origin)).toEqual([
+              root,
+              root,
+            ])
+            for (const request of state.captured)
+              expect(new URL(request.url).pathname).toBe("/v1/messages")
+          }
+        }
+      }),
+  )
 
   it.live(
     "a streamed request that marks its cache reports a warmer that sends it again for no output, on each sign-in path",

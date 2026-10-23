@@ -227,13 +227,16 @@ export const getModelBetas = (
 /**
  * Env vars for Anthropic keychain, read once at extension setup and
  * carried alongside platform inputs, so each extension instance carries
- * its own snapshot.
+ * its own snapshot. `baseUrl` is `ANTHROPIC_BASE_URL`, the root Claude Code
+ * sends to (a proxy such as TeamClaude's base-URL mode), on every sign-in
+ * path.
  */
 export interface AnthropicKeychainEnv {
   readonly betaFlags?: string
   readonly cliVersion?: string
   readonly entrypoint?: string
   readonly userAgent?: string
+  readonly baseUrl?: string
 }
 
 const makeAnthropicKeychainEnv = (options: {
@@ -241,12 +244,14 @@ const makeAnthropicKeychainEnv = (options: {
   readonly cliVersion: Option.Option<string>
   readonly entrypoint: Option.Option<string>
   readonly userAgent: Option.Option<string>
+  readonly baseUrl: Option.Option<string>
 }): AnthropicKeychainEnv => {
   let env: AnthropicKeychainEnv = {}
   if (Option.isSome(options.betaFlags)) env = { ...env, betaFlags: options.betaFlags.value }
   if (Option.isSome(options.cliVersion)) env = { ...env, cliVersion: options.cliVersion.value }
   if (Option.isSome(options.entrypoint)) env = { ...env, entrypoint: options.entrypoint.value }
   if (Option.isSome(options.userAgent)) env = { ...env, userAgent: options.userAgent.value }
+  if (Option.isSome(options.baseUrl)) env = { ...env, baseUrl: options.baseUrl.value }
   return env
 }
 
@@ -3838,6 +3843,15 @@ const carriesEffortMarker = (payload: JsonRecord): boolean => {
 // ── Layer construction helpers ──
 
 /**
+ * The SDK's `apiUrl` for a base URL: the SDK adds `/v1/messages` itself,
+ * and models.dev names the `/v1` root while `ANTHROPIC_BASE_URL` names the
+ * host root, so a trailing `/v1` goes. None keeps the SDK's default.
+ */
+// oxlint-disable-next-line effect/noNullish -- the SDK takes its default API URL as an absent `apiUrl`
+const sdkApiUrl = (baseUrl: Option.Option<string>): string | undefined =>
+  Option.getOrUndefined(Option.map(baseUrl, (url) => url.replace(/\/v1\/?$/, "")))
+
+/**
  * API-key path: plain `AnthropicClient.layer` over `ModelHttpClient`.
  * No keychain wrapper — `buildKeychainTransformClient` injects Claude Code OAuth
  * billing-header system blocks + identity prefix, which API-key users
@@ -3852,8 +3866,7 @@ const makeApiKeyAnthropicLayer = (
   warmsCache: boolean,
 ) => {
   const { AnthropicClient, AnthropicLanguageModel } = sdk
-  // The SDK adds `/v1/messages` to its base URL itself; models.dev names the `/v1` root.
-  const apiUrl = Option.map(endpoint.baseUrl, (url) => url.replace(/\/v1\/?$/, ""))
+  const apiUrl = sdkApiUrl(endpoint.baseUrl)
   const clientLayer = anthropicClientLayer(
     sdk,
     request,
@@ -3861,7 +3874,7 @@ const makeApiKeyAnthropicLayer = (
     (transformClient) =>
       AnthropicClient.layer({
         apiKey: sdkApiKey(endpoint.apiKey),
-        apiUrl: Option.getOrUndefined(apiUrl),
+        apiUrl,
         transformClient,
       }),
   ).pipe(Layer.provide(ModelHttpClient))
@@ -3891,12 +3904,14 @@ const makeOauthAnthropicLayer = (
   services: AnthropicDriverServices,
 ) => {
   const { AnthropicClient, AnthropicLanguageModel } = sdk
-  const keychain = buildKeychainTransformClient(creds, Context.get(services, AnthropicPlatform).env)
+  const env = Context.get(services, AnthropicPlatform).env
+  const keychain = buildKeychainTransformClient(creds, env)
+  const apiUrl = sdkApiUrl(Option.fromUndefinedOr(env.baseUrl))
   const wrappedClient = anthropicClientLayer(
     sdk,
     request,
     claudeCodeClientPath(sdk, creds, request.cacheLifetimes, keychain),
-    (transformClient) => AnthropicClient.layer({ transformClient }),
+    (transformClient) => AnthropicClient.layer({ apiUrl, transformClient }),
   ).pipe(Layer.provide(ModelHttpClient), Layer.provide(Layer.succeedContext(services)))
   return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
     Layer.provide(wrappedClient),
@@ -4095,7 +4110,9 @@ export const buildAnthropicModelDriver = (
               request,
               {
                 apiKey,
-                baseUrl: Option.none(),
+                baseUrl: Option.fromUndefinedOr(
+                  Context.get(services, AnthropicPlatform).env.baseUrl,
+                ),
                 transformClient: Option.none(),
               },
               true,
@@ -4257,6 +4274,7 @@ export const AnthropicExtension = defineExtension({
       cliVersion: yield* readOptionalEnv("ANTHROPIC_CLI_VERSION"),
       entrypoint: yield* readOptionalEnv("CLAUDE_CODE_ENTRYPOINT"),
       userAgent: yield* readOptionalEnv("ANTHROPIC_USER_AGENT"),
+      baseUrl: yield* readOptionalEnv("ANTHROPIC_BASE_URL"),
     })
 
     const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")

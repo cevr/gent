@@ -1171,14 +1171,16 @@ const PROXY_VARIABLES = [
   "NO_PROXY",
   "no_proxy",
   "NODE_EXTRA_CA_CERTS",
+  "ANTHROPIC_BASE_URL",
 ] as const
 
 /**
  * The caller's proxy variables as `herdr pane split` flags. The pane takes no
- * environment from the caller, so `eval "$(teamclaude env --mitm)"` before
- * `up` reaches the run only through these: its Anthropic requests then go
- * through the TeamClaude account pool, not the owner's own account. An empty
- * variable reads as unset.
+ * environment from the caller, so `eval "$(teamclaude env --mitm)"` (or
+ * `--no-mitm`, which sets `ANTHROPIC_BASE_URL`) before `up` reaches the run
+ * only through these: its Anthropic requests then go through the TeamClaude
+ * account pool, not the owner's own account. An empty variable reads as
+ * unset.
  */
 export const proxyEnv: Effect.Effect<ReadonlyArray<string>> = Effect.forEach(
   PROXY_VARIABLES,

@@ -28,10 +28,11 @@ model comparisons. The `haiku` preset is the only one a live check may spend
 the owner's Anthropic accounts on.
 
 The pane takes no environment from the caller except the proxy variables
-(`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` in either case, and
-`NODE_EXTRA_CA_CERTS`). Run `eval "$(teamclaude env --mitm)"` before `up` to
-send the run's Anthropic requests through the TeamClaude account pool rather
-than the owner's own account.
+(`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` in either case,
+`NODE_EXTRA_CA_CERTS` and `ANTHROPIC_BASE_URL`). Run
+`eval "$(teamclaude env --mitm)"`, or `--no-mitm` for its base-URL mode,
+before `up` to send the run's Anthropic requests through the TeamClaude
+account pool rather than the owner's own account.
 
 A comparison preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
 `anthropic/sonnet`, `anthropic/fable`, `anthropic/haiku`), not releases. `up` and `list` resolve

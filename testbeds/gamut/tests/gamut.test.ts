@@ -246,7 +246,7 @@ describe("gamut proxy environment", () => {
       Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env })),
     )
 
-  it.effect("each of the seven proxy variables becomes one pane flag, in a fixed order", () =>
+  it.effect("each of the eight proxy variables becomes one pane flag, in a fixed order", () =>
     Effect.gen(function* () {
       const flags = yield* flagsUnder({
         no_proxy: "localhost",
@@ -256,6 +256,7 @@ describe("gamut proxy environment", () => {
         https_proxy: "http://h:1",
         HTTPS_PROXY: "http://H:1",
         NO_PROXY: "LOCALHOST",
+        ANTHROPIC_BASE_URL: "http://localhost:3456",
         PATH: "/bin",
       })
       expect(flags).toEqual([
@@ -273,6 +274,8 @@ describe("gamut proxy environment", () => {
         "no_proxy=localhost",
         "--env",
         "NODE_EXTRA_CA_CERTS=/ca.pem",
+        "--env",
+        "ANTHROPIC_BASE_URL=http://localhost:3456",
       ])
     }),
   )
