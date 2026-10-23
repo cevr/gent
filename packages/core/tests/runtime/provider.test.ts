@@ -7165,6 +7165,10 @@ describe("account lanes", () => {
         const report = yield* after.lanes([a])
         expect(weightOf(report, glm)?.fitted).not.toBe(true)
         expect(report.load).toBeCloseTo(100_000 / report.fuelPerHour, 6)
+        // Its window admits floor(39.6) runs at the measured burn, the open one among them.
+        for (let index = 1; index < 39; index += 1)
+          expect(yield* after.admit([a], `glm-${index}`, glm)).toBe("admitted")
+        expect(yield* after.admit([a], "glm-full", glm)).toBe("Busy")
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
