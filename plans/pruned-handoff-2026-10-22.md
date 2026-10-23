@@ -110,6 +110,12 @@ each step for a 2.4% to 5.3% gain (measured on Haiku gamut).
 - A session search over results (devsql gather); the warm pre-lapse
   handoff.
 
+Measured before building the first three (2026-10-23): 3 of the owner's
+600 sessions hold a summary, cold steps carry 0.1% of root input and 0.2%
+of child input, and file re-reads are 1.7% of cell output; a post-Req-6
+Haiku gamut run handed off zero times. They wait until handoffs are common
+(queue row 7).
+
 ## Tests
 
 - Model view: a prune line stubs exactly the results before its cutoff,

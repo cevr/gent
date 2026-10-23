@@ -188,6 +188,14 @@ finished unit. The baseline is the table above.
    `red` only, once per attributed row); no stored run holds a machine log
    today, so no number. `bun run gamut status` prints all three for each
    run.
+   After (2026-10-23, Haiku gamut, default ledgerline prompt, 6 children,
+   measured by `gamut status`): 29 child calls at a mean of 13,976 input
+   tokens, the largest 22,117; 14 root calls at a mean of 20,693, the
+   largest 28,965; re-reads 0 of 82,168 cell output chars; no handoff. The
+   first two accepts hold. The gate count needs an orchestrate run, and
+   its `integrate` state needs a GitHub remote (`repoOf`,
+   `packages/extensions/src/integration.ts`), which the gamut scratch repo
+   lacks.
 
 7. **Short agents over long ones.** A unit that outgrows one window goes to a
    fresh agent with a handoff, not a compaction. Accept: compactions per
