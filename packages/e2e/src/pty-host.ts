@@ -24,6 +24,7 @@ import {
   Ref,
   Schema,
   Scope,
+  Semaphore,
 } from "effect"
 import { Rpc, RpcClient, RpcGroup, RpcSerialization, RpcServer } from "effect/rpc"
 import type { RpcClientError } from "effect/rpc/RpcClientError"
@@ -164,7 +165,11 @@ interface Program {
 
 const nonBlank = (rows: ReadonlyArray<string>) => rows.filter((row) => row.length > 0)
 
-/** Keep `config.command` on a pty and answer `HostRpcs` on `config.socket` until a `down` call. */
+/**
+ * Keep `config.command` on a pty and answer `HostRpcs` on `config.socket`
+ * until a `down` call. However the host ends (a `down`, a socket that will
+ * not bind, an interrupt), its program is closed with it.
+ */
 export const serve = Effect.fn("PtyHost.serve")(function* (config: HostConfig) {
   const start = Effect.fn("PtyHost.start")(function* (command: HostConfig["command"]) {
     const scope = yield* Scope.make()
@@ -174,13 +179,24 @@ export const serve = Effect.fn("PtyHost.serve")(function* (config: HostConfig) {
       cwd: config.cwd,
       env: config.env,
       size: { cols: config.cols, rows: config.rows },
-    }).pipe(Scope.provide(scope))
+    }).pipe(
+      Scope.provide(scope),
+      Effect.onError(() => Scope.close(scope, Exit.void)),
+    )
     return { terminal, scope } satisfies Program
   })
 
-  const program = yield* Ref.make(yield* start(config.command))
+  const program = yield* Effect.acquireRelease(
+    start(config.command).pipe(Effect.flatMap(Ref.make)),
+    (current) =>
+      Ref.get(current).pipe(Effect.flatMap(({ scope }) => Scope.close(scope, Exit.void))),
+  )
   const mark = yield* Ref.make<ReadonlyArray<string>>([])
   const stopped = yield* Deferred.make<void>()
+  // One restart or down at a time, each run to its end once begun: two
+  // restarts would both quit the same program and each start one, and the
+  // host would keep only the last. `down` keeps its permit.
+  const lifecycle = yield* Semaphore.make(1)
 
   const exited = (terminal: HostedTerminal) => terminal.exitedWithin("10 millis")
 
@@ -205,19 +221,18 @@ export const serve = Effect.fn("PtyHost.serve")(function* (config: HostConfig) {
 
   const handlers = HostRpcs.toLayer({
     type: ({ text }) => write(text),
+    // Every name is checked before the first key is written; each key is a
+    // write of its own, so `esc` then `down` never reads as alt+down.
     keys: ({ names }) =>
-      Effect.forEach(
-        names,
-        (name): Effect.Effect<void, UnknownKey | ProgramExited> =>
-          Option.match(
-            Arr.findFirst(Object.entries(keys), ([key]) => key === name),
-            {
-              onNone: () => Effect.fail(new UnknownKey({ key: name })),
-              onSome: ([, bytes]) => write(bytes),
-            },
-          ),
-        { discard: true },
-      ),
+      Effect.forEach(names, (name) =>
+        Option.match(
+          Arr.findFirst(Object.entries(keys), ([key]) => key === name),
+          {
+            onNone: () => Effect.fail(new UnknownKey({ key: name })),
+            onSome: ([, bytes]) => Effect.succeed(bytes),
+          },
+        ),
+      ).pipe(Effect.flatMap((all) => Effect.forEach(all, write, { discard: true }))),
     read: ({ scope }) =>
       Effect.gen(function* () {
         const { terminal } = yield* Ref.get(program)
@@ -242,16 +257,17 @@ export const serve = Effect.fn("PtyHost.serve")(function* (config: HostConfig) {
         yield* Scope.close(current.scope, Exit.void)
         yield* Ref.set(program, yield* start(command))
         yield* Ref.set(mark, [])
-      }),
+      }).pipe(Effect.uninterruptible, lifecycle.withPermits(1)),
     down: () =>
       Effect.gen(function* () {
+        yield* lifecycle.take(1)
         const current = yield* Ref.get(program)
         const clean = yield* quit(current)
         yield* Scope.close(current.scope, Exit.void)
         // The reply leaves before the host stops.
         yield* Deferred.done(stopped, Exit.void).pipe(Effect.delay("200 millis"), Effect.forkDetach)
         return { killed: !clean }
-      }),
+      }).pipe(Effect.uninterruptible),
   })
 
   yield* Layer.launch(
@@ -262,9 +278,7 @@ export const serve = Effect.fn("PtyHost.serve")(function* (config: HostConfig) {
       Layer.provide(BunSocketServer.layer({ path: config.socket })),
     ),
   ).pipe(Effect.raceFirst(Deferred.await(stopped)))
-  const last = yield* Ref.get(program)
-  yield* Scope.close(last.scope, Exit.void)
-})
+}, Effect.scoped)
 
 // ── Client ──
 

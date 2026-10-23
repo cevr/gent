@@ -64,7 +64,7 @@ The orchestrator runs it alone (Owner rules). The gamut testbed, [`testbeds/gamu
 
 - Prompt: a file whose first line sends the agent inside the gamut to read `~/.claude/skills/loop/safety.md` and this file's Owner rules in full before any action, and whose task drives every ability the batches changed (each apply report names them).
 - Drive: `bun run gamut up <preset> --prompt <file>`, then `bun run gamut wait` and `bun run gamut read`. Keys the prompt cannot reach (`/btw`, `/model`, queued follow-ups, Esc, `!cmd`) go through `bun run gamut send` and `bun run gamut keys`; `bun run gamut restart` checks resume. The run needs no herdr.
-- State: `bun run gamut status` prints the stored user messages, the session tree, the model per session, tool calls, extension pulses and the work dir's `bun test`: the pane shows what rendered, `status` shows what happened.
+- State: `bun run gamut status` prints the stored user messages, the session tree, the model per session, tool calls, extension pulses and the work dir's `bun test`: the screen shows what rendered, `status` shows what happened.
 - Stop: `bun run gamut down`.
 
 ## Rejected

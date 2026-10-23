@@ -49,7 +49,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { homedir, tmpdir } from "node:os"
-import { Cause, Config, Effect, Exit, Option, Schema } from "effect"
+import { Cause, Config, Duration, Effect, Exit, Option, Schema } from "effect"
 import { resolveDataDir } from "@gent/core/host"
 import { HostConfig, type HostClient, type HostScreen, hostCall } from "@gent/e2e/pty-host"
 
@@ -412,26 +412,42 @@ export const failureText = (stdout: string, stderr: string): string => {
   return lastLine(stderr) ?? lastLine(stdout) ?? "no output"
 }
 
-/** Whether `pid` is still a terminal host, not a process that reused its id. */
-const isHost = async (pid: number): Promise<boolean> => {
+/**
+ * Whether `pid` is still the terminal host of the run at `root`: not a
+ * process that reused its id, and not another run's host. Its arguments
+ * name the host entry and the config file under `root`.
+ */
+const isHost = async (pid: number, root: string): Promise<boolean> => {
   const ps = await $`ps -o command= -p ${pid}`.quiet().nothrow()
-  return ps.exitCode === 0 && ps.stdout.toString().includes(HOST_ENTRY)
+  const command = ps.stdout.toString()
+  return (
+    ps.exitCode === 0 && command.includes(HOST_ENTRY) && command.includes(join(root, "host.json"))
+  )
 }
 
 /**
- * Call the run's host. A host that has stopped (the machine slept, a kill)
- * is named as such, with the log that says why; any other failure keeps
- * its own message (an unknown key, a TUI that will not quit).
+ * Call the run's host, for at most `within`. A host that has stopped (the
+ * machine slept, a kill) is named as such, with the log that says why; a
+ * host that does not answer in time says so; any other failure keeps its
+ * own message (an unknown key, a TUI that will not quit).
  */
 const callHost = async <A, E>(
   state: GamutState,
   use: (host: HostClient) => Effect.Effect<A, E>,
+  within: Duration.Duration = Duration.seconds(30),
 ): Promise<A> => {
-  const exit = await Effect.runPromiseExit(hostCall(state.socket, use))
-  if (Exit.isSuccess(exit)) return exit.value
-  if (!(await isHost(state.hostPid))) {
+  const exit = await Effect.runPromiseExit(
+    hostCall(state.socket, use).pipe(Effect.timeoutOption(within)),
+  )
+  if (Exit.isSuccess(exit) && Option.isSome(exit.value)) return exit.value.value
+  if (!(await isHost(state.hostPid, state.root))) {
     throw new Error(
       `the run's terminal host has stopped (see ${join(state.root, "host.log")}); run: bun run gamut down`,
+    )
+  }
+  if (Exit.isSuccess(exit)) {
+    throw new Error(
+      `the run's terminal host did not answer within ${Duration.format(within)} (see ${join(state.root, "host.log")})`,
     )
   }
   const error = Cause.squash(exit.cause)
@@ -611,7 +627,13 @@ const prepareAndLaunch = async (
     sendMark: 0,
     awaitsTurn: true,
   }
-  await Bun.write(STATE_FILE, encodeState(state))
+  try {
+    await Bun.write(STATE_FILE, encodeState(state))
+  } catch (error) {
+    // Without the state file no `down` can find the host, so stop it here.
+    if (await isHost(hostPid, root)) process.kill(hostPid, "SIGKILL")
+    throw error
+  }
   console.log(`host  ${hostPid} on ${socket}`)
   console.log(`state ${STATE_FILE}`)
 }
@@ -1187,7 +1209,12 @@ const wait = async (timeoutSeconds: number) => {
   let progress = WAIT_START
   let record: RunRecord = { started: false, open: [], stored: false }
   while (Date.now() < deadline) {
-    const screen = await callHost(state, (host) => host.read({ scope: "screen" }))
+    // A host that stops answering ends the wait with the budget, not after it.
+    const screen = await callHost(
+      state,
+      (host) => host.read({ scope: "screen" }),
+      Duration.millis(Math.max(deadline - Date.now(), 1000)),
+    )
     if (screen.exited !== undefined) {
       throw new Error(`gent exited ${screen.exited}; read --full shows its last screen`)
     }
@@ -1224,8 +1251,8 @@ const down = async () => {
     console.log("gent did not quit on ctrl+c within 15s; killed it")
   }
   const deadline = Date.now() + 2000
-  while ((await isHost(state.hostPid)) && Date.now() < deadline) await Bun.sleep(100)
-  if (await isHost(state.hostPid)) process.kill(state.hostPid, "SIGKILL")
+  while ((await isHost(state.hostPid, state.root)) && Date.now() < deadline) await Bun.sleep(100)
+  if (await isHost(state.hostPid, state.root)) process.kill(state.hostPid, "SIGKILL")
   await removeTree(state.root)
   rmSync(STATE_FILE, { force: true })
   console.log(`stopped the host, removed ${state.root}`)

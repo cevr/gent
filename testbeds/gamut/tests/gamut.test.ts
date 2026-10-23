@@ -11,6 +11,7 @@ import { runProcess } from "@gent/core/extensions/api"
 import {
   Config,
   ConfigProvider,
+  Duration,
   Effect,
   FileSystem,
   Layer,
@@ -19,6 +20,7 @@ import {
   Schedule,
   Schema,
 } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { SqlClient } from "effect/sql"
 import { it } from "effect-bun-test"
 import {
@@ -732,13 +734,51 @@ describe("gamut reads the schema gent builds", () => {
   )
 })
 
-/** Kill `pid` once `ps` shows it is still a terminal host, so a failed test leaves no host behind. */
-const reapHost = (pid: number) =>
+/** The ids of the terminal hosts whose arguments name a path under `dir`. */
+const hostsUnder = (dir: string) =>
+  runProcess("ps", ["-axo", "pid=,args="]).pipe(
+    Effect.map((ps) =>
+      ps.stdout
+        .split("\n")
+        .filter((line) => line.includes("pty-host") && line.includes(dir))
+        .map((line) => Number(line.trim().split(" ")[0])),
+    ),
+    Effect.orDie,
+  )
+
+/** Kill each terminal host under `dir`, so a failed test leaves no host behind. */
+const reapHostsUnder = (dir: string) =>
   Effect.gen(function* () {
     const platform = yield* GentPlatform
-    const ps = yield* runProcess("ps", ["-p", String(pid), "-o", "args="])
-    if (ps.stdout.includes("pty-host")) yield* platform.signal(pid, "SIGKILL").pipe(Effect.ignore)
-  }).pipe(Effect.orDie)
+    for (const pid of yield* hostsUnder(dir)) {
+      yield* platform.signal(pid, "SIGKILL").pipe(Effect.ignore)
+    }
+  })
+
+/**
+ * A process that looks like the terminal host of the run at `root` to
+ * `ps`, and does nothing; the scope kills it.
+ */
+const hostLookalike = (root: string) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    const entry = yield* path.fromFileUrl(new URL(import.meta.resolve("@gent/e2e/pty-host")))
+    // `; :` keeps the shell, and with it these arguments, from exec'ing sleep.
+    const handle = yield* spawner.spawn(
+      ChildProcess.make("/bin/sh", ["-c", "sleep 30; :", entry, path.join(root, "host.json")], {
+        forceKillAfter: "5 seconds",
+      }),
+    )
+    return Number(handle.pid)
+  })
+
+/** Whether process `pid` is alive. */
+const running = (pid: number) =>
+  runProcess("ps", ["-p", String(pid), "-o", "pid="]).pipe(
+    Effect.map((ps) => ps.exitCode === 0),
+    Effect.orDie,
+  )
 
 /** Repeat `probe` until `done` holds, failing loudly when it never does. */
 const pollUntil = <A, E, R>(
@@ -807,6 +847,95 @@ describe("gamut CLI with a stopped host", () => {
       30_000,
     )
   }
+})
+
+describe("gamut CLI with another run's host", () => {
+  /** A state file for a run at `<scratch>/run` whose host is `hostPid`. */
+  const runWith = (scratch: string, driver: string, hostPid: number) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = path.join(scratch, "run")
+      const statePath = path.join(
+        scratch,
+        `gent-gamut-${path.basename(path.resolve(path.dirname(driver), "../.."))}.json`,
+      )
+      yield* fs.makeDirectory(root)
+      yield* fs.writeFileString(
+        statePath,
+        encodeState({
+          root,
+          work: root,
+          data: root,
+          socket: path.join(root, "host.sock"),
+          hostPid,
+          binary: path.join(path.resolve(path.dirname(driver), "../.."), "apps/tui/bin/gent"),
+          preset: "offline",
+          sendMark: 0,
+          awaitsTurn: false,
+        }),
+      )
+      return { root, statePath }
+    })
+
+  it.scopedLive(
+    "down leaves a host that serves another run running",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const platform = yield* GentPlatform
+        const scratch = yield* makeTempDirectoryScoped("gent-gamut-other-")
+        const driver = yield* path.fromFileUrl(new URL("../gamut.ts", import.meta.url))
+        // The recorded id now belongs to the host of a run elsewhere.
+        const other = yield* hostLookalike(path.join(scratch, "elsewhere"))
+        const { root, statePath } = yield* runWith(scratch, driver, other)
+        const result = yield* runProcess(yield* platform.execPath, [driver, "down"], {
+          env: { TMPDIR: scratch },
+          extendEnv: true,
+        }).pipe(Effect.timeout("20 seconds"))
+        expect(result.exitCode).toBe(0)
+        expect(yield* fs.exists(root)).toBe(false)
+        expect(yield* fs.exists(statePath)).toBe(false)
+        expect(yield* running(other)).toBe(true)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
+        Effect.timeout("25 seconds"),
+      ),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a wait on a host that does not answer ends with its budget",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const platform = yield* GentPlatform
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const scratch = yield* makeTempDirectoryScoped("gent-gamut-silent-")
+        const driver = yield* path.fromFileUrl(new URL("../gamut.ts", import.meta.url))
+        const host = yield* hostLookalike(path.join(scratch, "run"))
+        const { root } = yield* runWith(scratch, driver, host)
+        // A socket that takes the call and never answers it.
+        const socket = path.join(root, "host.sock")
+        yield* spawner.spawn(
+          ChildProcess.make("nc", ["-lU", socket], { forceKillAfter: "5 seconds" }),
+        )
+        yield* pollUntil(fs.exists(socket), (listening) => listening, "the silent socket")
+        const [took, result] = yield* runProcess(yield* platform.execPath, [driver, "wait", "2"], {
+          env: { TMPDIR: scratch },
+          extendEnv: true,
+        }).pipe(Effect.timeout("15 seconds"), Effect.timed)
+        expect(result.exitCode).toBe(1)
+        expect(result.stderr).toContain("did not answer within")
+        expect(Duration.toMillis(took)).toBeLessThan(10_000)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
+        Effect.timeout("20 seconds"),
+      ),
+    25_000,
+  )
 })
 
 describe("gamut CLI ownership", () => {
@@ -926,14 +1055,13 @@ const liveRun = (gent: string) =>
       }).pipe(Effect.timeout("30 seconds"))
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
-        if (!(yield* fs.exists(statePath))) return
-        const state = decodeState(yield* fs.readFileString(statePath))
+        // A state path a test made unreadable reads as no run.
+        if (!(yield* fs.exists(statePath).pipe(Effect.orElseSucceed(() => false)))) return
         yield* gamut(["down"]).pipe(Effect.ignore)
-        yield* reapHost(state.hostPid)
-      }).pipe(Effect.orDie),
+      }).pipe(Effect.andThen(reapHostsUnder(scratch)), Effect.orDie),
     )
     const runState = fs.readFileString(statePath).pipe(Effect.map(decodeState))
-    return { gamut, runState, statePath, owner }
+    return { gamut, runState, statePath, owner, scratch }
   })
 
 // A run can reach five writers of the user config (the first `/model` pick,
@@ -992,6 +1120,25 @@ describe("gamut CLI on a live host", () => {
         expect(
           (yield* runProcess("ps", ["-p", String(state.hostPid), "-o", "pid="])).exitCode,
         ).toBe(1)
+      }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer))),
+    40_000,
+  )
+
+  it.scopedLive(
+    "an up that cannot write its state stops the host it started",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const { gamut, statePath, scratch } = yield* liveRun(`#!/bin/sh\nexec sleep 60\n`)
+        // The state path leads through a regular file, so its write fails
+        // once the host is up.
+        const blocker = path.join(scratch, "blocker")
+        yield* fs.writeFileString(blocker, "")
+        yield* fs.symlink(path.join(blocker, "state.json"), statePath)
+        const up = yield* gamut(["up", "sol", "--no-build"])
+        expect(up.exitCode).toBe(1)
+        yield* pollUntil(hostsUnder(scratch), (hosts) => hosts.length === 0, "the host's stop")
       }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer))),
     40_000,
   )

@@ -6,6 +6,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
+import { runProcess } from "@gent/core/extensions/api"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { Effect, Fiber, FileSystem, Schedule } from "effect"
 import type { RpcClientError } from "effect/rpc/RpcClientError"
@@ -67,8 +68,44 @@ const hosted = (script: string) =>
       }),
     )
     const call: Call = (use) => hostCall(socket, use)
-    return { call, fiber }
+    return { call, fiber, dir }
   })
+
+/** Whether process `pid` is alive. */
+const alive = (pid: number) =>
+  Effect.try(() => process.kill(pid, 0)).pipe(
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  )
+
+/** The ids a program script wrote to `<dir>/pids`, one per start. */
+const startedPids = (dir: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    if (!(yield* fs.exists(`${dir}/pids`))) return []
+    const text = yield* fs.readFileString(`${dir}/pids`)
+    return text
+      .split("\n")
+      .filter((line) => line !== "")
+      .map(Number)
+  })
+
+/** Wait until every program the script started has exited, failing loudly when one survives. */
+const allExited = (dir: string) =>
+  startedPids(dir).pipe(
+    Effect.flatMap((pids) => Effect.forEach(pids, alive)),
+    Effect.repeat({
+      until: (states) => states.every((state) => !state),
+      schedule: Schedule.spaced("50 millis"),
+    }),
+    Effect.timeoutOrElse({
+      duration: "5 seconds",
+      orElse: () => Effect.die(new Error("a program outlived its host")),
+    }),
+  )
+
+/** A program that records its id, then waits. */
+const RECORDS_ITS_PID = `echo $$ >> pids; exec sleep 60`
 
 /** Read the screen until `text` is on it, failing loudly when it never is. */
 const screenShows = (call: Call, text: string) =>
@@ -114,6 +151,15 @@ describe("terminal host", () => {
       )
       expect(refused._tag).toBe("@gent/e2e/UnknownKey")
       expect(refused.message).toContain("no key named nope")
+      // Had the refused call written its enter, the program would answer an empty line first.
+      yield* call((host) =>
+        host.type({ text: "abc" }).pipe(Effect.andThen(host.keys({ names: ["enter"] }))),
+      )
+      yield* screenShows(call, "got abc")
+      expect((yield* call((host) => host.read({ scope: "changes" }))).rows).toEqual([
+        "abc",
+        "got abc",
+      ])
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 
@@ -147,6 +193,79 @@ describe("terminal host", () => {
       expect(rows).toContain("second")
       expect(rows).not.toContain("first")
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+  )
+
+  it.live("two restarts at once leave one program running", () =>
+    Effect.gen(function* () {
+      const { call, dir } = yield* hosted(RECORDS_ITS_PID)
+      yield* startedPids(dir).pipe(
+        Effect.repeat({
+          until: (pids) => pids.length === 1,
+          schedule: Schedule.spaced("20 millis"),
+        }),
+        Effect.timeout("5 seconds"),
+      )
+      // Each restart's program carries `marker` as its shell's `$0`, so the
+      // process table counts them: a program the other restart quit may
+      // never have run a line.
+      const marker = `${dir}/restarted`
+      const again = ["/bin/sh", "-c", "sleep 60; :", marker] as const
+      yield* Effect.all(
+        [
+          call((host) => host.restart({ command: again })),
+          call((host) => host.restart({ command: again })),
+        ],
+        { concurrency: "unbounded" },
+      )
+      // A restart returns once its program has started and the one before
+      // it has exited, so the count is final here.
+      const ps = yield* runProcess("ps", ["-axo", "args="])
+      expect(ps.stdout.split("\n").filter((line) => line.includes(marker))).toHaveLength(1)
+      expect(yield* Effect.forEach(yield* startedPids(dir), alive)).toEqual([false])
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+  )
+
+  it.live("an interrupted host closes its program", () =>
+    Effect.gen(function* () {
+      const { fiber, dir } = yield* hosted(RECORDS_ITS_PID)
+      yield* startedPids(dir).pipe(
+        Effect.repeat({
+          until: (pids) => pids.length === 1,
+          schedule: Schedule.spaced("20 millis"),
+        }),
+        Effect.timeout("5 seconds"),
+      )
+      yield* Fiber.interrupt(fiber)
+      yield* allExited(dir)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+
+  it.live("a host whose socket will not bind fails and closes its program", () =>
+    Effect.gen(function* () {
+      const dir = yield* makeTempDirectoryScoped("gent-pty-host-")
+      // The bind fails before the program could write its id, so the program
+      // is found by its directory, which its shell carries as `$0`.
+      const served = yield* serve({
+        // No such directory, so the server cannot listen.
+        socket: `${dir}/missing/host.sock`,
+        cwd: dir,
+        command: ["/bin/sh", "-c", "sleep 60; :", dir],
+        // oxlint-disable-next-line effect/noGlobals -- the program needs the caller's PATH to find its tools
+        env: { PATH: Bun.env["PATH"] ?? "/usr/bin:/bin" },
+        ...SIZE,
+      }).pipe(Effect.exit, Effect.timeout("10 seconds"))
+      expect(served._tag).toBe("Failure")
+      yield* runProcess("ps", ["-axo", "args="]).pipe(
+        Effect.repeat({
+          until: (ps) => !ps.stdout.includes(dir),
+          schedule: Schedule.spaced("50 millis"),
+        }),
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.die(new Error("the program outlived its host")),
+        }),
+      )
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 
   it.live("down quits the program and stops the host", () =>
