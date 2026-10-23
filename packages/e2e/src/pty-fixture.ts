@@ -23,6 +23,7 @@ import {
   Result,
   Schema,
   type Scope,
+  Struct,
 } from "effect"
 import { constVoid } from "effect/Function"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
@@ -756,7 +757,8 @@ type DriveStep = typeof DriveStep.Type
  * never over the caller's, so no credential reaches either unless the script
  * names it. `cwd` and `out` resolve against the script's directory. `exit` is
  * the code the program must end with when it exits by itself; a program the
- * cleanup stops at the end has no code to check.
+ * cleanup stops at the end has no code to check. `sweep` names further sizes
+ * the steps run at (`drivePasses`).
  */
 export const DriveScript = Schema.Struct({
   command: Schema.NonEmptyArray(Schema.String),
@@ -769,8 +771,61 @@ export const DriveScript = Schema.Struct({
   out: Schema.String,
   exit: Schema.optionalKey(Schema.Int),
   steps: Schema.Array(DriveStep),
+  /** Further `[cols, rows]` the steps run at, after `cols`×`rows`. */
+  sweep: Schema.optionalKey(Schema.NonEmptyArray(Schema.Tuple([Schema.Int, Schema.Int]))),
 })
 type DriveScript = typeof DriveScript.Type
+
+/** A script the runner can start: its `cwd` resolved. */
+type RunnableScript = DriveScript & { readonly cwd: string }
+
+/**
+ * One run of a script's steps: `size` names it (`120x40`, or `120x40-60x20`
+ * for a sweep's live resize), and `script` is that run, with no `sweep`.
+ */
+export interface DrivePass {
+  readonly size: string
+  readonly script: RunnableScript
+}
+
+/**
+ * The runs a script asks for. A script with no `sweep` is one run into
+ * `out`. One with a `sweep` runs its steps at `cols`×`rows`, then at each
+ * size it names, then once more from the first size through a live resize to
+ * the last, after which the screen must fit (`resized` captures it). Each
+ * run of a sweep has a directory of its own under `out`, named by its size,
+ * so its captures, its recording and its last pass are its own.
+ */
+export const drivePasses = (script: RunnableScript): ReadonlyArray<DrivePass> => {
+  const plain = Struct.omit(script, ["sweep"])
+  const size = (cols: number, rows: number) => `${cols}x${rows}`
+  const first = size(script.cols, script.rows)
+  return Option.match(Option.fromUndefinedOr(script.sweep), {
+    onNone: () => [{ size: first, script: plain }],
+    onSome: (sweep) => {
+      const [lastCols, lastRows] = Arr.lastNonEmpty(sweep)
+      const resize = `${first}-${size(lastCols, lastRows)}`
+      const resized: ReadonlyArray<DriveStep> = [
+        ["resize", lastCols, lastRows],
+        ["settle"],
+        ["fits"],
+        ["cap", "resized"],
+      ]
+      const at = ([cols, rows]: readonly [number, number]): DrivePass => {
+        const label = size(cols, rows)
+        return { size: label, script: { ...plain, cols, rows, out: `${script.out}/${label}` } }
+      }
+      return [
+        at([script.cols, script.rows]),
+        ...sweep.map(at),
+        {
+          size: resize,
+          script: { ...plain, out: `${script.out}/${resize}`, steps: [...plain.steps, ...resized] },
+        },
+      ]
+    },
+  })
+}
 
 /**
  * What one step came to: `Ok`; `Miss`, a `waitFor` whose pattern never
@@ -861,6 +916,19 @@ export const driveProblems = (
   })
   return [...steps, ...end]
 }
+
+/** A pass and what its drive came to. */
+export interface DrivenPass extends DrivePass {
+  readonly outcome: DriveOutcome
+}
+
+/** `driveProblems` of each pass, a sweep's each led by its pass's size. */
+export const passProblems = (passes: ReadonlyArray<DrivenPass>): ReadonlyArray<string> =>
+  passes.flatMap((pass) => {
+    const problems = driveProblems(pass.script, pass.outcome)
+    if (passes.length === 1) return problems
+    return problems.map((problem) => `${pass.size}: ${problem}`)
+  })
 
 /** What a step came to, before it has its index, label and time. */
 type StepDone = Data.TaggedEnum<{
@@ -1209,6 +1277,8 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
     COLORTERM: "truecolor",
     LANG: "C.UTF-8",
     ...script.env,
+    // An `sh` step saves its evidence beside the drive's captures.
+    EVIDENCE: script.out,
   }
   const size = { cols: script.cols, rows: script.rows }
   const record = options.record ?? true
@@ -1484,6 +1554,25 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
   const ok = outcomes.filter((step) => step._tag === "Ok").length
   yield* Console.error(`pass ${ok}/${outcomes.length} · ${endLabel(end)} · ${script.out}`)
   return outcome
+})
+
+/**
+ * Run each of a script's passes (`drivePasses`) in turn, each pass of a sweep
+ * under a `== <size>` line on stderr.
+ */
+export const runDrivePasses = Effect.fn("Drive.runPasses")(function* (
+  script: RunnableScript,
+  options: DriveOptions = {},
+) {
+  const passes = drivePasses(script)
+  return yield* Effect.forEach(passes, (pass) =>
+    Effect.gen(function* () {
+      if (passes.length > 1) yield* Console.error(`== ${pass.size}`)
+      const outcome = yield* runDriveScript(pass.script, options)
+      const driven: DrivenPass = { ...pass, outcome }
+      return driven
+    }),
+  )
 })
 
 /** The screen captures (`.txt`) a drive saved, in step order. */

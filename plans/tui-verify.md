@@ -57,7 +57,13 @@ The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1
 - Each assertion was broken in turn (8 probes); each break fails a test in `packages/e2e/tests/drive.test.ts` (measured).
 - `fits` reads the terminal's wrap flag (only while the row still ends on text at the last column; a row painted over keeps a stale flag) and the last two cells, skipping wide characters and keeping a combining mark with its letter. The cut rule is a guess: a word that ends exactly at the edge reads as cut. Old captures end on `$0.02`, `…` and borders at the last column, so only two letters at the edge count as a cut (measured on `tree-sections` captures).
 - Live: a drive with `expect`, `fits` and `stable` at 120x40, a resize to 60x20 and back passed 3/3 at 25 stderr lines (load 7.57 on 12 cores). `stable` right after `ready` caught the status row drawing `(anthropic)`, then `(Anthropic)` (1 of 3 runs); fixed 2026-10-23, the catalog read carries each model's `providerName`, so every view spells it from the first draw.
-- Open: the diff is row by row, so a block that moved shows every row it crossed; item 2 (size sweep), item 4 (gamut without herdr) and item 5 (scratch setup) are not started.
+- Open: the diff is row by row, so a block that moved shows every row it crossed; item 4 (gamut without herdr) and item 5 (scratch setup) are not started.
+
+### Item 2 status (2026-10-23)
+
+- The field is `sweep: [[60, 20]]`, the sizes after `cols`x`rows`, so a script with no sweep is unchanged. `drivePasses` in `packages/e2e/src/pty-fixture.ts` turns a sweep into one pass per size and a resize pass that starts at the first size and ends on `resize`, `settle`, `fits`, `cap resized`. Each pass writes to `out/<size>/` with its own recording and `passed/`, and `$EVIDENCE` is that directory. `verify:drive` prints `Driven.passes`, one entry per size; a problem is led by its size.
+- Tests: `drive.test.ts` (the expansion, and a fake program that fits 80 columns and wraps at 40: the 40 and resize passes fail, the 80 pass holds) and `verify.test.ts` (a sweep on the real TUI at 80x24, 60x20 and the resize). Six probes, each a broken part of the sweep, turn a test red (measured).
+- Live: `ready`, `fits`, `stable 1500`, `cap` and a ctl `sh` step at 120x40 with `sweep: [[60, 20]]` passed 3/3 (load 6.94 on 12 cores). A first try waited for `ready · work` and `stable` caught the model name drawing after it, at each size: a script error, fixed by waiting for the model name.
 
 ## Done when
 

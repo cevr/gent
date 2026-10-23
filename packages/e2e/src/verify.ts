@@ -52,9 +52,10 @@ import {
   checkRecording,
   DriveEnd,
   DriveScript,
-  driveProblems,
+  type DrivenPass,
   keepPassed,
-  runDriveScript,
+  passProblems,
+  runDrivePasses,
   StepOutcome,
 } from "./pty-fixture"
 
@@ -100,7 +101,6 @@ class DriveFailed extends Schema.TaggedError<DriveFailed, { readonly brand: uniq
   {
     out: Schema.String,
     problems: Schema.Array(Schema.String),
-    end: DriveEnd,
   },
 ) {
   override readonly [Runtime.errorReported] = false
@@ -802,9 +802,9 @@ const Recording = Schema.Struct({
   events: Schema.Int,
 })
 
-const Driven = Schema.Struct({
-  _tag: Schema.tag("Driven"),
-  out: Schema.String,
+const DrivenSize = Schema.Struct({
+  /** `120x40`, or `120x40-60x20` for a sweep's live resize. */
+  size: Schema.String,
   /** How many steps ran; each one's line is on stderr. */
   steps: Schema.Int,
   end: DriveEnd,
@@ -812,6 +812,13 @@ const Driven = Schema.Struct({
   captures: Schema.Array(Schema.String),
   /** The asciicast v2 recording, checked to play; absent with `--no-record`. */
   recording: Schema.optionalKey(Recording),
+})
+
+/** A drive that passed: one entry for a plain script, one for each pass of a sweep. */
+const Driven = Schema.Struct({
+  _tag: Schema.tag("Driven"),
+  out: Schema.String,
+  passes: Schema.Array(DrivenSize),
 })
 
 /**
@@ -857,11 +864,12 @@ const containedScript = Effect.fn("Verify.containedScript")(function* (
 /**
  * Run a drive script against the run: the run's wrapper, in the workspace
  * unless the script names a `cwd` inside the run, with the run's environment
- * (its `bin` first on `PATH`, `EVIDENCE` set to `out`) under the script's
- * `env`. Each step prints one line on stderr, a capture's screen too with
- * `print`; captures and the recording go to `out`. A missed or failed step,
- * an exit the script does not expect, or a recording that does not play
- * fails the drive.
+ * (its `bin` first on `PATH`, `EVIDENCE` set to the pass's `out`) under the
+ * script's `env`. Each step prints one line on stderr, a capture's screen too with
+ * `print`; captures and the recording go to `out`, to a directory for each
+ * size under it for a sweep. A missed or failed step, an exit the script does
+ * not expect, or a recording that does not play fails the drive; a size that
+ * passed keeps its last pass all the same.
  */
 const drive = Effect.fn("Verify.drive")(function* (options: {
   readonly dir: string
@@ -890,20 +898,30 @@ const drive = Effect.fn("Verify.drive")(function* (options: {
   }
   const contained = yield* containedScript(paths, run, script, path.dirname(scriptPath))
   const callerPath = yield* Config.String("PATH").pipe(Effect.orElseSucceed(() => "/usr/bin:/bin"))
-  const outcome = yield* runDriveScript(
+  const passes = yield* runDrivePasses(
     {
       ...script,
       command: contained.command,
       cwd: contained.cwd,
       out,
-      env: { ...script.env, ...run.env, PATH: `${paths.bin}:${callerPath}`, EVIDENCE: out },
+      env: { ...script.env, ...run.env, PATH: `${paths.bin}:${callerPath}` },
     },
     { print: options.print, record: options.record },
   ).pipe(Effect.mapError(failed("drive")))
-  const problems = driveProblems(script, outcome)
-  if (problems.length > 0) {
-    return yield* new DriveFailed({ out, problems, end: outcome.end })
-  }
+  // A size that passed is checked and keeps its last pass, even when another failed.
+  const driven = yield* Effect.forEach(
+    passes.filter((pass) => passProblems([pass]).length === 0),
+    (pass) => drivenSize(out, pass),
+  )
+  const problems = passProblems(passes)
+  if (problems.length > 0) return yield* new DriveFailed({ out, problems })
+  return Driven.make({ out, passes: driven })
+})
+
+/** A pass that passed: its recording checked to play at the pass's size, its captures kept. */
+const drivenSize = Effect.fn("Verify.drivenSize")(function* (out: string, pass: DrivenPass) {
+  const path = yield* Path.Path
+  const { script, outcome } = pass
   const recording = yield* Option.match(outcome.recording, {
     onNone: () => Effect.succeed({}),
     onSome: (file) =>
@@ -935,8 +953,14 @@ const drive = Effect.fn("Verify.drive")(function* (options: {
       Fail: () => [],
     }).map((file) => path.relative(out, file)),
   )
-  yield* keepPassed(out, outcome)
-  return Driven.make({ out, steps: outcome.steps.length, end: outcome.end, captures, ...recording })
+  yield* keepPassed(script.out, outcome)
+  return DrivenSize.make({
+    size: pass.size,
+    steps: outcome.steps.length,
+    end: outcome.end,
+    captures,
+    ...recording,
+  })
 })
 
 // ── stop ────────────────────────────────────────────────────────────────────

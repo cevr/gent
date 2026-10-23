@@ -8,9 +8,12 @@ import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
   checkRecording,
   DriveEnd,
+  drivePasses,
   DriveScript,
   driveProblems,
   keepPassed,
+  passProblems,
+  runDrivePasses,
   runDriveScript,
 } from "../src/pty-fixture"
 
@@ -544,6 +547,98 @@ describe("drive scripts", () => {
         expect(lines.at(-1)).toMatch(/^pass 2\/3 · stopped \d+ · /)
         // A failing drive leaves the last pass's capture alone.
         expect(yield* fs.readFileString(`${out}/passed/screen.txt`)).toContain("001|first")
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
+
+  test("a sweep runs the steps at each size, then from the first size through a live resize to the last", () => {
+    const script = {
+      command: ["true"] as const,
+      cwd: "/work",
+      cols: 120,
+      rows: 40,
+      out: "/evidence",
+      steps: [["waitFor", "ready"]] as const,
+    }
+    // A script with no sweep is one run into its own `out`.
+    expect(drivePasses(script)).toEqual([{ size: "120x40", script }])
+    const passes = drivePasses({
+      ...script,
+      sweep: [
+        [80, 24],
+        [60, 20],
+      ],
+    })
+    expect(
+      passes.map((pass) => [pass.size, pass.script.cols, pass.script.rows, pass.script.out]),
+    ).toEqual([
+      ["120x40", 120, 40, "/evidence/120x40"],
+      ["80x24", 80, 24, "/evidence/80x24"],
+      ["60x20", 60, 20, "/evidence/60x20"],
+      ["120x40-60x20", 120, 40, "/evidence/120x40-60x20"],
+    ])
+    expect(passes.map((pass) => "sweep" in pass.script)).toEqual([false, false, false, false])
+    expect(passes[2]?.script.steps).toEqual(script.steps)
+    expect(passes[3]?.script.steps).toEqual([
+      ["waitFor", "ready"],
+      ["resize", 60, 20],
+      ["settle"],
+      ["fits"],
+      ["cap", "resized"],
+    ])
+  })
+
+  it.scopedLive(
+    "a sweep fails the size and the resize a row does not fit, and each pass keeps its own evidence",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const out = yield* makeTempDirectoryScoped("gent-drive-")
+        // Fifty letters fit 80 columns and wrap at 40.
+        const { result: passes, stderr } = yield* keepingStderr(
+          runDrivePasses(
+            {
+              command: drawing(`${"w".repeat(50)}\r\ndrawn`),
+              cwd: out,
+              cols: 80,
+              rows: 8,
+              sweep: [[40, 8]],
+              out,
+              steps: [
+                ["waitFor", "drawn", 5_000],
+                ["fits"],
+                ["sh", 'printf kept > "$EVIDENCE/sh.txt"'],
+              ],
+            },
+            { record: false },
+          ),
+        )
+        expect(passes.map((pass) => pass.size)).toEqual(["80x8", "40x8", "80x8-40x8"])
+        expect(stderr.split("\n").filter((line) => line.startsWith("== "))).toEqual([
+          "== 80x8",
+          "== 40x8",
+          "== 80x8-40x8",
+        ])
+        expect(passProblems(passes)).toEqual([
+          "40x8: fail fits: row 1 wraps onto the next row",
+          "80x8-40x8: fail fits: row 1 wraps onto the next row",
+        ])
+        // The first size passed; the resize pass passed its own steps before the resize.
+        expect(passProblems([passes[0]!])).toEqual([])
+        expect(passes[2]?.outcome.steps.map((step) => step._tag)).toEqual([
+          "Ok",
+          "Ok",
+          "Ok",
+          "Ok",
+          "Ok",
+          "Fail",
+          "Ok",
+        ])
+        // `$EVIDENCE` is each pass's own directory, where its captures go too.
+        for (const size of ["80x8", "40x8", "80x8-40x8"]) {
+          expect(yield* fs.readFileString(`${out}/${size}/sh.txt`)).toBe("kept")
+        }
+        expect(yield* fs.readFileString(`${out}/80x8-40x8/resized.txt`)).toContain("# resized 40x8")
       }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )

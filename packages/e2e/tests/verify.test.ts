@@ -47,10 +47,15 @@ const Stopped = Schema.TaggedStruct("Stopped", {
   removed: Schema.Boolean,
 })
 const Driven = Schema.TaggedStruct("Driven", {
-  steps: Schema.Finite,
-  end: Schema.Struct({ _tag: Schema.String }),
-  captures: Schema.Array(Schema.String),
-  recording: Schema.Struct({ file: Schema.String, seconds: Schema.Finite }),
+  passes: Schema.Array(
+    Schema.Struct({
+      size: Schema.String,
+      steps: Schema.Finite,
+      end: Schema.Struct({ _tag: Schema.String }),
+      captures: Schema.Array(Schema.String),
+      recording: Schema.Struct({ file: Schema.String, seconds: Schema.Finite }),
+    }),
+  ),
 })
 const ErrorLine = Schema.Struct({
   _tag: Schema.String,
@@ -192,13 +197,15 @@ describe("verify helpers", () => {
           `${evidence}/turn`,
         )
         expect({ code: drove.code, stderr: drove.stderr }).toMatchObject({ code: 0 })
-        const driven = yield* decodeLine(Driven)(drove.stdout.trim())
-        expect(driven.steps).toBe(7)
-        expect(driven.end._tag).toBe("Stopped")
+        const [driven, ...more] = (yield* decodeLine(Driven)(drove.stdout.trim())).passes
+        expect(more).toEqual([])
+        expect(driven?.size).toBe("80x24")
+        expect(driven?.steps).toBe(7)
+        expect(driven?.end._tag).toBe("Stopped")
         // Files are named from the evidence directory.
-        expect(driven.captures).toEqual(["answered.txt"])
-        expect(driven.recording.file).toBe("drive.cast")
-        expect(driven.recording.seconds).toBeGreaterThan(0)
+        expect(driven?.captures).toEqual(["answered.txt"])
+        expect(driven?.recording.file).toBe("drive.cast")
+        expect(driven?.recording.seconds).toBeGreaterThan(0)
         const lines = drove.stderr.trimEnd().split("\n")
         expect(lines).toHaveLength(8)
         expect(lines.at(-1)).toMatch(/^pass 7\/7 · stopped \d+ · /)
@@ -207,6 +214,31 @@ describe("verify helpers", () => {
           "gent debug response",
         )
         expect(yield* fs.readFileString(`${evidence}/turn/snapshot.json`)).toContain("hello drive")
+
+        // A sweep runs the steps at each size and through a live resize, each
+        // pass in a directory of its own, its recording checked at its size.
+        const swept = yield* driveScript(
+          parent,
+          dir,
+          "sweep",
+          {
+            command: ["gent"],
+            sweep: [[60, 20]],
+            steps: [["waitFor", "ready · work", 30_000], ["fits"]],
+          },
+          `${evidence}/sweep`,
+        )
+        expect({ code: swept.code, stderr: swept.stderr }).toMatchObject({ code: 0 })
+        const sizes = (yield* decodeLine(Driven)(swept.stdout.trim())).passes
+        expect(sizes.map((pass) => [pass.size, pass.recording.file, pass.captures])).toEqual([
+          ["80x24", "80x24/drive.cast", []],
+          ["60x20", "60x20/drive.cast", []],
+          ["80x24-60x20", "80x24-60x20/drive.cast", ["80x24-60x20/resized.txt"]],
+        ])
+        expect(swept.stderr).toContain("== 80x24-60x20")
+        expect(
+          yield* fs.readFileString(`${evidence}/sweep/80x24-60x20/passed/resized.txt`),
+        ).toContain("# resized 60x20")
 
         // A step that misses fails the drive, after the script ran to its end.
         const missed = yield* driveScript(

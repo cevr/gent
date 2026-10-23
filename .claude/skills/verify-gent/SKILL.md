@@ -59,7 +59,7 @@ bun run --silent verify:drive --dir "$RUN" --script <script.json> --out "$EVIDEN
 
 - `command` is the argv, and its program is `gent`: the run's wrapper. `["gent"]` opens a new session, `["gent", "resume"]` the last one, `["gent", "-p", "<prompt>"]` sends a first prompt. Another program is refused.
 - The steps, the assertions (`expect`, `expectNot`, `fits`, `stable`), the checks a script passes before it runs, and the stderr report with its diff against the last pass: [drive-script.md](drive-script.md). Read it before you write or change a drive.
-- It prints `Driven` (`steps`, `end`, `captures`, `recording`; files named from `--out`). It fails with `DriveFailed` (`out`, `problems`, one line each; `end`) after the script ran to its end when a `waitFor` never matched, an assertion failed, an `sh` step exited non-zero or outlived its limit, or the program exited by itself with another code than the script's `exit` (0 when it names none). A program still running when the steps end is stopped by the drive (`end: Stopped`) and passes, unless the script names an `exit`.
+- It prints `Driven` (`passes`, one for each size a script runs at: `size`, `steps`, `end`, `captures`, `recording`; files named from `--out`). It fails with `DriveFailed` (`out`, `problems`, one line each, led by the size in a sweep) after the script ran to its end when a `waitFor` never matched, an assertion failed, an `sh` step exited non-zero or outlived its limit, or the program exited by itself with another code than the script's `exit` (0 when it names none). A program still running when the steps end is stopped by the drive (`end: Stopped`) and passes, unless the script names an `exit`.
 - Reach a state by keys and slash commands. `gent ctl send` is a second client, a user path of its own; never a setter that skips the TUI.
 
 Feature recipes, with a shipped script each: [features/README.md](features/README.md).
@@ -72,8 +72,9 @@ The caller names the evidence directory, outside every checkout (`verify:drive` 
 
 - each `cap` as `<name>.txt`: a header (`# <name> <cols>x<rows> buffer=… cursor=… t=<ms>`), then numbered rows;
 - `passed/<name>.txt`: the captures of the last drive into this directory that passed, which a failing drive is diffed against;
-- `drive.cast`: the whole drive as an asciicast v2 recording, on by default (`--no-record` turns it off). Before it prints `Driven`, the drive reads it back as a player does: a version 2 header at the script's `cols`x`rows`, events in time order, a length above zero. `Driven.recording` names the file, its `seconds` and `events`. Any asciicast v2 player plays it (`asciinema play`, not installed on the laptop);
+- `drive.cast`: the whole drive as an asciicast v2 recording, on by default (`--no-record` turns it off). Before it prints `Driven`, the drive reads it back as a player does: a version 2 header at the size the pass starts at, events in time order, a length above zero. `Driven.recording` names the file, its `seconds` and `events`. Any asciicast v2 player plays it (`asciinema play`, not installed on the laptop);
 - the files the script's `sh` steps write: `gent ctl` JSON (`events`, `snapshot`, `status`, a `request` reply) and workspace files;
+- a sweep (`sweep` in the script) holds the files above in one directory for each pass, named by its size: `120x40/`, `60x20/`, `120x40-60x20/` for the live resize;
 - the drive's own output: the `Driven` or `DriveFailed` line, and the step lines on stderr (keep them: `2> "$EVIDENCE/<feature>.log"`).
 
 Proof rules:
