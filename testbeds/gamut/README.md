@@ -76,9 +76,14 @@ It reads the run's own `data.db` read-only and prints:
 - **context per model call**, the mean and the largest input tokens of
   `StreamEnded` (cache reads included), for the root sessions and the
   children apart;
-- **re-read files**, an upper bound on the share of the cells' output that
-  is a file its session read before: a `read` answers the cell's code, so a
-  cell counts at most its own output. A re-read through bash is not seen;
+- **re-read files**, an estimate of the share of the cells' output that is
+  a file its session read before: a `read` answers the cell's code, so a
+  cell counts at most its own output. Not seen: `context.read`, a value a
+  cell kept from an earlier cell, a `read` outside a cell, a re-read through
+  bash;
+- **orchestrate units**, the orchestrate machine's runs, with its moves from
+  the merge gate by `fail` and from `merge` by `red`, the gate failures per
+  unit;
 - **`bun test` in the work dir**, pass and fail counts — the red app is the
   only real measure of whether the run did the work.
 

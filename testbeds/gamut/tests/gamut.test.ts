@@ -14,6 +14,7 @@ import { it } from "effect-bun-test"
 import {
   decodeState,
   contextPerCall,
+  gateFailures,
   extensionPulses,
   failureText,
   isSettled,
@@ -31,7 +32,7 @@ import {
   parseUpArgs,
   proxyEnv,
   runRecord,
-  rereadBound,
+  rereadEstimate,
   sessionStatuses,
   userMessageTexts,
   paneIdFromSplit,
@@ -636,23 +637,27 @@ describe("gamut status", () => {
     ])
   })
 
-  test("bounds the re-read part of the cells' output by each cell's own", () => {
+  test("estimates the re-read part of the cells' output, at most each cell's own", () => {
     const { db, event } = runDb()
     // A database before the cell extension's first build has no cell table.
-    expect(rereadBound(db)).toEqual({ cellChars: 0, bound: 0 })
+    expect(rereadEstimate(db)).toEqual({ cellChars: 0, reread: 0 })
     db.run(
       "CREATE TABLE cell_tool_operations (cell_tool_call_id TEXT, operation_id TEXT, record_json TEXT)",
     )
     let operations = 0
-    /** A cell in `session` answering `chars` that ran `reads`, each a path and its output size. */
+    /**
+     * A cell in `session` answering `chars` that ran `reads`, each a path,
+     * its output size and how it ended; `ended` is how the cell ended.
+     */
     const cell = (
       session: string,
       id: string,
       chars: number,
-      reads: ReadonlyArray<readonly [string, number]>,
+      reads: ReadonlyArray<readonly [string, number, string?]>,
+      ended = "ToolCallSucceeded",
     ) => {
       event(session, "ToolCallStarted", { toolCallId: id, toolName: "cell", input: {} })
-      for (const [path, size] of reads) {
+      for (const [path, size, readEnded = "ToolCallSucceeded"] of reads) {
         const inner = `cell:${operations++}`
         db.run("INSERT INTO cell_tool_operations VALUES (?, ?, ?)", [
           id,
@@ -661,9 +666,9 @@ describe("gamut status", () => {
           JSON.stringify({ toolCallId: inner }),
         ])
         event(session, "ToolCallStarted", { toolCallId: inner, toolName: "read", input: { path } })
-        event(session, "ToolCallSucceeded", { toolCallId: inner, output: "r".repeat(size) })
+        event(session, readEnded, { toolCallId: inner, output: "r".repeat(size) })
       }
-      event(session, "ToolCallSucceeded", { toolCallId: id, output: "c".repeat(chars) })
+      event(session, ended, { toolCallId: id, output: "c".repeat(chars) })
     }
     cell("root", "c1", 100, [["a.ts", 50]])
     // a.ts again: its 60 chars, cut to the 40 the cell answered.
@@ -675,7 +680,45 @@ describe("gamut status", () => {
     cell("child", "c3", 30, [["a.ts", 70]])
     // b.ts again: its 20 chars, under the cell's 200.
     cell("root", "c4", 200, [["b.ts", 20]])
-    expect(rereadBound(db)).toEqual({ cellChars: 370, bound: 60 })
+    expect(rereadEstimate(db)).toEqual({ cellChars: 370, reread: 60 })
+    // A cell that failed still answered the model: its 80 chars, and a.ts again.
+    cell("child", "c5", 80, [["a.ts", 25]], "ToolCallFailed")
+    // A read that failed read nothing, so the next read of z.ts is the first.
+    cell("child", "c6", 50, [["z.ts", 5, "ToolCallFailed"]])
+    cell("child", "c7", 50, [["z.ts", 30]])
+    expect(rereadEstimate(db)).toEqual({ cellChars: 550, reread: 85 })
+  })
+
+  test("counts the orchestrate machine's gate failures against its units", () => {
+    const db = new Database(":memory:")
+    // A database before the machines extension's first build has no machine tables.
+    expect(gateFailures(db)).toEqual({ units: 0, gateFails: 0, mergeReds: 0 })
+    db.run("CREATE TABLE machine_runs (run TEXT PRIMARY KEY, machine TEXT)")
+    db.run("CREATE TABLE machine_steps (run TEXT, seq INTEGER, step_json TEXT)")
+    db.run(
+      "INSERT INTO machine_runs VALUES ('u1', 'orchestrate'), ('u2', 'orchestrate'), ('o1', 'other')",
+    )
+    let seq = 0
+    const step = (run: string, tag: string, body: { readonly [field: string]: string }) =>
+      db.run("INSERT INTO machine_steps VALUES (?, ?, ?)", [
+        run,
+        seq++,
+        // oxlint-disable-next-line effect/noGlobals -- a raw SQLite row, as the stored JSON spells it
+        JSON.stringify({ _tag: tag, ...body }),
+      ])
+    const moved = (run: string, from: string, to: string, by: string) =>
+      step(run, "Moved", { from, to, by })
+    // u1 fails its gate once and its merge once, then merges.
+    moved("u1", "gate", "resume", "fail")
+    moved("u1", "gate", "merge", "pass")
+    moved("u1", "merge", "resume", "red")
+    moved("u1", "gate", "merge", "pass")
+    moved("u1", "merge", "merged", "green")
+    moved("u2", "gate", "merge", "pass")
+    // Another machine's gate, and a step that is not a move, do not count.
+    moved("o1", "gate", "resume", "fail")
+    step("u2", "Saved", { from: "gate", by: "fail" })
+    expect(gateFailures(db)).toEqual({ units: 2, gateFails: 1, mergeReds: 1 })
   })
 })
 
@@ -696,7 +739,8 @@ describe("gamut reads the schema gent builds", () => {
       expect(userMessageTexts(db)).toEqual([])
       expect(extensionPulses(db)).toEqual([])
       expect(contextPerCall(db)).toEqual([])
-      expect(rereadBound(db)).toEqual({ cellChars: 0, bound: 0 })
+      expect(rereadEstimate(db)).toEqual({ cellChars: 0, reread: 0 })
+      expect(gateFailures(db)).toEqual({ units: 0, gateFails: 0, mergeReds: 0 })
       expect(openTurnSessions(db)).toEqual([])
       expect(runRecord(db, 0)).toEqual({ started: false, open: [], stored: false })
       expect(latestEventId(db)).toBe(0)

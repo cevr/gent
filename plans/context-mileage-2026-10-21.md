@@ -175,13 +175,19 @@ finished unit. The baseline is the table above.
    (600 sessions, to 2026-09-23, before this requirement merged): 2,532
    child calls at a mean of 15,340 input tokens, the largest 65,730; 1,289
    root calls at a mean of 20,147. Every read ran inside a cell, so only the
-   cell's output reaches the model: re-reads are at most 2.1% of the
-   children's cell output and 1.7% of the roots' (bash `cat` included), and
-   the 4 sessions with a compaction or handoff re-read nothing after it. The
-   share is not real, so no re-read hook. Gate failures per unit are the
-   quality rows' `gates` (`red` against `accepted.runs`); no stored run
-   holds a machine log today, so no number. `bun run gamut status` now
-   prints the first two for each run.
+   cell's output reaches the model. A path-level estimate puts re-reads,
+   bash `cat`, `head`, `tail` and `sed -n` included, at 2.1% of the
+   children's cell output and 1.7% of the roots'; the 4 sessions with a
+   compaction or handoff re-read no file after it. The estimate does not
+   see `context.read` of history or a value a cell kept from an earlier
+   cell, so it is not a bound. On it, the share is too small for a re-read
+   hook (inferred). These numbers are the baseline: the accept needs the
+   same measures on runs after this requirement. Gate failures per unit
+   are the orchestrate machine's moves from `gate` by `fail` and from
+   `merge` by `red`, against its runs (the quality rows' `gates` count the
+   `red` only, once per attributed row); no stored run holds a machine log
+   today, so no number. `bun run gamut status` prints all three for each
+   run.
 
 7. **Short agents over long ones.** A unit that outgrows one window goes to a
    fresh agent with a handoff, not a compaction. Accept: compactions per
