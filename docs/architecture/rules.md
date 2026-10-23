@@ -283,8 +283,10 @@ commit.
     step's cache warm when its driver reports a warmer
     (`reportProviderCacheWarmer`): 30 seconds before the step's lifetime
     lapses, the warmer sends the step's request again with no output, which
-    reads the whole prefix, writes nothing, and restarts the entry's
-    lifetime. At most 12 reads go out per tool run: a read costs 0.1x input
+    on a hit reads the whole prefix, writes nothing, and restarts the
+    entry's lifetime; a read that comes too late writes the prefix again,
+    priced by its lifetime. A quota the read names reaches the step's
+    account. At most 12 reads go out per tool run: a read costs 0.1x input
     and a 5-minute rewrite 1.25x. The end of the tools stops the reads, a
     failed read stops them too, and each read's price joins the turn's cost
     and the account's spend. Anthropic reports a warmer for a streamed

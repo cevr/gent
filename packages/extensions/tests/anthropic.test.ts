@@ -1590,26 +1590,30 @@ describe("Anthropic cache warming", () => {
   const decodeSentBody = Schema.decodeUnknownSync(
     Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
   )
-  /** A warming read's answer: the whole prefix read, nothing written, no output. */
-  const warmingAnswer = () => ({
-    status: 200,
-    headers: { "content-type": "application/json" },
-    body: encodeExternalJson({
-      id: "msg_warm",
-      type: "message",
-      role: "assistant",
-      model: "claude-haiku-4-5",
-      content: [],
-      stop_reason: "max_tokens",
-      stop_sequence: externalWireNull,
-      usage: {
-        input_tokens: 4,
-        output_tokens: 0,
-        cache_read_input_tokens: 25_839,
-        cache_creation_input_tokens: 0,
-      },
-    }),
-  })
+  /** A hit: the whole prefix read, nothing written, no output. */
+  const HIT_USAGE = {
+    input_tokens: 4,
+    output_tokens: 0,
+    cache_read_input_tokens: 25_839,
+    cache_creation_input_tokens: 0,
+  }
+  /** A warming read's answer with `usage`, plus `headers`. */
+  const warmingAnswer =
+    (usage: Record<string, unknown> = HIT_USAGE, headers: Record<string, string> = {}) =>
+    () => ({
+      status: 200,
+      headers: { "content-type": "application/json", ...headers },
+      body: encodeExternalJson({
+        id: "msg_warm",
+        type: "message",
+        role: "assistant",
+        model: "claude-haiku-4-5",
+        content: [],
+        stop_reason: "max_tokens",
+        stop_sequence: externalWireNull,
+        usage,
+      }),
+    })
   /** What one request of `model` reported, its reply streamed as a tool call's. */
   const stepOf = (
     model: Layer.Layer<LanguageModel.LanguageModel>,
@@ -1628,6 +1632,23 @@ describe("Anthropic cache warming", () => {
         Effect.scoped,
       ),
     )
+  /** What the step's warmer reads, and the quota it reports, its request answered by `answer`. */
+  const readOf = (
+    step: Effect.Success<ReturnType<typeof stepOf>>,
+    state: FakeFetchState,
+    answer: Parameters<typeof fakeFetchLayer>[1],
+  ) =>
+    Effect.gen(function* () {
+      const warmer = Option.getOrThrow(step.cacheWarmer)
+      const usage = yield* Ref.make<Effect.Success<typeof warmer.resend>>(Option.none())
+      const reported = yield* captureProviderReport(
+        warmer.resend.pipe(
+          Effect.flatMap((read) => Ref.set(usage, read)),
+          Effect.provide(fakeFetchLayer(state, answer)),
+        ),
+      )
+      return { usage: yield* Ref.get(usage), quota: reported.quota }
+    })
   const anthropicModel = (authInfo: ProviderAuthInfo, hints: ProviderHints) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
@@ -1647,10 +1668,7 @@ describe("Anthropic cache warming", () => {
         for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
           const state = makeFakeFetchState()
           const step = yield* stepOf(yield* anthropicModel(authInfo, marked), state)
-          const warmer = Option.getOrThrow(step.cacheWarmer)
-          const usage = yield* warmer.resend.pipe(
-            Effect.provide(fakeFetchLayer(state, warmingAnswer)),
-          )
+          const { usage } = yield* readOf(step, state, warmingAnswer())
           expect(state.captured).toHaveLength(2)
           const [sent, warming] = state.captured
           // The same URL, signed the same way: the SDK's URL and headers and
@@ -1673,10 +1691,58 @@ describe("Anthropic cache warming", () => {
               outputTokens: 0,
               cacheReadTokens: 25_839,
               cacheWriteTokens: 0,
+              cacheWritesByLifetime: [],
             }),
           )
         }
       }),
+  )
+
+  it.live(
+    "a sign-in's warming read reports the quota its answer names; an API key's names none",
+    () =>
+      Effect.gen(function* () {
+        const headers = yield* unifiedHeaders("allowed", "five_hour")
+        const quotaOf = (authInfo: ProviderAuthInfo) =>
+          Effect.gen(function* () {
+            const state = makeFakeFetchState()
+            const step = yield* stepOf(yield* anthropicModel(authInfo, marked), state)
+            const { quota } = yield* readOf(step, state, warmingAnswer(HIT_USAGE, headers))
+            return quota.map((reading) => reading.window)
+          })
+        expect(yield* quotaOf(makeOAuthInfo())).toEqual(["5h", "7d"])
+        expect(yield* quotaOf(makeApiAuthInfo("test-key"))).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.live("a read past the lifetime answers its writes by lifetime", () =>
+    Effect.gen(function* () {
+      const state = makeFakeFetchState()
+      const step = yield* stepOf(yield* anthropicModel(makeApiAuthInfo("test-key"), marked), state)
+      const { usage } = yield* readOf(
+        step,
+        state,
+        warmingAnswer({
+          input_tokens: 4,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 25_839,
+          cache_creation: { ephemeral_5m_input_tokens: 25_839, ephemeral_1h_input_tokens: 0 },
+        }),
+      )
+      expect(usage).toEqual(
+        Option.some({
+          inputTokens: 25_843,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 25_839,
+          cacheWritesByLifetime: [
+            { ttlMs: 300_000, tokens: 25_839 },
+            { ttlMs: 3_600_000, tokens: 0 },
+          ],
+        }),
+      )
+    }),
   )
 
   it.live(
@@ -1715,14 +1781,10 @@ describe("Anthropic cache warming", () => {
     Effect.gen(function* () {
       const state = makeFakeFetchState()
       const step = yield* stepOf(yield* anthropicModel(makeApiAuthInfo("test-key"), marked), state)
-      const usage = yield* Option.getOrThrow(step.cacheWarmer).resend.pipe(
-        Effect.provide(
-          fakeFetchLayer(state, () => ({
-            status: 529,
-            body: '{"type":"error","error":{"type":"overloaded_error","message":"busy"}}',
-          })),
-        ),
-      )
+      const { usage } = yield* readOf(step, state, () => ({
+        status: 529,
+        body: '{"type":"error","error":{"type":"overloaded_error","message":"busy"}}',
+      }))
       expect(state.captured).toHaveLength(2)
       expect(usage).toEqual(Option.none())
     }),

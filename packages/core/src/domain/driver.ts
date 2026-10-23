@@ -671,13 +671,19 @@ export class ProviderReport extends Context.Service<
  * How a driver keeps the step's prompt cache warm while the step's tools run.
  * `sentAtMillis` is when the step's request went out; `resend` sends the same
  * request again for no output (a cache read refreshes the entry's lifetime)
- * and answers with its usage, none when the request failed (the driver logs
- * why). The loop calls it only while the step's tools run and the cache would
- * lapse before they finish.
+ * and answers with its usage and its cache writes by lifetime (a read past
+ * the lifetime writes the prefix again), none when the request failed (the
+ * driver logs why). The loop calls it only while the step's tools run and the
+ * cache would lapse before they finish, and listens to it as to the step's
+ * stream: a quota the read names reaches the step's account.
  */
 export interface CacheWarmer {
   readonly sentAtMillis: number
-  readonly resend: Effect.Effect<Option.Option<Usage>>
+  readonly resend: Effect.Effect<
+    Option.Option<Usage & { readonly cacheWritesByLifetime: ReadonlyArray<CacheWriteByLifetime> }>,
+    never,
+    ProviderReport
+  >
 }
 
 /** Nothing listens outside a loop step. */

@@ -124,6 +124,7 @@ import {
   ProviderAuthError,
   type ProviderHints,
   ProviderReport,
+  type QuotaReading,
   type RunEffort,
   sameCredential,
 } from "../domain/driver.js"
@@ -3225,8 +3226,13 @@ type ModelTurnSource = {
   ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventStore>
   /** The turn's model-call budget as it reads when run; none for a turn with no budget. */
   readonly modelAttempts: Effect.Effect<Option.Option<ModelAttempts>>
-  /** How the driver keeps this request's cache warm; none from a driver that cannot. */
-  readonly cacheWarmer: Effect.Effect<Option.Option<CacheWarmer>>
+  /**
+   * How the driver keeps this request's cache warm, its reads reporting
+   * their quota to the step's account; none from a driver that cannot.
+   */
+  readonly cacheWarmer: Effect.Effect<
+    Option.Option<{ readonly sentAtMillis: number; readonly resend: WarmingResend }>
+  >
 }
 
 /**
@@ -4188,6 +4194,27 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // request went out on.
   const stopReason = yield* Ref.make(Option.none<string>())
   const cacheWarmer = yield* Ref.make(Option.none<CacheWarmer>())
+  const noteQuota = (readings: ReadonlyArray<QuotaReading>) =>
+    Effect.flatMap(credential, (sent) =>
+      Effect.forEach(
+        Option.toArray(sent),
+        (receipt) =>
+          placement.noteQuota({
+            provider: receipt.provider,
+            slot: receipt.slot,
+            signedInAt: Option.fromUndefinedOr(receipt.signedInAt),
+            readings,
+          }),
+        { discard: true },
+      ),
+    )
+  // A warming read reports only its quota: the step's stop reason and
+  // warmer stay as the stream left them.
+  const warmingReport = ProviderReport.of({
+    stopReason: () => Effect.void,
+    cacheWarmer: () => Effect.void,
+    quota: noteQuota,
+  })
   const reportedStream = Stream.unwrap(
     Ref.set(stopReason, Option.none()).pipe(
       Effect.andThen(Ref.set(cacheWarmer, Option.none())),
@@ -4199,20 +4226,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       ProviderReport.of({
         stopReason: (reason) => Ref.set(stopReason, Option.some(reason)),
         cacheWarmer: (warmer) => Ref.set(cacheWarmer, Option.some(warmer)),
-        quota: (readings) =>
-          Effect.flatMap(credential, (sent) =>
-            Effect.forEach(
-              Option.toArray(sent),
-              (receipt) =>
-                placement.noteQuota({
-                  provider: receipt.provider,
-                  slot: receipt.slot,
-                  signedInAt: Option.fromUndefinedOr(receipt.signedInAt),
-                  readings,
-                }),
-              { discard: true },
-            ),
-          ),
+        quota: noteQuota,
       }),
     ),
   )
@@ -4259,7 +4273,13 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     ),
     credential,
     modelAttempts,
-    cacheWarmer: Ref.get(cacheWarmer),
+    cacheWarmer: Effect.map(
+      Ref.get(cacheWarmer),
+      Option.map((warmer) => ({
+        ...warmer,
+        resend: Effect.provideService(warmer.resend, ProviderReport, warmingReport),
+      })),
+    ),
     collect: <R>(
       effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
     ) => {
@@ -4361,6 +4381,11 @@ const priceUsage = Effect.fn("TurnHelpers.priceUsage")(function* (
   return Option.some(requestCost(registry, priced.value.id, usage.value, priced.value.pricing, at))
 })
 
+/** What a warming read used: its tokens and its cache writes by lifetime. */
+type WarmingUsage = Option.Option.Value<Effect.Success<CacheWarmer["resend"]>>
+/** A warming read with its report listened to. */
+type WarmingResend = Effect.Effect<Option.Option<WarmingUsage>>
+
 /**
  * At most this many warming reads per tool run. A cache read costs 0.1x the
  * input price and a 5-minute rewrite 1.25x: past twelve reads, warming costs
@@ -4378,9 +4403,9 @@ const CACHE_WARM_MARGIN_MS = 30_000
  * a read; a failed one stops warming, and the end of the tools interrupts it.
  */
 const keepCacheWarm = <A, E, R, R2>(
-  warmer: CacheWarmer,
+  warmer: { readonly sentAtMillis: number; readonly resend: WarmingResend },
   lifetimeMs: number,
-  noteRead: (usage: Usage) => Effect.Effect<void, never, R2>,
+  noteRead: (usage: WarmingUsage) => Effect.Effect<void, never, R2>,
   tools: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R | R2> => {
   const warming = Effect.gen(function* () {
@@ -5685,7 +5710,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // A read that kept the step's cache warm while its tools ran: priced on
       // the turn and noted on the step's account as a step is, since the
       // cache there was read just now.
-      const noteWarmingRead = Effect.fn("AgentLoop.noteWarmingRead")(function* (usage: Usage) {
+      const noteWarmingRead = Effect.fn("AgentLoop.noteWarmingRead")(function* (
+        usage: WarmingUsage,
+      ) {
         const listed = yield* listedModel(
           params.resolved.modelDriver.contextModelId,
           yield* source.credential,

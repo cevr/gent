@@ -2445,35 +2445,32 @@ const withPromptCacheWritePrice =
     })
 
 /** The split of a response's cache writes the Messages API reports in its usage. */
+const CacheCreation = Schema.Struct({
+  ephemeral_5m_input_tokens: Schema.Finite,
+  ephemeral_1h_input_tokens: Schema.Finite,
+})
 const AnthropicCacheCreation = Schema.Struct({
-  anthropic: Schema.Struct({
-    usage: Schema.Struct({
-      cache_creation: Schema.Struct({
-        ephemeral_5m_input_tokens: Schema.Finite,
-        ephemeral_1h_input_tokens: Schema.Finite,
-      }),
-    }),
-  }),
+  anthropic: Schema.Struct({ usage: Schema.Struct({ cache_creation: CacheCreation }) }),
 })
 const decodeAnthropicCacheCreation = Schema.decodeUnknownOption(AnthropicCacheCreation)
+
+/** The cache writes of one `cache_creation` usage, by lifetime. */
+const cacheWritesOf = (creation: typeof CacheCreation.Type) => [
+  {
+    ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME["5m"]),
+    tokens: creation.ephemeral_5m_input_tokens,
+  },
+  {
+    ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME["1h"]),
+    tokens: creation.ephemeral_1h_input_tokens,
+  },
+]
 
 /** A response's cache writes by lifetime; empty when its usage reports no split. */
 const anthropicCacheWritesByLifetime = (metadata: Response.ProviderMetadata) =>
   Option.match(decodeAnthropicCacheCreation(metadata), {
     onNone: () => [],
-    onSome: ({ anthropic }) => {
-      const creation = anthropic.usage.cache_creation
-      return [
-        {
-          ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME["5m"]),
-          tokens: creation.ephemeral_5m_input_tokens,
-        },
-        {
-          ttlMs: Duration.toMillis(PROMPT_CACHE_LIFETIME["1h"]),
-          tokens: creation.ephemeral_1h_input_tokens,
-        },
-      ]
-    },
+    onSome: ({ anthropic }) => cacheWritesOf(anthropic.usage.cache_creation),
   })
 
 /** The `ANTHROPIC_PROMPT_CACHE_TTL` switch; a value other than `5m` or `1h` is reported and ignored. */
@@ -2795,6 +2792,7 @@ const WarmingReply = Schema.Struct({
     output_tokens: Schema.Finite,
     cache_read_input_tokens: Schema.optional(Schema.NullOr(Schema.Int)),
     cache_creation_input_tokens: Schema.optional(Schema.NullOr(Schema.Int)),
+    cache_creation: Schema.optional(Schema.NullOr(CacheCreation)),
   }),
 })
 
@@ -2802,10 +2800,11 @@ const WarmingReply = Schema.Struct({
  * The warmer of a streamed request (`CacheWarmer`): the same request again,
  * with no output and no stream. `client` sends a request as it stands: the
  * SDK's URL and headers are already on it, and the path's own transform signs
- * it again with a fresh credential. It reads the
- * whole prefix and writes nothing, and the read restarts the 5-minute entry's
- * lifetime; `max_tokens: 0` is accepted with adaptive thinking and tools
- * (Haiku probe, 2026-10-23). A 1-hour marker on a later request cannot extend
+ * it again with a fresh credential, its quota reported as the step's is. On
+ * a hit it reads the whole prefix and writes nothing, and the read restarts
+ * the 5-minute entry's lifetime; a read past the lifetime writes the prefix
+ * again, priced by its lifetime split. `max_tokens: 0` is accepted with
+ * adaptive thinking and tools (Haiku probe, 2026-10-23). A 1-hour marker on a later request cannot extend
  * a 5-minute entry: it writes its part again at the 1-hour rate.
  */
 const cacheWarmerFor = (
@@ -2831,6 +2830,10 @@ const cacheWarmerFor = (
               outputTokens: usage.output_tokens,
               cacheReadTokens,
               cacheWriteTokens,
+              cacheWritesByLifetime: Option.match(Option.fromNullishOr(usage.cache_creation), {
+                onNone: () => [],
+                onSome: cacheWritesOf,
+              }),
             })
           }),
           Effect.catch((error) =>

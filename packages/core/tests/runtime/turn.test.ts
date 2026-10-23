@@ -73,6 +73,7 @@ import {
   effectiveModelDriver,
   ModelId,
   Model,
+  type ModelPricing,
   ProviderId,
   type ReasoningEffort,
 } from "../../src/domain/agent"
@@ -190,6 +191,9 @@ import {
   DEFAULT_RETRY_POLICY,
   type CacheWarmer,
   type ModelDriverContribution,
+  type ProviderReport,
+  type QuotaReading,
+  reportProviderQuota,
   type SpendLimit,
   type ModelRouteInput,
   type ModelRouterContribution,
@@ -2464,35 +2468,45 @@ describe("cache keep-warm", () => {
   const CACHE_TTL_MS = 300_000
   const READ_GAP_MS = 270_000
   /** One warming read: a million tokens read from the cache, at $0.5 a million. */
-  const READ_USAGE: Usage = {
+  const READ_USAGE = {
     inputTokens: 1_000_000,
     outputTokens: 0,
     cacheReadTokens: 1_000_000,
     cacheWriteTokens: 0,
+    cacheWritesByLifetime: [],
   }
   const READ_COST = 0.5
+  type ReadAnswer = Option.Option.Value<Effect.Success<CacheWarmer["resend"]>>
 
   /**
-   * One turn whose first step reports a warmer and calls a tool that holds
-   * while the clock moves `gaps` read gaps, then ends. Answers the times the
-   * warmer read while the tool held, the reads after three more gaps past
-   * the turn, and what the turn spent beyond its steps.
+   * One turn on an API key whose first step reports a warmer and calls a
+   * tool that holds while the clock moves `gaps` read gaps; then the tool
+   * ends, or the turn is interrupted. `answer` is what the warmer's read
+   * `read` (from 0) answers; default a hit. Answers the times the warmer
+   * read while the tool held, the reads after three more gaps past the turn,
+   * what the turn spent beyond its steps, and the quotas noted on accounts.
    */
   const runWarmedTurn = (params: {
     readonly name: string
     readonly ttlMs: Option.Option<number>
     readonly gaps: number
+    readonly end?: "release" | "interrupt"
+    readonly pricing?: ModelPricing
+    readonly answer?: (
+      read: number,
+    ) => Effect.Effect<Option.Option<ReadAnswer>, never, ProviderReport>
   }) =>
     Effect.gen(function* () {
       const reads = yield* Ref.make<ReadonlyArray<number>>([])
       const started = yield* Deferred.make<void>()
       const released = yield* Deferred.make<void>()
+      const answer = params.answer ?? (() => Effect.succeedSome<ReadAnswer>(READ_USAGE))
       const warmer: CacheWarmer = {
         sentAtMillis: yield* Clock.currentTimeMillis,
         resend: Effect.gen(function* () {
           const at = yield* Clock.currentTimeMillis
-          yield* Ref.update(reads, (all) => [...all, at])
-          return Option.some(READ_USAGE)
+          const before = yield* Ref.getAndUpdate(reads, (all) => [...all, at])
+          return yield* answer(before.length)
         }),
       }
       const holdTool = tool({
@@ -2516,10 +2530,23 @@ describe("cache keep-warm", () => {
         name: "Warm driver",
         resolveModel: () => Effect.succeed(AiModel.make("warm-driver", "model", providerLayer)),
       }
+      const realPlacement = yield* makeCredentialPlacement(Option.none())
+      const notedQuota = yield* Ref.make<
+        ReadonlyArray<Parameters<typeof realPlacement.noteQuota>[0]>
+      >([])
+      const placement: CredentialPlacement["Service"] = {
+        ...realPlacement,
+        noteQuota: (quota) =>
+          Ref.update(notedQuota, (all) => [...all, quota]).pipe(
+            Effect.andThen(realPlacement.noteQuota(quota)),
+          ),
+      }
       const events = Ref.makeUnsafe<Array<AgentEvent>>([])
       const layer = actorTestRoot({
         resolver: ModelResolver.Live.pipe(
-          Layer.provide(Auth.Test()),
+          Layer.provide(
+            Auth.Test({ "warm-driver": AuthApi.make({ type: "api", key: "warm-key" }) }),
+          ),
           Layer.provide(fixtureModelCatalogSource),
         ),
         eventStore: recordingEventStore(events),
@@ -2541,10 +2568,11 @@ describe("cache keep-warm", () => {
             name: "Warm model",
             provider: ProviderId.make("warm-driver"),
             contextLength: 128_000,
-            pricing: { input: 5, output: 25, cacheRead: READ_COST },
+            pricing: params.pricing ?? { input: 5, output: 25, cacheRead: READ_COST },
             ...omitUndefined({ promptCacheTtlMs: Option.getOrUndefined(params.ttlMs) }),
           }),
         ],
+        overrides: Layer.succeed(CredentialPlacement, placement),
       })
       const sessionId = SessionId.make(`warm-${params.name}-session`)
       const branchId = BranchId.make(`warm-${params.name}-branch`)
@@ -2559,6 +2587,10 @@ describe("cache keep-warm", () => {
         // Each adjust returns once the fibers it woke have suspended again.
         for (let moved = 0; moved < params.gaps; moved++) yield* TestClock.adjust(gap)
         const whileHeld = yield* Ref.get(reads)
+        if (params.end === "interrupt") {
+          yield* Fiber.interrupt(turn)
+          return whileHeld
+        }
         yield* Deferred.succeed(released, void 0)
         yield* Fiber.join(turn)
         return whileHeld
@@ -2570,17 +2602,18 @@ describe("cache keep-warm", () => {
         return sum + (event.costUsd ?? 0)
       }, 0)
       const turn = recorded.filter(Schema.is(TurnCompleted))
-      expect(turn).toHaveLength(1)
       return {
         held,
         after: (yield* Ref.get(reads)).length,
+        turns: turn.length,
         warmingCost: (turn[0]?.costUsd ?? 0) - stepsCost,
+        quota: yield* Ref.get(notedQuota),
       }
     }).pipe(Effect.scoped)
 
   it.effect("reads the cache before it lapses while tools run, and stops when they end", () =>
     Effect.gen(function* () {
-      const { held, after, warmingCost } = yield* runWarmedTurn({
+      const { held, after, turns, warmingCost } = yield* runWarmedTurn({
         name: "stops",
         ttlMs: Option.some(CACHE_TTL_MS),
         gaps: 3,
@@ -2588,6 +2621,7 @@ describe("cache keep-warm", () => {
       // Each read waits for the lifetime the last one restarted, less the margin.
       expect(held).toEqual([READ_GAP_MS, 2 * READ_GAP_MS, 3 * READ_GAP_MS])
       expect(after).toBe(3)
+      expect(turns).toBe(1)
       // The reads are the turn's spend, though no step made them.
       expect(warmingCost).toBeCloseTo(3 * READ_COST, 9)
     }),
@@ -2595,27 +2629,106 @@ describe("cache keep-warm", () => {
 
   it.effect("reads at most twelve times however long the tools run", () =>
     Effect.gen(function* () {
-      const { held, after, warmingCost } = yield* runWarmedTurn({
+      const { held, after, turns, warmingCost } = yield* runWarmedTurn({
         name: "capped",
         ttlMs: Option.some(CACHE_TTL_MS),
         gaps: 15,
       })
       expect(held).toHaveLength(12)
       expect(after).toBe(12)
+      expect(turns).toBe(1)
       expect(warmingCost).toBeCloseTo(12 * READ_COST, 9)
     }),
   )
 
   it.effect("a model whose cache never lapses is not read", () =>
     Effect.gen(function* () {
-      const { held, after, warmingCost } = yield* runWarmedTurn({
+      const { held, after, turns, warmingCost } = yield* runWarmedTurn({
         name: "lifeless",
         ttlMs: Option.none(),
         gaps: 3,
       })
       expect(held).toEqual([])
       expect(after).toBe(0)
+      expect(turns).toBe(1)
       expect(warmingCost).toBeCloseTo(0, 9)
+    }),
+  )
+
+  it.effect("a failed read stops the reads, and costs nothing", () =>
+    Effect.gen(function* () {
+      const { held, after, turns, warmingCost } = yield* runWarmedTurn({
+        name: "failed",
+        ttlMs: Option.some(CACHE_TTL_MS),
+        gaps: 4,
+        answer: (read) => Effect.succeed(Option.liftPredicate(READ_USAGE, () => read === 0)),
+      })
+      expect(held).toEqual([READ_GAP_MS, 2 * READ_GAP_MS])
+      expect(after).toBe(2)
+      expect(turns).toBe(1)
+      expect(warmingCost).toBeCloseTo(READ_COST, 9)
+    }),
+  )
+
+  it.effect("an interrupted turn stops the reads its tools held", () =>
+    Effect.gen(function* () {
+      const { held, after } = yield* runWarmedTurn({
+        name: "interrupted",
+        ttlMs: Option.some(CACHE_TTL_MS),
+        gaps: 1,
+        end: "interrupt",
+      })
+      expect(held).toEqual([READ_GAP_MS])
+      expect(after).toBe(1)
+    }),
+  )
+
+  it.effect("the quota a read names is noted on the step's account", () =>
+    Effect.gen(function* () {
+      const reading: QuotaReading = {
+        window: "five_hour",
+        utilization: 0.4,
+        resetAt: 9_000_000,
+        rejected: false,
+      }
+      const { quota } = yield* runWarmedTurn({
+        name: "quota",
+        ttlMs: Option.some(CACHE_TTL_MS),
+        gaps: 1,
+        answer: () =>
+          reportProviderQuota([reading]).pipe(Effect.as(Option.some<ReadAnswer>(READ_USAGE))),
+      })
+      expect(quota).toMatchObject([
+        { provider: "warm-driver", slot: DEFAULT_CREDENTIAL_SLOT, readings: [reading] },
+      ])
+    }),
+  )
+
+  it.effect("a read that writes the prefix again is priced by its lifetime", () =>
+    Effect.gen(function* () {
+      // The read came late: the entry lapsed, and the read wrote it again for five minutes.
+      const { warmingCost } = yield* runWarmedTurn({
+        name: "rewrite",
+        ttlMs: Option.some(CACHE_TTL_MS),
+        gaps: 1,
+        pricing: {
+          input: 5,
+          output: 25,
+          cacheRead: READ_COST,
+          cacheWrite: 10,
+          cacheWriteByLifetime: [{ ttlMs: CACHE_TTL_MS, price: 6.25 }],
+        },
+        answer: () =>
+          Effect.succeedSome<ReadAnswer>({
+            inputTokens: 1_000_000,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 1_000_000,
+            cacheWritesByLifetime: [{ ttlMs: CACHE_TTL_MS, tokens: 1_000_000 }],
+          }),
+      })
+      // At the five-minute rate, not the fallback `cacheWrite`.
+      expect(warmingCost).toBeCloseTo(6.25, 9)
     }),
   )
 })
