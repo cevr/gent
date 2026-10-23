@@ -534,11 +534,15 @@ describe("gamut up arguments", () => {
       preset: "opus-luna",
       // oxlint-disable-next-line effect/noNullish -- the driver reads an absent prompt as undefined
       prompt: undefined,
+      // oxlint-disable-next-line effect/noNullish -- no --remote keeps the run local
+      remote: undefined,
       build: true,
     })
     expect(parseUpArgs(["--prompt", "fix it", "opus-luna", "--no-build"])).toEqual({
       preset: "opus-luna",
       prompt: "fix it",
+      // oxlint-disable-next-line effect/noNullish -- no --remote keeps the run local
+      remote: undefined,
       build: false,
     })
   })
@@ -546,12 +550,38 @@ describe("gamut up arguments", () => {
     expect(parseUpArgs(["mixed", "--prompt", "mixed"])).toEqual({
       preset: "mixed",
       prompt: "mixed",
+      // oxlint-disable-next-line effect/noNullish -- no --remote keeps the run local
+      remote: undefined,
       build: true,
     })
   })
   test("--prompt with no value is refused, not replaced by the default prompt", () => {
     expect(() => parseUpArgs(["mixed", "--prompt"])).toThrow("--prompt needs a value")
     expect(() => parseUpArgs(["mixed", "--prompt", "--no-build"])).toThrow("--prompt needs a value")
+  })
+  test("--remote takes the repository URL, which is not the preset", () => {
+    expect(parseUpArgs(["--remote", "https://github.com/o/r", "haiku", "--prompt", "go"])).toEqual({
+      preset: "haiku",
+      prompt: "go",
+      remote: "https://github.com/o/r",
+      build: true,
+    })
+    expect(() => parseUpArgs(["haiku", "--remote"])).toThrow("--remote needs a value")
+    expect(() => parseUpArgs(["haiku", "--remote", "--no-build"])).toThrow("--remote needs a value")
+  })
+  test("a value flag given twice is refused, so the push target never depends on the order", () => {
+    expect(() =>
+      parseUpArgs([
+        "haiku",
+        "--remote",
+        "https://github.com/o/a",
+        "--remote",
+        "https://github.com/o/b",
+      ]),
+    ).toThrow("--remote is given more than once")
+    expect(() => parseUpArgs(["haiku", "--prompt", "a", "--prompt", "b"])).toThrow(
+      "--prompt is given more than once",
+    )
   })
 })
 

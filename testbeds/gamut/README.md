@@ -12,6 +12,7 @@ sessions, the tools, and the model overrides at once.
 bun run gamut list                  # the presets and the models each one pins
 bun run gamut up sol                # Sol at high effort for orchestration, ordinary work and review
 bun run gamut up mixed --prompt ./my-prompt.md --no-build
+bun run gamut up haiku --remote https://github.com/cevr/gamut-ledgerline  # origin for the merge gate
 bun run gamut read                  # the rows added since the last read, or (no change)
 bun run gamut read --full           # the whole screen
 bun run gamut wait                  # block until a turn has run (after a /command: any stored event, or about 15 s of quiet), no session in the run's data.db has an open turn, and the screen shows no working child (the agents tray's pulse)
@@ -22,6 +23,15 @@ bun run gamut status                # what the run actually did (below)
 bun run gamut restart               # quit and resume the same session
 bun run gamut down                  # quit, stop the host, remove the scratch dir
 ```
+
+`--remote <url>` adds that GitHub repository as the scratch repo's `origin`
+and force-pushes the first commit to its `main`, so an orchestrate run's
+merge gate can push and wait for CI. The fixture's
+`.github/workflows/gate.yml` runs the project's whole gate (`bun run
+typecheck`, `bun test`) on every push. Without `--remote` the run has no
+remote, and a merge state fails with `No such remote 'origin'`. The owner's
+throwaway private repository for this is `cevr/gamut-ledgerline`; each run
+replaces its history.
 
 The `sol` preset and fixture use `openai/gpt-6.1-sol` at `high` for ordinary
 work and review. Only repetitive mechanical tasks use `openai/gpt-6-luna`

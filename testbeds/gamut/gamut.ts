@@ -2,7 +2,7 @@
 /**
  * One-command live testbed for the gent TUI.
  *
- *   bun run gamut up <preset> [--prompt <file|text>] [--no-build]
+ *   bun run gamut up <preset> [--prompt <file|text>] [--remote <url>] [--no-build]
  *   bun run gamut send "<text>"
  *   bun run gamut keys <name…>
  *   bun run gamut interrupt
@@ -488,7 +488,8 @@ const startHost = async (root: string, config: HostConfig): Promise<number> => {
 
 // ── up ──────────────────────────────────────────────────────────────────
 
-const up = async (presetName: string, promptArg: string | undefined, build: boolean) => {
+const up = async (args: UpArgs) => {
+  const { preset: presetName } = args
   const named = PRESETS[presetName]
   if (!named) {
     throw new Error(`unknown preset: ${presetName}. Presets: ${Object.keys(PRESETS).join(", ")}`)
@@ -502,7 +503,7 @@ const up = async (presetName: string, promptArg: string | undefined, build: bool
   // Until the state file names `root`, `down` cannot find it: a failed `up`
   // removes it here instead.
   try {
-    await prepareAndLaunch(presetName, preset, promptArg, build, root)
+    await prepareAndLaunch(args, preset, root)
   } catch (error) {
     if (!existsSync(STATE_FILE)) await removeTree(root)
     throw error
@@ -547,13 +548,8 @@ const buildRunHome = (ownerHome: string, runHome: string): void => {
   if (existsSync(config)) copyFileSync(config, join(runHome, ".gent", "config.json"))
 }
 
-const prepareAndLaunch = async (
-  presetName: string,
-  preset: Preset,
-  promptArg: string | undefined,
-  build: boolean,
-  root: string,
-) => {
+const prepareAndLaunch = async (args: UpArgs, preset: Preset, root: string) => {
+  const { preset: presetName, prompt: promptArg, remote, build } = args
   const work = join(root, "work")
   const data = join(root, "data")
   mkdirSync(work, { recursive: true })
@@ -583,6 +579,14 @@ const prepareAndLaunch = async (
   await $`git -c user.name=gamut -c user.email=gamut@local commit -q -m "ledgerline: red suite with six open tasks"`
     .cwd(work)
     .quiet()
+  if (remote !== undefined) {
+    // The merge gate pushes to `origin` and waits for its CI
+    // (`fixture/.github/workflows/gate.yml`). The remote is a throwaway: each
+    // run replaces its history.
+    console.log(`remote ${remote}`)
+    await $`git remote add origin ${remote}`.cwd(work).quiet()
+    await $`git push -q -f origin HEAD:main`.cwd(work).quiet()
+  }
 
   if (build) {
     // Build from THIS checkout. `gent` and its `gent-cell` worker are compiled
@@ -1273,7 +1277,9 @@ const list = async () => {
 // ── entry ───────────────────────────────────────────────────────────────
 
 const USAGE = `usage: bun run gamut <command>
-  up <preset> [--prompt <file|text>] [--no-build]   fresh scratch run on its own terminal host
+  up <preset> [--prompt <file|text>] [--remote <url>] [--no-build]
+                                                    fresh scratch run on its own terminal host;
+                                                    --remote force-pushes it to that GitHub repo as origin
   send <text>                                       type text + Enter into the TUI
   keys <name…>                                      press named keys (ctrl+c, esc, down, tab, …)
   interrupt                                         press ctrl+c once
@@ -1284,27 +1290,52 @@ const USAGE = `usage: bun run gamut <command>
   down                                              quit, stop the host, remove the scratch dir
   list                                              presets`
 
-/** `up`'s arguments. `--prompt` takes the next argument, which may not be a flag. */
-export const parseUpArgs = (
-  rest: ReadonlyArray<string>,
-): { readonly preset: string; readonly prompt: string | undefined; readonly build: boolean } => {
-  const promptIndex = rest.indexOf("--prompt")
-  const prompt = promptIndex >= 0 ? rest[promptIndex + 1] : undefined
-  if (promptIndex >= 0 && (prompt === undefined || prompt.startsWith("--"))) {
-    throw new Error("--prompt needs a value: a file path or the prompt text")
+/** `up`'s arguments. */
+interface UpArgs {
+  readonly preset: string
+  readonly prompt: string | undefined
+  readonly remote: string | undefined
+  readonly build: boolean
+}
+
+/**
+ * The flags of `up` that take the next argument, which may not be a flag.
+ * Each is given at most once: a second `--remote` would leave which
+ * repository the run force-pushes to up to the order of the arguments.
+ */
+const UP_VALUE_FLAGS = {
+  "--prompt": "a file path or the prompt text",
+  "--remote": "a GitHub repository URL",
+} as const
+
+export const parseUpArgs = (rest: ReadonlyArray<string>): UpArgs => {
+  const values = new Map<string, string>()
+  const taken = new Set<number>()
+  for (const [flag, what] of Object.entries(UP_VALUE_FLAGS)) {
+    const index = rest.indexOf(flag)
+    if (index < 0) continue
+    if (rest.lastIndexOf(flag) !== index) throw new Error(`${flag} is given more than once`)
+    const value = rest[index + 1]
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`${flag} needs a value: ${what}`)
+    }
+    values.set(flag, value)
+    taken.add(index + 1)
   }
-  const positional = rest.filter(
-    (arg, index) => !arg.startsWith("--") && (promptIndex < 0 || index !== promptIndex + 1),
-  )
-  return { preset: positional[0] ?? "", prompt, build: !rest.includes("--no-build") }
+  const positional = rest.filter((arg, index) => !arg.startsWith("--") && !taken.has(index))
+  return {
+    preset: positional[0] ?? "",
+    prompt: values.get("--prompt"),
+    remote: values.get("--remote"),
+    build: !rest.includes("--no-build"),
+  }
 }
 
 const main = async (argv: ReadonlyArray<string>): Promise<void> => {
   const [command, ...rest] = argv
   switch (command) {
     case "up": {
-      const args = parseUpArgs(rest)
-      return up(args.preset, args.prompt, args.build)
+      return up(parseUpArgs(rest))
     }
     case "send":
       return send(rest.join(" "))
