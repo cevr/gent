@@ -45,6 +45,5 @@ Script `drives/sessions-routes.json`, the other entry points:
 
 - Each row's age ticks every second, each on its own phase, so with several rows the pane is never quiet: `settle` fails while it is open. Use `waitFor`, then `wait 300`, before a `cap`.
 - `Loading…` that never ends means the `list-agents` reply failed: run step 6 by hand to see the error.
-- The detail column spells the provider `(anthropic)`, the status row `(Anthropic)`. Match on the model name alone.
 - Each `gent` start makes a `New Chat` session, so the pane grows with every drive on the same run.
 - `left` opens the pane only while the composer is empty and nothing else is open; in a draft it moves the caret.

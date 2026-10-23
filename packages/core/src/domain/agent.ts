@@ -103,6 +103,13 @@ export class Model extends Schema.Class<Model, { readonly brand: unique symbol }
   id: ModelId,
   name: Schema.String,
   provider: ProviderId,
+  /**
+   * The display name of the driver that serves the model ("Anthropic"), the
+   * name `/auth` gives its sign-in. The catalog sets it, so a client labels a
+   * model's provider from the same read that lists the model. Absent for a
+   * model no driver serves (a router's virtual model): the id names it.
+   */
+  providerName: Schema.optional(Schema.String),
   contextLength: Schema.optional(Schema.Finite),
   /**
    * The most input tokens one request may carry, when the catalog names a cap

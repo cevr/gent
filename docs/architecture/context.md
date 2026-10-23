@@ -262,7 +262,7 @@
   carrier like any other effort change. The session metrics keep the newest
   route (`SessionRuntimeMetrics.routed`); while the session runs on that
   virtual model the TUI status row names both (`Auto → Claude Sonnet 5
-  (anthropic)`; a row too narrow for it takes the short form `Auto → Sonnet
+  (Anthropic)`; a row too narrow for it takes the short form `Auto → Sonnet
   5`, after the debug mark and the cwd gave way), shows the level in the
   same order after the routed model's clamp, and reads the context gauge
   against the routed model's window. The effort picker lists the routed

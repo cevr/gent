@@ -20,6 +20,7 @@ import {
   isConversation,
   modelDisplayName,
   plural,
+  providerLabel,
   randomId,
   truncate,
 } from "./utils"
@@ -87,7 +88,7 @@ import {
 } from "./session"
 import { ExtensionRenderBoundary, useExtensionUI } from "./extensions/host"
 import type { ResolvedWidget } from "./extensions/loader-boundary"
-import { Auth, providerLabel } from "./auth"
+import { Auth } from "./auth"
 import {
   type MessageRendererEntry,
   STATUS_YIELD,
@@ -642,19 +643,6 @@ function ActivityRow(props: { label: string; elapsed: number }) {
 export const NO_MODEL_LABEL = "no model · /model"
 
 /**
- * The model as the status row names it (`modelDisplayName`, the name the
- * Sessions pane gives it too), the provider spelled as the sign-in names it
- * (`providerLabel`). A narrow row takes the label's short form instead
- * (`shortModelName`, no provider label), so the pair `Auto → Sonnet 5` fits
- * beside the effort and the gauge.
- */
-export const statusModelName = (
-  model: Model,
-  models: ReadonlyArray<Model>,
-  providers: ReadonlyArray<AuthProviderInfo>,
-): string => modelDisplayName(model, models, (provider) => providerLabel(providers, provider))
-
-/**
  * The credential label the status row names beside the model: the one the
  * newest request on `model` went out with, `unknown` for a request recorded
  * before receipts. Only a sign-in that holds more than one credential names
@@ -793,8 +781,7 @@ export function Session(props: SessionProps) {
     const model = client.modelInfo()
     const routed = client.routedModel()
     const items: StatusRowLabel[] = []
-    const name = (entry: Model) =>
-      statusModelName(entry, client.models(), controller.authProviders())
+    const name = (entry: Model) => modelDisplayName(entry, client.models())
     // The selected model, and the model its newest route chose.
     const named = (format: (entry: Model) => string) =>
       Option.map(model, (selected) =>

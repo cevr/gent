@@ -7054,9 +7054,17 @@ const servedModelCatalog = Effect.fn("ModelRegistry.servedModelCatalog")(functio
   const virtual = virtualModelCatalog(profile)
   const failures = [...catalog.failures, ...virtual.failures]
   yield* catalogRecord.record(profile, failures)
+  // Each model names its driver as `/auth` does, so a client labels the
+  // provider from this read, not a later sign-in check.
+  const named = catalog.models.map((model) =>
+    Option.match(Option.fromUndefinedOr(served.modelDrivers.get(model.provider)), {
+      onNone: () => model,
+      onSome: (driver) => Model.make({ ...model, providerName: driver.name }),
+    }),
+  )
   return {
     served,
-    models: [...byReleaseDateDesc(catalog.models), ...virtual.models],
+    models: [...byReleaseDateDesc(named), ...virtual.models],
     failures,
   }
 })

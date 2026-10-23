@@ -578,6 +578,8 @@ describe("driver callbacks use the selected profile", () => {
         const { client, sessionId } = yield* profileDriverHarness()
         const models = yield* client.model.list({ sessionId })
         expect(models.map((model) => model.id)).toEqual([profileDriverModel.id])
+        // Each model names its driver as `/auth` does: the status row labels by it.
+        expect(models.map((model) => model.providerName)).toEqual(["Profile driver"])
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

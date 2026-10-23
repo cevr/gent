@@ -45,6 +45,7 @@ import {
   formatError,
   graphemeCount,
   plural,
+  providerLabel,
   repliesInView,
   type ReplyWriter,
   truncate,
@@ -716,30 +717,6 @@ export const listedProviders = (
   if (query.trim().length === 0) return catalog.providers
   return [...matching(catalog.providers), ...matching(catalog.others)]
 }
-
-/**
- * What gent calls a provider, in the pane and in headless errors alike: its
- * driver's name ("OpenCode"), or its id when the server sends no name. A
- * name two of `providers` share carries the id beside it: "Mirror (mirror-a)".
- */
-export const providerLabel = (
-  providers: ReadonlyArray<AuthProviderInfo>,
-  provider: string,
-): string =>
-  Option.match(
-    Option.flatMap(
-      Option.fromNullishOr(providers.find((entry) => entry.provider === provider)),
-      (entry) => Option.fromUndefinedOr(entry.name),
-    ),
-    {
-      onNone: () => provider,
-      onSome: (name) => {
-        if (providers.filter((entry) => entry.name === name).length > 1)
-          return `${name} (${provider})`
-        return name
-      },
-    },
-  )
 
 /** The required providers that still have no credentials. */
 const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> =>

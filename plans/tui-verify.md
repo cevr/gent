@@ -37,7 +37,7 @@ The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1
 - `gent ctl send|events|wait|snapshot|status|request`: exit 0 ok, 1 failed, 2 usage, 3 no server, 4 not found, 124 wait timed out. `status --run <id>` comes from the machines extension's client projection; the TUI host holds no machine code.
 - A request reply crosses the wire as a value or void, decoded with `decodeRequestReply` and the request's output schema. This also fixed the `/sessions` pane, which stayed on `Loading…` since an optional key set to `undefined` failed the encoder.
 - `.claude/skills/verify-gent`: `bun run --silent verify:launch|doctor|drive|stop` in `packages/e2e/src/verify.ts`, ten drives over six feature files, an asciicast `drive.cast` per drive, captures in files (`--print` to show them). A passing turn drive prints 32 lines (measured). Cold-start proof: scratchpad `verify-gent-proof-2/`, all ten drives `Driven`, no PID, port or run dir left.
-- **Open:** the Sessions pane takes 5 to 7 s to leave `Loading…` with 9 sessions while the server answers in about 2 ms (measured, cause not found); the Sessions detail says `(anthropic)` and the status row `(Anthropic)`; the Workbox host is unproven; most of a drive's output bytes are long evidence paths (print them relative to `--out`).
+- **Open:** the Sessions pane takes 5 to 7 s to leave `Loading…` with 9 sessions while the server answers in about 2 ms (measured, cause not found); the Workbox host is unproven; most of a drive's output bytes are long evidence paths (print them relative to `--out`).
 
 ## Design
 
@@ -56,7 +56,7 @@ The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1
 - `expect`, `expectNot`, `fits`, `stable` and the compact report with a diff against `out/passed/` are in `packages/e2e/src/pty-fixture.ts`. Drive output names files relative to `out` (the unit-1 leftover).
 - Each assertion was broken in turn (8 probes); each break fails a test in `packages/e2e/tests/drive.test.ts` (measured).
 - `fits` reads the terminal's wrap flag (only while the row still ends on text at the last column; a row painted over keeps a stale flag) and the last two cells, skipping wide characters and keeping a combining mark with its letter. The cut rule is a guess: a word that ends exactly at the edge reads as cut. Old captures end on `$0.02`, `…` and borders at the last column, so only two letters at the edge count as a cut (measured on `tree-sections` captures).
-- Live: a drive with `expect`, `fits` and `stable` at 120x40, a resize to 60x20 and back passed 3/3 at 25 stderr lines (load 7.57 on 12 cores). `stable` right after `ready` caught the status row drawing `(anthropic)`, then `(Anthropic)` (1 of 3 runs).
+- Live: a drive with `expect`, `fits` and `stable` at 120x40, a resize to 60x20 and back passed 3/3 at 25 stderr lines (load 7.57 on 12 cores). `stable` right after `ready` caught the status row drawing `(anthropic)`, then `(Anthropic)` (1 of 3 runs); fixed 2026-10-23, the catalog read carries each model's `providerName`, so every view spells it from the first draw.
 - Open: the diff is row by row, so a block that moved shows every row it crossed; item 2 (size sweep), item 4 (gamut without herdr) and item 5 (scratch setup) are not started.
 
 ## Done when

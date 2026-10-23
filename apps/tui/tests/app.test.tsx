@@ -90,9 +90,9 @@ import {
   resolveInteractiveBootstrap,
   activityLine,
   statusCredentialLabel,
-  statusModelName,
   NO_MODEL_LABEL,
 } from "../src/app"
+import { modelDisplayName } from "../src/utils"
 import {
   applySnapshotAgent,
   createMockClient,
@@ -2234,30 +2234,20 @@ describe("App status and activity rows", () => {
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-shared-name")
       const branchId = BranchId.make("branch-shared-name")
-      const sonnet = (provider: string) =>
+      // The catalog read names each provider; no sign-in check is needed.
+      const sonnet = (provider: string, providerName: string) =>
         new Model({
           id: ModelId.make(`${provider}/claude-sonnet-5`),
           name: "Claude Sonnet 5",
           provider: ProviderId.make(provider),
+          providerName,
         })
-      const provider = (id: string, name: string) => ({
-        provider: id,
-        name,
-        hasKey: true,
-        required: false,
-        source: "stored" satisfies "stored",
-        authType: absent,
-      })
       const { setup } = yield* mountApp({
         client: {
-          auth: {
-            listProviders: () =>
-              Effect.succeed([
-                provider("anthropic", "Anthropic"),
-                provider("opencode", "OpenCode"),
-              ]),
+          model: {
+            list: () =>
+              Effect.succeed([sonnet("anthropic", "Anthropic"), sonnet("opencode", "OpenCode")]),
           },
-          model: { list: () => Effect.succeed([sonnet("anthropic"), sonnet("opencode")]) },
           driver: {
             list: () =>
               Effect.succeed({
@@ -2351,7 +2341,26 @@ describe("App status and activity rows", () => {
       name: "Claude Opus 5",
       provider: ProviderId.make("anthropic"),
     })
-    expect(statusModelName(model, [model], [])).toBe("Claude Opus 5")
+    expect(modelDisplayName(model, [model])).toBe("Claude Opus 5")
+  })
+  // The catalog read carries the provider's name, so the first draw spells it
+  // as `/auth` does: no `(anthropic)` before the sign-in check answers.
+  test("a shared model name carries its provider's name from the catalog", () => {
+    const entry = (provider: string, name: Option.Option<string>) =>
+      new Model({
+        id: ModelId.make(`${provider}/claude-haiku-4-5`),
+        name: "Claude Haiku 4.5",
+        provider: ProviderId.make(provider),
+        ...Option.match(name, { onNone: () => ({}), onSome: (providerName) => ({ providerName }) }),
+      })
+    const anthropic = entry("anthropic", Option.some("Anthropic"))
+    const mirror = entry("mirror-a", Option.some("Mirror"))
+    const twin = entry("mirror-b", Option.some("Mirror"))
+    const bare = entry("bare", Option.none())
+    const models = [anthropic, mirror, twin, bare]
+    expect(modelDisplayName(anthropic, models)).toBe("Claude Haiku 4.5 (Anthropic)")
+    expect(modelDisplayName(mirror, models)).toBe("Claude Haiku 4.5 (Mirror (mirror-a))")
+    expect(modelDisplayName(bare, models)).toBe("Claude Haiku 4.5 (bare)")
   })
   // A sign-in of several credentials: the row names the one the model's
   // newest request went out with, or `unknown` for a request recorded before

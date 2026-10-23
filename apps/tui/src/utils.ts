@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   DateTime,
   Effect,
   FileSystem,
@@ -16,6 +17,7 @@ import { textWidth } from "./bun-adapter"
 import {
   GentConnectionError,
   GentRpcError,
+  type AuthProviderInfo,
   type LaneReport,
   type LaneWindow,
   lineCount,
@@ -310,23 +312,48 @@ export const repliesInView = <K>(
 // ── model names ─────────────────────────────────────────────────────────────
 
 /**
+ * What gent calls a provider, in the `/auth` pane, the model names and
+ * headless errors alike: its driver's name ("OpenCode"), or its id when the
+ * server sends no name. A name two of `providers` share carries the id beside
+ * it: "Mirror (mirror-a)".
+ */
+export const providerLabel = (
+  providers: ReadonlyArray<Pick<AuthProviderInfo, "provider" | "name">>,
+  provider: string,
+): string =>
+  Option.match(
+    Option.flatMap(
+      Option.fromNullishOr(providers.find((entry) => entry.provider === provider)),
+      (entry) => Option.fromUndefinedOr(entry.name),
+    ),
+    {
+      onNone: () => provider,
+      onSome: (name) => {
+        if (providers.filter((entry) => entry.name === name).length > 1)
+          return `${name} (${provider})`
+        return name
+      },
+    },
+  )
+
+/**
  * The model as gent names it to the reader, the one owner of a model's name:
  * its catalog name (`Claude Sonnet 5.5`), and its provider's label after it
  * when another provider's model has the same name, so the name says which
- * provider runs, and bills, it. `label` spells the provider: the status row
- * reads the sign-in's names (`providerLabel`); a view with no sign-in in
- * reach names the provider by its id.
+ * provider runs, and bills, it. The label is `providerLabel` over the
+ * catalog's `providerName`s: the catalog read carries them, so the first draw
+ * spells `(Anthropic)` as `/auth` does, in every view.
  */
-export const modelDisplayName = (
-  model: Model,
-  models: ReadonlyArray<Model>,
-  label: (provider: string) => string = (provider) => provider,
-): string => {
+export const modelDisplayName = (model: Model, models: ReadonlyArray<Model>): string => {
   const shared = models.some(
     (other) => other.name === model.name && other.provider !== model.provider,
   )
   if (!shared) return model.name
-  return `${model.name} (${label(model.provider)})`
+  const providers = Arr.dedupeWith(
+    models.map((entry) => ({ provider: entry.provider, name: entry.providerName })),
+    (a, b) => a.provider === b.provider,
+  )
+  return `${model.name} (${providerLabel(providers, model.provider)})`
 }
 
 /**
