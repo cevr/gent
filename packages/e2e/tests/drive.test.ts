@@ -10,6 +10,7 @@ import {
   DriveEnd,
   DriveScript,
   driveProblems,
+  keepPassed,
   runDriveScript,
 } from "../src/pty-fixture"
 
@@ -427,6 +428,42 @@ describe("drive scripts", () => {
   )
 
   it.scopedLive(
+    "fits reads cells: a wide character at the edge fits, a cut word ending on a combining mark does not, and a row painted over a wrap fits",
+    () =>
+      Effect.gen(function* () {
+        const out = yield* makeTempDirectoryScoped("gent-drive-")
+        // Row 1 ends on two wide characters in the last four cells. Row 2 is
+        // cut at the edge on `e` and a combining acute accent. Rows 3 and 4
+        // took a wrap, then were painted over, padded, from their first column.
+        const wide = `${" ".repeat(36)}漢字`
+        const accent = `${"x".repeat(39)}e\\xcc\\x81`
+        const wrapped = "w".repeat(50)
+        const painted = `\\033[3;1H${"short".padEnd(40)}\\033[4;1H${"x".padEnd(40)}`
+        const outcome = yield* runDriveScript(
+          {
+            command: drawing(
+              `${wide}\\r\\n\\033[?7l${accent}\\033[?7h\\r\\n${wrapped}${painted}\\r\\ndrawn`,
+            ),
+            cwd: out,
+            cols: 40,
+            rows: 8,
+            out,
+            steps: [
+              ["waitFor", "drawn", 5_000],
+              ["fits", [1, 1]],
+              ["fits", [2, 2]],
+              ["fits", [3, 4]],
+            ],
+          },
+          { record: false },
+        )
+        expect(outcome.steps.map((step) => step._tag)).toEqual(["Ok", "Ok", "Fail", "Ok"])
+        expect(outcome.steps[2]).toMatchObject({ reason: "row 2 a word runs into the right edge" })
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
+
+  it.scopedLive(
     "stable fails a screen that changes within its window, with the rows that changed",
     () =>
       Effect.gen(function* () {
@@ -493,6 +530,9 @@ describe("drive scripts", () => {
         expect(first.stderr).toContain(" screen.txt")
         expect(first.stderr).not.toContain(out + "/screen.txt")
         expect(first.stderr).not.toContain("diff ")
+        // The caller keeps a pass once its own checks passed too; the drive alone keeps nothing.
+        expect(yield* fs.exists(`${out}/passed`)).toBe(false)
+        yield* keepPassed(out, first.result)
         expect(yield* fs.readFileString(`${out}/passed/screen.txt`)).toContain("001|first")
         const second = yield* drive("second", "first")
         const lines = second.stderr.split("\n")

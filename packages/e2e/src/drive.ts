@@ -18,7 +18,7 @@ import {
   Runtime,
   Schema,
 } from "effect"
-import { DriveScript, driveProblems, runDriveScript } from "./pty-fixture"
+import { DriveScript, driveProblems, keepPassed, runDriveScript } from "./pty-fixture"
 
 class DriveUsageError extends Schema.TaggedError<
   DriveUsageError,
@@ -61,6 +61,7 @@ const program = Effect.gen(function* () {
   yield* Console.log(`end=${outcome.end._tag} recording=${recording}`)
   const problems = driveProblems(script, outcome)
   if (problems.length > 0) return yield* new DriveFailed({ problems })
+  yield* keepPassed(out, outcome)
 })
 
 // The layer runs the script once as it is built; the scope closes after it.

@@ -6,7 +6,7 @@ import {
   waitFor,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
-import { Terminal } from "@xterm/headless"
+import { type IBufferCell, type IBufferLine, Terminal } from "@xterm/headless"
 import {
   Array as Arr,
   Clock,
@@ -1028,14 +1028,26 @@ const patternAssertion = (
     },
   })
 
-/** A character a word is made of: a run of two at the right edge was cut there. */
-const LETTER = /\p{L}/u
+/** A cell a word is made of: a run of two at the right edge was cut there. */
+const LETTER = /^\p{L}/u
+
+/**
+ * A row's cells left to right, without the right halves of wide characters,
+ * so a CJK character and a letter with its combining mark are one cell each.
+ */
+const rowCells = (row: IBufferLine, cols: number): ReadonlyArray<IBufferCell> =>
+  Arr.range(0, cols - 1)
+    .flatMap((x) => Option.toArray(Option.fromNullishOr(row.getCell(x))))
+    .filter((cell) => cell.getWidth() > 0)
 
 /**
  * The rows of `[from, to)` that do not fit the screen's width: one the
- * terminal wrapped onto the next row (the program wrote past the last
- * column), and one whose last two cells are letters, a word the edge cut.
- * Text set flush to the edge ends otherwise: a border, a number, `…`.
+ * terminal wrapped onto the next row (the program wrote past the last column
+ * and the row still ends on text there; a row painted over since, ending on a
+ * blank, keeps the stale wrap flag and fits), and one whose last two cells are
+ * narrow letters, a word the edge cut. This is a guess from the screen: a word
+ * that ends exactly at the edge reads as cut. Text set flush to the edge ends
+ * otherwise: a border, a number, `…`, a wide character.
  */
 const unfitRows = (
   screen: Terminal,
@@ -1045,13 +1057,16 @@ const unfitRows = (
   const buffer = screen.buffer.active
   const line = (index: number) => Option.fromNullishOr(buffer.getLine(buffer.viewportY + index))
   return Arr.range(from, to - 1).flatMap((index) => {
-    const wraps = Option.exists(line(index + 1), (next) => next.isWrapped)
+    const edge = Option.match(line(index), {
+      onNone: () => [],
+      onSome: (row) => rowCells(row, screen.cols).slice(-2),
+    })
+    const endsOnText = Option.exists(Arr.last(edge), (cell) => cell.getChars().trim() !== "")
+    const wraps = endsOnText && Option.exists(line(index + 1), (next) => next.isWrapped)
     if (wraps) return [{ index, why: "wraps onto the next row" }]
-    const cut = Option.exists(line(index), (row) =>
-      [...row.translateToString(false, 0, screen.cols)]
-        .slice(-2)
-        .every((cell) => LETTER.test(cell)),
-    )
+    const cut =
+      edge.length === 2 &&
+      edge.every((cell) => cell.getWidth() === 1 && LETTER.test(cell.getChars()))
     if (cut) return [{ index, why: "a word runs into the right edge" }]
     return []
   })
@@ -1451,23 +1466,9 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
     Effect.ensuring(saveRecording),
   )
   const outcome = { steps: outcomes, end, recording } satisfies DriveOutcome
-  const passed = driveProblems(script, outcome).length === 0
-  const captures = outcomes.flatMap((step) =>
-    StepOutcome.match(step, {
-      Ok: (ok) => Option.toArray(Option.fromUndefinedOr(ok.file)),
-      Miss: () => [],
-      Fail: () => [],
-    }).filter((file) => file.endsWith(".txt")),
-  )
-  const passedDir = path.join(script.out, PASSED)
-  if (passed) {
-    // The captures of this pass are the screens the next failing drive is diffed against.
-    yield* fs.makeDirectory(passedDir, { recursive: true }).pipe(Effect.orDie)
-    yield* Effect.forEach(captures, (file) =>
-      fs.copyFile(file, path.join(passedDir, path.basename(file))).pipe(Effect.orDie),
-    )
-  } else {
-    yield* Effect.forEach(captures, (file) =>
+  if (driveProblems(script, outcome).length > 0) {
+    const passedDir = path.join(script.out, PASSED)
+    yield* Effect.forEach(textCaptures(outcome), (file) =>
       Effect.gen(function* () {
         const before = path.join(passedDir, path.basename(file))
         if (!(yield* fs.exists(before).pipe(Effect.orDie))) return
@@ -1483,4 +1484,33 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
   const ok = outcomes.filter((step) => step._tag === "Ok").length
   yield* Console.error(`pass ${ok}/${outcomes.length} · ${endLabel(end)} · ${script.out}`)
   return outcome
+})
+
+/** The screen captures (`.txt`) a drive saved, in step order. */
+const textCaptures = (outcome: DriveOutcome): ReadonlyArray<string> =>
+  outcome.steps.flatMap((step) =>
+    StepOutcome.match(step, {
+      Ok: (ok) => Option.toArray(Option.fromUndefinedOr(ok.file)),
+      Miss: () => [],
+      Fail: () => [],
+    }).filter((file) => file.endsWith(".txt")),
+  )
+
+/**
+ * Keep a passing drive's captures in `<out>/passed/`, the screens the next
+ * failing drive into `out` is diffed against. The caller runs it once every
+ * check it makes on the drive has passed, so a drive that fails a later check
+ * (a recording that does not play) leaves the last pass alone.
+ */
+export const keepPassed = Effect.fn("Drive.keepPassed")(function* (
+  out: string,
+  outcome: DriveOutcome,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const passedDir = path.join(out, PASSED)
+  yield* fs.makeDirectory(passedDir, { recursive: true }).pipe(Effect.orDie)
+  yield* Effect.forEach(textCaptures(outcome), (file) =>
+    fs.copyFile(file, path.join(passedDir, path.basename(file))).pipe(Effect.orDie),
+  )
 })

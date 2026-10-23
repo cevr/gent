@@ -53,6 +53,7 @@ import {
   DriveEnd,
   DriveScript,
   driveProblems,
+  keepPassed,
   runDriveScript,
   StepOutcome,
 } from "./pty-fixture"
@@ -934,6 +935,7 @@ const drive = Effect.fn("Verify.drive")(function* (options: {
       Fail: () => [],
     }).map((file) => path.relative(out, file)),
   )
+  yield* keepPassed(out, outcome)
   return Driven.make({ out, steps: outcome.steps.length, end: outcome.end, captures, ...recording })
 })
 
