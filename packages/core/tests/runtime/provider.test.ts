@@ -107,7 +107,7 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { type ProviderConfig, RuntimeEnvironment } from "../../src/runtime/config"
+import { type NightPace, type ProviderConfig, RuntimeEnvironment } from "../../src/runtime/config"
 import {
   defineExtension,
   ExtensionHost,
@@ -5659,7 +5659,7 @@ describe("account lanes", () => {
         })
       }
       const lanes = (scope: Scope) =>
-        Effect.map(placement.lanes(scopeOf(scope), noHolds), (report) => {
+        Effect.map(placement.lanes(scopeOf(scope), noHolds, Option.none()), (report) => {
           const found = report.providers.find((lanes) => lanes.provider === "plan")
           if (Predicate.isUndefined(found)) return Option.none()
           return Option.some(found)
@@ -5685,6 +5685,7 @@ describe("account lanes", () => {
             model: Option.some(model),
             project: Option.none(),
             holds: new Map(),
+            night: Option.none(),
           })
           .pipe(
             Effect.as("admitted" as const),
@@ -5795,6 +5796,42 @@ describe("account lanes", () => {
       for (let index = 0; index < 8; index += 1)
         expect(yield* admit(pool, `rolling-${index}`)).toBe("admitted")
       expect(yield* admit(pool, "rolling-full")).toBe("Busy")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  /** The plan provider's capacity on `scope` under `night`. */
+  const nightCapacity = (
+    placement: Effect.Success<ReturnType<typeof makeCredentialPlacement>>,
+    scope: Scope,
+    night: Option.Option<NightPace>,
+  ) =>
+    Effect.map(
+      placement.lanes(scopeOf(scope), noHolds, night),
+      (report) => report.providers.find((lanes) => lanes.provider === "plan")?.capacity,
+    )
+
+  it.effect("a night hour paces the rolling pool at its weight", () =>
+    Effect.gen(function* () {
+      const { placement, pool } = yield* rollingPool
+      // 00:00 UTC. A week holds 16 day and 8 night hours a day: 126 weighted hours.
+      // Rolling = 4926.56 M / 126 h × 0.25 = 9.775 M/h; floor(9.775 / 3.4) = 2.
+      const night = { start: 0, end: 8, weight: 0.25, timeZone: "UTC" }
+      expect(yield* nightCapacity(placement, pool, Option.some(night))).toBe(2)
+      // A night past midnight is the same night.
+      const wrapping = { start: 20, end: 4, weight: 0.25, timeZone: "UTC" }
+      expect(yield* nightCapacity(placement, pool, Option.some(wrapping))).toBe(2)
+      expect(yield* nightCapacity(placement, pool, Option.none())).toBe(8)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a day hour paces the rolling pool at full weight, under the ceilings", () =>
+    Effect.gen(function* () {
+      yield* TestClock.adjust("8 hours")
+      const { placement, pool } = yield* rollingPool
+      // 08:00 UTC: rolling = 4926.56 M / 126 h = 39.10 M/h, past the plain 29.32,
+      // but the 5h ceiling of 29.76 M/h binds: floor(29.76 / 3.4) = 8.
+      const night = { start: 0, end: 8, weight: 0.25, timeZone: "UTC" }
+      expect(yield* nightCapacity(placement, pool, Option.some(night))).toBe(8)
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -6281,7 +6318,7 @@ describe("account lanes", () => {
           Effect.succeedSome(Arr.make({ provider: ProviderId.make(provider), slot: a }))
         const free = (report: LaneReport) =>
           report.providers.map((lanes) => [lanes.provider, lanes.capacity] as const)
-        const both = free(yield* placement.lanes(scopes, noHolds))
+        const both = free(yield* placement.lanes(scopes, noHolds, Option.none()))
         expect(both.map(([provider]) => provider)).toEqual(["anthropic", "openai"])
         for (const [, capacity] of both) expect(capacity).toBeGreaterThan(0)
         const admit = (provider: string) =>
@@ -6294,6 +6331,7 @@ describe("account lanes", () => {
               model: Option.some(ModelId.make(`${provider}/model`)),
               project: Option.none(),
               holds: new Map(),
+              night: Option.none(),
             })
             .pipe(
               Effect.as("admitted" as const),
@@ -6380,7 +6418,8 @@ describe("account lanes", () => {
               })
             yield* quota(0.1)
             // A file with no burn reads the prior.
-            const before = (yield* placement.lanes(scopeOf([a]), noHolds)).providers[0]
+            const before = (yield* placement.lanes(scopeOf([a]), noHolds, Option.none()))
+              .providers[0]
             expect(before?.fuelPerHour).toBe(3_400_000)
             expect(before?.laneHours).toBe(0)
             // One lane runs 2 hours on $11: 2.2 M fuel, 1.1 M a lane-hour.
@@ -6402,7 +6441,7 @@ describe("account lanes", () => {
         const restarted = yield* Effect.scoped(
           Effect.gen(function* () {
             const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
-            return yield* placement.lanes(scopeOf([a]), noHolds)
+            return yield* placement.lanes(scopeOf([a]), noHolds, Option.none())
           }),
         )
         const window = restarted.providers[0]?.accounts[0]?.windows[0]
@@ -6492,7 +6531,9 @@ describe("account lanes", () => {
         // `gent auth` signed a new account in under a: the store stamps it anew.
         expect(yield* admit([replaced], "after")).toBe("admitted")
         // The old sign-in's reading went with it: no window of the provider is read now.
-        expect((yield* placement.lanes(scopeOf([replaced]), noHolds)).providers).toEqual([])
+        expect(
+          (yield* placement.lanes(scopeOf([replaced]), noHolds, Option.none())).providers,
+        ).toEqual([])
         // The new sign-in reads its own window; then a response of a request the
         // old sign-in sent before the change lands late, and leaves that reading.
         yield* read(replaced, [{ window: "5h", utilization: 0.1, resetAt: now + HOUR }])
@@ -6780,6 +6821,7 @@ describe("account lanes", () => {
             model: Option.some(glm),
             project: Option.some(project),
             holds,
+            night: Option.none(),
           })
           .pipe(
             Effect.as("admitted" as const),
@@ -6823,6 +6865,7 @@ describe("account lanes", () => {
     project: string,
     key: string,
     scope: Scope = [a],
+    night: Option.Option<NightPace> = Option.none(),
   ) =>
     placement
       .admitLane({
@@ -6833,6 +6876,7 @@ describe("account lanes", () => {
         model: Option.some(planModel),
         project: Option.some(project),
         holds,
+        night,
       })
       .pipe(
         Effect.as("admitted" as const),
@@ -6869,7 +6913,7 @@ describe("account lanes", () => {
         ["blade", 1],
       ])
       expect(yield* startIn(placement, held, "gent", "gent-1")).toBe("admitted")
-      const report = yield* placement.lanes(scopeOf([a]), () => Effect.succeed(held))
+      const report = yield* placement.lanes(scopeOf([a]), () => Effect.succeed(held), Option.none())
       expect(report.providers.map((lanes) => lanes.holds)).toEqual([
         [
           { project: "blade", lanes: 1, used: 0, admits: true },
@@ -6897,6 +6941,7 @@ describe("account lanes", () => {
           model: Option.some(planModel),
           project: Option.some("other"),
           holds: gentHeld,
+          night: Option.none(),
         }),
       )
       expect(refused.reason).toBe("Busy")
@@ -6930,6 +6975,108 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  /** Midnight to 08:00 UTC, one run per project on a sign-in. */
+  const oneLaneNight = Option.some({
+    start: 0,
+    end: 8,
+    weight: 0.25,
+    lanes: 1,
+    timeZone: "UTC",
+  })
+
+  it.effect("at night a project runs its night lanes and no more", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      // 01:00 UTC; the account's window carries 2 runs.
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const start = (project: string, key: string) =>
+        startIn(placement, new Map(), project, key, [a], oneLaneNight)
+      expect(yield* start("gent", "gent-1")).toBe("admitted")
+      const refused = yield* Effect.flip(
+        placement.admitLane({
+          provider: "plan",
+          scope: [receiptOf(a)],
+          key: "gent-2",
+          asker: Option.none(),
+          model: Option.some(planModel),
+          project: Option.some("gent"),
+          holds: new Map(),
+          night: oneLaneNight,
+        }),
+      )
+      expect(refused.reason).toBe("Busy")
+      expect(refused.message).toContain(
+        "No lane on plan at night: gent runs 1, and its night lanes are 1",
+      )
+      // Another project takes the lane gent cannot.
+      expect(yield* start("blade", "blade-1")).toBe("admitted")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("at night a parent keeps its night lanes of children; its own turn takes none", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const parent = SessionId.make("gent-parent")
+      yield* placement.openLane({
+        sessionId: parent,
+        key: "gent-parent-start",
+        provider: "plan",
+        scope: [receiptOf(a)],
+        model: planModel,
+        project: Option.some("gent"),
+      })
+      const child = (asker: Option.Option<SessionId>, key: string) =>
+        placement
+          .admitLane({
+            provider: "plan",
+            scope: [receiptOf(a)],
+            key,
+            asker,
+            model: Option.some(planModel),
+            project: Option.some("gent"),
+            holds: new Map(),
+            night: oneLaneNight,
+          })
+          .pipe(
+            Effect.as("admitted" as const),
+            Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(refused.reason)),
+          )
+      // Another session of the project sees the parent's run.
+      expect(yield* child(Option.none(), "other-session")).toBe("Busy")
+      expect(yield* child(Option.some(parent), "gent-child-1")).toBe("admitted")
+      expect(yield* child(Option.some(parent), "gent-child-2")).toBe("Busy")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("at night a hold reserves only its night lanes; by day it takes them all", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const gentHeld = new Map([["gent", 2]])
+      const start = (project: string, key: string) =>
+        startIn(placement, gentHeld, project, key, [a], oneLaneNight)
+      // Two lanes, one reserved for gent's night lane: blade takes the other.
+      expect(yield* start("blade", "blade-1")).toBe("admitted")
+      expect(yield* start("blade", "blade-2")).toBe("Busy")
+      expect(yield* start("gent", "gent-1")).toBe("admitted")
+      expect(yield* start("gent", "gent-2")).toBe("Busy")
+      // 09:00 UTC: gent's hold is two lanes again.
+      yield* placement.freeReservation("blade-1")
+      yield* placement.freeReservation("gent-1")
+      yield* TestClock.adjust("8 hours")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      expect(yield* start("gent", "gent-3")).toBe("admitted")
+      expect(yield* start("gent", "gent-4")).toBe("admitted")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("the lanes report gives admission's answer for each held project's next run", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()
@@ -6939,7 +7086,7 @@ describe("account lanes", () => {
       const gentHeld = new Map([["gent", 1]])
       const holdsIn = (scope: Scope) =>
         Effect.map(
-          placement.lanes(scopeOf(scope), () => Effect.succeed(gentHeld)),
+          placement.lanes(scopeOf(scope), () => Effect.succeed(gentHeld), Option.none()),
           (report) => report.providers[0]?.holds,
         )
       // Two hours to the reset: the pace carries runs, so past its hold the pool takes it.
@@ -6960,6 +7107,7 @@ describe("account lanes", () => {
       const unread = yield* placement.lanes(
         () => Effect.succeedNone,
         () => Effect.succeed(gentHeld),
+        Option.none(),
       )
       expect(unread.providers[0]?.holds).toEqual([{ project: "gent", lanes: 1, used: 0 }])
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
@@ -7132,7 +7280,7 @@ describe("account lanes", () => {
         yield* TestClock.adjust("1 hour")
         yield* spend(a, Option.none(), usage, runner, glm, limits)
         // Unknown spend is never zero: neither window reads.
-        expect((yield* placement.lanes(scopeOf([a]), noHolds)).providers).toEqual([])
+        expect((yield* placement.lanes(scopeOf([a]), noHolds, Option.none())).providers).toEqual([])
         // Six hours on, the unpriced hour has left the 5h window alone.
         yield* TestClock.adjust("6 hours")
         expect(windowsOfA(yield* lanes([a]))).toEqual([["5h", glm, 0, false]])
@@ -7519,7 +7667,7 @@ describe("account lanes", () => {
       expect((yield* Ref.get(file)).segments?.length).toBe(1)
       // Eight days on, nothing new was recorded; a read of the lanes trims.
       yield* TestClock.adjust("8 days")
-      expect((yield* placement.lanes(scopeOf([a]), noHolds)).providers).toEqual([])
+      expect((yield* placement.lanes(scopeOf([a]), noHolds, Option.none())).providers).toEqual([])
       yield* placement.flush
       const saved = yield* Ref.get(file)
       expect(saved.readings).toBeUndefined()

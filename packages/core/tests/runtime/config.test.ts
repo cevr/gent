@@ -377,6 +377,60 @@ describe("user configuration", () => {
         )
       }).pipe(Effect.provide(BunServices.layer)),
     )
+    it.scopedLive("night counts only in the user file, and a bad time zone fails the file", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        yield* fs.writeFileString(
+          projectConfigPath,
+          encodeJson({ night: { start: 0, end: 8, weight: 0.5 } }),
+        )
+        const night = { start: 22, end: 7, weight: 0.25, lanes: 1, timeZone: "America/Montreal" }
+        yield* fs.writeFileString(userConfigPath, encodeJson({ night }))
+        const warnings: Array<string> = []
+        const captureLogger = Logger.make(({ message, fiber }) => {
+          let rendered = String(message)
+          if (Array.isArray(message)) rendered = message.map((entry) => String(entry)).join(" ")
+          if (rendered.includes("only the user config counts"))
+            warnings.push(String(fiber.getRef(References.CurrentLogAnnotations)["fields"]))
+        })
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* cfg.get(cwd)
+          expect(warnings).toEqual(["night"])
+          expect(yield* cfg.night).toEqual(Option.some(night))
+          // A zone the clock cannot name fails the whole file; the last good one holds.
+          yield* fs.writeFileString(
+            userConfigPath,
+            encodeJson({ night: { ...night, timeZone: "Mars/Olympus" } }),
+          )
+          const fresh = yield* cfg.getFresh(cwd)
+          expect(fresh.failures.map((failure) => failure.path)).toEqual([userConfigPath])
+          expect(yield* cfg.night).toEqual(Option.some(night))
+        }).pipe(
+          Effect.provide(
+            Layer.provideMerge(
+              live,
+              // The test preload silences logs; this test reads the warning.
+              Layer.merge(
+                Logger.layer([captureLogger]),
+                Layer.succeed(References.MinimumLogLevel, "Warn"),
+              ),
+            ),
+          ),
+        )
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
   })
 
   describe("concurrent writes", () => {

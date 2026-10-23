@@ -1747,7 +1747,8 @@ export const routeCredentialDriver = (
 /**
  * The lane a session's turns take: the sign-in their route spends from, the
  * accounts it is counted over, the model it spends on, the project it works
- * in and the lanes the user holds for projects on that sign-in, as
+ * in, the lanes the user holds for projects on that sign-in and the
+ * owner's night, as
  * `resolveSessionRoute` routes a turn of a session with `admission` and
  * `modelId` in `cwd`. None for a route with no model, or a sign-in whose
  * order does not read.
@@ -1780,6 +1781,7 @@ const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
     modelId: modelId.value,
     project: yield* Effect.transposeOption(Option.map(run.cwd, configService.project)),
     holds: yield* configService.laneHolds(lane.value.provider),
+    night: yield* configService.night,
   })
 })
 
@@ -1835,6 +1837,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
             Option.map((lane) => lane.scope),
           ),
         configService.laneHolds,
+        yield* configService.night,
       )
     }),
   )
@@ -1866,6 +1869,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
         model: Option.some(lane.value.modelId),
         project: lane.value.project,
         holds: lane.value.holds,
+        night: lane.value.night,
       })
     }),
     tiers: Effect.fn("ExtensionAccounts.tiers")(function* (cwd: string) {

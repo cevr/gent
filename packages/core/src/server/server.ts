@@ -1892,6 +1892,7 @@ const RpcHandlers = GentRpcs.toLayer(
                 Option.map((lane) => lane.scope),
               ),
             configService.laneHolds,
+            yield* configService.night,
           )
         }).pipe(Effect.scoped),
 
