@@ -2283,8 +2283,9 @@ const threadStateOf = Effect.fn("Machines.threadStateOf")(function* (run: Run, n
  * or a crash after the admission then finds the round it must stop. A
  * commit that another writer beat sends nothing: the next read decides. A
  * busy thread or the running cap waits for a round end and sends again. An
- * account with no lane (`LaneUnavailable`) makes the round wait until the
- * time it names, as the same round.
+ * account with no lane (`LaneUnavailable`: a model the round names, or a
+ * tier pick whose lane lapsed before the send) makes the round wait until
+ * the time it names, as the same round.
  */
 const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
   run: Run,
@@ -2359,7 +2360,7 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
     () => !fresh,
   ).pipe(Option.flatten)
   const kept = Option.orElse(Option.fromUndefinedOr(action.thread), () => known)
-  const tiered = yield* tierPick(run, action.state, role, kept)
+  const tiered = yield* tierPick(run, action, role, kept)
   if (Result.isFailure(tiered)) {
     yield* waitForAccount(run, action, { until: tiered.failure, reason: "lane" })
     return Option.none()
@@ -2511,15 +2512,19 @@ const tierOrder = Effect.fn("Machines.tierOrder")(function* (
 })
 
 /**
- * The first of `models` whose lane is free now, as the round's start would
- * be admitted; fails with the earliest time any of them frees.
+ * The first of `models` whose lane is free now, admitted under the round's
+ * send key, so the send takes the lane the pick saw free; fails with the
+ * earliest time any of them frees. A pick whose commit loses keeps its lane
+ * until the hold lapses (2 minutes): another driver may send under the same
+ * key, so none cancels it.
  */
 const freeModel = Effect.fn("Machines.freeModel")(function* (
   run: Run,
+  action: RoundAction,
   role: ThreadRole,
   models: ReadonlyArray<ModelId>,
 ) {
-  const ctx = yield* ExtensionContext
+  const threads = yield* threadsOf
   const admission = {
     agent: role.agent ?? WORKER_AGENT,
     ...omitUndefined({
@@ -2530,7 +2535,7 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
   }
   const retries: Array<number> = []
   for (const modelId of models) {
-    const refused = yield* ctx.Accounts.probe({ cwd: run.cwd, modelId, admission }).pipe(
+    const refused = yield* threads.admitSend(action.key, { cwd: run.cwd, modelId, admission }).pipe(
       Effect.as(Option.none<LaneUnavailable>()),
       Effect.catchTag("LaneUnavailable", (lane) => Effect.succeedSome(lane)),
     )
@@ -2549,7 +2554,7 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
  */
 const tierPick = Effect.fn("Machines.tierPick")(function* (
   run: Run,
-  state: StateName,
+  action: RoundAction,
   role: ThreadRole,
   kept: Option.Option<SessionId>,
 ) {
@@ -2557,7 +2562,7 @@ const tierPick = Effect.fn("Machines.tierPick")(function* (
     return Result.succeed(Option.none<{ readonly model: ModelId; readonly keep: boolean }>())
   }
   const threads = yield* threadsOf
-  const order = yield* tierOrder(run, state, role.tier)
+  const order = yield* tierOrder(run, action.state, role.tier)
   const keptModel = yield* Option.match(kept, {
     onNone: () => Effect.succeedNone,
     onSome: (thread) => threads.model(thread).pipe(Effect.mapError(threadFault)),
@@ -2567,7 +2572,7 @@ const tierPick = Effect.fn("Machines.tierPick")(function* (
     ...Option.toArray(first),
     ...order.filter((model) => !Option.contains(first, model)),
   ]
-  const free = yield* freeModel(run, role, tried)
+  const free = yield* freeModel(run, action, role, tried)
   return Result.map(free, (model) => Option.some({ model, keep: Option.contains(first, model) }))
 })
 

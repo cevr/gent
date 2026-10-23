@@ -334,8 +334,9 @@ once it has passed (B2).
     config (8e57018a3, 129421c9b); tier role rounds (9370052e9, 90e4a7e97);
     quality per model and state in `machine.status`, `MachinesRpc.Quality`
     and a round thread's details in the sessions pane (ba7725417,
-    aa6eac4f4). Open: a send-time `LaneUnavailable` after a passing probe
-    waits on the picked model; stats are keyed by machine name; a
+    aa6eac4f4). The pick admits its lane under the round's send key, so
+    the send takes it (2026-10-22); the probe is gone. Open: stats are
+    keyed by machine name; a
     subscription-only tier ranks by list order; quality shows from 100
     columns only.) Intelligence is hard to measure, so gent does
     not score it. The owner names two ordered model lists beside the account

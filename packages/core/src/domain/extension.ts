@@ -1454,13 +1454,6 @@ export interface ExtensionAccountsService {
    * sign-in that reported no quota window admits every run.
    */
   readonly admit: (run: LaneRun) => Effect.Effect<void, LaneUnavailable>
-  /**
-   * Whether `admit` would admit `run` now: it fails as `admit` would, and
-   * holds nothing. A caller choosing a model asks each before it starts a
-   * run on one; the admission may still refuse it when a lane filled
-   * meanwhile.
-   */
-  readonly probe: (run: Omit<LaneRun, "message">) => Effect.Effect<void, LaneUnavailable>
   /** The owner's model tiers as the config of `cwd` names them. */
   readonly tiers: (cwd: string) => Effect.Effect<ModelTiers>
   /**

@@ -144,6 +144,7 @@ interface ThreadOp {
     | "thread.send"
     | "probe.lane-on-end"
     | "probe.start-key"
+    | "probe.admit-send"
   readonly input: Record<string, string | boolean>
   readonly id: string
 }
@@ -162,6 +163,7 @@ const THREAD_TOOLS = new Set([
   "thread.send",
   "probe.lane-on-end",
   "probe.start-key",
+  "probe.admit-send",
 ])
 
 const StartedResult = Schema.Struct({ thread: SessionId, sessionId: SessionId, branchId: BranchId })
@@ -423,6 +425,41 @@ const startKeyProbe = defineExtension({
               })),
             ),
           )
+        }),
+      }),
+    )
+  }),
+})
+
+/** A round sent beside a send whose lane was admitted first, then the send under that key. */
+const SendAdmitted = Schema.Struct({ beside: LaneOutcome, admitted: LaneOutcome })
+const decodeSendAdmitted = Schema.decodeEffect(Schema.fromJsonString(SendAdmitted))
+
+/** Admits the first thread's send lane under a key, as a machine's tier pick does, then sends. */
+const admitSendProbe = defineExtension({
+  id: "threads-admit-send-probe",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "tool",
+      tool({
+        id: "probe.admit-send",
+        description: "Admit a send's lane, then send beside it and under its key.",
+        params: Schema.Struct({ first: SessionId, second: SessionId }),
+        output: SendAdmitted,
+        execute: Effect.fn("AdmitSend.execute")(function* (params) {
+          const threads = Option.getOrThrow(yield* Effect.serviceOption(Threads))
+          const ctx = yield* ExtensionContext
+          const send = (thread: SessionId, key: string) =>
+            threads.send({ thread, message: THREAD_TASK, key, notify: "none" })
+          const modelId = yield* threads.model(params.first)
+          yield* threads.admitSend("send-admitted", {
+            cwd: ctx.cwd,
+            ...omitUndefined({ modelId: Option.getOrUndefined(modelId) }),
+          })
+          const beside = yield* laneOutcome(send(params.second, "send-beside"))
+          const admitted = yield* laneOutcome(send(params.first, "send-admitted"))
+          return { beside, admitted }
         }),
       }),
     )
@@ -892,6 +929,42 @@ describe("threads", () => {
               "the second thread's round",
             )
             yield* loadIs(rig, 0, "every lane is free once the rounds end")
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a lane admitted for a send under its key is the send's: a round beside it is refused, the send under the key takes it",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const rig = yield* accountsRig({
+              ...metered,
+              quota: oneLane(now),
+              extensions: [admitSendProbe],
+            })
+            yield* Deferred.succeed(rig.gate, true)
+            const results = yield* rig.act(rig.starter, [
+              rig.op("thread.start", { name: "first" }),
+              rig.op("thread.start", { name: "second" }),
+            ])
+            const [first, second] = yield* Effect.forEach(results, (result) => {
+              if (!result.ok) return Effect.die(`thread.start failed: ${result.output}`)
+              return decodeStarted(result.output)
+            })
+            if (Predicate.isUndefined(first) || Predicate.isUndefined(second)) {
+              return yield* Effect.die("two threads were not started")
+            }
+            expect(yield* lanesOf(rig)).toMatchObject({ scope: [work], capacity: 1, load: 0 })
+            const probed = yield* rig.one(
+              rig.starter,
+              rig.op("probe.admit-send", { first: first.thread, second: second.thread }),
+            )
+            expect(yield* decodeSendAdmitted(probed)).toEqual({ beside: "busy", admitted: "sent" })
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the admitted round")
+            yield* loadIs(rig, 0, "the lane frees once the round ends")
           }).pipe(Effect.timeout("12 seconds")),
         ),
       15_000,

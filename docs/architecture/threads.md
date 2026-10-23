@@ -296,7 +296,8 @@
     list of models in config `tiers` (`Accounts.tiers`; a project list
     shadows the user's). A role with neither runs the agent's model; `model`
     wins over `tier`. A tier role's round runs the first model of its order
-    that `Accounts.probe` admits now: `strongest` in the list's order;
+    whose lane `Threads.admitSend` admits under the round's send key, so the
+    send takes the lane the pick saw free: `strongest` in the list's order;
     `efficient` a model with no round of the state yet first (list order),
     then by priced cost per finished round at the provider's fitted quota
     weight (`accounts.lanes`), over every run of the machine; a model whose

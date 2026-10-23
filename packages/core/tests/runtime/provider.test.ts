@@ -5687,22 +5687,7 @@ describe("account lanes", () => {
           left: new Set(),
           ttlMs: Option.none(),
         })
-      /** Ask whether a start of `model` over `scope` would be admitted: "admitted", else the refusal's reason. */
-      const probe = (scope: Scope, model = planModel) =>
-        placement
-          .probeLane({
-            provider: "plan",
-            scope: Arr.map(scope, receiptOf),
-            asker: Option.none(),
-            model: Option.some(model),
-            project: Option.none(),
-            holds: new Map(),
-          })
-          .pipe(
-            Effect.as("admitted" as const),
-            Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(refused.reason)),
-          )
-      return { placement, read, spend, lanes, windowOf, admit, probe, place }
+      return { placement, read, spend, lanes, windowOf, admit, place }
     })
   /** A ledger store over a ref, as the file is over a restart. */
   const ledgerRef = Effect.gen(function* () {
@@ -6585,53 +6570,6 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
-  it.effect("a probe refuses exactly where an admission would, and holds no lane", () =>
-    Effect.gen(function* () {
-      const fixture = yield* accounts()
-      const { placement, admit, probe } = fixture
-      yield* TestClock.adjust("1 hour")
-      // The account's window carries 2 runs, glm's 1.
-      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
-      // Probes hold nothing: three of them leave glm's one lane free.
-      expect(yield* probe([a], glm)).toBe("admitted")
-      expect(yield* probe([a], glm)).toBe("admitted")
-      expect(yield* probe([a])).toBe("admitted")
-      expect(yield* admit([a], "glm-start", glm)).toBe("admitted")
-      expect(yield* probe([a], glm)).toBe("Busy")
-      expect(yield* probe([a])).toBe("admitted")
-      expect(yield* admit([a], "plan-start")).toBe("admitted")
-      expect(yield* probe([a])).toBe("Busy")
-      yield* placement.freeReservation("plan-start")
-      expect(yield* probe([a])).toBe("admitted")
-      expect(yield* probe([a], glm)).toBe("Busy")
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
-  it.effect("a probe's refusal of a spent window is the admission's, to its retry time", () =>
-    Effect.gen(function* () {
-      const { placement, read } = yield* accounts()
-      yield* TestClock.adjust("1 hour")
-      const now = yield* Clock.currentTimeMillis
-      yield* read(a, [
-        { window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR },
-        { window: "5h", model: glm, utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
-      ])
-      const request = {
-        provider: "plan",
-        scope: Arr.map([a] as const, receiptOf),
-        asker: Option.none(),
-        model: Option.some(glm),
-        project: Option.none(),
-        holds: new Map(),
-      }
-      const probed = yield* Effect.flip(placement.probeLane(request))
-      const admitted = yield* Effect.flip(placement.admitLane({ ...request, key: "glm-start" }))
-      expect(probed.reason).toBe("Spent")
-      expect(probed.retryAt).toBe(now + 2 * HOUR)
-      expect({ ...probed }).toEqual({ ...admitted })
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
   it.effect("a model's window counts that model's runs alone; the account's counts every run", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()
@@ -6855,9 +6793,10 @@ describe("account lanes", () => {
       const start = (project: string, key: string) => startIn(placement, gentHeld, project, key)
       expect(yield* start("other", "other-1")).toBe("admitted")
       const refused = yield* Effect.flip(
-        placement.probeLane({
+        placement.admitLane({
           provider: "plan",
           scope: [receiptOf(a)],
+          key: "other-refused",
           asker: Option.none(),
           model: Option.some(planModel),
           project: Option.some("other"),

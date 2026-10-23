@@ -3828,13 +3828,6 @@ interface CredentialPlacementService {
    * 2 minutes pass. With no capacity read, every run is admitted.
    */
   readonly admitLane: (request: LaneRequest) => Effect.Effect<void, LaneUnavailable>
-  /**
-   * Whether `admitLane` would admit the run now: it fails as that would, and
-   * holds nothing. A caller choosing among models asks each before it starts
-   * a run on one; the admission itself may still refuse a run a lane filled
-   * for meanwhile.
-   */
-  readonly probeLane: (request: Omit<LaneRequest, "key">) => Effect.Effect<void, LaneUnavailable>
   /** The session's turn opened on `provider`: it holds a lane until it ends, and the start admitted under `key` no longer does. */
   readonly openLane: (lane: OpenLane) => Effect.Effect<void>
   /**
@@ -6114,17 +6107,6 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           admission: (lastAdmission += 1),
         })
         return Option.none()
-      })
-      if (Option.isSome(refusal)) return yield* refusal.value
-    }),
-    probeLane: Effect.fn("CredentialPlacement.probeLane")(function* (
-      request: Omit<LaneRequest, "key">,
-    ) {
-      const now = yield* Clock.currentTimeMillis
-      const refusal = yield* locked(() => {
-        trim(now)
-        for (const [key, held] of reserved) if (!reserving(held, now)) reserved.delete(key)
-        return laneRefusal(request, now)
       })
       if (Option.isSome(refusal)) return yield* refusal.value
     }),

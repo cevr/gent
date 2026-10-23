@@ -1865,18 +1865,6 @@ export const makeExtensionAccounts = Effect.gen(function* () {
         holds: lane.value.holds,
       })
     }),
-    probe: Effect.fn("ExtensionAccounts.probe")(function* (run: Omit<LaneRun, "message">) {
-      const lane = yield* runLane(run)
-      if (Option.isNone(lane)) return
-      yield* placement.probeLane({
-        provider: lane.value.provider,
-        scope: lane.value.scope,
-        asker: Option.some(asker),
-        model: Option.some(lane.value.modelId),
-        project: lane.value.project,
-        holds: lane.value.holds,
-      })
-    }),
     tiers: Effect.fn("ExtensionAccounts.tiers")(function* (cwd: string) {
       const { tiers } = yield* configService.get(cwd)
       return { strongest: tiers?.strongest ?? [], efficient: tiers?.efficient ?? [] }

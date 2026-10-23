@@ -2926,6 +2926,16 @@ const makeThreads = (rounds: ThreadRoundsService) => {
      */
     sendRound: (key: string) => roundIdOf("thread.send", key),
     /**
+     * Admits the lane a send under `key` will take, before the send: the
+     * send's admission finds it held, as a retry under its key does. A
+     * sender choosing among models admits each until one is free, so no
+     * other round takes that lane between the choice and the send. Held as a
+     * start's lane is: until the round's turn opens, the send's claim
+     * refuses, or 2 minutes pass.
+     */
+    admitSend: (key: string, lane: RoundLane) =>
+      Effect.flatMap(roundIdOf("thread.send", key), (round) => admitLane(round, lane)),
+    /**
      * A thread's latest round, open or ended, or with `ended` its latest
      * ended one; none for a thread that took no round. By the thread's key
      * alone, for a reader that lists every session (the agents view).
