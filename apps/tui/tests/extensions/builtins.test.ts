@@ -964,6 +964,7 @@ describe("Herdr integration", () => {
         branchId: BranchId.make("child-b"),
         parentSessionId: here.sessionId,
         section: "running",
+        listedUnder: "running",
         status: "Running",
         live: true,
         depth: 1,
@@ -1019,7 +1020,7 @@ describe("Herdr integration", () => {
       const report = yield* server.next
       expect(report.params.agent_session_id).toBe("parent")
       expect(report.params.state).toBe("working")
-      children = [{ ...child, section: "idle", status: "Idle" }]
+      children = [{ ...child, section: "idle", listedUnder: "idle", status: "Idle" }]
       controller.reload()
       expect((yield* server.next).params.state).toBe("idle")
       setFocused("working")
@@ -1108,6 +1109,7 @@ describe("Herdr integration", () => {
           branchId: BranchId.make("loader-child-b"),
           parentSessionId: here.sessionId,
           section: "running",
+          listedUnder: "running",
           status: "Running",
           live: true,
           depth: 1,

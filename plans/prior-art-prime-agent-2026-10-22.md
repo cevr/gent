@@ -148,6 +148,7 @@ gent has durable rounds that reconcile, an interrupt cascade, and typed state. P
 - `AgentRowEntry` (packages/extensions/src/agents-view.ts:629-676) is a typed Schema struct: section, status, open questions, name, cwd, times, `runningSince`, live, depth, parent, side thread, thread key, `reportsToStarter`, sessions, `activity`, `runningCall`. It has no model, effort, cost or turn count. (measured)
 - Those fields are on `ExtensionAgentDetail` (apps/tui/src/extensions/client-facets.ts:113-132: status, model, effort, turns, `costUsd`, duration, omitted messages, first prompt, last answer). The TUI fetches it only for the selected row (agents.client.tsx:397-440). (measured)
 - Sessions pane groups each session by its own status, not nested under the root (observed live; matches `section` per row). (measured live, inferred from the schema)
+- Decided (2026-10-23): a spawn tree stays whole under its most urgent member's heading (`listedUnder`), the rule a handoff thread's row already follows; each row keeps its own `section` for its glyph and the title's counts. PA lists by the root's status, which would put a child that waits on an answer under `Idle`. (built; tests in `packages/extensions/tests/agents-view.test.ts` and `apps/tui/tests/extensions/agents.client.test.tsx`)
 
 ### Verdict: copy the per-row data, keep gent's typed shape
 

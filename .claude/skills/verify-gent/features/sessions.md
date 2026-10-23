@@ -1,6 +1,6 @@
 # Sessions
 
-A user browses and switches sessions. `/sessions` docks the `Sessions` pane under the composer: a filter row, sections (`Idle (n)`, `Inactive (n)`, `Running`, `Needs you`), one row per session with its age, and a detail column for the selected row (model, turns, cost, cwd, the last answer). Typing filters it; enter switches the TUI to the selected session.
+A user browses and switches sessions. `/sessions` docks the `Sessions` pane under the composer: a filter row, sections (`Idle (n)`, `Inactive (n)`, `Running`, `Needs you`), a spawn tree whole under its most urgent member's section with each row's own glyph, one row per session with its age, and a detail column for the selected row (model, turns, cost, cwd, the last answer). Typing filters it; enter switches the TUI to the selected session.
 
 ## Sub-features
 

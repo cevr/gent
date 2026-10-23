@@ -265,10 +265,10 @@ describe("agents view projection", () => {
       expect(rows[0]?.depth).toBe(0)
     })
 
-    test("a child whose parent sits in another section is a root of its own section", () => {
+    test("a stored child stays under its live parent, its own state kept", () => {
       // After a restart the parent's loop is back and idle while its child is
-      // only stored. The child heads the inactive section; indented, it would
-      // read as a child of whichever row sits above it.
+      // only stored. The child is listed under its parent, in the idle
+      // heading, and still reads as inactive.
       const rows = buildRowTree(
         reconcileAgentRows({
           live: [live({ session: "parent", branch: "b", status: "Idle" })],
@@ -285,10 +285,10 @@ describe("agents view projection", () => {
           ],
         }),
       )
-      expect(rows.map((row) => [row.sessionId, row.section, row.depth])).toEqual([
-        [sid("parent"), "idle", 0],
-        [sid("unrelated"), "inactive", 0],
-        [sid("child"), "inactive", 0],
+      expect(rows.map((row) => [row.sessionId, row.listedUnder, row.section, row.depth])).toEqual([
+        [sid("parent"), "idle", "idle", 0],
+        [sid("child"), "idle", "inactive", 1],
+        [sid("unrelated"), "inactive", "inactive", 0],
       ])
     })
 
@@ -563,8 +563,8 @@ describe("agents view projection", () => {
     })
   })
 
-  describe("sections by own state", () => {
-    test("an idle middle parent sits in the idle section while its grandchild runs", () => {
+  describe("a tree under its most urgent heading", () => {
+    test("an idle chain stays above its running grandchild, each row its own state", () => {
       // main → a → b. a started b and its own turn ended; only b works.
       const rows = projectAgentRows({
         live: [
@@ -578,10 +578,36 @@ describe("agents view projection", () => {
           durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
         ],
       })
-      expect(rows.map((row) => [row.sessionId, row.section, row.depth])).toEqual([
-        [sid("b"), "running", 0],
-        [sid("main"), "idle", 0],
-        [sid("a"), "idle", 1],
+      expect(rows.map((row) => [row.sessionId, row.listedUnder, row.section, row.depth])).toEqual([
+        [sid("main"), "running", "idle", 0],
+        [sid("a"), "running", "idle", 1],
+        [sid("b"), "running", "running", 2],
+      ])
+    })
+
+    test("a child waiting on an answer lifts its tree above a running one", () => {
+      const rows = projectAgentRows({
+        live: [
+          live({ session: "busy", branch: "b", status: "Running" }),
+          live({ session: "main", branch: "b", status: "Idle" }),
+          live({ session: "asks", branch: "b", status: "Running", openQuestions: 1 }),
+        ],
+        durable: [
+          durable({ session: "busy", branch: "b", updatedAt: 30 }),
+          durable({ session: "main", branch: "b", updatedAt: 10 }),
+          durable({
+            session: "asks",
+            branch: "b",
+            parentSession: "main",
+            parentBranch: "b",
+            updatedAt: 20,
+          }),
+        ],
+      })
+      expect(rows.map((row) => [row.sessionId, row.listedUnder, row.section, row.depth])).toEqual([
+        [sid("main"), "needs", "idle", 0],
+        [sid("asks"), "needs", "needs", 1],
+        [sid("busy"), "running", "running", 0],
       ])
     })
 
@@ -644,12 +670,12 @@ describe("agents view projection", () => {
           durable({ session: "gone", branch: "b", name: "old task", updatedAt: 50 }),
         ],
       })
-      // Each row sits in its own state's section: the working child first, as
-      // a root there, then its idle parent, then the stored row.
-      expect(rows.map((row) => [row.sessionId, row.section, row.depth])).toEqual([
-        [sid("child"), "running", 0],
-        [sid("parent"), "idle", 0],
-        [sid("gone"), "inactive", 0],
+      // The working child keeps the tree under the running heading; each row
+      // keeps its own state.
+      expect(rows.map((row) => [row.sessionId, row.listedUnder, row.section, row.depth])).toEqual([
+        [sid("parent"), "running", "idle", 0],
+        [sid("child"), "running", "running", 1],
+        [sid("gone"), "inactive", "inactive", 0],
       ])
     })
 

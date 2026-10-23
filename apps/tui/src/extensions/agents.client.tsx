@@ -1375,19 +1375,19 @@ export function AgentsPane(props: {
   const armedColor = (row: AgentRowEntry) =>
     Option.liftPredicate(theme.error, () => Option.contains(armed(), row.sessionId))
 
-  /** The list's rows: a heading opens each section. */
+  /** The list's rows: a heading opens each section; a tree sits under one. */
   const rows = (): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
     groupedRows(
       visible(),
-      (row) => row.section,
+      (row) => row.listedUnder,
       (first, count) =>
         decoration<AgentRowEntry>(() => (
           <box paddingLeft={1}>
             <text style={{ fg: theme.textMuted }}>
               {sectionHeading(
-                first.section,
+                first.listedUnder,
                 count,
-                visible().filter((row) => row.section === first.section),
+                visible().filter((row) => row.listedUnder === first.listedUnder),
               )}
             </text>
           </box>
@@ -1459,7 +1459,9 @@ export function AgentsPane(props: {
   const listLines = () => {
     const rows = visible()
     if (rows.length === 0) return 2
-    const headings = rows.filter((row, index) => rows[index - 1]?.section !== row.section).length
+    const headings = rows.filter(
+      (row, index) => rows[index - 1]?.listedUnder !== row.listedUnder,
+    ).length
     return 1 + rows.length + headings
   }
   // A wide pane asks for the rows its taller column needs: the list's, or

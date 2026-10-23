@@ -872,6 +872,7 @@ const mountShortTerminalWithTrays = (
         sessionId: SessionId.make(`child-${n}`),
         branchId: BranchId.make(`child-${n}-branch`),
         section: "running" satisfies "running",
+        listedUnder: "running" satisfies "running",
         name: `delegate: task ${n}`,
         live: true,
         depth: 1,

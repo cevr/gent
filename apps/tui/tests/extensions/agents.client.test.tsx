@@ -84,6 +84,7 @@ const row = (id: string, live = true): AgentRowEntry => ({
   sessionId: SessionId.make(id),
   branchId: BranchId.make(`${id}-branch`),
   section: "idle",
+  listedUnder: "idle",
   live,
   depth: 0,
   sideThread: false,
@@ -328,7 +329,7 @@ describe("Agents pane refresh while open", () => {
         const entry = { ...row("child", childLive), parentSessionId: parentKey.sessionId }
         if (childLive) return [entry]
         // A stored child has no loop, so it is inactive.
-        return [{ ...entry, section: "inactive" }]
+        return [{ ...entry, section: "inactive", listedUnder: "inactive" }]
       }
       const clock = yield* TestClock.make()
       const controller = yield* provideClientServices(
@@ -415,6 +416,7 @@ describe("Agents pane refresh while open", () => {
           {
             ...row("child"),
             section: "running",
+            listedUnder: "running",
             status: "Running",
             updatedAt: 1,
             parentSessionId: parentKey.sessionId,
@@ -595,6 +597,7 @@ const rowPane = (id: string, name: string, depth: number): AgentRowEntry => ({
   sessionId: SessionId.make(id),
   branchId: BranchId.make(`${id}-branch`),
   section: "inactive",
+  listedUnder: "inactive",
   name,
   live: false,
   depth,
@@ -618,6 +621,7 @@ const rowPane = (id: string, name: string, depth: number): AgentRowEntry => ({
 const agedRow = (id: string, name: string, updatedAt: number): AgentRowEntry => ({
   ...rowPane(id, name, 0),
   section: "idle",
+  listedUnder: "idle",
   live: true,
   updatedAt,
 })
@@ -844,7 +848,12 @@ describe("Agents pane navigation", () => {
     Effect.gen(function* () {
       // The listing has to report a resident loop as idle — it never reads
       // state — so the detail read is the only thing that knows better.
-      const busy: AgentRowEntry = { ...rowPane("busy", "Alpha", 0), section: "idle", live: true }
+      const busy: AgentRowEntry = {
+        ...rowPane("busy", "Alpha", 0),
+        section: "idle",
+        listedUnder: "idle",
+        live: true,
+      }
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
@@ -886,7 +895,12 @@ describe("Agents pane navigation", () => {
 
   it.scopedLive("a selected row waiting on an answer says so: no glyph shows it", () =>
     Effect.gen(function* () {
-      const busy: AgentRowEntry = { ...rowPane("ask", "Alpha", 0), section: "running", live: true }
+      const busy: AgentRowEntry = {
+        ...rowPane("ask", "Alpha", 0),
+        section: "running",
+        listedUnder: "running",
+        live: true,
+      }
       const setup = yield* renderScoped(() => (
         <AgentsPane
           models={() => []}
@@ -922,7 +936,12 @@ describe("Agents pane navigation", () => {
 
   it.scopedLive("a selected idle row draws its dot and no state word", () =>
     Effect.gen(function* () {
-      const idle: AgentRowEntry = { ...rowPane("rest", "Alpha", 0), section: "idle", live: true }
+      const idle: AgentRowEntry = {
+        ...rowPane("rest", "Alpha", 0),
+        section: "idle",
+        listedUnder: "idle",
+        live: true,
+      }
       const setup = yield* renderScoped(() => (
         <AgentsPane
           models={() => []}
@@ -1037,6 +1056,7 @@ describe("Agents pane reopen", () => {
       const live: AgentRowEntry = {
         ...rowPane("reopened", "Alpha", 0),
         section: "idle",
+        listedUnder: "idle",
         live: true,
       }
       const asked: Array<string> = []
@@ -1102,6 +1122,7 @@ describe("Agents pane framing", () => {
         const idle: AgentRowEntry = {
           ...rowPane("framed", "Alpha", 0),
           section: "idle",
+          listedUnder: "idle",
           live: true,
           model: ModelId.make("anthropic/claude-sonnet-5"),
           turns: 7,
@@ -1340,6 +1361,7 @@ const root = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => {
     sessionId: SessionId.make(id),
     branchId: BranchId.make(`${id}-branch`),
     section,
+    listedUnder: section,
     live: section !== "inactive",
     depth: 0,
     sideThread: false,
@@ -1396,6 +1418,31 @@ describe("agents pane rows", () => {
       ),
       { width, height: 24 },
     )
+
+  it.scopedLive("a tree draws under its listed heading, each row with its own glyph", () =>
+    Effect.gen(function* () {
+      // An idle session whose child works: the server lists both under Running.
+      const setup = yield* paneOver(
+        [
+          { ...root("main", "idle"), name: "main task", listedUnder: "running" },
+          { ...child("worker", "running", "main"), listedUnder: "running", depth: 1 },
+          { ...root("rest", "idle"), name: "rest task" },
+        ],
+        100,
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("Sessions ·"), "pane")
+      const lines = frame.split("\n")
+      const lineOf = (text: string) => lines.findIndex((line) => line.includes(text))
+      expect(frame).toContain("Sessions · 1 running · 2 idle")
+      expect(lineOf("Running (2)")).toBeGreaterThan(-1)
+      // The detail column names the selected row too; the list draws its glyph.
+      expect(lineOf("○ main task")).toBeGreaterThan(lineOf("Running (2)"))
+      expect(lineOf("delegate: worker task")).toBeGreaterThan(lineOf("○ main task"))
+      expect(lineOf("Idle (1)")).toBeGreaterThan(lineOf("delegate: worker task"))
+      expect(lineOf("rest task")).toBeGreaterThan(lineOf("Idle (1)"))
+      expect(lines[lineOf("delegate: worker task")]).not.toContain("○")
+    }),
+  )
 
   it.scopedLive(
     "each agent is one line with its glyph, task, what it does now and its time, running first, at 43 columns",
@@ -3303,6 +3350,7 @@ describe("Descendant activity", () => {
     ...row(id),
     parentSessionId,
     section: "running",
+    listedUnder: "running",
     status: "Running",
   })
   const over = (
@@ -3364,7 +3412,14 @@ describe("Descendant activity", () => {
       Effect.gen(function* () {
         for (const initial of [
           [],
-          [{ ...row("stored", false), parentSessionId: parent.sessionId, section: "inactive" }],
+          [
+            {
+              ...row("stored", false),
+              parentSessionId: parent.sessionId,
+              section: "inactive",
+              listedUnder: "inactive",
+            },
+          ],
         ] satisfies ReadonlyArray<ReadonlyArray<AgentRowEntry>>) {
           const clock = yield* TestClock.make()
           const pane = makePaneSlot()
@@ -3550,7 +3605,14 @@ describe("Descendant activity", () => {
         controller.refresh("")
         yield* settle(controller)
         expect(activity.snapshot().state).toBe("unknown")
-        rows = [{ ...row("stored", false), parentSessionId: parent.sessionId, section: "inactive" }]
+        rows = [
+          {
+            ...row("stored", false),
+            parentSessionId: parent.sessionId,
+            section: "inactive",
+            listedUnder: "inactive",
+          },
+        ]
         controller.reload()
         yield* settle(controller)
         expect(activity.snapshot().state).toBe("idle")

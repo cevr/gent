@@ -113,7 +113,14 @@ export interface DurableAgentRow {
 export interface AgentRow {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  /** The row's own state: its glyph and the title's counts. */
   readonly section: AgentSection
+  /**
+   * The heading the row is drawn under: its tree's most urgent section, so
+   * a tree is never split across headings. Equal to `section` until
+   * `buildRowTree` places the row.
+   */
+  readonly listedUnder: AgentSection
   readonly status: Option.Option<string>
   readonly name: Option.Option<string>
   readonly cwd: Option.Option<string>
@@ -216,6 +223,7 @@ export const reconcileAgentRows = (params: {
       sessionId: identity.value.sessionId,
       branchId: identity.value.branchId,
       section: sectionOf(live),
+      listedUnder: sectionOf(live),
       status: Option.flatMap(live, (row) => row.status),
       name: Option.flatMap(durable, (row) => row.name),
       cwd: Option.flatMap(durable, (row) => row.cwd),
@@ -284,6 +292,7 @@ const foldThread = (seed: AgentRow, others: ReadonlyArray<AgentRow>): AgentRow =
   return {
     ...current,
     section: busiest.section,
+    listedUnder: busiest.section,
     status: busiest.status,
     runningSince: busiest.runningSince,
     openQuestions: all.reduce((sum, row) => sum + row.openQuestions, 0),
@@ -323,15 +332,17 @@ const groupThreads = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> =>
 }
 
 /**
- * Order rows for display: one row per thread, by section, and in each
- * section as a tree. The sessions of one thread (a handoff chain) fold into
- * one row first; a spawned session is a thread of its own and nests under
- * the session that started it. A root,
- * or a row whose parent is in another section, is placed by its last update,
- * most recent first, at depth 0; its children follow it one level deeper, in
- * the order they started, as the tray lists them, so a child's steps never
- * reshuffle its siblings. Depth is the nesting as drawn, so a row is never
- * indented under a row that is not its parent.
+ * Order rows for display: one row per thread, as trees, each tree under one
+ * heading. The sessions of one thread (a handoff chain) fold into one row
+ * first; a spawned session is a thread of its own and nests under the
+ * session that started it. A tree is listed under its most urgent member's
+ * section (`listedUnder`), the rule a thread's row already follows, so a
+ * working child stays under the idle session that started it; each row keeps
+ * its own `section`. A root is placed by its last update, most recent first,
+ * at depth 0; its children follow it one level deeper, in the order they
+ * started, as the tray lists them, so a child's steps never reshuffle its
+ * siblings. Depth is the nesting as drawn, so a row is never indented under a
+ * row that is not its parent.
  *
  * A child whose parent is absent from the row set is promoted to top level
  * rather than hidden — an orphan is still a real agent, and dropping it would
@@ -355,10 +366,10 @@ export const buildRowTree = (loops: ReadonlyArray<AgentRow>): ReadonlyArray<Agen
     if (recency !== 0) return recency
     return Order.String(rowKey(left), rowKey(right))
   }
-  // The parent a row nests under here: one in the same section.
+  // The parent a row nests under: its starter's row, when that is listed.
   const parentKeyOf = (row: AgentRow): Option.Option<string> =>
     Option.map(row.parent, (parent) => rowOfMember.get(rowKey(parent)) ?? rowKey(parent)).pipe(
-      Option.filter((key) => byKey.get(key)?.section === row.section),
+      Option.filter((key) => byKey.has(key)),
     )
   const children = new Map<string, Array<AgentRow>>()
   for (const row of rows) {
@@ -367,26 +378,48 @@ export const buildRowTree = (loops: ReadonlyArray<AgentRow>): ReadonlyArray<Agen
     children.set(parentKey.value, [...(children.get(parentKey.value) ?? []), row])
   }
 
+  // The most urgent section in the tree under `row`; a cycle counts once.
+  const treeSection = (row: AgentRow, walked: Set<string>): AgentSection => {
+    const key = rowKey(row)
+    walked.add(key)
+    return (children.get(key) ?? [])
+      .filter((child) => !walked.has(rowKey(child)))
+      .reduce((most: AgentSection, child) => {
+        const section = treeSection(child, walked)
+        if (SECTION_ORDER[section] < SECTION_ORDER[most]) return section
+        return most
+      }, row.section)
+  }
+
   const ordered: Array<AgentRow> = []
   const seen = new Set<string>()
-  const visit = (row: AgentRow, depth: number): void => {
+  const visit = (row: AgentRow, depth: number, listedUnder: AgentSection): void => {
     const key = rowKey(row)
     if (seen.has(key)) return
     seen.add(key)
-    ordered.push({ ...row, depth })
-    for (const child of (children.get(key) ?? []).toSorted(byStart)) visit(child, depth + 1)
+    ordered.push({ ...row, depth, listedUnder })
+    for (const child of (children.get(key) ?? []).toSorted(byStart)) {
+      visit(child, depth + 1, listedUnder)
+    }
   }
-  const sectionRank = (row: AgentRow) => SECTION_ORDER[row.section]
-  const bySectionThenRecency = (left: AgentRow, right: AgentRow) =>
-    sectionRank(left) - sectionRank(right) || byRecency(left, right)
-  for (const root of rows
-    .filter((row) => Option.isNone(parentKeyOf(row)))
-    .toSorted(bySectionThenRecency)) {
-    visit(root, 0)
+  const placed = (row: AgentRow) => ({ row, listedUnder: treeSection(row, new Set()) })
+  const byHeadingThenRecency = (
+    left: { readonly row: AgentRow; readonly listedUnder: AgentSection },
+    right: { readonly row: AgentRow; readonly listedUnder: AgentSection },
+  ) =>
+    SECTION_ORDER[left.listedUnder] - SECTION_ORDER[right.listedUnder] ||
+    byRecency(left.row, right.row)
+  const roots = rows.filter((row) => Option.isNone(parentKeyOf(row)))
+  for (const root of roots.map(placed).toSorted(byHeadingThenRecency)) {
+    visit(root.row, 0, root.listedUnder)
   }
   // A cycle has no root to reach it from.
-  for (const row of rows.toSorted(bySectionThenRecency)) visit(row, 0)
-  return ordered.toSorted((left, right) => sectionRank(left) - sectionRank(right))
+  for (const entry of rows.map(placed).toSorted(byHeadingThenRecency)) {
+    visit(entry.row, 0, entry.listedUnder)
+  }
+  return ordered.toSorted(
+    (left, right) => SECTION_ORDER[left.listedUnder] - SECTION_ORDER[right.listedUnder],
+  )
 }
 
 /** Case-insensitive substring match over the fields a reader would search by. */
@@ -411,8 +444,9 @@ export const filterRows = (
 
 /**
  * Full projection: reconcile, then order. A row's section is its own loop's
- * state, so a parent idles in its own section while a child works, and the
- * child is a root of the running section. A query filters after, with `filterRows`.
+ * state, so a parent idles while a child works; the child is listed under
+ * the parent, both under the running heading. A query filters after, with
+ * `filterRows`.
  */
 export const projectAgentRows = (params: {
   readonly live: ReadonlyArray<LiveAgentRow>
@@ -643,7 +677,10 @@ const AGENTS_VIEW_EXTENSION_ID = ExtensionId.make("@gent/agents-view")
 export const AgentRowEntry = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
+  /** The row's own state: its glyph and the title's counts. */
   section: Schema.Literals(["needs", "running", "idle", "inactive"]),
+  /** The heading the row is drawn under: its tree's most urgent section. */
+  listedUnder: Schema.Literals(["needs", "running", "idle", "inactive"]),
   status: Schema.optional(Schema.String),
   /** Background questions the row's live loops hold open. Absent at none. Wire only. */
   openQuestions: Schema.optional(Schema.Finite),
@@ -888,6 +925,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           sessionId: row.sessionId,
           branchId: row.branchId,
           section: row.section,
+          listedUnder: row.listedUnder,
           status: Option.getOrUndefined(row.status),
           openQuestions: Option.getOrUndefined(
             Option.liftPredicate(row.openQuestions, (count) => count > 0),
