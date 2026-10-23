@@ -9,6 +9,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "turbo run typecheck",
+    "typecheck:fast": "s=0; for p in packages/* apps/* examples; do [ -f $p/tsconfig.json ] || continue; bun check --no-script --no-pretty -p $p || s=1; done; exit $s",
     "lint": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n oxlint,guards \"env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore --report-unused-disable-directives-severity=error\" \"bun run guards\"",
     "lint:fix": "env -u FORCE_COLOR NO_COLOR=1 oxlint --ignore-path=.oxlintignore --report-unused-disable-directives-severity=error --fix",
     "guards": "bun packages/tooling/src/check-guardrails.ts",
@@ -36,7 +37,7 @@
     "@gent/e2e": "workspace:*",
     "@gent/extensions": "workspace:*",
     "@oxlint/plugins": "^1.89.0",
-    "@types/bun": "^1.4.3",
+    "@types/bun": "^1.4.4",
     "@types/picomatch": "catalog:",
     "concurrently": "^10.0.6",
     "effect": "catalog:",
@@ -58,7 +59,7 @@
     "@effect/sql-d1": "4.0.5",
     "effect": "4.0.5"
   },
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "catalog": {
     "effect": "4.0.5",
     "@effect/platform-bun": "4.0.5",

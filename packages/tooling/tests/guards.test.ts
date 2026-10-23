@@ -831,6 +831,8 @@ describe("pre-commit hook runs only its fast commands", () => {
       "bun gate",
       "turbo run test",
       "bunx turbo run typecheck",
+      "bun run typecheck",
+      "bun check",
       "env NO_COLOR=1 bun run gate",
       "bun run test",
     ]) {
@@ -861,6 +863,7 @@ describe("pre-commit hook runs only its fast commands", () => {
     ).toEqual([])
     expect(withGuards("'bunx oxfmt --ignore-path=.oxlintignore {staged_files}'")).toEqual([])
     expect(withGuards("bun  run   guards")).toEqual([])
+    expect(withGuards("bun run typecheck:fast")).toEqual([])
   })
 
   test("a step under another hook does not count", () => {

@@ -1,6 +1,7 @@
-# The pre-commit hook finishes in under 10 s: it reads the staged files only.
-# Typecheck, build, the whole-tree lint and the tests are `bun run gate`'s,
-# which CI runs on every push and pull request; run it before a handoff.
+# The pre-commit hook finishes in under 10 s: it reads the staged files only,
+# except `types`. Build, the whole-tree lint, the Effect diagnostics and the
+# tests are `bun run gate`'s, which CI runs on every push and pull request;
+# run it before a handoff.
 pre-commit:
   parallel: true
   jobs:
@@ -9,6 +10,12 @@ pre-commit:
     # oxlint autofix, and the gate reads the committed tree again.
     - name: guards
       run: bun run guards
+    # `bun check` reports the same type errors as tsc, for every package in
+    # about 2 s, against the working tree. It does not load tsconfig
+    # `plugins`, so the Effect diagnostics stay with the gate's patched tsc.
+    - name: types
+      glob: "*.{ts,tsx}"
+      run: bun run typecheck:fast
     # oxlint first, then the formatter, on the same staged files, so the
     # formatter has the last word; each stages what it rewrote. oxlint and
     # oxfmt check a path named on the command line even when

@@ -1428,13 +1428,14 @@ export const findE2eFixtureImportFindings = (
  * what the guards read, so a hook without a `bun run guards` job commits a
  * guard violation that only the gate would catch later.
  *
- * The hook finishes in under 10 s. Typecheck, build, the whole-tree lint and
- * format, and the tests take minutes; they are `bun run gate`'s, and CI runs
- * the gate. A slow step has many spellings (`bun gate`, `turbo run test`,
- * `env NO_COLOR=1 bun run gate`), so the rule names the fast commands instead:
- * every step of a `pre-commit` job's `run:` is the guards script, or oxlint
- * or oxfmt with flags on `{staged_files}` alone, after optional `env`
- * settings. Anything else is a finding on its line.
+ * The hook finishes in under 10 s. The patched-tsc typecheck, build, the
+ * whole-tree lint and format, and the tests take minutes; they are `bun run
+ * gate`'s, and CI runs the gate. A slow step has many spellings (`bun gate`,
+ * `turbo run test`, `env NO_COLOR=1 bun run gate`), so the rule names the fast
+ * commands instead: every step of a `pre-commit` job's `run:` is the guards
+ * script, `bun run typecheck:fast` (`bun check` on every package, about 2 s),
+ * or oxlint or oxfmt with flags on `{staged_files}` alone, after optional
+ * `env` settings. Anything else is a finding on its line.
  *
  * A job is found by the command it runs, not by its name.
  *
@@ -1445,6 +1446,8 @@ export const HOOK_FILE = "lefthook.yml"
 
 const GUARD_COMMAND = "bun run guards"
 
+const TYPES_COMMAND = "bun run typecheck:fast"
+
 /**
  * oxlint or oxfmt through `bunx`, after optional `env` settings, with flags
  * and the staged files as its only operand.
@@ -1454,7 +1457,7 @@ const STAGED_FILES_COMMAND =
 
 /** The commands the hook may run: each one finishes in seconds. */
 const isFastCommand = (command: string): boolean =>
-  command === GUARD_COMMAND || STAGED_FILES_COMMAND.test(command)
+  command === GUARD_COMMAND || command === TYPES_COMMAND || STAGED_FILES_COMMAND.test(command)
 
 /** The `pre-commit` hook's own key, at the top level of the file. */
 const PRE_COMMIT = /^pre-commit:/
@@ -1513,7 +1516,7 @@ export const findPreCommitHookFindings = (file: string, text: string): ReadonlyA
       .map((command) => ({
         file,
         line,
-        message: `\`${command}\` is not one of the hook's fast commands (\`${GUARD_COMMAND}\`, or \`bunx oxlint\` or \`bunx oxfmt\` on \`{staged_files}\`); the hook finishes in under 10 s -- leave whole-tree steps to \`bun run gate\` and CI`,
+        message: `\`${command}\` is not one of the hook's fast commands (\`${GUARD_COMMAND}\`, \`${TYPES_COMMAND}\`, or \`bunx oxlint\` or \`bunx oxfmt\` on \`{staged_files}\`); the hook finishes in under 10 s -- leave whole-tree steps to \`bun run gate\` and CI`,
       })),
   )
   if (steps.some(({ commands }) => commands.includes(GUARD_COMMAND))) return findings

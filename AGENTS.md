@@ -9,6 +9,7 @@ North stars: effect-native, actor-model, a lean core with maximal expressiveness
 ```bash
 bun install
 bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean; also compiles and lints the ts and tsx blocks of the steering docs
+bun run typecheck:fast  # `bun check` on every package in about 2 s: type errors only, no Effect diagnostics (bun check ignores tsconfig plugins)
 bun run lint       # oxlint (gent rules + type-aware lints) and the guards (`bun run guards`)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
 bun run smoke      # Headless mode smoke test
@@ -61,7 +62,7 @@ bun run test:e2e          # PTY + focused server-process lifecycle coverage (slo
 bun run gate              # typecheck + lint + fmt + build + test
 ```
 
-The pre-commit hook runs the guards, and oxlint and oxfmt on the staged files, in under 10 s. Typecheck, build and the tests run only in `bun run gate` and CI: run the gate before a commit that changes behavior and before a handoff.
+The pre-commit hook runs the guards, `bun run typecheck:fast`, and oxlint and oxfmt on the staged files, in under 10 s. The Effect diagnostics, build and the tests run only in `bun run gate` and CI: run the gate before a commit that changes behavior and before a handoff.
 
 Every TUI change also needs `bun run test:e2e` and a live check before acceptance: the verify-gent skill (`.claude/skills/verify-gent/SKILL.md`) launches the real TUI on the scripted model in a scratch home, drives it from its feature map and keeps the captures, with no herdr. Read [the UI comparison method](docs/architecture/ui.md); exercise each changed ability at normal and narrow sizes, including resize, and compare with installed reference TUIs such as Codex, Pi and fx. Follow `NORTH_STAR.md` Owner rules for isolated debug runs and reference credentials. Record rendered captures and mark reference screens checked through source/tests when login or a model is required.
 
