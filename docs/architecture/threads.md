@@ -310,9 +310,9 @@
     narrowest scope it has runs in: the run's project (`Accounts.project`,
     kept on `Started`) and the input's `domain`, else the project, else the
     machine. A model with no measured run goes first (list order), then the
-    lowest score, one with no unit last. When the role's last 9 runs ran
-    the first model alone, the runner-up goes first, so the rank measures
-    again. Deleting the function leaves the list's order. The role's
+    lowest score, one with no unit last. When the role's last 9 runs in
+    the first model's scope ran it alone, the runner-up goes first, so the
+    rank measures again. Deleting the function leaves the list's order. The role's
     thread is tried first while its model is in the tier, so the role keeps
     its thread and cache; another pick starts a new thread that becomes the
     role's. With no model of the tier free, the round waits (`lane`) until

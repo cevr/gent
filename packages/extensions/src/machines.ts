@@ -137,8 +137,8 @@ const Template = Schema.String.check(Schema.isMaxLength(16_000))
 
 /**
  * A role's model tier, read from config `tiers`: `strongest` takes the first
- * model of its list with a free lane, `efficient` the one of its list with
- * the least cost per finished round, at the model's quota weight. With no
+ * model of its list with a free lane, `efficient` the one of its list whose
+ * recent runs cost least per accepted unit (`efficientOrder`). With no
  * model free, the round waits; it never runs the other tier.
  */
 const Tier = Schema.Literals(["strongest", "efficient"])
@@ -359,7 +359,7 @@ const Visits = Schema.Struct({
 })
 type Visits = typeof Visits.Type
 
-/** A round's turn's tokens, by class. */
+/** A round's turn's tokens, by class: `input` counts the cache's reads and writes too. */
 const RoundTokens = Schema.Struct({
   input: Schema.Finite,
   output: Schema.Finite,
@@ -924,8 +924,8 @@ const createMachineTables = Effect.gen(function* () {
         step_json TEXT NOT NULL,
         PRIMARY KEY (run, seq)
       )`,
-      // A tier pick reads one machine's rounds of one state: the runs by
-      // machine, their steps by state.
+      // A tier pick reads one machine's newest ended runs: the runs by
+      // machine, their steps by run.
       `CREATE INDEX machine_runs_machine ON machine_runs (machine)`,
       `CREATE INDEX machine_steps_state ON machine_steps (run, state)`,
       // A round's thread finds its run: the recorded rounds by thread. The
@@ -2471,7 +2471,7 @@ const roundSpend = (round: RoundEnded): Option.Option<number> => {
   return Option.map(
     Option.fromUndefinedOr(round.tokens),
     (tokens) =>
-      (tokens.input * REFERENCE_PRICES.input +
+      (Math.max(0, tokens.input - tokens.cacheRead - tokens.cacheWrite) * REFERENCE_PRICES.input +
         tokens.output * REFERENCE_PRICES.output +
         tokens.cacheRead * REFERENCE_PRICES.cacheRead +
         tokens.cacheWrite * REFERENCE_PRICES.cacheWrite) /
@@ -2557,39 +2557,46 @@ const runSpend = (run: RankedRun, weightOf: (model: ModelId) => number): Option.
   return Option.some(spend)
 }
 
-/** `efficientOrder`'s scopes over `runs`, and the models each run of `role` ran, newest first. */
+/** One scope of `efficientOrder`: each model's tally, and the models each run of the role in it ran, newest first. */
+interface RankScope {
+  readonly tallies: Map<ModelId, UnitTally>
+  readonly ran: Array<ReadonlySet<ModelId>>
+}
+
+/** `efficientOrder`'s scopes over `runs`, narrowest first: `here`'s project and domain, its project, the machine. */
 const unitScopes = (
   runs: ReadonlyArray<RankedRun>,
   here: { readonly project: string; readonly domain: Option.Option<string> },
   role: RoleName,
   weightOf: (model: ModelId) => number,
-) => {
-  const scopes = {
-    domain: new Map<ModelId, UnitTally>(),
-    project: new Map<ModelId, UnitTally>(),
-    machine: new Map<ModelId, UnitTally>(),
-  }
-  const ran: Array<ReadonlySet<ModelId>> = []
+): ReadonlyArray<RankScope> => {
+  const scopes: ReadonlyArray<RankScope> = [0, 1, 2].map(() => ({ tallies: new Map(), ran: [] }))
   for (const [index, run] of runs.entries()) {
     const byModel = roleRounds(run, role)
     if (byModel.size === 0) continue
-    ran.push(new Set(byModel.keys()))
-    const spend = runSpend(run, weightOf)
-    if (Option.isNone(spend)) continue
-    const weight = 0.5 ** (index / RANK_HALF_LIFE)
     const inProject = Option.contains(run.project, here.project)
     const inDomain =
       inProject && Option.isSome(run.domain) && Option.contains(here.domain, run.domain.value)
+    const holds = [inDomain, inProject, true]
+    const holding = scopes.filter((_, at) => holds[at] === true)
+    for (const scope of holding) scope.ran.push(new Set(byModel.keys()))
+    const spend = runSpend(run, weightOf)
+    if (Option.isNone(spend)) continue
+    const weight = 0.5 ** (index / RANK_HALF_LIFE)
     const total = [...byModel.values()].reduce((sum, count) => sum + count, 0)
     for (const [model, count] of byModel) {
       const share = (weight * count) / total
       const units = share * Number(run.accepted)
-      addTally(scopes.machine, model, share * spend.value, units)
-      if (inProject) addTally(scopes.project, model, share * spend.value, units)
-      if (inDomain) addTally(scopes.domain, model, share * spend.value, units)
+      for (const scope of holding) addTally(scope.tallies, model, share * spend.value, units)
     }
   }
-  return { scopes, ran }
+  return scopes
+}
+
+/** A tally's spend per unit; one with no unit last. */
+const unitCost = (tally: UnitTally): number => {
+  if (tally.units === 0) return Number.POSITIVE_INFINITY
+  return tally.spend / tally.units
 }
 
 /**
@@ -2604,9 +2611,9 @@ const unitScopes = (
  * domain, else of its project, else of the machine. A model with no
  * measured run (a new release is a new id) goes first, in the list's order;
  * then the measured by score, one with no unit last; ties in the list's
- * order. When the newest `RANK_EXPLORE - 1` runs of the role all ran the
- * first model alone, the runner-up goes first, so the rank measures again.
- * Deleting it leaves the list's order.
+ * order. When the newest `RANK_EXPLORE - 1` runs of the role in the first
+ * model's scope all ran it alone, the runner-up goes first, so the rank
+ * measures again where the work is. Deleting it leaves the list's order.
  */
 const efficientOrder = (
   listed: ReadonlyArray<ModelId>,
@@ -2615,36 +2622,36 @@ const efficientOrder = (
   role: RoleName,
   weightOf: (model: ModelId) => number,
 ): ReadonlyArray<ModelId> => {
-  const { scopes, ran } = unitScopes(runs, here, role, weightOf)
-  const scoreOf = (model: ModelId): Option.Option<number> =>
-    Option.map(
-      Option.firstSomeOf(
-        [scopes.domain, scopes.project, scopes.machine].map((scope) =>
-          Option.fromUndefinedOr(scope.get(model)),
-        ),
+  const scopes = unitScopes(runs, here, role, weightOf)
+  const scoredIn = (model: ModelId) =>
+    Option.firstSomeOf(
+      scopes.map((scope) =>
+        Option.map(Option.fromUndefinedOr(scope.tallies.get(model)), (tally) => ({
+          scope,
+          score: unitCost(tally),
+        })),
       ),
-      (tally) => {
-        if (tally.units === 0) return Number.POSITIVE_INFINITY
-        return tally.spend / tally.units
-      },
     )
   const ranked = listed
-    .map((model, index) => ({ model, index, score: scoreOf(model) }))
+    .map((model, index) => ({ model, index, scored: scoredIn(model) }))
     .toSorted(
       (left, right) =>
-        Number(Option.isSome(left.score)) - Number(Option.isSome(right.score)) ||
+        Number(Option.isSome(left.scored)) - Number(Option.isSome(right.scored)) ||
         Order.Number(
-          Option.getOrElse(left.score, () => 0),
-          Option.getOrElse(right.score, () => 0),
+          Option.match(left.scored, { onNone: () => 0, onSome: (found) => found.score }),
+          Option.match(right.scored, { onNone: () => 0, onSome: (found) => found.score }),
         ) ||
         left.index - right.index,
     )
   const [first, second, ...rest] = ranked
   if (Predicate.isUndefined(first) || Predicate.isUndefined(second)) return listed
-  const settled =
-    Option.isSome(first.score) &&
-    ran.length >= RANK_EXPLORE - 1 &&
-    ran.slice(0, RANK_EXPLORE - 1).every((models) => models.size === 1 && models.has(first.model))
+  const settled = Option.exists(first.scored, ({ scope }) => {
+    const newest = scope.ran.slice(0, RANK_EXPLORE - 1)
+    return (
+      newest.length === RANK_EXPLORE - 1 &&
+      newest.every((models) => models.size === 1 && models.has(first.model))
+    )
+  })
   if (settled) return [second, first, ...rest].map((entry) => entry.model)
   return ranked.map((entry) => entry.model)
 }

@@ -2427,6 +2427,7 @@ interface EndedRun {
     readonly role: string
     readonly model: ModelId
     readonly costUsd?: number
+    readonly tokens?: typeof SeededTokens.Type
   }>
   /** Default true: the run's final state accepted its work. */
   readonly accepted?: boolean
@@ -2714,6 +2715,34 @@ describe("a tier role's round", () => {
   )
 
   it.live(
+    "prices an unpriced round's uncached input, cache reads and writes at the reference prices",
+    () =>
+      Effect.gen(function* () {
+        // A million input tokens, all read from the cache: $0.50 at the reference prices.
+        const cached = {
+          rounds: [
+            {
+              role: "worker",
+              model: HAIKU,
+              tokens: { input: 1_000_000, output: 0, cacheRead: 1_000_000, cacheWrite: 0 },
+            },
+          ],
+        }
+        const dearer = yield* rankedPick(
+          [OPUS, HAIKU],
+          [cached, { rounds: [{ role: "worker", model: OPUS, costUsd: 1 }] }],
+        )
+        expect(dearer).toEqual([HAIKU])
+        const cheaper = yield* rankedPick(
+          [HAIKU, OPUS],
+          [cached, { rounds: [{ role: "worker", model: OPUS, costUsd: 0.4 }] }],
+        )
+        expect(cheaper).toEqual([OPUS])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
     "runs first a listed model with no measured run, before every measured one",
     () =>
       Effect.gen(function* () {
@@ -2848,6 +2877,25 @@ describe("a tier role's round", () => {
         expect(picks).toEqual([OPUS])
         const fewer = yield* rankedPick([HAIKU, OPUS], [...times(8, cheapest), older])
         expect(fewer).toEqual([HAIKU])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "counts the runs toward the runner-up's turn in the cheapest model's own scope",
+    () =>
+      Effect.gen(function* () {
+        // This project's nine newest runs ran Haiku alone; other projects' runs, Opus, between them.
+        const here = { rounds: [{ role: "worker", model: HAIKU, costUsd: 0.1 }] }
+        const elsewhere = {
+          rounds: [{ role: "worker", model: OPUS, costUsd: 1 }],
+          elsewhere: true,
+        }
+        const picks = yield* rankedPick(
+          [HAIKU, OPUS],
+          Array.from({ length: 9 }, () => [here, elsewhere]).flat(),
+        )
+        expect(picks).toEqual([OPUS])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
   )
