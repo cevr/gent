@@ -870,7 +870,7 @@ export function Session(props: SessionProps) {
       items.push({ text: localError.value, color: theme.error })
     } else if (Option.isSome(notice)) {
       items.push({ text: notice.value, color: theme.warning })
-    } else if (a.phase === "idle") {
+    } else if (a.phase === "idle" && rowReady()) {
       // The phase word says least of the row: a narrow row leaves it out
       // last. A cue, an error and a notice never give way.
       items.push({
@@ -879,6 +879,7 @@ export function Session(props: SessionProps) {
         short: { text: "", rank: STATUS_YIELD.phase },
       })
     }
+    if (!rowReady()) return items
 
     // Where the session is rooted, beside the phase word rather than behind a
     // debug flag. A reader running several sessions at once cannot tell them
@@ -894,6 +895,31 @@ export function Session(props: SessionProps) {
     })
 
     return items
+  }
+
+  // The row draws from reads that answer after the first frame: the
+  // branch's snapshot and replay (the phase word, the cost, the extension
+  // labels), the catalog (the model's name) and the root walk (the cwd
+  // label). Until each has answered it holds only what the reader must see
+  // now: a cue, an error, a notice and the connection's state. So it never
+  // shows a resumed session as `ready` with no model, then redraws it.
+  const rowReady = () =>
+    controller.historyReplayed() &&
+    Option.isSome(client.modelCatalog()) &&
+    Option.isSome(root().pipe(Option.filter((known) => known.cwd === client.pathPlace().cwd)))
+  const statusRightLabels = () => {
+    if (!rowReady()) return 0
+    return rightAnchoredLabels().length
+  }
+  const statusLabels = (): StatusRowLabel[] => {
+    if (!rowReady()) return [...phaseLabels(), ...connectionLabels()]
+    return [
+      ...phaseLabels(),
+      ...connectionLabels(),
+      ...modelLabels(),
+      ...extensionLabels("left"),
+      ...rightAnchoredLabels(),
+    ]
   }
 
   return (
@@ -961,18 +987,7 @@ export function Session(props: SessionProps) {
             composer, the panes after it) docks under the status row. */}
           <ComposerFrame>
             <Composer
-              statusRow={
-                <StatusRow
-                  labels={[
-                    ...phaseLabels(),
-                    ...connectionLabels(),
-                    ...modelLabels(),
-                    ...extensionLabels("left"),
-                    ...rightAnchoredLabels(),
-                  ]}
-                  rightLabels={rightAnchoredLabels().length}
-                />
-              }
+              statusRow={<StatusRow labels={statusLabels()} rightLabels={statusRightLabels()} />}
             >
               <Composer.Autocomplete />
               <CommandPalette />

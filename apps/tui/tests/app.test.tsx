@@ -771,13 +771,16 @@ const mountSessionPair = (
       initialSession: sessionNamed(pairA.sessionId, pairA.branchId, "Session A"),
     })
     yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session A")
-    const switchTo = (pair: typeof pairA, name: string) =>
+    // The row draws once the session's catalog has settled: a switch to a
+    // session whose catalog a test holds loading waits for the switch alone.
+    const switchTo = (pair: typeof pairA, name: string, row: "drawn" | "held" = "drawn") =>
       Effect.gen(function* () {
         clientCtx.switchSession(pair.sessionId, pair.branchId, name)
         yield* waitForFrame(
           setup,
           (frame) =>
-            clientCtx.sessionIdentity().sessionId === pair.sessionId && frame.includes("ready ·"),
+            clientCtx.sessionIdentity().sessionId === pair.sessionId &&
+            (row === "held" || frame.includes("ready ·")),
           name,
         )
       })
@@ -2281,6 +2284,111 @@ describe("App status and activity rows", () => {
       )
     }).pipe(Effect.timeout("4 seconds")),
   )
+  // A resumed session's row draws whole. Until its snapshot has replayed,
+  // its catalog has answered and its root walk has ended, it shows no phase
+  // word and no cwd, so it never reads `ready` with no model, then redraws.
+  for (const held of ["catalog", "snapshot", "root walk"] as const) {
+    it.scopedLive(
+      `the status row of a resumed session waits for its ${held}, then draws whole`,
+      () =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make("session-held-row")
+          const branchId = BranchId.make("branch-held-row")
+          const sonnet = new Model({
+            id: ModelId.make("anthropic/claude-sonnet-5"),
+            name: "Claude Sonnet 5",
+            provider: ProviderId.make("anthropic"),
+            providerName: "Anthropic",
+          })
+          const asked = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          // The held read answers once the test releases it; the other at once.
+          const readOf = <A, E>(leg: typeof held, read: Effect.Effect<A, E>) => {
+            if (leg !== held) return read
+            return Deferred.complete(asked, Effect.void).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(read),
+            )
+          }
+          const catalog = Effect.succeed([sonnet])
+          const snapshot = Effect.succeed({
+            sessionId,
+            branchId,
+            messages: [],
+            lastEventId: nullValue,
+            reasoningLevel: absent,
+            resolvedModelId: sonnet.id,
+            agent: AgentName.make("main"),
+            runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
+            metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+          })
+          // The root walk stats each `.git` up from the cwd.
+          const built = yield* Layer.build(testPlatformLayer())
+          const fs = Context.get(built, FileSystem.FileSystem)
+          const walked: FileSystem.FileSystem = {
+            ...fs,
+            exists: (path) => {
+              if (!path.endsWith(".git")) return fs.exists(path)
+              return readOf("root walk", fs.exists(path))
+            },
+          }
+          const scope = yield* Scope.Scope
+          const services = Context.makeUnsafe<unknown>(
+            Context.add(Context.add(built, FileSystem.FileSystem, walked), Scope.Scope, scope)
+              .mapUnsafe,
+          )
+          const { setup } = yield* mountApp({
+            services,
+            client: {
+              model: { list: () => readOf("catalog", catalog) },
+              driver: {
+                list: () =>
+                  Effect.succeed({
+                    drivers: [{ id: "anthropic" }],
+                    overrides: {},
+                    agents: [testAgent],
+                  }),
+              },
+              session: { getSnapshot: () => readOf("snapshot", snapshot) },
+            },
+            width: 120,
+            initialSession: sessionNamed(sessionId, branchId, "Held"),
+          })
+          yield* Deferred.await(asked)
+          for (let frame = 0; frame < 5; frame++) {
+            yield* Effect.yieldNow
+            yield* Effect.promise(() => setup.renderOnce())
+          }
+          expect(setup.captureCharFrame()).not.toContain("ready ·")
+          const partial: Array<string> = []
+          yield* Deferred.complete(release, Effect.void)
+          const whole = yield* waitForFrame(
+            setup,
+            (frame) => {
+              if (frame.includes("ready ·") && !frame.includes("Claude Sonnet 5"))
+                partial.push(frame)
+              return frame.includes("Claude Sonnet 5")
+            },
+            "the whole row",
+          )
+          expect(partial).toEqual([])
+          expect(whole).toContain("ready ·")
+        }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
+  // A failed catalog read has answered too: the row draws, not held for good.
+  it.scopedLive("the status row of a session whose catalog read failed draws", () =>
+    Effect.gen(function* () {
+      const { setup } = yield* mountApp({
+        client: {
+          model: { list: () => Effect.fail(new ProviderAuthError({ message: "catalog refused" })) },
+        },
+        width: 120,
+        initialSession: sessionNamed("session-failed-catalog", "branch-failed-catalog", "Failed"),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("ready · workspace-"), "the row")
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   // Gent ships no default model: a session nobody named one for says so, and
   // a send it refuses opens the model picker, with the draft kept.
   it.scopedLive("a session with no model says so, and a refused send opens the model picker", () =>
@@ -3306,7 +3414,7 @@ describe("App drafts, queue restore and forks across session switches", () => {
         })
         yield* waitForFrame(view.setup, () => view.client.models().length === 1, "A's catalog")
         yield* view.switchTo(pairB, "Session B")
-        yield* view.switchTo(pairA, "Session A")
+        yield* view.switchTo(pairA, "Session A", "held")
         yield* waitForFrame(view.setup, () => readsOfA === 2, "A's catalog read again")
         yield* typeCommand(typed)(view.setup)
         const frame = yield* waitForFrame(

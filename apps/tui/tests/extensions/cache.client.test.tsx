@@ -1445,9 +1445,19 @@ const renderResumed = (opts: {
               },
             },
           }),
+        // As the server's: the replay ends with the synchronized marker.
         events: () => {
           opened = true
-          return Stream.concat(Stream.make(...history.envelopes), Stream.never)
+          const synchronized = EventEnvelope.make({
+            id: EventId.make(lastEventId),
+            event: AgentEvent.cases.StreamSynchronized.make({
+              sessionId,
+              branchId,
+              lastEventId: EventId.make(lastEventId),
+            }),
+            createdAt: 0,
+          })
+          return Stream.concat(Stream.make(...history.envelopes, synchronized), Stream.never)
         },
       },
     })

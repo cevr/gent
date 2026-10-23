@@ -1915,6 +1915,8 @@ interface SessionFeed {
   messages: () => Message[]
   /** The label of the tool that runs now; none between tools. */
   activeTool: () => Option.Option<string>
+  /** The branch's snapshot applied and its history replayed, once; a reconnect keeps it. */
+  replayed: () => boolean
 }
 
 type SessionFeedClient = Pick<
@@ -2392,6 +2394,7 @@ export function useSessionFeed(
   })
   const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
   const [streamReady, setStreamReady] = createSignal(false)
+  const [replayed, setReplayed] = createSignal(false)
   // The answer the step in flight streams into: the one row drawn as streaming.
   const [openAnswer, setOpenAnswer] = createSignal(Option.none<string>(), {
     equals: Option.makeEquivalence<string>((left, right) => left === right),
@@ -2822,6 +2825,7 @@ export function useSessionFeed(
         // with the last replayed event, so it must not enter the duplicate set.
         lastSeenEventId = Math.max(lastSeenEventId, envelope.event.lastEventId)
         client.finishReplay()
+        setReplayed(true)
         client.log.info("feed.stream.synchronized", {
           key,
           lastEventId: envelope.event.lastEventId,
@@ -2921,6 +2925,7 @@ export function useSessionFeed(
     items,
     messages: () => store.messages,
     activeTool: () => runningLabel(runningCalls()),
+    replayed,
   }
 }
 
@@ -2953,6 +2958,8 @@ export interface SessionController {
    * `NOTICE_ROWS_BOUND`: the items may reach native history.
    */
   itemsSettled: () => boolean
+  /** The branch's snapshot applied and its history replayed, once; a reconnect keeps it. */
+  historyReplayed: () => boolean
   messages: () => Message[]
   /** The providers the newest auth check read: the status row names a provider by them. */
   authProviders: () => ReadonlyArray<AuthProviderInfo>
@@ -3958,6 +3965,7 @@ export function createSessionController(props: {
   return {
     items,
     itemsSettled: noticeRowsSettled,
+    historyReplayed: feed.replayed,
     messages: feed.messages,
     authProviders,
     forkMessages: () => {
