@@ -188,6 +188,7 @@ import {
 import * as AiModel from "effect/ai/Model"
 import {
   DEFAULT_RETRY_POLICY,
+  type CacheWarmer,
   type ModelDriverContribution,
   type SpendLimit,
   type ModelRouteInput,
@@ -2454,6 +2455,169 @@ describe("model driver and catalog", () => {
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })
+})
+
+// ── cache keep-warm ─────────────────────────────────────────────────────────
+
+describe("cache keep-warm", () => {
+  /** A five-minute cache gets its warming read 30 seconds before it lapses. */
+  const CACHE_TTL_MS = 300_000
+  const READ_GAP_MS = 270_000
+  /** One warming read: a million tokens read from the cache, at $0.5 a million. */
+  const READ_USAGE: Usage = {
+    inputTokens: 1_000_000,
+    outputTokens: 0,
+    cacheReadTokens: 1_000_000,
+    cacheWriteTokens: 0,
+  }
+  const READ_COST = 0.5
+
+  /**
+   * One turn whose first step reports a warmer and calls a tool that holds
+   * while the clock moves `gaps` read gaps, then ends. Answers the times the
+   * warmer read while the tool held, the reads after three more gaps past
+   * the turn, and what the turn spent beyond its steps.
+   */
+  const runWarmedTurn = (params: {
+    readonly name: string
+    readonly ttlMs: Option.Option<number>
+    readonly gaps: number
+  }) =>
+    Effect.gen(function* () {
+      const reads = yield* Ref.make<ReadonlyArray<number>>([])
+      const started = yield* Deferred.make<void>()
+      const released = yield* Deferred.make<void>()
+      const warmer: CacheWarmer = {
+        sentAtMillis: yield* Clock.currentTimeMillis,
+        resend: Effect.gen(function* () {
+          const at = yield* Clock.currentTimeMillis
+          yield* Ref.update(reads, (all) => [...all, at])
+          return Option.some(READ_USAGE)
+        }),
+      }
+      const holdTool = tool({
+        id: "hold",
+        description: "Runs until the test releases it",
+        params: Schema.Struct({}),
+        output: Schema.String,
+        execute: () =>
+          Deferred.succeed(started, void 0).pipe(
+            Effect.andThen(Deferred.await(released)),
+            Effect.as("released"),
+          ),
+      })
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("hold", {}), cacheWarmer: warmer },
+        textStep("done"),
+      ])
+      const modelId = ModelId.make("warm-driver/model")
+      const driver: ModelDriverContribution = {
+        id: "warm-driver",
+        name: "Warm driver",
+        resolveModel: () => Effect.succeed(AiModel.make("warm-driver", "model", providerLayer)),
+      }
+      const events = Ref.makeUnsafe<Array<AgentEvent>>([])
+      const layer = actorTestRoot({
+        resolver: ModelResolver.Live.pipe(
+          Layer.provide(Auth.Test()),
+          Layer.provide(fixtureModelCatalogSource),
+        ),
+        eventStore: recordingEventStore(events),
+        // The tool runs for real: the warmer reads while it holds.
+        toolRunner: ToolRunner.Live,
+        registry: ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("warm-driver") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { agents: testAgents, modelDrivers: [driver], tools: [holdTool] },
+            },
+          ]),
+        ),
+        models: [
+          Model.make({
+            id: modelId,
+            name: "Warm model",
+            provider: ProviderId.make("warm-driver"),
+            contextLength: 128_000,
+            pricing: { input: 5, output: 25, cacheRead: READ_COST },
+            ...omitUndefined({ promptCacheTtlMs: Option.getOrUndefined(params.ttlMs) }),
+          }),
+        ],
+      })
+      const sessionId = SessionId.make(`warm-${params.name}-session`)
+      const branchId = BranchId.make(`warm-${params.name}-branch`)
+      const admission: SessionAdmission = { runSpec: { overrides: { model: modelId } } }
+      const gap = Duration.millis(READ_GAP_MS)
+      const held = yield* Effect.gen(function* () {
+        yield* ensureStorageParents({ sessionId, branchId, admission })
+        const turn = yield* Effect.forkChild(
+          runAgentLoop(makeMessage(sessionId, branchId, "hold"), admission),
+        )
+        yield* Deferred.await(started)
+        // Each adjust returns once the fibers it woke have suspended again.
+        for (let moved = 0; moved < params.gaps; moved++) yield* TestClock.adjust(gap)
+        const whileHeld = yield* Ref.get(reads)
+        yield* Deferred.succeed(released, void 0)
+        yield* Fiber.join(turn)
+        return whileHeld
+      }).pipe(Effect.provide(layer))
+      for (let moved = 0; moved < 3; moved++) yield* TestClock.adjust(gap)
+      const recorded = yield* Ref.get(events)
+      const stepsCost = recorded.reduce((sum, event) => {
+        if (event._tag !== "StreamEnded") return sum
+        return sum + (event.costUsd ?? 0)
+      }, 0)
+      const turn = recorded.filter(Schema.is(TurnCompleted))
+      expect(turn).toHaveLength(1)
+      return {
+        held,
+        after: (yield* Ref.get(reads)).length,
+        warmingCost: (turn[0]?.costUsd ?? 0) - stepsCost,
+      }
+    }).pipe(Effect.scoped)
+
+  it.effect("reads the cache before it lapses while tools run, and stops when they end", () =>
+    Effect.gen(function* () {
+      const { held, after, warmingCost } = yield* runWarmedTurn({
+        name: "stops",
+        ttlMs: Option.some(CACHE_TTL_MS),
+        gaps: 3,
+      })
+      // Each read waits for the lifetime the last one restarted, less the margin.
+      expect(held).toEqual([READ_GAP_MS, 2 * READ_GAP_MS, 3 * READ_GAP_MS])
+      expect(after).toBe(3)
+      // The reads are the turn's spend, though no step made them.
+      expect(warmingCost).toBeCloseTo(3 * READ_COST, 9)
+    }),
+  )
+
+  it.effect("reads at most twelve times however long the tools run", () =>
+    Effect.gen(function* () {
+      const { held, after, warmingCost } = yield* runWarmedTurn({
+        name: "capped",
+        ttlMs: Option.some(CACHE_TTL_MS),
+        gaps: 15,
+      })
+      expect(held).toHaveLength(12)
+      expect(after).toBe(12)
+      expect(warmingCost).toBeCloseTo(12 * READ_COST, 9)
+    }),
+  )
+
+  it.effect("a model whose cache never lapses is not read", () =>
+    Effect.gen(function* () {
+      const { held, after, warmingCost } = yield* runWarmedTurn({
+        name: "lifeless",
+        ttlMs: Option.none(),
+        gaps: 3,
+      })
+      expect(held).toEqual([])
+      expect(after).toBe(0)
+      expect(warmingCost).toBeCloseTo(0, 9)
+    }),
+  )
 })
 
 // ── credential order ────────────────────────────────────────────────────────

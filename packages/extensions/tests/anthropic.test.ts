@@ -26,7 +26,7 @@ import {
   Clock,
   ConfigProvider,
   Context,
-  type Crypto,
+  Crypto,
   FileSystem,
   Deferred,
   type Duration,
@@ -90,6 +90,7 @@ import {
   type PendingRotation,
   type TurnNotice,
 } from "@gent/core/extensions/api"
+import { buildOpenCodeModelDriver, OPENCODE_GATEWAYS } from "../src/opencode.js"
 import { monitorMessage, WakeEntry, wakeTurnNotice } from "../src/wake.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import {
@@ -1579,6 +1580,151 @@ describe("Anthropic stop reason", () => {
       // Effect AI's map lacks the reason, so the finish part alone cannot tell.
       expect(finishes).toEqual(["unknown"])
       expect(reported.stopReason).toEqual(Option.some("model_context_window_exceeded"))
+    }),
+  )
+})
+
+describe("Anthropic cache warming", () => {
+  const marked: ProviderHints = { cacheKey: "session-cache-key" }
+  const streamed = LanguageModel.streamText({ prompt: "hi" }).pipe(Stream.runDrain)
+  const decodeSentBody = Schema.decodeUnknownSync(
+    Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+  )
+  /** A warming read's answer: the whole prefix read, nothing written, no output. */
+  const warmingAnswer = () => ({
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: encodeExternalJson({
+      id: "msg_warm",
+      type: "message",
+      role: "assistant",
+      model: "claude-haiku-4-5",
+      content: [],
+      stop_reason: "max_tokens",
+      stop_sequence: externalWireNull,
+      usage: {
+        input_tokens: 4,
+        output_tokens: 0,
+        cache_read_input_tokens: 25_839,
+        cache_creation_input_tokens: 0,
+      },
+    }),
+  })
+  /** What one request of `model` reported, its reply streamed as a tool call's. */
+  const stepOf = (
+    model: Layer.Layer<LanguageModel.LanguageModel>,
+    state: FakeFetchState,
+    request: Effect.Effect<unknown, AiError.AiError, LanguageModel.LanguageModel> = streamed,
+  ) =>
+    captureProviderReport(
+      Effect.asVoid(request).pipe(
+        Effect.ignore,
+        Effect.provide(
+          Layer.provideMerge(
+            model,
+            fakeFetchLayer(state, () => streamReplyEnding("tool_use")),
+          ),
+        ),
+        Effect.scoped,
+      ),
+    )
+  const anthropicModel = (authInfo: ProviderAuthInfo, hints: ProviderHints) =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+        makeDurableCell(
+          { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+          yield* Clock.currentTimeMillis,
+        ),
+      )
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+      return yield* driver.resolveModel("claude-haiku-4-5", authInfo, hints)
+    })
+
+  it.live(
+    "a streamed request that marks its cache reports a warmer that sends it again for no output, on each sign-in path",
+    () =>
+      Effect.gen(function* () {
+        for (const authInfo of [makeApiAuthInfo("test-key"), makeOAuthInfo()]) {
+          const state = makeFakeFetchState()
+          const step = yield* stepOf(yield* anthropicModel(authInfo, marked), state)
+          const warmer = Option.getOrThrow(step.cacheWarmer)
+          const usage = yield* warmer.resend.pipe(
+            Effect.provide(fakeFetchLayer(state, warmingAnswer)),
+          )
+          expect(state.captured).toHaveLength(2)
+          const [sent, warming] = state.captured
+          // The same URL, signed the same way: the SDK's URL and headers and
+          // the sign-in's are each applied once.
+          expect(warming!.url).toBe(sent!.url)
+          // Each request carries its own trace.
+          const untraced = (headers: Record<string, string>) =>
+            Record.remove(Record.remove(headers, "b3"), "traceparent")
+          expect(untraced(warming!.headers)).toEqual(untraced(sent!.headers))
+          const sentBody = decodeSentBody(sent!.body ?? "{}")
+          expect(sentBody["stream"]).toBe(true)
+          expect(decodeSentBody(warming!.body ?? "{}")).toEqual({
+            ...sentBody,
+            max_tokens: 0,
+            stream: false,
+          })
+          expect(usage).toEqual(
+            Option.some({
+              inputTokens: 25_843,
+              outputTokens: 0,
+              cacheReadTokens: 25_839,
+              cacheWriteTokens: 0,
+            }),
+          )
+        }
+      }),
+  )
+
+  it.live(
+    "a request that writes no cache, a reply that does not stream and a gateway's request report no warmer",
+    () =>
+      Effect.gen(function* () {
+        const apiKey = makeApiAuthInfo("test-key")
+        const unmarked = yield* stepOf(
+          yield* anthropicModel(apiKey, { reasoning: "none" }),
+          makeFakeFetchState(),
+        )
+        expect(unmarked.cacheWarmer).toEqual(Option.none())
+        const generated = yield* stepOf(
+          yield* anthropicModel(apiKey, marked),
+          makeFakeFetchState(),
+          LanguageModel.generateText({ prompt: "hi" }),
+        )
+        expect(generated.cacheWarmer).toEqual(Option.none())
+        // The gateway's request marks its cache as the driver's own does.
+        const crypto = yield* Effect.service(Crypto.Crypto).pipe(Effect.provide(BunCrypto.layer))
+        const gatewayModel = yield* resolveShipped(
+          buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, Option.none(), crypto),
+          fixtureModelCatalog(),
+          "claude-opus-4-5",
+          Option.some(apiKey),
+          Option.some(marked),
+        )
+        const gatewayState = makeFakeFetchState()
+        const gateway = yield* stepOf(gatewayModel, gatewayState)
+        expect(gatewayState.captured[0]?.body).toContain("cache_control")
+        expect(gateway.cacheWarmer).toEqual(Option.none())
+      }),
+  )
+
+  it.live("a warming read the API refuses answers none", () =>
+    Effect.gen(function* () {
+      const state = makeFakeFetchState()
+      const step = yield* stepOf(yield* anthropicModel(makeApiAuthInfo("test-key"), marked), state)
+      const usage = yield* Option.getOrThrow(step.cacheWarmer).resend.pipe(
+        Effect.provide(
+          fakeFetchLayer(state, () => ({
+            status: 529,
+            body: '{"type":"error","error":{"type":"overloaded_error","message":"busy"}}',
+          })),
+        ),
+      )
+      expect(state.captured).toHaveLength(2)
+      expect(usage).toEqual(Option.none())
     }),
   )
 })

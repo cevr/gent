@@ -118,6 +118,7 @@ import {
   type ModelRouteCurrent,
   type ModelRouteDecision,
   type ModelRouteInput,
+  type CacheWarmer,
   type CredentialReceipt,
   type ModelRouterContribution,
   ProviderAuthError,
@@ -877,12 +878,13 @@ interface TurnLedger {
     readonly toolCallCount: number
   }) => Effect.Effect<void>
   /**
-   * A compaction summary this turn wrote or tried to write, and its price:
-   * none when its model has no price or the summary failed after its model
-   * was admitted, which leaves the turn without a cost. Its tokens are not a
-   * step's.
+   * A request this turn sent that is not a step, and its price: a compaction
+   * summary written or tried, or a read that kept the cache warm while tools
+   * ran. None when its model has no price or the summary failed after its
+   * model was admitted, which leaves the turn without a cost. Its tokens are
+   * not a step's.
    */
-  readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
+  readonly noteSpend: (costUsd: Option.Option<number>) => Effect.Effect<void>
   /**
    * A route this turn runs on, published now or recorded before (an earlier
    * step, a process before a restart): its model route or its effort route.
@@ -1117,7 +1119,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           usageKnown: m.usageKnown,
         }
       }),
-    noteCompaction: (costUsd) =>
+    noteSpend: (costUsd) =>
       Ref.update(metrics, (m) => ({ ...m, costUsd: addCost(m.costUsd, costUsd) })),
     // Every step of a routed turn reads its route; only the first one this
     // ledger sees for the turn charges it.
@@ -3223,6 +3225,8 @@ type ModelTurnSource = {
   ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventStore>
   /** The turn's model-call budget as it reads when run; none for a turn with no budget. */
   readonly modelAttempts: Effect.Effect<Option.Option<ModelAttempts>>
+  /** How the driver keeps this request's cache warm; none from a driver that cannot. */
+  readonly cacheWarmer: Effect.Effect<Option.Option<CacheWarmer>>
 }
 
 /**
@@ -3931,7 +3935,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     Effect.tapError((error) =>
       Effect.gen(function* () {
         if (error._tag !== "CompactionStopped" || !(yield* Ref.get(summaryAdmitted))) return
-        yield* params.turnLedger.noteCompaction(Option.none())
+        yield* params.turnLedger.noteSpend(Option.none())
       }),
     ),
     // The compactor runs with the context a tool call on this branch gets:
@@ -4179,16 +4183,22 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   )
   const rawStream = wireStream.pipe(Stream.map(fromWireToolPart))
   // What the driver reports for this attempt's stream (`ProviderReport`):
-  // the raw stop reason, a retried attempt starting with none; and the quota
-  // windows a response named, noted on the account the request went out on.
+  // the raw stop reason and the cache warmer, a retried attempt starting with
+  // none; and the quota windows a response named, noted on the account the
+  // request went out on.
   const stopReason = yield* Ref.make(Option.none<string>())
+  const cacheWarmer = yield* Ref.make(Option.none<CacheWarmer>())
   const reportedStream = Stream.unwrap(
-    Ref.set(stopReason, Option.none()).pipe(Effect.as(rawStream)),
+    Ref.set(stopReason, Option.none()).pipe(
+      Effect.andThen(Ref.set(cacheWarmer, Option.none())),
+      Effect.as(rawStream),
+    ),
   ).pipe(
     Stream.provideService(
       ProviderReport,
       ProviderReport.of({
         stopReason: (reason) => Ref.set(stopReason, Option.some(reason)),
+        cacheWarmer: (warmer) => Ref.set(cacheWarmer, Option.some(warmer)),
         quota: (readings) =>
           Effect.flatMap(credential, (sent) =>
             Effect.forEach(
@@ -4249,6 +4259,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     ),
     credential,
     modelAttempts,
+    cacheWarmer: Ref.get(cacheWarmer),
     collect: <R>(
       effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
     ) => {
@@ -4349,6 +4360,46 @@ const priceUsage = Effect.fn("TurnHelpers.priceUsage")(function* (
   const at = yield* Clock.currentTimeMillis
   return Option.some(requestCost(registry, priced.value.id, usage.value, priced.value.pricing, at))
 })
+
+/**
+ * At most this many warming reads per tool run. A cache read costs 0.1x the
+ * input price and a 5-minute rewrite 1.25x: past twelve reads, warming costs
+ * more than the miss it prevents.
+ */
+const CACHE_WARM_READS = 12
+/** A warming read goes out this long before the cache would lapse. */
+const CACHE_WARM_MARGIN_MS = 30_000
+
+/**
+ * Runs `effect`, a step's tools, while the driver's warmer re-sends the
+ * step's request before its cache lapses: a cache read restarts the entry's
+ * lifetime, so the next step reads the prefix instead of writing it again.
+ * A cache that would outlive the tools gets no read. The tools never wait on
+ * a read; a failed one stops warming, and the end of the tools interrupts it.
+ */
+const keepCacheWarm = <A, E, R, R2>(
+  warmer: CacheWarmer,
+  lifetimeMs: number,
+  noteRead: (usage: Usage) => Effect.Effect<void, never, R2>,
+  tools: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R | R2> => {
+  const warming = Effect.gen(function* () {
+    let sentAt = warmer.sentAtMillis
+    for (let read = 0; read < CACHE_WARM_READS; read++) {
+      const now = yield* Clock.currentTimeMillis
+      const due = sentAt + lifetimeMs - CACHE_WARM_MARGIN_MS
+      yield* Effect.sleep(Duration.millis(Math.max(0, due - now)))
+      sentAt = yield* Clock.currentTimeMillis
+      const usage = yield* warmer.resend
+      if (Option.isNone(usage)) return
+      yield* noteRead(usage.value)
+    }
+  })
+  return Effect.scoped(Effect.forkScoped(warming).pipe(Effect.andThen(tools)))
+}
+
+/** A step whose driver reported no warmer runs its tools as they are. */
+const runToolsCold = <A, E, R>(tools: Effect.Effect<A, E, R>) => tools
 
 // Freeze pricing into the StreamEnded event at emit time. Returns None
 // when usage is absent or pricing is missing; the reducer treats that as a
@@ -5541,10 +5592,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             }),
         }),
       )
-      if (Result.isFailure(resolvedSource)) return resolvedSource.failure
+      if (Result.isFailure(resolvedSource)) {
+        return { ...resolvedSource.failure, warmCache: runToolsCold }
+      }
       const source = resolvedSource.success
       if (Option.isSome(source.compaction))
-        yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
+        yield* scope.turnLedger.noteSpend(source.compaction.value.costUsd)
       yield* scope.turnLedger.noteNotices(params.resolved.notices)
 
       yield* publishEventOrDie(
@@ -5628,6 +5681,35 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         })
       })
+
+      // A read that kept the step's cache warm while its tools ran: priced on
+      // the turn and noted on the step's account as a step is, since the
+      // cache there was read just now.
+      const noteWarmingRead = Effect.fn("AgentLoop.noteWarmingRead")(function* (usage: Usage) {
+        const listed = yield* listedModel(
+          params.resolved.modelDriver.contextModelId,
+          yield* source.credential,
+        )
+        const costUsd = yield* priceUsage(Option.some(usage), listed)
+        yield* scope.turnLedger.noteSpend(costUsd)
+        yield* notePlacedStep(costUsd, Option.some(usage), listed)
+        yield* Effect.logInfo("cache.keep-warm").pipe(
+          Effect.annotateLogs({
+            cacheReadTokens: usage.cacheReadTokens ?? 0,
+            cacheWriteTokens: usage.cacheWriteTokens ?? 0,
+          }),
+        )
+      })
+      const cacheWarmer = yield* source.cacheWarmer
+      const warmCache = <A, E, R>(tools: Effect.Effect<A, E, R>) => {
+        if (Option.isNone(cacheWarmer) || Option.isNone(source.cacheLifetimeMs)) return tools
+        return keepCacheWarm(
+          cacheWarmer.value,
+          source.cacheLifetimeMs.value,
+          (usage) => Effect.ignoreCause(noteWarmingRead(usage)),
+          tools,
+        )
+      }
 
       // A settled step: cost frozen into the boundary event, metrics folded,
       // parts persisted with their bindings.
@@ -5808,7 +5890,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
       )(outcome)
 
-      return { collected, outcome }
+      return { collected, outcome, warmCache }
     })
 
     const interactionOutcome = (pending: ToolInteractionPending) =>
@@ -6701,7 +6783,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         ),
       )
 
-      const { collected, outcome } = yield* Effect.scoped(
+      const { collected, outcome, warmCache } = yield* Effect.scoped(
         Effect.gen(function* () {
           const activeStream = yield* makeActiveStreamHandle
           yield* Ref.set(scope.activeStreamRef, Option.some(activeStream))
@@ -6770,14 +6852,16 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* closeTurnStep({ messageId: params.state.message.id, step: params.step })
       })
       const runTools = Effect.gen(function* () {
-        const interactionSignal = yield* executeTools({
-          hostToolBindings: resolved.hostToolBindings,
-          messageId: params.state.message.id,
-          step: params.step,
-          toolCalls: toolCallsFromResponseParts(collected.responseParts),
-          currentTurnAgent,
-          toolBindings: resolved.toolBindings,
-        })
+        const interactionSignal = yield* warmCache(
+          executeTools({
+            hostToolBindings: resolved.hostToolBindings,
+            messageId: params.state.message.id,
+            step: params.step,
+            toolCalls: toolCallsFromResponseParts(collected.responseParts),
+            currentTurnAgent,
+            toolBindings: resolved.toolBindings,
+          }),
+        )
         if (Option.isSome(interactionSignal)) {
           return interactionOutcome(interactionSignal.value)
         }

@@ -116,6 +116,14 @@ finished unit. The baseline is the table above.
    TTL. Other calls write with the 5 m TTL. The Anthropic extension
    (`packages/extensions/src/anthropic.ts`, the `ttl` marker) takes the choice
    from the turn. Accept: misses under 2% of W (F8).
+   Built differently (2026-10-23): a read refresh while tools run. The
+   lifetime cannot be picked at send, since the long wait is the reply's
+   own tool call, and a 1 h marker cannot extend a 5 m entry (Haiku probe).
+   The loop re-sends the step's request with `max_tokens: 0` 30 s before
+   its lifetime lapses, at most 12 times per tool run. Replay of child
+   transcripts: misses 3.07% to 0.52% of W, reads 0.45%, W down 2.0%
+   (measured). The target is met for Anthropic children on the replay; a
+   live gamut measure is still to do.
    Anthropic already splits the lifetime: 1 h for a root, 5 m for a child
    (`Model.childPromptCacheTtlMs`). On the `sol` gamut run (see 3) misses
    cost 14.3% of W (measured): 4 of 60 calls, all inside a turn, with no

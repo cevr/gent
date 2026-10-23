@@ -279,8 +279,19 @@ commit.
     model of the last request (its newest `StreamEnded.model`): a turn on
     another model never hands off for a cold cache. A model whose catalog entry
     names no lifetime never hands off either, and with no compactor installed
-    the window stays whole. The loop sends no keep-alive calls to hold a cache
-    warm. Each request names its session as the cache key and its turn (the
+    the window stays whole. While a step's tools run, the loop keeps that
+    step's cache warm when its driver reports a warmer
+    (`reportProviderCacheWarmer`): 30 seconds before the step's lifetime
+    lapses, the warmer sends the step's request again with no output, which
+    reads the whole prefix, writes nothing, and restarts the entry's
+    lifetime. At most 12 reads go out per tool run: a read costs 0.1x input
+    and a 5-minute rewrite 1.25x. The end of the tools stops the reads, a
+    failed read stops them too, and each read's price joins the turn's cost
+    and the account's spend. Anthropic reports a warmer for a streamed
+    request that carries its own cache markers; a gateway that only forwards
+    the Messages API does not. A 1-hour marker cannot extend a 5-minute
+    entry, so a later request with a longer lifetime writes its part again
+    (Haiku probe, 2026-10-23). Each request names its session as the cache key and its turn (the
     turn message id) as `ProviderHints.turnKey`. Over ChatGPT sign-in OpenAI
     sends the key as the `session-id` header and both in `client_metadata`,
     and sends the route a turn's first successful answer names
@@ -294,9 +305,9 @@ commit.
     a message option too, and prices each model's `cacheWrite` at that
     lifetime's multiple of input (2x for 1 hour, 1.25x for 5 minutes).
     Receipts: `packages/core/src/runtime/model-context.ts`,
-    `packages/core/src/runtime/turn.ts`,
+    `packages/core/src/runtime/turn.ts` (`keepCacheWarm`),
     `packages/extensions/src/compaction.ts`,
-    `packages/extensions/src/anthropic.ts` (`PromptCacheTtl`),
+    `packages/extensions/src/anthropic.ts` (`PromptCacheTtl`, `cacheWarmerFor`),
     `apps/tui/src/extensions/cache.client.tsx`.
 18. **A leaf requires only the services it is given.** `tool` and `request`
     bound the services their `execute` may require (`LeafServices`):

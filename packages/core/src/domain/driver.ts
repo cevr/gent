@@ -39,6 +39,7 @@ import { omitUndefined } from "./guards.js"
 import { CredentialSlot, DEFAULT_CREDENTIAL_SLOT, type SessionId } from "./ids.js"
 import type { ExtensionContext, ExtensionServiceError } from "./extension.js"
 import type { Message } from "./message.js"
+import type { Usage } from "./event.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
 export type DriverFailureId = typeof DriverFailureId.Type
@@ -662,8 +663,22 @@ export class ProviderReport extends Context.Service<
   {
     readonly stopReason: (reason: string) => Effect.Effect<void>
     readonly quota: (readings: ReadonlyArray<QuotaReading>) => Effect.Effect<void>
+    readonly cacheWarmer: (warmer: CacheWarmer) => Effect.Effect<void>
   }
 >()("@gent/core/src/domain/driver/ProviderReport") {}
+
+/**
+ * How a driver keeps the step's prompt cache warm while the step's tools run.
+ * `sentAtMillis` is when the step's request went out; `resend` sends the same
+ * request again for no output (a cache read refreshes the entry's lifetime)
+ * and answers with its usage, none when the request failed (the driver logs
+ * why). The loop calls it only while the step's tools run and the cache would
+ * lapse before they finish.
+ */
+export interface CacheWarmer {
+  readonly sentAtMillis: number
+  readonly resend: Effect.Effect<Option.Option<Usage>>
+}
 
 /** Nothing listens outside a loop step. */
 const reportToLoop = (
@@ -681,6 +696,10 @@ const reportToLoop = (
 /** A driver reports the stream's raw stop reason. */
 export const reportProviderStopReason = (reason: string): Effect.Effect<void> =>
   reportToLoop((listener) => listener.stopReason(reason))
+
+/** A driver reports how to keep the step's cache warm (`CacheWarmer`). */
+export const reportProviderCacheWarmer = (warmer: CacheWarmer): Effect.Effect<void> =>
+  reportToLoop((listener) => listener.cacheWarmer(warmer))
 
 /** A driver reports the quota windows a response named; none named reports nothing. */
 export const reportProviderQuota = (readings: ReadonlyArray<QuotaReading>): Effect.Effect<void> => {

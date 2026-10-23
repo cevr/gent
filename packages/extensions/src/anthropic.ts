@@ -49,6 +49,7 @@ import {
   ReasoningEffort,
   type QuotaReading,
   rateLimitResponse,
+  reportProviderCacheWarmer,
   reportProviderQuota,
   reportProviderStopReason,
   retryAfterAt,
@@ -95,7 +96,7 @@ import {
   spentLimitsReset,
 } from "./providers.js"
 import { ChildProcessSpawner } from "effect/process"
-import { Headers, HttpClient, HttpClientRequest } from "effect/http"
+import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import type { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
 import type * as AnthropicSdkModule from "@effect/ai-anthropic"
 import { type AiError, Model as AiModel, type Response } from "effect/ai"
@@ -2356,6 +2357,10 @@ const SHARED_PREFIX_MIN_CHARS = 4_096
  * the parent and every sibling read that entry. The catalog names the child
  * lifetime as each model's `childPromptCacheTtlMs`.
  *
+ * A tool run that outlasts the lifetime keeps the entry warm instead of
+ * writing it again (`cacheWarmerFor`): a read restarts an entry's own
+ * lifetime, while a longer-lived marker on the next request cannot extend it.
+ *
  * The Messages API takes `ttl` on `cache_control` with no beta header
  * (`CacheControlEphemeral` in `@effect/ai-anthropic`'s Generated schema). A
  * request must list longer-lived entries before shorter ones. The shared
@@ -2740,6 +2745,18 @@ type CreateMessageStreamReply = Effect.Success<
 
 /** What one auth path adds around the request plan. */
 interface ClientPath<R> {
+  /**
+   * Whether a step's streamed request reports a cache warmer
+   * (`cacheWarmerFor`): the Anthropic driver's own paths when they mark the
+   * cache, never a gateway's, which names no receipt that it takes a request
+   * for no output.
+   */
+  readonly warmsCache: boolean
+  /**
+   * The path's own client transform, run after the body rewrite: the OAuth
+   * headers and their 401 recovery, or a gateway's transform.
+   */
+  readonly transformClient: (client: HttpClient.HttpClient) => HttpClient.HttpClient
   /** The path's own payload rewrite, run after the request plan is applied. */
   readonly payload: (payload: JsonRecord) => Effect.Effect<JsonRecord, never, R>
   /** Maps the reply; `toolIds` are the tool ids the call's request advertised. */
@@ -2753,9 +2770,9 @@ interface ClientPath<R> {
   ) => Effect.Effect<CreateMessageStreamReply, AiError.AiError>
 }
 
-/** The SDK client layer of one auth path, given the body rewrite to install as its innermost transform. */
+/** The SDK client layer of one auth path, given the whole client transform: the body rewrite, then the path's own. */
 type SdkClientLayer = (
-  rewriteBody: (client: HttpClient.HttpClient) => HttpClient.HttpClient,
+  transformClient: (client: HttpClient.HttpClient) => HttpClient.HttpClient,
 ) => Layer.Layer<AnthropicClient.AnthropicClient, never, HttpClient.HttpClient>
 
 /**
@@ -2770,6 +2787,61 @@ const reportStopReason = (event: AnthropicClient.MessageStreamEvent): Effect.Eff
   }
   return reportProviderStopReason(event.delta.stop_reason)
 }
+
+/** The usage a warming read answers with. */
+const WarmingReply = Schema.Struct({
+  usage: Schema.Struct({
+    input_tokens: Schema.Finite,
+    output_tokens: Schema.Finite,
+    cache_read_input_tokens: Schema.optional(Schema.NullOr(Schema.Int)),
+    cache_creation_input_tokens: Schema.optional(Schema.NullOr(Schema.Int)),
+  }),
+})
+
+/**
+ * The warmer of a streamed request (`CacheWarmer`): the same request again,
+ * with no output and no stream. `client` sends a request as it stands: the
+ * SDK's URL and headers are already on it, and the path's own transform signs
+ * it again with a fresh credential. It reads the
+ * whole prefix and writes nothing, and the read restarts the 5-minute entry's
+ * lifetime; `max_tokens: 0` is accepted with adaptive thinking and tools
+ * (Haiku probe, 2026-10-23). A 1-hour marker on a later request cannot extend
+ * a 5-minute entry: it writes its part again at the 1-hour rate.
+ */
+const cacheWarmerFor = (
+  client: HttpClient.HttpClient,
+  request: HttpClientRequest.HttpClientRequest,
+  body: JsonRecord,
+): Effect.Effect<void> =>
+  Effect.flatMap(Clock.currentTimeMillis, (sentAtMillis) =>
+    reportProviderCacheWarmer({
+      sentAtMillis,
+      resend: client
+        .execute(
+          HttpClientRequest.bodyJsonUnsafe(request, { ...body, max_tokens: 0, stream: false }),
+        )
+        .pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.flatMap(HttpClientResponse.schemaBodyJson(WarmingReply)),
+          Effect.map(({ usage }) => {
+            const cacheReadTokens = usage.cache_read_input_tokens ?? 0
+            const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0
+            return Option.some({
+              inputTokens: usage.input_tokens + cacheReadTokens + cacheWriteTokens,
+              outputTokens: usage.output_tokens,
+              cacheReadTokens,
+              cacheWriteTokens,
+            })
+          }),
+          Effect.catch((error) =>
+            Effect.logWarning("anthropic.cache-warming-failed").pipe(
+              Effect.annotateLogs({ error: String(error) }),
+              Effect.as(Option.none()),
+            ),
+          ),
+        ),
+    }),
+  )
 
 /**
  * Builds the AnthropicClient for one auth path. The request plan (effort and
@@ -2789,8 +2861,8 @@ const anthropicClientLayer = <R>(
   Layer.unwrap(
     Effect.gen(function* () {
       const pathContext = yield* Effect.context<R>()
-      const rewriteBody = HttpClient.mapRequestEffect(
-        (request: HttpClientRequest.HttpClientRequest) =>
+      const rewriteBody = (client: HttpClient.HttpClient) =>
+        HttpClient.mapRequestEffect(client, (request: HttpClientRequest.HttpClientRequest) =>
           Option.match(requestJsonObject(request), {
             onNone: () => Effect.succeed(request),
             onSome: (payload) => {
@@ -2799,21 +2871,27 @@ const anthropicClientLayer = <R>(
                 .payload(applyRequestPlan(separateHostContextUpdates(flagged), plan, carrier))
                 .pipe(
                   Effect.provideContext(pathContext),
-                  Effect.map((body) => {
-                    let rewritten = HttpClientRequest.bodyJsonUnsafe(
-                      request,
-                      unflagHostContextUpdates(body),
-                    )
+                  Effect.flatMap((body) => {
+                    const sent = unflagHostContextUpdates(body)
+                    let rewritten = HttpClientRequest.bodyJsonUnsafe(request, sent)
                     if (bindsThinking(body)) rewritten = withBeta(rewritten, THINKING_BINDING_BETA)
                     if (carriesEffortMarker(body)) {
                       rewritten = withBeta(rewritten, MID_CONVERSATION_EFFORT_BETA)
                     }
-                    return rewritten
+                    if (!path.warmsCache || sent["stream"] !== true)
+                      return Effect.succeed(rewritten)
+                    // Effect's `mapRequest` appends to the preprocess chain: the
+                    // SDK's URL and headers ran before this rewrite, the path's
+                    // transform runs after it.
+                    const resendAsIs = path.transformClient(
+                      HttpClient.makeWith(client.postprocess, Effect.succeed),
+                    )
+                    return Effect.as(cacheWarmerFor(resendAsIs, rewritten, sent), rewritten)
                   }),
                 )
             },
           }),
-      )
+        )
       const replies = Layer.effect(
         AnthropicClient.AnthropicClient,
         Effect.gen(function* () {
@@ -2837,7 +2915,9 @@ const anthropicClientLayer = <R>(
           })
         }),
       )
-      return replies.pipe(Layer.provide(sdkLayer(rewriteBody)))
+      return replies.pipe(
+        Layer.provide(sdkLayer((client) => path.transformClient(rewriteBody(client)))),
+      )
     }),
   )
 
@@ -2845,7 +2925,16 @@ const anthropicClientLayer = <R>(
  * The API-key path marks prompt-cache breakpoints and changes nothing else.
  * The Claude Code path marks its payload in `transformPayload`.
  */
-const apiKeyClientPath = (cacheLifetimes: Option.Option<CacheLifetimes>): ClientPath<never> => ({
+const apiKeyClientPath = (
+  cacheLifetimes: Option.Option<CacheLifetimes>,
+  warmsCache: boolean,
+  transformClient: Option.Option<(client: HttpClient.HttpClient) => HttpClient.HttpClient>,
+): ClientPath<never> => ({
+  warmsCache: warmsCache && Option.isSome(cacheLifetimes),
+  transformClient: Option.getOrElse(
+    transformClient,
+    () => (client: HttpClient.HttpClient) => client,
+  ),
   payload: (payload) =>
     Effect.succeed(markRequestCache(payload, CachePrefixEnd.cases.System.make({}), cacheLifetimes)),
   message: (call) => call,
@@ -2861,10 +2950,13 @@ const claudeCodeClientPath = (
   { Generated }: AnthropicSdk,
   creds: CredentialCache<ClaudeCredentials>,
   cacheLifetimes: Option.Option<CacheLifetimes>,
+  keychain: (client: HttpClient.HttpClient) => HttpClient.HttpClient,
 ): ClientPath<KeychainTransformRequirements> => {
   const explain = explainCredentialFailure(creds)
   const decodeMessage = Schema.decodeUnknownSync(Generated.BetaMessage)
   return {
+    warmsCache: Option.isSome(cacheLifetimes),
+    transformClient: keychain,
     payload: (payload) => transformPayload(payload, cacheLifetimes),
     message: (call, toolIds) =>
       explain(call).pipe(
@@ -3746,13 +3838,15 @@ const carriesEffortMarker = (payload: JsonRecord): boolean => {
  * API-key path: plain `AnthropicClient.layer` over `ModelHttpClient`.
  * No keychain wrapper — `buildKeychainTransformClient` injects Claude Code OAuth
  * billing-header system blocks + identity prefix, which API-key users
- * are not on the hook for.
+ * are not on the hook for. `warmsCache`: the path reports a cache warmer
+ * (`ClientPath.warmsCache`).
  */
 const makeApiKeyAnthropicLayer = (
   sdk: AnthropicSdk,
   modelName: string,
   request: AnthropicRequest,
   endpoint: ApiEndpoint,
+  warmsCache: boolean,
 ) => {
   const { AnthropicClient, AnthropicLanguageModel } = sdk
   // The SDK adds `/v1/messages` to its base URL itself; models.dev names the `/v1` root.
@@ -3760,16 +3854,12 @@ const makeApiKeyAnthropicLayer = (
   const clientLayer = anthropicClientLayer(
     sdk,
     request,
-    apiKeyClientPath(request.cacheLifetimes),
-    (rewriteBody) =>
+    apiKeyClientPath(request.cacheLifetimes, warmsCache, endpoint.transformClient),
+    (transformClient) =>
       AnthropicClient.layer({
         apiKey: sdkApiKey(endpoint.apiKey),
         apiUrl: Option.getOrUndefined(apiUrl),
-        transformClient: (client) =>
-          Option.match(endpoint.transformClient, {
-            onNone: () => rewriteBody(client),
-            onSome: (transform) => transform(rewriteBody(client)),
-          }),
+        transformClient,
       }),
   ).pipe(Layer.provide(ModelHttpClient))
   return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
@@ -3802,9 +3892,8 @@ const makeOauthAnthropicLayer = (
   const wrappedClient = anthropicClientLayer(
     sdk,
     request,
-    claudeCodeClientPath(sdk, creds, request.cacheLifetimes),
-    (rewriteBody) =>
-      AnthropicClient.layer({ transformClient: (client) => keychain(rewriteBody(client)) }),
+    claudeCodeClientPath(sdk, creds, request.cacheLifetimes, keychain),
+    (transformClient) => AnthropicClient.layer({ transformClient }),
   ).pipe(Layer.provide(ModelHttpClient), Layer.provide(Layer.succeedContext(services)))
   return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
     Layer.provide(wrappedClient),
@@ -3857,6 +3946,7 @@ export const MESSAGES_CLASS: ApiClassContribution = {
             anthropicRequest(request.model, request.hints, MESSAGES_PROMPT_CACHE_TTL, "none"),
           ),
           request,
+          false,
         ),
       ),
     ),
@@ -3996,11 +4086,17 @@ export const buildAnthropicModelDriver = (
           return AiModel.make(
             "anthropic",
             modelName,
-            makeApiKeyAnthropicLayer(yield* loadAnthropicSdk, modelName, request, {
-              apiKey,
-              baseUrl: Option.none(),
-              transformClient: Option.none(),
-            }),
+            makeApiKeyAnthropicLayer(
+              yield* loadAnthropicSdk,
+              modelName,
+              request,
+              {
+                apiKey,
+                baseUrl: Option.none(),
+                transformClient: Option.none(),
+              },
+              true,
+            ),
           )
         }
 

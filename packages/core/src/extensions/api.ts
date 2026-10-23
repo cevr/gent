@@ -80,6 +80,7 @@ export {
   rateLimitResponse,
   QuotaReading,
   ReasoningOption,
+  reportProviderCacheWarmer,
   reportProviderQuota,
   reportProviderStopReason,
   retryAfterAt,

@@ -188,12 +188,14 @@ import * as path from "node:path"
 import {
   type ApiClassContribution,
   type AuthMetadata,
+  type CacheWarmer,
   type LockSourceRotation,
   type StoredOAuthCredentials,
   type ModelDriverContribution,
   type ProviderAuthInfo,
   ProviderReport,
   type QuotaReading,
+  reportProviderCacheWarmer,
   reportProviderQuota,
   reportProviderStopReason,
 } from "../domain/driver.js"
@@ -2327,23 +2329,33 @@ export const storeRotationLock = (
 export const captureProviderReport = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<
-  { readonly stopReason: Option.Option<string>; readonly quota: ReadonlyArray<QuotaReading> },
+  {
+    readonly stopReason: Option.Option<string>
+    readonly quota: ReadonlyArray<QuotaReading>
+    readonly cacheWarmer: Option.Option<CacheWarmer>
+  },
   E,
   Exclude<R, ProviderReport>
 > =>
   Effect.gen(function* () {
     const stopReason = yield* Ref.make(Option.none<string>())
     const quota = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+    const cacheWarmer = yield* Ref.make(Option.none<CacheWarmer>())
     yield* effect.pipe(
       Effect.provideService(
         ProviderReport,
         ProviderReport.of({
           stopReason: (reason) => Ref.set(stopReason, Option.some(reason)),
           quota: (readings) => Ref.update(quota, (seen) => [...seen, ...readings]),
+          cacheWarmer: (warmer) => Ref.set(cacheWarmer, Option.some(warmer)),
         }),
       ),
     )
-    return { stopReason: yield* Ref.get(stopReason), quota: yield* Ref.get(quota) }
+    return {
+      stopReason: yield* Ref.get(stopReason),
+      quota: yield* Ref.get(quota),
+      cacheWarmer: yield* Ref.get(cacheWarmer),
+    }
   })
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -2676,6 +2688,8 @@ export interface SequenceStep extends ScriptedStep {
    * response's headers.
    */
   readonly quota?: ReadonlyArray<QuotaReading>
+  /** The warmer the step reports through `ProviderReport`, as a driver that marks its cache does. */
+  readonly cacheWarmer?: CacheWarmer
 }
 
 interface SequenceLanguageModelControls {
@@ -2818,6 +2832,9 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
           yield* checked.pipe(Effect.mapError((message) => aiError("Sequence.streamText", message)))
 
           if (Predicate.isNotUndefined(step.quota)) yield* reportProviderQuota(step.quota)
+          if (Predicate.isNotUndefined(step.cacheWarmer)) {
+            yield* reportProviderCacheWarmer(step.cacheWarmer)
+          }
           if (Predicate.isNotUndefined(step.stopReason)) {
             yield* reportProviderStopReason(step.stopReason)
           }
