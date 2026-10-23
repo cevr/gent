@@ -9,14 +9,42 @@ describe("monthly report", () => {
   })
   test("splits income and spend and sorts categories by spend", () => {
     const report = monthlyReport("2026-03", [
-      { id: "1", date: "2026-03-02", merchant: "Payroll", memo: "", amount: cents(1000), category: "income" },
-      { id: "2", date: "2026-03-05", merchant: "Shop", memo: "", amount: cents(-300), category: "groceries" },
-      { id: "3", date: "2026-03-06", merchant: "Cab", memo: "", amount: cents(-100), category: "transport" },
-      { id: "4", date: "2026-04-06", merchant: "Cab", memo: "", amount: cents(-100), category: "transport" },
+      {
+        id: "1",
+        date: "2026-03-02",
+        merchant: "Payroll",
+        memo: "",
+        amount: cents(1000),
+        category: "income",
+      },
+      {
+        id: "2",
+        date: "2026-03-05",
+        merchant: "Shop",
+        memo: "",
+        amount: cents(-300),
+        category: "groceries",
+      },
+      {
+        id: "3",
+        date: "2026-03-06",
+        merchant: "Cab",
+        memo: "",
+        amount: cents(-100),
+        category: "transport",
+      },
+      {
+        id: "4",
+        date: "2026-04-06",
+        merchant: "Cab",
+        memo: "",
+        amount: cents(-100),
+        category: "transport",
+      },
     ])
-    expect(report.income).toBe(1000)
-    expect(report.spend).toBe(-400)
-    expect(report.net).toBe(600)
+    expect(report.income).toBe(cents(1000))
+    expect(report.spend).toBe(cents(-400))
+    expect(report.net).toBe(cents(600))
     expect(report.byCategory.map((c) => c.category)).toEqual(["groceries", "transport"])
   })
 })

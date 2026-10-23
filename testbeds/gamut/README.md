@@ -27,8 +27,10 @@ bun run gamut down                  # quit, stop the host, remove the scratch di
 `--remote <url>` adds that GitHub repository as the scratch repo's `origin`
 and force-pushes the first commit to its `main`, so an orchestrate run's
 merge gate can push and wait for CI. The fixture's
-`.github/workflows/gate.yml` runs the project's whole gate (`bun run
-typecheck`, `bun test`) on every push. Without `--remote` the run has no
+`.github/workflows/gate.yml` runs `bun run typecheck` on every push: the
+typecheck is green at the red baseline, while the suite's red tests are the
+open tasks and run in each unit's own gate. The fixture's `bun.lock` pins `@types/bun`
+and TypeScript, so the typecheck baseline is the same on every run. Without `--remote` the run has no
 remote, and a merge state fails with `No such remote 'origin'`. The owner's
 throwaway private repository for this is `cevr/gamut-ledgerline`; each run
 replaces its history.

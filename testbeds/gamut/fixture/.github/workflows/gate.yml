@@ -1,3 +1,6 @@
+# Typecheck only: the red tests are the open tasks, so a whole-suite run
+# would fail every unit's merge for another unit's task. Each unit's tests
+# run in its own gate.
 name: gate
 on: push
 jobs:
@@ -8,4 +11,3 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test
