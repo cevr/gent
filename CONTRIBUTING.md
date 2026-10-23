@@ -21,5 +21,6 @@ in the same commit when the change diverges from them.
 1. Fork the repo
 2. Create a feature branch
 3. Make changes; run `bun run gate` (the pre-commit hook lints and formats
-   the staged files only; the gate and CI run everything)
+   the staged files, and type-checks the working tree with `bun check`;
+   the gate and CI run everything)
 4. Submit PR — small, reviewable commits preferred over one mega-PR

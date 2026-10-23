@@ -1,6 +1,6 @@
 # The pre-commit hook finishes in under 10 s: it reads the staged files only,
-# except `types`. Build, the whole-tree lint, the Effect diagnostics and the
-# tests are `bun run gate`'s, which CI runs on every push and pull request;
+# except `types`. Build, the whole-tree lint, the Effect diagnostics, the
+# steering-doc fences and the tests are `bun run gate`'s, which CI runs on every push and pull request;
 # run it before a handoff.
 pre-commit:
   parallel: true
