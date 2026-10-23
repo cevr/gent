@@ -51,6 +51,14 @@ The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1
 4. **A herdr-free gamut.** `gamut up` starts the TUI on the pty fixture in a detached host process, which owns the pty and listens on a Unix socket in the run's scratch directory. `send`, `keys`, `interrupt`, `restart` and `down` become socket calls. `read` returns only the rows that changed since the last read, with `--full` for the whole screen. `wait` keeps its database rule and asks the host for the tray pulse, not the pane text. With no herdr pane, a run starts from any shell, a subagent included.
 5. **Scratch setup in the tool.** The script takes `model` and a fixture, and the tool seeds the scratch `HOME`, `GENT_DATA_DIR` and config. The tool refuses paths outside the scratch directory, as `fetch-capture.ts` does.
 
+### Items 1 and 3 status (2026-10-23)
+
+- `expect`, `expectNot`, `fits`, `stable` and the compact report with a diff against `out/passed/` are in `packages/e2e/src/pty-fixture.ts`. Drive output names files relative to `out` (the unit-1 leftover).
+- Each assertion was broken in turn (8 probes); each break fails a test in `packages/e2e/tests/drive.test.ts` (measured).
+- `fits` reads the terminal's wrap flag and the last two cells. Old captures end on `$0.02`, `…` and borders at the last column, so only two letters at the edge count as a cut (measured on `tree-sections` captures).
+- Live: a drive with `expect`, `fits` and `stable` at 120x40, a resize to 60x20 and back passed 3/3 at 25 stderr lines (load 7.57 on 12 cores). `stable` right after `ready` caught the status row drawing `(anthropic)`, then `(Anthropic)` (1 of 3 runs).
+- Open: the diff is row by row, so a block that moved shows every row it crossed; item 2 (size sweep), item 4 (gamut without herdr) and item 5 (scratch setup) are not started.
+
 ## Done when
 
 - A drive script with `expect`, `fits` and a two-size sweep passes on the current TUI and fails on a planted wrap. Each assertion is proved by breaking it first.

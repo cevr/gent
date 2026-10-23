@@ -90,15 +90,15 @@ class DoctorFailed extends Schema.TaggedError<DoctorFailed, { readonly brand: un
 
 /**
  * A drive that ran to its end and failed: `problems`, one line per missed
- * or failed step and per exit the script does not expect; `steps`, every
- * step's outcome; `end`, how the program ended.
+ * or failed step and per exit the script does not expect; `end`, how the
+ * program ended. Each step's line, and the rows a failed one shows, are on
+ * stderr above it.
  */
 class DriveFailed extends Schema.TaggedError<DriveFailed, { readonly brand: unique symbol }>()(
   "DriveFailed",
   {
     out: Schema.String,
     problems: Schema.Array(Schema.String),
-    steps: Schema.Array(StepOutcome),
     end: DriveEnd,
   },
 ) {
@@ -807,7 +807,7 @@ const Driven = Schema.Struct({
   /** How many steps ran; each one's line is on stderr. */
   steps: Schema.Int,
   end: DriveEnd,
-  /** The files the capture steps saved, in step order. */
+  /** The files the capture steps saved, in step order, named from `out`. */
   captures: Schema.Array(Schema.String),
   /** The asciicast v2 recording, checked to play; absent with `--no-record`. */
   recording: Schema.optionalKey(Recording),
@@ -901,7 +901,7 @@ const drive = Effect.fn("Verify.drive")(function* (options: {
   ).pipe(Effect.mapError(failed("drive")))
   const problems = driveProblems(script, outcome)
   if (problems.length > 0) {
-    return yield* new DriveFailed({ out, problems, steps: outcome.steps, end: outcome.end })
+    return yield* new DriveFailed({ out, problems, end: outcome.end })
   }
   const recording = yield* Option.match(outcome.recording, {
     onNone: () => Effect.succeed({}),
@@ -918,7 +918,11 @@ const drive = Effect.fn("Verify.drive")(function* (options: {
             )
           }
           return Effect.succeed({
-            recording: { file, seconds: check.seconds, events: check.events },
+            recording: {
+              file: path.relative(out, file),
+              seconds: check.seconds,
+              events: check.events,
+            },
           })
         }),
       ),
@@ -928,7 +932,7 @@ const drive = Effect.fn("Verify.drive")(function* (options: {
       Ok: (ok) => Option.toArray(Option.fromUndefinedOr(ok.file)),
       Miss: () => [],
       Fail: () => [],
-    }),
+    }).map((file) => path.relative(out, file)),
   )
   return Driven.make({ out, steps: outcome.steps.length, end: outcome.end, captures, ...recording })
 })

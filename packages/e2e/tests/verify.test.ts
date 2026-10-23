@@ -115,7 +115,8 @@ describe("verify helpers", () => {
         yield* Effect.addFinalizer(() => verify(["stop", "--dir", dir], parent).pipe(Effect.ignore))
 
         // `--data` seeds an account ledger the server reads as it starts: one
-        // window 40% used, two 2-point segments of 240k fuel, so 120k a point.
+        // window 30% used, two 2-point segments of 240k fuel, so 120k a point:
+        // 60 points to the 90% stop over 2 h hold one run.
         const now = yield* Clock.currentTimeMillis
         const segment = (endedAt: number) => ({
           provider: "anthropic",
@@ -137,7 +138,7 @@ describe("verify helpers", () => {
                 provider: "anthropic",
                 slot: "default",
                 window: "5h",
-                utilization: 0.4,
+                utilization: 0.3,
                 resetAt: now + 2 * 3_600_000,
                 readAt: now - 60_000,
                 rejected: false,
@@ -184,6 +185,7 @@ describe("verify helpers", () => {
               ["keys", "enter"],
               ["waitFor", "gent debug response", 15_000],
               ["cap", "answered"],
+              ["fits"],
               ["sh", 'gent ctl snapshot --limit 2 > "$EVIDENCE/snapshot.json"'],
             ],
           },
@@ -191,12 +193,15 @@ describe("verify helpers", () => {
         )
         expect({ code: drove.code, stderr: drove.stderr }).toMatchObject({ code: 0 })
         const driven = yield* decodeLine(Driven)(drove.stdout.trim())
-        expect(driven.steps).toBe(6)
+        expect(driven.steps).toBe(7)
         expect(driven.end._tag).toBe("Stopped")
-        expect(driven.captures).toEqual([`${evidence}/turn/answered.txt`])
-        expect(driven.recording.file).toBe(`${evidence}/turn/drive.cast`)
+        // Files are named from the evidence directory.
+        expect(driven.captures).toEqual(["answered.txt"])
+        expect(driven.recording.file).toBe("drive.cast")
         expect(driven.recording.seconds).toBeGreaterThan(0)
-        expect(drove.stderr.trimEnd().split("\n")).toHaveLength(6)
+        const lines = drove.stderr.trimEnd().split("\n")
+        expect(lines).toHaveLength(8)
+        expect(lines.at(-1)).toMatch(/^pass 7\/7 · stopped \d+ · /)
         expect(drove.stderr).not.toContain("001|")
         expect(yield* fs.readFileString(`${evidence}/turn/answered.txt`)).toContain(
           "gent debug response",

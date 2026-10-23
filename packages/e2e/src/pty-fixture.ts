@@ -705,6 +705,17 @@ const CaptureName = Schema.String.check(
   }),
 )
 
+/** A screen row as a capture numbers it: 1 is the top, and -1 the bottom, -2 the one above it. */
+const ScreenRow = Schema.Int.check(
+  Schema.makeFilter(
+    (row: number) => row !== 0 || "rows count from 1 at the top, or from -1 at the bottom",
+  ),
+)
+
+/** The rows `[first, last]` an assertion reads, both included. */
+const RowSpan = Schema.Tuple([ScreenRow, ScreenRow])
+type RowSpan = typeof RowSpan.Type
+
 /**
  * One step of a drive script. `send` writes text, `keys` writes a named key
  * from `keys` (or the text itself), `wait` sleeps, `waitFor` polls the screen
@@ -713,6 +724,11 @@ const CaptureName = Schema.String.check(
  * the screen (with scrollback), `cells` saves the cursor row's cells, `raw`
  * saves the raw output, and `sh` runs a shell command (30 s unless the step
  * names its ms).
+ *
+ * The assertions read the screen as it is now and fail the step with the
+ * rows that show why: `expect` and `expectNot` a regex in the screen's rows
+ * (or a `RowSpan` of them); `fits`, no row the terminal wrapped and no word
+ * cut at the right edge; `stable`, a screen that does not change for the ms.
  */
 const DriveStep = Schema.Union([
   Schema.Tuple([Schema.Literal("send"), Schema.String]),
@@ -723,6 +739,13 @@ const DriveStep = Schema.Union([
   Schema.Tuple([Schema.Literal("resize"), Schema.Int, Schema.Int]),
   Schema.Tuple([Schema.Literals(["cap", "capAll", "cells", "raw"]), CaptureName]),
   Schema.Tuple([Schema.Literal("sh"), Schema.String, Schema.optionalKey(Schema.Finite)]),
+  Schema.Tuple([
+    Schema.Literals(["expect", "expectNot"]),
+    PatternSource,
+    Schema.optionalKey(RowSpan),
+  ]),
+  Schema.Tuple([Schema.Literal("fits"), Schema.optionalKey(RowSpan)]),
+  Schema.Tuple([Schema.Literal("stable"), Schema.Finite]),
 ])
 type DriveStep = typeof DriveStep.Type
 
@@ -751,7 +774,8 @@ type DriveScript = typeof DriveScript.Type
 
 /**
  * What one step came to: `Ok`; `Miss`, a `waitFor` whose pattern never
- * showed; `Fail`, an `sh` step that exited non-zero or outlived its limit.
+ * showed; `Fail`, an `sh` step that exited non-zero or outlived its limit, or
+ * an assertion that did not hold, with the rows that show why in `detail`.
  * `at` is the step's index, `ms` the time since the program started, and
  * `file` what a capture step saved.
  */
@@ -763,7 +787,13 @@ export const StepOutcome = Schema.TaggedUnion({
     file: Schema.optionalKey(Schema.String),
   },
   Miss: { at: Schema.Int, step: Schema.String, ms: Schema.Finite },
-  Fail: { at: Schema.Int, step: Schema.String, ms: Schema.Finite, reason: Schema.String },
+  Fail: {
+    at: Schema.Int,
+    step: Schema.String,
+    ms: Schema.Finite,
+    reason: Schema.String,
+    detail: Schema.optionalKey(Schema.Array(Schema.String)),
+  },
 })
 export type StepOutcome = typeof StepOutcome.Type
 
@@ -836,39 +866,223 @@ export const driveProblems = (
 type StepDone = Data.TaggedEnum<{
   Ok: { readonly file: Option.Option<string>; readonly screen: Option.Option<string> }
   Miss: {}
-  Fail: { readonly reason: string }
+  Fail: { readonly reason: string; readonly detail: ReadonlyArray<string> }
 }>
 const StepDone = Data.taggedEnum<StepDone>()
 const stepOk = StepDone.Ok({ file: Option.none(), screen: Option.none() })
 
 const WAIT_FOR_DEFAULT_MS = 15_000
 const SH_LIMIT_MS = 30_000
+const STABLE_POLL_MS = 100
 const RECORDING = "drive.cast"
+/** Where a passing drive keeps its captures, for the next failing one to diff against. */
+const PASSED = "passed"
+/** The rows shown around an assertion's rows when it fails. */
+const CONTEXT_ROWS = 3
+/** The most rows a failure prints for one step or one capture. */
+const DETAIL_ROWS = 24
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
-/** A step as its outcome line names it: the verb, then its argument as JSON text. */
-const stepLabel = (step: DriveStep): string => {
-  const [verb, ...rest] = step
-  return [
-    verb,
-    ...rest.map((each) =>
-      Option.match(Option.liftPredicate(each, Predicate.isString), {
-        onNone: () => String(each),
-        onSome: (text) => encodeJson(text),
-      }),
-    ),
-  ].join(" ")
+/** One argument of a step as its line names it: text as JSON, a span as `rows a..b`. */
+const argumentLabel = (each: NonNullable<DriveStep[number]>): string => {
+  if (Predicate.isString(each)) return encodeJson(each)
+  if (Predicate.isNumber(each)) return String(each)
+  return `rows ${each[0]}..${each[1]}`
 }
 
-/** One outcome as the compact line a drive prints on stderr. */
-const outcomeLine = (outcome: StepOutcome): string =>
+/** A step as its outcome line names it: the verb, then its arguments. */
+const stepLabel = (step: DriveStep): string => {
+  const parts: ReadonlyArray<DriveStep[number]> = step.slice(1)
+  return [step[0], ...parts.values().filter(Predicate.isNotUndefined).map(argumentLabel)].join(" ")
+}
+
+/**
+ * One outcome as the compact lines a drive prints on stderr: one line, and
+ * under a failed step the rows that show why. A file is named from `out`.
+ */
+const outcomeLines = (outcome: StepOutcome, named: (file: string) => string): string =>
   StepOutcome.match(outcome, {
     Ok: (ok) =>
-      [`ok   ${ok.step} ${ok.ms}ms`, ...Option.toArray(Option.fromUndefinedOr(ok.file))].join(" "),
+      [
+        `ok   ${ok.step} ${ok.ms}ms`,
+        ...Option.toArray(Option.fromUndefinedOr(ok.file).pipe(Option.map(named))),
+      ].join(" "),
     Miss: (miss) => `miss ${miss.step} ${miss.ms}ms`,
-    Fail: (fail) => `fail ${fail.step} ${fail.ms}ms ${fail.reason}`,
+    Fail: (fail) =>
+      [`FAIL ${fail.step} ${fail.ms}ms ${fail.reason}`, ...(fail.detail ?? [])].join("\n"),
   })
+
+/** How the program ended, as the drive's last line names it. */
+const endLabel = (end: DriveEnd): string =>
+  DriveEnd.match(end, {
+    Exited: ({ code }) => `exited ${code}`,
+    Stopped: ({ code }) => `stopped ${code}`,
+    Survived: () => "survived the SIGKILL",
+  })
+
+// ── Screen assertions ──
+
+/** A screen row as a failure prints it, numbered as a capture numbers it, `mark` before the number. */
+const detailRow = (index: number, row: string, mark = " "): string =>
+  `  ${mark}${String(index + 1).padStart(3, "0")}|${row}`
+
+/** At most `DETAIL_ROWS` of `lines`, and a count of the rest. */
+const capped = (lines: ReadonlyArray<string>, unit: string): ReadonlyArray<string> => {
+  if (lines.length <= DETAIL_ROWS) return lines
+  return [...lines.slice(0, DETAIL_ROWS), `  … ${lines.length - DETAIL_ROWS} more ${unit}`]
+}
+
+/**
+ * The 0-based rows `[from, to)` a span names on a screen of `count` rows,
+ * clipped to the screen: every row without a span, `None` when the span
+ * names no row there.
+ */
+const spanRows = (
+  span: Option.Option<RowSpan>,
+  count: number,
+): Option.Option<readonly [number, number]> => {
+  if (Option.isNone(span)) return Option.some([0, count])
+  const [first, last] = span.value
+  const index = (row: number) => {
+    if (row < 0) return count + row
+    return row - 1
+  }
+  const range = [Math.max(0, index(first)), Math.min(count, index(last) + 1)] as const
+  return Option.liftPredicate(range, ([from, to]) => from < to)
+}
+
+/** Rows `[from, to)` with `CONTEXT_ROWS` around them, those in the range marked `!`. */
+const rowsInContext = (
+  rows: ReadonlyArray<string>,
+  from: number,
+  to: number,
+): ReadonlyArray<string> => {
+  const first = Math.max(0, from - CONTEXT_ROWS)
+  const last = Math.min(rows.length, to + CONTEXT_ROWS)
+  return capped(
+    rows.slice(first, last).map((row, offset) => {
+      const index = first + offset
+      if (index >= from && index < to) return detailRow(index, row, "!")
+      return detailRow(index, row)
+    }),
+    "rows",
+  )
+}
+
+/** A failure for a span that names no row of a screen of `count` rows. */
+const offScreen = (span: Option.Option<RowSpan>, count: number): StepDone =>
+  StepDone.Fail({
+    reason: `${Option.match(span, { onNone: () => "the screen", onSome: argumentLabel })} names no row of the ${count}-row screen`,
+    detail: [],
+  })
+
+/** The screen's rows that hold text, for a failure with no rows of its own to show. */
+const textRows = (rows: ReadonlyArray<string>): ReadonlyArray<string> =>
+  capped(
+    rows.flatMap((row, index) => {
+      if (row.length === 0) return []
+      return [detailRow(index, row)]
+    }),
+    "rows",
+  )
+
+/** What a regex assertion found: `expect` holds on a match, `expectNot` on none. */
+const patternAssertion = (
+  verb: "expect" | "expectNot",
+  source: string,
+  span: Option.Option<RowSpan>,
+  rows: ReadonlyArray<string>,
+): StepDone =>
+  Option.match(spanRows(span, rows.length), {
+    onNone: () => offScreen(span, rows.length),
+    onSome: ([from, to]) => {
+      const where = Option.match(span, {
+        onNone: () => "on the screen",
+        onSome: (each) => `in ${argumentLabel(each)}`,
+      })
+      const text = rows.slice(from, to).join("\n")
+      const match = Option.fromNullishOr(new RegExp(source).exec(text))
+      if (verb === "expect") {
+        if (Option.isSome(match)) return stepOk
+        return StepDone.Fail({
+          reason: `no match ${where}`,
+          detail: Option.match(span, {
+            onNone: () => textRows(rows),
+            onSome: () => rowsInContext(rows, from, to),
+          }),
+        })
+      }
+      return Option.match(match, {
+        onNone: () => stepOk,
+        onSome: (found) => {
+          // The rows the match covers: each newline before its start, and within it.
+          const start = from + (text.slice(0, found.index).match(/\n/g) ?? []).length
+          const end = start + (found[0].match(/\n/g) ?? []).length + 1
+          return StepDone.Fail({
+            reason: `${encodeJson(found[0])} shows ${where}, at row ${start + 1}`,
+            detail: rowsInContext(rows, start, end),
+          })
+        },
+      })
+    },
+  })
+
+/** A character a word is made of: a run of two at the right edge was cut there. */
+const LETTER = /\p{L}/u
+
+/**
+ * The rows of `[from, to)` that do not fit the screen's width: one the
+ * terminal wrapped onto the next row (the program wrote past the last
+ * column), and one whose last two cells are letters, a word the edge cut.
+ * Text set flush to the edge ends otherwise: a border, a number, `…`.
+ */
+const unfitRows = (
+  screen: Terminal,
+  from: number,
+  to: number,
+): ReadonlyArray<{ readonly index: number; readonly why: string }> => {
+  const buffer = screen.buffer.active
+  const line = (index: number) => Option.fromNullishOr(buffer.getLine(buffer.viewportY + index))
+  return Arr.range(from, to - 1).flatMap((index) => {
+    const wraps = Option.exists(line(index + 1), (next) => next.isWrapped)
+    if (wraps) return [{ index, why: "wraps onto the next row" }]
+    const cut = Option.exists(line(index), (row) =>
+      [...row.translateToString(false, 0, screen.cols)]
+        .slice(-2)
+        .every((cell) => LETTER.test(cell)),
+    )
+    if (cut) return [{ index, why: "a word runs into the right edge" }]
+    return []
+  })
+}
+
+/** The rows that differ between two reads of a screen: `-` the first read, `+` the second. */
+const changedRows = (
+  before: ReadonlyArray<string>,
+  after: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const changed = Arr.range(0, Math.max(before.length, after.length) - 1).filter(
+    (index) => before[index] !== after[index],
+  )
+  const lines = changed.flatMap((index) => [
+    detailRow(index, before[index] ?? "", "-"),
+    detailRow(index, after[index] ?? "", "+"),
+  ])
+  if (changed.length <= DETAIL_ROWS / 2) return lines
+  return [
+    ...lines.slice(0, DETAIL_ROWS),
+    `  … ${changed.length - DETAIL_ROWS / 2} more changed rows`,
+  ]
+}
+
+/** A capture file's screen rows, its header and the row numbers taken off. */
+const capturedRows = (text: string): ReadonlyArray<string> =>
+  text
+    .trimEnd()
+    .split("\n")
+    .slice(1)
+    .map((row) => row.replace(/^\d{3}\|/, ""))
 
 /**
  * The asciicast v2 text of a drive: the header with the starting size, then
@@ -952,12 +1166,16 @@ export const checkRecording = Effect.fn("Drive.checkRecording")(function* (file:
 /**
  * Run `script` on a live pty and return each step's outcome, how the
  * program ended and its recording. Captures go to files under `script.out`
- * by name; each step prints one line on stderr (`ok|miss|fail <step> <ms>`,
- * and a capture's file), and a capture's screen too with `print`. A miss or
- * a failed step does not stop the drive: the outcome holds it, and
- * `driveProblems` reads it. An `sh` step runs in a process group of its
- * own, stopped with the step, so a command it left in the background ends
- * with it.
+ * by name; each step prints one line on stderr (`ok|miss|FAIL <step> <ms>`,
+ * and a capture's file from `out`), a failed assertion the rows that show
+ * why, and a capture's screen too with `print`. A miss or a failed step does
+ * not stop the drive: the outcome holds it, and `driveProblems` reads it. An
+ * `sh` step runs in a process group of its own, stopped with the step, so a
+ * command it left in the background ends with it.
+ *
+ * The last line is `pass <ok>/<steps> · <end> · <out>`. A drive that passes
+ * keeps its captures under `out/passed`; one that fails prints, before that
+ * line, the rows of each capture that changed since that pass.
  */
 export const runDriveScript = Effect.fn("Drive.run")(function* (
   script: DriveScript & { readonly cwd: string },
@@ -993,6 +1211,7 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
     }),
   ).pipe(Effect.ignore)
   const outcomes: Array<StepOutcome> = []
+  const named = (file: string) => path.relative(script.out, file)
 
   const end = yield* Effect.scoped(
     Effect.gen(function* () {
@@ -1025,9 +1244,45 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
           const file = yield* save(name, "txt", text)
           return { file, text }
         })
-      const visibleScreen = drained(session.screen).pipe(
-        Effect.map(() => screenRows(session, "viewport").join("\n")),
+      const visibleRows = drained(session.screen).pipe(
+        Effect.map(() => screenRows(session, "viewport")),
       )
+      const visibleScreen = Effect.map(visibleRows, (rows) => rows.join("\n"))
+      const stableFor = (ms: number) =>
+        Effect.gen(function* () {
+          const first = yield* visibleRows
+          const deadline = elapsedMs() + ms
+          while (elapsedMs() < deadline) {
+            // oxlint-disable-next-line effect/noFixedWaitInTests -- the poll interval of a stable-screen check; only a second read of the rows shows a change
+            yield* Effect.sleep(`${Math.min(STABLE_POLL_MS, deadline - elapsedMs())} millis`)
+            const now = yield* visibleRows
+            const changed = changedRows(first, now)
+            if (changed.length > 0) {
+              return StepDone.Fail({
+                reason: `the screen changed within ${ms}ms`,
+                detail: changed,
+              })
+            }
+          }
+          return stepOk
+        })
+      const fitsIn = (span: Option.Option<RowSpan>) =>
+        Effect.map(visibleRows, (rows) =>
+          Option.match(spanRows(span, rows.length), {
+            onNone: () => offScreen(span, rows.length),
+            onSome: ([from, to]) => {
+              const unfit = unfitRows(session.screen, from, to)
+              if (unfit.length === 0) return stepOk
+              return StepDone.Fail({
+                reason: unfit.map(({ index, why }) => `row ${index + 1} ${why}`).join("; "),
+                detail: capped(
+                  unfit.map(({ index }) => detailRow(index, rows[index] ?? "", "!")),
+                  "rows",
+                ),
+              })
+            },
+          }),
+        )
       const shell = (command: string, limitMs: number) =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -1123,10 +1378,21 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
               Effect.map(
                 Option.match({
                   onNone: () => ok,
-                  onSome: (reason) => StepDone.Fail({ reason }),
+                  onSome: (reason) => StepDone.Fail({ reason, detail: [] }),
                 }),
               ),
             )
+          case "expect":
+          case "expectNot": {
+            const [verb, source, span] = step
+            return Effect.map(visibleRows, (rows) =>
+              patternAssertion(verb, source, Option.fromUndefinedOr(span), rows),
+            )
+          }
+          case "fits":
+            return fitsIn(Option.fromUndefinedOr(step[1]))
+          case "stable":
+            return stableFor(step[1])
         }
       }
 
@@ -1143,10 +1409,23 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
               ...Option.match(file, { onNone: () => ({}), onSome: (each) => ({ file: each }) }),
             }),
           Miss: () => StepOutcome.cases.Miss.make({ at, step: label, ms }),
-          Fail: ({ reason }) => StepOutcome.cases.Fail.make({ at, step: label, ms, reason }),
+          Fail: ({ reason, detail }) =>
+            StepOutcome.cases.Fail.make({
+              at,
+              step: label,
+              ms,
+              reason,
+              ...Option.match(
+                Arr.match(detail, { onEmpty: Option.none, onNonEmpty: Option.some }),
+                {
+                  onNone: () => ({}),
+                  onSome: (rows) => ({ detail: rows }),
+                },
+              ),
+            }),
         })
         outcomes.push(outcome)
-        yield* Console.error(outcomeLine(outcome))
+        yield* Console.error(outcomeLines(outcome, named))
         if (StepDone.$is("Ok")(done))
           yield* Option.match(done.screen, { onNone: () => Effect.void, onSome: printed })
       }
@@ -1171,5 +1450,37 @@ export const runDriveScript = Effect.fn("Drive.run")(function* (
     ),
     Effect.ensuring(saveRecording),
   )
-  return { steps: outcomes, end, recording } satisfies DriveOutcome
+  const outcome = { steps: outcomes, end, recording } satisfies DriveOutcome
+  const passed = driveProblems(script, outcome).length === 0
+  const captures = outcomes.flatMap((step) =>
+    StepOutcome.match(step, {
+      Ok: (ok) => Option.toArray(Option.fromUndefinedOr(ok.file)),
+      Miss: () => [],
+      Fail: () => [],
+    }).filter((file) => file.endsWith(".txt")),
+  )
+  const passedDir = path.join(script.out, PASSED)
+  if (passed) {
+    // The captures of this pass are the screens the next failing drive is diffed against.
+    yield* fs.makeDirectory(passedDir, { recursive: true }).pipe(Effect.orDie)
+    yield* Effect.forEach(captures, (file) =>
+      fs.copyFile(file, path.join(passedDir, path.basename(file))).pipe(Effect.orDie),
+    )
+  } else {
+    yield* Effect.forEach(captures, (file) =>
+      Effect.gen(function* () {
+        const before = path.join(passedDir, path.basename(file))
+        if (!(yield* fs.exists(before).pipe(Effect.orDie))) return
+        const changed = changedRows(
+          capturedRows(yield* fs.readFileString(before).pipe(Effect.orDie)),
+          capturedRows(yield* fs.readFileString(file).pipe(Effect.orDie)),
+        )
+        if (changed.length === 0) return
+        yield* Console.error([`diff ${named(file)} against the last pass`, ...changed].join("\n"))
+      }),
+    )
+  }
+  const ok = outcomes.filter((step) => step._tag === "Ok").length
+  yield* Console.error(`pass ${ok}/${outcomes.length} · ${endLabel(end)} · ${script.out}`)
+  return outcome
 })

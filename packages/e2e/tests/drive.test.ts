@@ -3,7 +3,7 @@
  */
 import { describe, expect, it, test } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, Exit, FileSystem, Option, Result, Schedule, Schema } from "effect"
+import { Console, Effect, Exit, FileSystem, Option, Result, Schedule, Schema } from "effect"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
   checkRecording,
@@ -38,6 +38,26 @@ const reap = (file: string) =>
     Effect.flatMap((text) => Effect.sync(() => process.kill(Number(text.trim()), "SIGKILL"))),
     Effect.ignoreCause,
   )
+
+/** Run `drive` with the lines it prints on stderr kept, and return both. */
+const keepingStderr = <A, E, R>(drive: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const console = yield* Console.Console
+    const lines: Array<string> = []
+    const result = yield* drive.pipe(
+      Effect.provideService(Console.Console, {
+        ...console,
+        error: (...args: ReadonlyArray<unknown>) => {
+          lines.push(args.map(String).join(" "))
+        },
+      }),
+    )
+    return { result, stderr: lines.join("\n") }
+  })
+
+/** A program that draws `text` once, then idles until the drive stops it. */
+const drawing = (text: string) =>
+  ["bash", "-c", `printf '${text}'; while true; do sleep 0.05; done`] as const
 
 describe("drive scripts", () => {
   it.scopedLive(
@@ -308,6 +328,186 @@ describe("drive scripts", () => {
     TEST_TIMEOUT,
   )
 
+  it.scopedLive(
+    "expect and expectNot read the screen or a span of its rows, and a failure shows the rows around them",
+    () =>
+      Effect.gen(function* () {
+        const out = yield* makeTempDirectoryScoped("gent-drive-")
+        const { result: outcome, stderr } = yield* keepingStderr(
+          runDriveScript(
+            {
+              command: drawing("alpha\\nbeta\\ngamma\\n"),
+              cwd: out,
+              cols: 40,
+              rows: 8,
+              out,
+              steps: [
+                ["waitFor", "gamma", 5_000],
+                ["expect", "beta"],
+                ["expect", "beta", [2, 2]],
+                ["expect", "beta", [3, -1]],
+                ["expectNot", "delta"],
+                ["expectNot", "gamma", [1, 2]],
+                ["expectNot", "be\\w+\\ngam"],
+                ["expect", "alpha", [9, 10]],
+              ],
+            },
+            { record: false },
+          ),
+        )
+        expect(outcome.steps.map((step) => step._tag)).toEqual([
+          "Ok",
+          "Ok",
+          "Ok",
+          "Fail",
+          "Ok",
+          "Ok",
+          "Fail",
+          "Fail",
+        ])
+        // The span and three rows of context, the span's rows marked.
+        expect(outcome.steps[3]).toMatchObject({
+          reason: "no match in rows 3..-1",
+          detail: [
+            "   001|alpha",
+            "   002|beta",
+            "  !003|gamma",
+            "  !004|",
+            "  !005|",
+            "  !006|",
+            "  !007|",
+            "  !008|",
+          ],
+        })
+        // A match across rows marks each row it covers.
+        expect(outcome.steps[6]).toMatchObject({
+          reason: '"beta\\ngam" shows on the screen, at row 2',
+          detail: ["   001|alpha", "  !002|beta", "  !003|gamma", "   004|", "   005|", "   006|"],
+        })
+        expect(outcome.steps[7]).toMatchObject({
+          reason: "rows 9..10 names no row of the 8-row screen",
+        })
+        expect(stderr).toContain('FAIL expect "beta" rows 3..-1')
+        expect(stderr).toContain("  !003|gamma")
+        expect(stderr.split("\n").at(-1)).toMatch(/^pass 5\/8 · stopped \d+ · /)
+        expect(stderr.endsWith(` · ${out}`)).toBe(true)
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
+
+  it.scopedLive(
+    "fits fails a row the terminal wrapped and a word cut at the edge, and passes text set flush to it",
+    () =>
+      Effect.gen(function* () {
+        const out = yield* makeTempDirectoryScoped("gent-drive-")
+        // Row 1 runs past 40 columns and wraps onto row 2. With autowrap off,
+        // row 3's word is cut at the edge, as a renderer clips a row it lays
+        // out too wide; rows 4 to 6 end at the edge on a number, `…` and a border.
+        const w = "w".repeat(50)
+        const c = "c".repeat(45)
+        const flush = `${" ".repeat(35)}$0.02\\r\\n${"x".repeat(39)}…\\r\\n${" ".repeat(39)}│`
+        const outcome = yield* runDriveScript(
+          {
+            command: drawing(`${w}\\r\\n\\033[?7l${c}\\r\\n${flush}\\r\\ndrawn`),
+            cwd: out,
+            cols: 40,
+            rows: 8,
+            out,
+            steps: [["waitFor", "drawn", 5_000], ["fits"], ["fits", [2, 2]], ["fits", [4, 7]]],
+          },
+          { record: false },
+        )
+        expect(outcome.steps.map((step) => step._tag)).toEqual(["Ok", "Fail", "Ok", "Ok"])
+        expect(outcome.steps[1]).toMatchObject({
+          reason: "row 1 wraps onto the next row; row 3 a word runs into the right edge",
+          detail: [`  !001|${"w".repeat(40)}`, `  !003|${"c".repeat(40)}`],
+        })
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
+
+  it.scopedLive(
+    "stable fails a screen that changes within its window, with the rows that changed",
+    () =>
+      Effect.gen(function* () {
+        const out = yield* makeTempDirectoryScoped("gent-drive-")
+        const outcome = yield* runDriveScript(
+          {
+            command: [
+              "bash",
+              "-c",
+              "for i in $(seq 1 30); do printf '\\rtick %s' $i; sleep 0.05; done; printf '\\nquiet'; while true; do sleep 0.05; done",
+            ],
+            cwd: out,
+            cols: 40,
+            rows: 6,
+            out,
+            steps: [
+              ["waitFor", "tick 2", 5_000],
+              ["stable", 400],
+              ["waitFor", "quiet", 5_000],
+              ["stable", 400],
+            ],
+          },
+          { record: false },
+        )
+        expect(outcome.steps.map((step) => step._tag)).toEqual(["Ok", "Fail", "Ok", "Ok"])
+        // Only the ticking row changed: its first read, then the one that differed.
+        expect(outcome.steps[1]).toMatchObject({
+          reason: "the screen changed within 400ms",
+          detail: [
+            expect.stringMatching(/^  -001\|tick \d+$/),
+            expect.stringMatching(/^  \+001\|tick \d+$/),
+          ],
+        })
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
+
+  it.scopedLive(
+    "a pass keeps its captures, and a later failing drive prints the rows that changed since",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const out = yield* makeTempDirectoryScoped("gent-drive-")
+        const drive = (text: string, check: string) =>
+          keepingStderr(
+            runDriveScript(
+              {
+                command: drawing(`${text}\\nsame row`),
+                cwd: out,
+                cols: 40,
+                rows: 4,
+                out,
+                steps: [
+                  ["waitFor", "same row", 5_000],
+                  ["cap", "screen"],
+                  ["expect", check],
+                ],
+              },
+              { record: false },
+            ),
+          )
+        const first = yield* drive("first", "first")
+        expect(first.stderr).toContain('ok   cap "screen"')
+        expect(first.stderr).toContain(" screen.txt")
+        expect(first.stderr).not.toContain(out + "/screen.txt")
+        expect(first.stderr).not.toContain("diff ")
+        expect(yield* fs.readFileString(`${out}/passed/screen.txt`)).toContain("001|first")
+        const second = yield* drive("second", "first")
+        const lines = second.stderr.split("\n")
+        expect(lines.slice(-4, -1)).toEqual([
+          "diff screen.txt against the last pass",
+          "  -001|first",
+          "  +001|second",
+        ])
+        expect(lines.at(-1)).toMatch(/^pass 2\/3 · stopped \d+ · /)
+        // A failing drive leaves the last pass's capture alone.
+        expect(yield* fs.readFileString(`${out}/passed/screen.txt`)).toContain("001|first")
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
+
   test("a script is refused at decode when a pattern does not compile or a capture name leaves out", () => {
     const decode = Schema.decodeUnknownExit(DriveScript)
     const base = { command: ["true"], cols: 40, rows: 6, out: "out" }
@@ -318,6 +518,10 @@ describe("drive scripts", () => {
           steps: [
             ["waitFor", "ready"],
             ["cap", "01-home.v2"],
+            ["expect", "ready", [-3, -1]],
+            ["expectNot", "error"],
+            ["fits"],
+            ["stable", 500],
           ],
         }),
       ),
@@ -327,6 +531,10 @@ describe("drive scripts", () => {
       ["cap", "../escaped"],
       ["capAll", "a/b"],
       ["raw", ""],
+      ["expect", "("],
+      ["expect", "ready", [0, 2]],
+      ["fits", [1]],
+      ["stable"],
     ]) {
       expect(Exit.isFailure(decode({ ...base, steps: [step] }))).toBe(true)
     }

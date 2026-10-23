@@ -49,15 +49,15 @@ const program = Effect.gen(function* () {
   const scriptPath = path.resolve(file)
   const script = yield* decodeScript(yield* fs.readFileString(scriptPath))
   const base = path.dirname(scriptPath)
+  const out = path.resolve(base, script.out)
   const outcome = yield* runDriveScript(
-    {
-      ...script,
-      cwd: path.resolve(base, script.cwd ?? "."),
-      out: path.resolve(base, script.out),
-    },
+    { ...script, cwd: path.resolve(base, script.cwd ?? "."), out },
     { record: !flags.includes("--no-record"), print: flags.includes("--print") },
   )
-  const recording = Option.getOrElse(outcome.recording, () => "none")
+  const recording = Option.match(outcome.recording, {
+    onNone: () => "none",
+    onSome: (file) => path.relative(out, file),
+  })
   yield* Console.log(`end=${outcome.end._tag} recording=${recording}`)
   const problems = driveProblems(script, outcome)
   if (problems.length > 0) return yield* new DriveFailed({ problems })

@@ -34,9 +34,11 @@
     ["resize", 60, 20],
     ["settle"],
     ["cap", "06-narrow"],
+    ["fits"],
     ["resize", 100, 30],
     ["settle"],
     ["cap", "07-wide-again"],
+    ["fits"],
     ["sh", "gent ctl snapshot --limit 6 > \"$EVIDENCE/ctl-snapshot.json\""]
   ]
 }

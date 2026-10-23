@@ -58,11 +58,8 @@ bun run --silent verify:drive --dir "$RUN" --script <script.json> --out "$EVIDEN
 ```
 
 - `command` is the argv, and its program is `gent`: the run's wrapper. `["gent"]` opens a new session, `["gent", "resume"]` the last one, `["gent", "-p", "<prompt>"]` sends a first prompt. Another program is refused.
-- Steps: `["send", text]`, `["keys", name]` (`enter`, `esc`, `tab`, `up`, `down`, `left`, `backspace`, `ctrl+c`, `ctrl+p` …, the `keys` table in `packages/e2e/src/pty-fixture.ts`), `["waitFor", regex, ms]`, `["settle", ms]` (the screen is quiet that long), `["wait", ms]`, `["resize", cols, rows]`, `["cap", name]`, `["capAll", name]` (with scrollback), `["sh", command, ms]` (30 s unless the step names its ms).
-- The script is checked before anything runs. A `waitFor` regex that does not compile, a capture name that is not one file name (`../x`, `a/b`), a `cwd` outside `$RUN` (symlinks resolved), or an `env` that sets a variable of the run (`HOME`, `GENT_DATA_DIR`, `GENT_AUTH_DIRECTORY`, `XDG_CACHE_HOME`, `PATH`, `EVIDENCE` …) fails it with `VerifyFailed` (`step: "script"`). An `--out` inside the checkout under any name is refused (`step: "out"`).
-- `sh` runs in the workspace with `gent` on `PATH` as the run's wrapper and `$EVIDENCE` set to `--out`. `gent ctl` there finds the run's server through its data directory. Each `sh` step runs in a process group of its own; the step's end stops the group, so a command it left in the background does not outlive it.
-- Each step prints one line on stderr: `ok|miss|fail <step> <ms>ms`, then the file a capture saved, or why the step failed. `--print` adds each capture's screen after its line. Stdout holds only the result.
-- It prints `Driven` (`steps`, `end`, `captures`, `recording`). It fails with `DriveFailed` (`problems`, one line each; `steps`; `end`) after the script ran to its end when a `waitFor` never matched, an `sh` step exited non-zero or outlived its limit, or the program exited by itself with another code than the script's `exit` (0 when it names none). A program still running when the steps end is stopped by the drive (`end: Stopped`) and passes, unless the script names an `exit`.
+- The steps, the assertions (`expect`, `expectNot`, `fits`, `stable`), the checks a script passes before it runs, and the stderr report with its diff against the last pass: [drive-script.md](drive-script.md). Read it before you write or change a drive.
+- It prints `Driven` (`steps`, `end`, `captures`, `recording`; files named from `--out`). It fails with `DriveFailed` (`out`, `problems`, one line each; `end`) after the script ran to its end when a `waitFor` never matched, an assertion failed, an `sh` step exited non-zero or outlived its limit, or the program exited by itself with another code than the script's `exit` (0 when it names none). A program still running when the steps end is stopped by the drive (`end: Stopped`) and passes, unless the script names an `exit`.
 - Reach a state by keys and slash commands. `gent ctl send` is a second client, a user path of its own; never a setter that skips the TUI.
 
 Feature recipes, with a shipped script each: [features/README.md](features/README.md).
@@ -74,6 +71,7 @@ Feature recipes, with a shipped script each: [features/README.md](features/READM
 The caller names the evidence directory, outside every checkout (`verify:drive` refuses one inside). One subdirectory per feature. What it holds:
 
 - each `cap` as `<name>.txt`: a header (`# <name> <cols>x<rows> buffer=… cursor=… t=<ms>`), then numbered rows;
+- `passed/<name>.txt`: the captures of the last drive into this directory that passed, which a failing drive is diffed against;
 - `drive.cast`: the whole drive as an asciicast v2 recording, on by default (`--no-record` turns it off). Before it prints `Driven`, the drive reads it back as a player does: a version 2 header at the script's `cols`x`rows`, events in time order, a length above zero. `Driven.recording` names the file, its `seconds` and `events`. Any asciicast v2 player plays it (`asciinema play`, not installed on the laptop);
 - the files the script's `sh` steps write: `gent ctl` JSON (`events`, `snapshot`, `status`, a `request` reply) and workspace files;
 - the drive's own output: the `Driven` or `DriveFailed` line, and the step lines on stderr (keep them: `2> "$EVIDENCE/<feature>.log"`).

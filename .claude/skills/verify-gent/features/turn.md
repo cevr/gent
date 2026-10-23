@@ -33,7 +33,7 @@ Script `drives/turn.json`:
 4. **Second view.** `sh gent ctl wait --until idle`, `sh gent ctl events --tags ToolCallStarted,ToolCallFailed,TurnCompleted`, `sh cat gent-debug-tools/a.ts`. The events hold the `ToolCallStarted` rows and one `TurnCompleted`; the `ls` that exits 2 is a call that ran, not a `ToolCallFailed`. `a.ts` holds the edited greeting, `hello, world`.
 5. **Interrupt.** `send debug tools`, `keys enter`, `waitFor esc cancel`, `keys esc`, `waitFor Interrupted`, `cap 04-interrupted`. The row reads `■ Interrupted · what should gent do instead?`.
 6. **External client.** `sh gent ctl send --wait "debug think"`, `waitFor Both chrome paths draw once`, `cap 05-external`. The TUI draws the ctl message and its answer with no key pressed.
-7. **Resize.** `resize 60 20`, `cap 06-narrow`; `resize 100 30`, `cap 07-wide-again`. No row is cut mid-word; the status row shortens to fit.
+7. **Resize.** `resize 60 20`, `cap 06-narrow`, `fits`; `resize 100 30`, `cap 07-wide-again`, `fits`. No row wraps or is cut mid-word; the status row shortens to fit.
 8. **Proof.** `sh gent ctl snapshot --limit 6`. The snapshot is the session `debug tools` with `turns` 3, and its last message is `Both chrome paths draw once.`
 
 Script `drives/turn-prompt-flag.json`: `gent -p "debug tools"`, `waitFor ✻ Worked for`, `cap 11-prompt-flag`, then `gent ctl events --tags MessageReceived,TurnCompleted --limit 3`. The first prompt ran with no key pressed.
