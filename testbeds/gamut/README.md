@@ -73,6 +73,12 @@ It reads the run's own `data.db` read-only and prints:
 - **extension pulses per extension**, the stored `ExtensionStateChanged`
   events grouped by `extensionId`, so a widget that refetched too often, or
   never, has a count;
+- **context per model call**, the mean and the largest input tokens of
+  `StreamEnded` (cache reads included), for the root sessions and the
+  children apart;
+- **re-read files**, an upper bound on the share of the cells' output that
+  is a file its session read before: a `read` answers the cell's code, so a
+  cell counts at most its own output. A re-read through bash is not seen;
 - **`bun test` in the work dir**, pass and fail counts — the red app is the
   only real measure of whether the run did the work.
 

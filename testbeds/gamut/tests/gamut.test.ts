@@ -13,6 +13,7 @@ import { SqlClient } from "effect/sql"
 import { it } from "effect-bun-test"
 import {
   decodeState,
+  contextPerCall,
   extensionPulses,
   failureText,
   isSettled,
@@ -30,6 +31,7 @@ import {
   parseUpArgs,
   proxyEnv,
   runRecord,
+  rereadBound,
   sessionStatuses,
   userMessageTexts,
   paneIdFromSplit,
@@ -590,6 +592,91 @@ describe("gamut status", () => {
       { extension: "@gent/session-tools", count: 1 },
     ])
   })
+
+  /** The stored event fields the measures read. */
+  interface StoredFields {
+    readonly usage?: { readonly inputTokens: number; readonly outputTokens: number }
+    readonly toolCallId?: string
+    readonly toolName?: string
+    readonly input?: { readonly path?: string }
+    readonly output?: string
+  }
+
+  /** A run's database with the columns the measures read: two sessions, the second a child. */
+  const runDb = () => {
+    const db = new Database(":memory:")
+    db.run("CREATE TABLE sessions (id TEXT PRIMARY KEY, parent_session_id TEXT)")
+    db.run(
+      "CREATE TABLE events (id INTEGER PRIMARY KEY, session_id TEXT, event_tag TEXT, event_json TEXT)",
+    )
+    db.run("INSERT INTO sessions VALUES ('root', NULL), ('child', 'root')")
+    const event = (session: string, tag: string, body: StoredFields = {}) =>
+      db.run("INSERT INTO events (session_id, event_tag, event_json) VALUES (?, ?, ?)", [
+        session,
+        tag,
+        // oxlint-disable-next-line effect/noGlobals -- a raw SQLite row for the driver's queries, as the stored JSON spells it
+        JSON.stringify({ _tag: tag, ...body }),
+      ])
+    return { db, event }
+  }
+
+  test("measures the prompt of each model call, the roots and the children apart", () => {
+    const { db, event } = runDb()
+    expect(contextPerCall(db)).toEqual([])
+    const ended = (session: string, inputTokens: number) =>
+      event(session, "StreamEnded", { usage: { inputTokens, outputTokens: 1 } })
+    ended("root", 10_000)
+    ended("root", 20_000)
+    ended("child", 30_000)
+    // A step that reported no usage is not a measured call.
+    event("child", "StreamEnded")
+    expect(contextPerCall(db)).toEqual([
+      { role: "root", calls: 2, mean: 15_000, max: 20_000 },
+      { role: "child", calls: 1, mean: 30_000, max: 30_000 },
+    ])
+  })
+
+  test("bounds the re-read part of the cells' output by each cell's own", () => {
+    const { db, event } = runDb()
+    // A database before the cell extension's first build has no cell table.
+    expect(rereadBound(db)).toEqual({ cellChars: 0, bound: 0 })
+    db.run(
+      "CREATE TABLE cell_tool_operations (cell_tool_call_id TEXT, operation_id TEXT, record_json TEXT)",
+    )
+    let operations = 0
+    /** A cell in `session` answering `chars` that ran `reads`, each a path and its output size. */
+    const cell = (
+      session: string,
+      id: string,
+      chars: number,
+      reads: ReadonlyArray<readonly [string, number]>,
+    ) => {
+      event(session, "ToolCallStarted", { toolCallId: id, toolName: "cell", input: {} })
+      for (const [path, size] of reads) {
+        const inner = `cell:${operations++}`
+        db.run("INSERT INTO cell_tool_operations VALUES (?, ?, ?)", [
+          id,
+          inner,
+          // oxlint-disable-next-line effect/noGlobals -- a raw SQLite row, as the stored JSON spells it
+          JSON.stringify({ toolCallId: inner }),
+        ])
+        event(session, "ToolCallStarted", { toolCallId: inner, toolName: "read", input: { path } })
+        event(session, "ToolCallSucceeded", { toolCallId: inner, output: "r".repeat(size) })
+      }
+      event(session, "ToolCallSucceeded", { toolCallId: id, output: "c".repeat(chars) })
+    }
+    cell("root", "c1", 100, [["a.ts", 50]])
+    // a.ts again: its 60 chars, cut to the 40 the cell answered.
+    cell("root", "c2", 40, [
+      ["a.ts", 60],
+      ["b.ts", 10],
+    ])
+    // Another session reads a.ts for the first time.
+    cell("child", "c3", 30, [["a.ts", 70]])
+    // b.ts again: its 20 chars, under the cell's 200.
+    cell("root", "c4", 200, [["b.ts", 20]])
+    expect(rereadBound(db)).toEqual({ cellChars: 370, bound: 60 })
+  })
 })
 
 describe("gamut reads the schema gent builds", () => {
@@ -608,6 +695,8 @@ describe("gamut reads the schema gent builds", () => {
       expect(sessionStatuses(db)).toEqual([])
       expect(userMessageTexts(db)).toEqual([])
       expect(extensionPulses(db)).toEqual([])
+      expect(contextPerCall(db)).toEqual([])
+      expect(rereadBound(db)).toEqual({ cellChars: 0, bound: 0 })
       expect(openTurnSessions(db)).toEqual([])
       expect(runRecord(db, 0)).toEqual({ started: false, open: [], stored: false })
       expect(latestEventId(db)).toBe(0)

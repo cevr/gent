@@ -725,6 +725,119 @@ export const extensionPulses = (
       .all(),
   )
 
+/**
+ * The prompt size of the run's model calls, from `StreamEnded.usage.inputTokens`
+ * (the whole prompt, cache reads included), the root sessions and the children
+ * apart.
+ */
+export const contextPerCall = (
+  db: Database,
+): ReadonlyArray<{
+  readonly role: "root" | "child"
+  readonly calls: number
+  readonly mean: number
+  readonly max: number
+}> =>
+  decodeRows(
+    Schema.Struct({
+      role: Schema.Literals(["root", "child"]),
+      calls: Schema.Finite,
+      mean: Schema.Finite,
+      max: Schema.Finite,
+    }),
+    db
+      .query(
+        `SELECT CASE WHEN s.parent_session_id IS NULL THEN 'root' ELSE 'child' END AS role,
+           COUNT(*) AS calls,
+           ROUND(AVG(json_extract(e.event_json, '$.usage.inputTokens'))) AS mean,
+           MAX(json_extract(e.event_json, '$.usage.inputTokens')) AS max
+         FROM events e JOIN sessions s ON s.id = e.session_id
+         WHERE e.event_tag = 'StreamEnded'
+           AND json_extract(e.event_json, '$.usage.inputTokens') IS NOT NULL
+         GROUP BY role ORDER BY role DESC`,
+      )
+      .all(),
+  )
+
+/**
+ * Each tool call a cell made, with the cell's own call. The cell extension
+ * makes its table at its first build, so a database before it has none.
+ */
+const cellLinks = (
+  db: Database,
+): ReadonlyArray<{ readonly cell: string; readonly inner: string }> => {
+  const table = db
+    .query(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cell_tool_operations'`)
+    .get()
+  if (table === null) return []
+  return decodeRows(
+    Schema.Struct({ cell: Schema.String, inner: Schema.String }),
+    db
+      .query(
+        `SELECT cell_tool_call_id AS cell, json_extract(record_json, '$.toolCallId') AS inner
+         FROM cell_tool_operations`,
+      )
+      .all(),
+  )
+}
+
+/**
+ * How much of what the cells answered the model can be a file read again:
+ * `cellChars`, the output of every cell, and `bound`, an upper bound on its
+ * re-read part. A `read` inside a cell answers the cell's code, not the
+ * model, so a cell whose reads name a path its session read before counts
+ * those reads' output, at most the cell's own. A file read again through
+ * bash (`cat`, `sed -n`) is not seen.
+ */
+export const rereadBound = (
+  db: Database,
+): { readonly cellChars: number; readonly bound: number } => {
+  const calls = decodeRows(
+    Schema.Struct({
+      session: Schema.String,
+      call: Schema.String,
+      tool: Schema.String,
+      path: Schema.NullOr(Schema.String),
+      chars: Schema.NullOr(Schema.Finite),
+    }),
+    db
+      .query(
+        `SELECT started.session_id AS session, started.call AS call, started.tool AS tool,
+           started.path AS path, ended.chars AS chars
+         FROM (SELECT id, session_id,
+                 json_extract(event_json, '$.toolCallId') AS call,
+                 json_extract(event_json, '$.toolName') AS tool,
+                 json_extract(event_json, '$.input.path') AS path
+               FROM events WHERE event_tag = 'ToolCallStarted') started
+         LEFT JOIN (SELECT json_extract(event_json, '$.toolCallId') AS call,
+                      LENGTH(json_extract(event_json, '$.output')) AS chars
+                    FROM events WHERE event_tag = 'ToolCallSucceeded') ended
+           ON ended.call = started.call
+         ORDER BY started.id`,
+      )
+      .all(),
+  )
+  // A tool call a cell made, by the cell's own call.
+  const cellOf = new Map(cellLinks(db).map(({ cell, inner }) => [inner, cell]))
+  const outputOf = new Map(calls.map(({ call, chars }) => [call, chars ?? 0]))
+  const readBy = new Map<string, Set<string>>()
+  const readAgain = new Map<string, number>()
+  for (const { session, call, tool, path } of calls) {
+    if (tool !== "read" || path === null) continue
+    const paths = readBy.get(session) ?? new Set<string>()
+    const cell = cellOf.get(call)
+    if (paths.has(path) && cell !== undefined)
+      readAgain.set(cell, (readAgain.get(cell) ?? 0) + (outputOf.get(call) ?? 0))
+    paths.add(path)
+    readBy.set(session, paths)
+  }
+  let cellChars = 0
+  for (const { call, tool } of calls) if (tool === "cell") cellChars += outputOf.get(call) ?? 0
+  let bound = 0
+  for (const [cell, chars] of readAgain) bound += Math.min(chars, outputOf.get(cell) ?? 0)
+  return { cellChars, bound }
+}
+
 /** One session of the run: its place in the parent chain, its last model and its tool calls. */
 interface SessionStatus {
   readonly row: SessionRow
@@ -804,6 +917,15 @@ const status = async () => {
   const pulses = extensionPulses(db)
   console.log(`\nextension pulses (stored ExtensionStateChanged, ${pulses.length} extensions):`)
   for (const { extension, count } of pulses) console.log(`  ${extension}  ${count}`)
+
+  console.log("\ncontext per model call (input tokens):")
+  for (const { role, calls, mean, max } of contextPerCall(db))
+    console.log(`  ${role}  calls=${calls}  mean=${mean}  max=${max}`)
+  const reread = rereadBound(db)
+  const share = (100 * reread.bound) / Math.max(reread.cellChars, 1)
+  console.log(
+    `re-read files: at most ${reread.bound} of ${reread.cellChars} cell output chars (${share.toFixed(1)}%)`,
+  )
   db.close()
 
   console.log("\nbun test in the work dir:")

@@ -171,6 +171,17 @@ finished unit. The baseline is the table above.
    (the placement and permit work) reads the tuned window per role. Accept:
    mean context per worker call under 130k (F2), the re-read share after a
    compaction does not rise, and the gate failures per unit do not rise.
+   Measured (2026-10-23) on a read-only copy of the owner's `data.db`
+   (600 sessions, to 2026-09-23, before this requirement merged): 2,532
+   child calls at a mean of 15,340 input tokens, the largest 65,730; 1,289
+   root calls at a mean of 20,147. Every read ran inside a cell, so only the
+   cell's output reaches the model: re-reads are at most 2.1% of the
+   children's cell output and 1.7% of the roots' (bash `cat` included), and
+   the 4 sessions with a compaction or handoff re-read nothing after it. The
+   share is not real, so no re-read hook. Gate failures per unit are the
+   quality rows' `gates` (`red` against `accepted.runs`); no stored run
+   holds a machine log today, so no number. `bun run gamut status` now
+   prints the first two for each run.
 
 7. **Short agents over long ones.** A unit that outgrows one window goes to a
    fresh agent with a handoff, not a compaction. Accept: compactions per
