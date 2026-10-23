@@ -5187,6 +5187,21 @@ describe("credential placement", () => {
     },
   )
 
+  bunTest("an account with no room ranks after one at pace, whatever its score", () => {
+    // a's 5h window is past 90%; b paces 1.176 runs and holds two warm sessions.
+    expect(
+      rankPlacement({
+        slots: [
+          { ...row(a, 0, 0), sustainable: 0, weeklyResetAt: 100 },
+          { ...row(b, 0, 2), sustainable: 1.176, weeklyResetAt: 200 },
+        ],
+        spent: 0,
+        sessions: 0,
+        preferred: Option.none(),
+      }),
+    ).toEqual([b, a])
+  })
+
   bunTest("held accounts stay last even with the earliest reset and a warm preference", () => {
     expect(
       rankPlacement({
@@ -6070,6 +6085,29 @@ describe("account lanes", () => {
       expect(stopped.accounts[0]?.held).toBe(false)
       expect(stopped.accounts[0]?.windows.find((w) => w.window === "5h")?.sustainable).toBe(0)
       expect(stopped.capacity).toBe(0)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a first 5h reading past 90% refuses a start before any rate is known", () =>
+    Effect.gen(function* () {
+      const { read, lanes, windowOf, admit } = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const resetAt = (yield* Clock.currentTimeMillis) + 2 * HOUR
+      // The weekly window has room, at a pace no rate tells yet.
+      const week = { window: "7d", utilization: 0.3, resetAt: resetAt + 72 * HOUR }
+      yield* read(a, [{ window: "5h", utilization: 0.95, resetAt }, week])
+      const window = yield* windowOf([a], a, "5h")
+      expect(window.fuelPerPct).toBeUndefined()
+      expect(window.sustainable).toBe(0)
+      expect((yield* windowOf([a], a, "7d")).sustainable).toBeUndefined()
+      const stopped = yield* lanes([a])
+      expect(stopped.accounts[0]?.sustainable).toBe(0)
+      expect(stopped.capacity).toBe(0)
+      expect(yield* admit([a], "past-margin")).toBe("Spent")
+      // Below the share with no rate, the pace stays unknown and admits.
+      yield* read(a, [{ window: "5h", utilization: 0.5, resetAt }, week])
+      expect((yield* windowOf([a], a, "5h")).sustainable).toBeUndefined()
+      expect(yield* admit([a], "under-margin")).toBe("admitted")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

@@ -3657,7 +3657,8 @@ interface PlacementTable {
 /**
  * Where a run goes, as the pool walk its turn takes: the choice first, then
  * eligible accounts below their sustainable live load by weekly reset
- * (missing weekly readings last), then the others by score, then held
+ * (missing weekly readings last), then the others by score (those with no
+ * room, sustainable 0, after those with some), then held
  * accounts in pool order. Equal resets or scores keep pool order.
  * `score = load / unit + live`, where a unit is the mean recorded price of a
  * session on the provider (`spent / sessions`; with no recorded price, or no
@@ -3678,6 +3679,9 @@ export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<
     Option.match(unit, { onNone: () => 0, onSome: (mean) => entry.load / mean }) + entry.live
   const underPace = (entry: PlacementSlot) =>
     Predicate.isNotUndefined(entry.sustainable) && entry.live < entry.sustainable
+  // An account at none (a 5h window at its share) takes a new run only when
+  // every other is at none too, whatever its score.
+  const noRoom = (entry: PlacementSlot) => entry.sustainable === 0
   const paced = table.slots.some((entry) => Predicate.isNotUndefined(entry.sustainable))
   const eligible = table.slots
     .filter((entry) => !entry.held)
@@ -3695,6 +3699,10 @@ export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<
         if (leftReset < rightReset) return -1
         return 1
       }
+      const leftFull = noRoom(left)
+      const rightFull = noRoom(right)
+      if (!leftFull && rightFull) return -1
+      if (leftFull && !rightFull) return 1
       return score(left) - score(right)
     })
   const preferred = Option.flatMap(table.preferred, (slot) =>
@@ -5739,10 +5747,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           // A window a spend limit meters bounds runs by its room: under the
           // limit it carries one run at least, at the limit none. Its pace
           // counts from one run up: below one, it would refuse every start
-          // on a small plan while the plan still has room.
+          // on a small plan while the plan still has room. A window at its
+          // share carries none, with or without a rate.
           const sustainable = Option.flatMap(horizon, (ms) => {
             if (reading.rejected && !reset) return Option.some(0)
             const remaining = Math.max(0, windowShare(reading) - utilization) * 100
+            if (remaining === 0) return Option.some(0)
             return Option.map(fuelPerPct, (rate) => {
               const pace = (remaining * rate * 3_600_000) / (runRate * ms)
               if (Option.isSome(metered)) return Math.max(1, pace)
@@ -5772,10 +5782,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         .toArray()
       const counted = windows.filter(counts)
       const each = counted.map((window) => Option.fromUndefinedOr(window.sustainable))
-      const fewest = Option.map(
+      // A window with no room bounds the account at none, whatever the
+      // others' unknown paces would say.
+      let fewest = Option.map(
         Option.filter(Option.all(each), () => counted.length > 0),
         (values) => Math.min(...values),
       )
+      if (each.some((value) => Option.contains(value, 0))) fewest = Option.some(0)
       // A held account carries no run, whatever its windows read.
       let sustainable = fewest
       if (accountHeld) sustainable = Option.some(0)
@@ -5848,7 +5861,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     let sustainable = accountCapacity
     if (scoped.some((account) => account.windows.some((window) => isAccountWindow(window, "7d"))))
       sustainable = rollingCapacity
-    if (scoped.length > 0 && scoped.every((account) => account.held)) sustainable = Option.some(0)
+    // Every account at none, held or at its windows' share: no new run now,
+    // whatever an unread rate or a later refill would say.
+    if (scoped.length > 0 && scoped.every((account) => account.sustainable === 0))
+      sustainable = Option.some(0)
     const supply = Option.filter(sustainable, () => scoped.length > 0)
     const capacity = Option.map(supply, (value) => Math.floor(value + 1e-9))
     return {
