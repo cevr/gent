@@ -597,7 +597,8 @@ describe("git status row", () => {
         const setup = yield* renderRow(repo, 60)
         const frame = yield* waitForFrame(
           setup,
-          (next) => statusLine(next).trim() !== `ready · ${dir}`,
+          // The row with its head label: an empty first frame is not it.
+          (next) => statusLine(next).trim().startsWith(`ready · ${dir} · `),
           "the branch",
         )
         return statusLine(frame).trim()
