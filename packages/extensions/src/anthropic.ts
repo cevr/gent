@@ -117,7 +117,8 @@ const loadAnthropicSdk = Effect.promise((): Promise<AnthropicSdk> => import("@ef
 // AnthropicKeychainEnv, AnthropicPlatform, AnthropicCredentialIO,
 // makeAnthropicCredentialCache and buildAnthropicModelDriver let a test run the
 // keychain, the credential cache and the driver against fake I/O.
-// readPromptCacheTtl lets a test read the cache-lifetime switch from its own config.
+// readPromptCacheTtl and readAnthropicKeychainEnv let a test read the cache-lifetime
+// switch and the keychain env from its own config.
 
 // ── model config ────────────────────────────────────────────────────────────
 
@@ -239,21 +240,23 @@ export interface AnthropicKeychainEnv {
   readonly baseUrl?: string
 }
 
-const makeAnthropicKeychainEnv = (options: {
-  readonly betaFlags: Option.Option<string>
-  readonly cliVersion: Option.Option<string>
-  readonly entrypoint: Option.Option<string>
-  readonly userAgent: Option.Option<string>
-  readonly baseUrl: Option.Option<string>
-}): AnthropicKeychainEnv => {
-  let env: AnthropicKeychainEnv = {}
-  if (Option.isSome(options.betaFlags)) env = { ...env, betaFlags: options.betaFlags.value }
-  if (Option.isSome(options.cliVersion)) env = { ...env, cliVersion: options.cliVersion.value }
-  if (Option.isSome(options.entrypoint)) env = { ...env, entrypoint: options.entrypoint.value }
-  if (Option.isSome(options.userAgent)) env = { ...env, userAgent: options.userAgent.value }
-  if (Option.isSome(options.baseUrl)) env = { ...env, baseUrl: options.baseUrl.value }
-  return env
-}
+/** The keychain env as setup reads it, each variable left out when unset. */
+export const readAnthropicKeychainEnv: Effect.Effect<AnthropicKeychainEnv> = Effect.gen(
+  function* () {
+    const betaFlags = yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS")
+    const cliVersion = yield* readOptionalEnv("ANTHROPIC_CLI_VERSION")
+    const entrypoint = yield* readOptionalEnv("CLAUDE_CODE_ENTRYPOINT")
+    const userAgent = yield* readOptionalEnv("ANTHROPIC_USER_AGENT")
+    const baseUrl = yield* readOptionalEnv("ANTHROPIC_BASE_URL")
+    let env: AnthropicKeychainEnv = {}
+    if (Option.isSome(betaFlags)) env = { ...env, betaFlags: betaFlags.value }
+    if (Option.isSome(cliVersion)) env = { ...env, cliVersion: cliVersion.value }
+    if (Option.isSome(entrypoint)) env = { ...env, entrypoint: entrypoint.value }
+    if (Option.isSome(userAgent)) env = { ...env, userAgent: userAgent.value }
+    if (Option.isSome(baseUrl)) env = { ...env, baseUrl: baseUrl.value }
+    return env
+  },
+)
 
 interface AnthropicPlatformApi {
   readonly platform: string
@@ -4269,13 +4272,7 @@ export const AnthropicExtension = defineExtension({
   id: "@gent/provider-anthropic",
   setup: Effect.gen(function* () {
     const ctx = yield* ExtensionHost
-    const env: AnthropicKeychainEnv = makeAnthropicKeychainEnv({
-      betaFlags: yield* readOptionalEnv("ANTHROPIC_BETA_FLAGS"),
-      cliVersion: yield* readOptionalEnv("ANTHROPIC_CLI_VERSION"),
-      entrypoint: yield* readOptionalEnv("CLAUDE_CODE_ENTRYPOINT"),
-      userAgent: yield* readOptionalEnv("ANTHROPIC_USER_AGENT"),
-      baseUrl: yield* readOptionalEnv("ANTHROPIC_BASE_URL"),
-    })
+    const env = yield* readAnthropicKeychainEnv
 
     const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
     // The host's platform, not one of the driver's own: a shipped provider

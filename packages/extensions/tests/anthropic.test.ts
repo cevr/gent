@@ -14,6 +14,7 @@ import {
   getModelBetas,
   MESSAGES_CLASS,
   parseOAuthResponse,
+  readAnthropicKeychainEnv,
   readPromptCacheTtl,
   SYSTEM_IDENTITY_PREFIX,
   transformPayload as transformPayloadEffect,
@@ -2640,6 +2641,31 @@ describe("Anthropic prompt-cache lifetime", () => {
       expect(yield* read({ ANTHROPIC_PROMPT_CACHE_TTL: "1h" })).toBe("1h")
       expect(yield* read({})).toBe("1h")
       expect(yield* read({ ANTHROPIC_PROMPT_CACHE_TTL: "10m" })).toBe("1h")
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.live("setup reads ANTHROPIC_BASE_URL and the Claude Code variables; unset ones stay out", () =>
+    Effect.gen(function* () {
+      const read = (env: Record<string, string>) =>
+        readAnthropicKeychainEnv.pipe(
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+        )
+      expect(
+        yield* read({
+          ANTHROPIC_BASE_URL: "http://127.0.0.1:3456",
+          ANTHROPIC_BETA_FLAGS: "flag-a",
+          ANTHROPIC_CLI_VERSION: "2.1.306",
+          CLAUDE_CODE_ENTRYPOINT: "cli",
+          ANTHROPIC_USER_AGENT: "claude-cli/2.1.306",
+        }),
+      ).toEqual({
+        baseUrl: "http://127.0.0.1:3456",
+        betaFlags: "flag-a",
+        cliVersion: "2.1.306",
+        entrypoint: "cli",
+        userAgent: "claude-cli/2.1.306",
+      })
+      expect(yield* read({ ANTHROPIC_BASE_URL: "" })).toEqual({})
     }).pipe(Effect.timeout("5 seconds")),
   )
 })
