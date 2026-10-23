@@ -32,7 +32,6 @@ import {
   buildRowTree,
   type DurableAgentRow,
   emptyActivity,
-  filterRows,
   foldActivity,
   type LiveAgentRow,
   projectAgentRows,
@@ -558,8 +557,8 @@ describe("agents view projection", () => {
     })
 
     test("an older session's id finds its thread's row", () => {
-      const rows = projectAgentRows({ live: [], durable: chain(Option.none()) })
-      expect(filterRows(rows, "second").map((row) => row.sessionId)).toEqual([sid("third")])
+      const loops = reconcileAgentRows({ live: [], durable: chain(Option.none()) })
+      expect(buildRowTree(loops, "second").map((row) => row.sessionId)).toEqual([sid("third")])
     })
   })
 
@@ -624,29 +623,72 @@ describe("agents view projection", () => {
   })
 
   describe("search", () => {
-    const rows = buildRowTree(
-      reconcileAgentRows({
-        live: [live({ session: "s1", branch: "b1" })],
-        durable: [durable({ session: "s1", branch: "b1", name: "Fix the parser", cwd: "/repo" })],
-      }),
-    )
+    const loops = reconcileAgentRows({
+      live: [live({ session: "s1", branch: "b1" })],
+      durable: [durable({ session: "s1", branch: "b1", name: "Fix the parser", cwd: "/repo" })],
+    })
 
     test("returns everything for an empty query", () => {
-      expect(filterRows(rows, "")).toHaveLength(1)
-      expect(filterRows(rows, "   ")).toHaveLength(1)
+      expect(buildRowTree(loops, "")).toHaveLength(1)
+      expect(buildRowTree(loops, "   ")).toHaveLength(1)
     })
 
     test("matches on name, case-insensitively", () => {
-      expect(filterRows(rows, "PARSER")).toHaveLength(1)
+      expect(buildRowTree(loops, "PARSER")).toHaveLength(1)
     })
 
     test("matches on cwd and ids", () => {
-      expect(filterRows(rows, "/repo")).toHaveLength(1)
-      expect(filterRows(rows, "s1")).toHaveLength(1)
+      expect(buildRowTree(loops, "/repo")).toHaveLength(1)
+      expect(buildRowTree(loops, "s1")).toHaveLength(1)
     })
 
     test("returns nothing for a miss", () => {
-      expect(filterRows(rows, "nonexistent")).toHaveLength(0)
+      expect(buildRowTree(loops, "nonexistent")).toHaveLength(0)
+    })
+
+    test("a match is listed by the rows that show, not by a hidden running sibling", () => {
+      // main started two children; only "worker" runs. The query finds the idle one.
+      const tree = reconcileAgentRows({
+        live: [
+          live({ session: "main", branch: "b", status: "Idle" }),
+          live({ session: "worker", branch: "b", status: "Running" }),
+          live({ session: "reader", branch: "b", status: "Idle" }),
+        ],
+        durable: [
+          durable({ session: "main", branch: "b", name: "plan" }),
+          durable({
+            session: "worker",
+            branch: "b",
+            createdAt: 1,
+            name: "build",
+            parentSession: "main",
+            parentBranch: "b",
+          }),
+          durable({
+            session: "reader",
+            branch: "b",
+            createdAt: 2,
+            name: "notes",
+            parentSession: "main",
+            parentBranch: "b",
+          }),
+        ],
+      })
+      expect(
+        buildRowTree(tree, "notes").map((row) => [
+          row.sessionId,
+          row.listedUnder,
+          row.section,
+          row.depth,
+        ]),
+      ).toEqual([[sid("reader"), "idle", "idle", 0]])
+      expect(
+        buildRowTree(tree, "b").map((row) => [row.sessionId, row.listedUnder, row.depth]),
+      ).toEqual([
+        [sid("main"), "running", 0],
+        [sid("worker"), "running", 1],
+        [sid("reader"), "running", 1],
+      ])
     })
   })
 

@@ -331,6 +331,23 @@ const groupThreads = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> =>
   return Array.from(groups.values(), (group) => foldThread(group.seed, group.others))
 }
 
+/** Case-insensitive substring match over the fields a reader would search by. */
+const filterRows = (rows: ReadonlyArray<AgentRow>, query: string): ReadonlyArray<AgentRow> => {
+  const needle = query.trim().toLowerCase()
+  if (needle.length === 0) return rows
+  return rows.filter((row) => {
+    const fields = [
+      Option.getOrElse(row.name, () => ""),
+      Option.getOrElse(row.cwd, () => ""),
+      row.sessionId,
+      row.branchId,
+      // An older session of the thread finds the thread's row.
+      ...row.members.map((member) => member.sessionId),
+    ]
+    return fields.some((field) => field.toLowerCase().includes(needle))
+  })
+}
+
 /**
  * Order rows for display: one row per thread, as trees, each tree under one
  * heading. The sessions of one thread (a handoff chain) fold into one row
@@ -344,13 +361,19 @@ const groupThreads = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> =>
  * siblings. Depth is the nesting as drawn, so a row is never indented under a
  * row that is not its parent.
  *
- * A child whose parent is absent from the row set is promoted to top level
- * rather than hidden — an orphan is still a real agent, and dropping it would
- * make work disappear from the view. Rows on a parent cycle are placed as
- * roots.
+ * A query (`filterRows`) keeps its matches after the threads fold and before
+ * the rows nest, so a heading and a depth come only from rows that show.
+ *
+ * A child whose parent is absent from the row set, or filtered out, is
+ * promoted to top level rather than hidden — an orphan is still a real agent,
+ * and dropping it would make work disappear from the view. Rows on a parent
+ * cycle are placed as roots.
  */
-export const buildRowTree = (loops: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> => {
-  const rows = groupThreads(loops)
+export const buildRowTree = (
+  loops: ReadonlyArray<AgentRow>,
+  query = "",
+): ReadonlyArray<AgentRow> => {
+  const rows = filterRows(groupThreads(loops), query)
   const byKey = new Map<string, AgentRow>()
   for (const row of rows) byKey.set(rowKey(row), row)
   // Each session of a thread stands for the thread's row, so a child of an
@@ -422,31 +445,11 @@ export const buildRowTree = (loops: ReadonlyArray<AgentRow>): ReadonlyArray<Agen
   )
 }
 
-/** Case-insensitive substring match over the fields a reader would search by. */
-export const filterRows = (
-  rows: ReadonlyArray<AgentRow>,
-  query: string,
-): ReadonlyArray<AgentRow> => {
-  const needle = query.trim().toLowerCase()
-  if (needle.length === 0) return rows
-  return rows.filter((row) => {
-    const fields = [
-      Option.getOrElse(row.name, () => ""),
-      Option.getOrElse(row.cwd, () => ""),
-      row.sessionId,
-      row.branchId,
-      // An older session of the thread finds the thread's row.
-      ...row.members.map((member) => member.sessionId),
-    ]
-    return fields.some((field) => field.toLowerCase().includes(needle))
-  })
-}
-
 /**
  * Full projection: reconcile, then order. A row's section is its own loop's
  * state, so a parent idles while a child works; the child is listed under
- * the parent, both under the running heading. A query filters after, with
- * `filterRows`.
+ * the parent, both under the running heading. A query goes to
+ * `buildRowTree`.
  */
 export const projectAgentRows = (params: {
   readonly live: ReadonlyArray<LiveAgentRow>
@@ -902,7 +905,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
         listed,
         watch: loops.filter((row) => row.live && Option.isSome(row.parent)),
       })
-      const rows = filterRows(buildRowTree(loops), input.query ?? "")
+      const rows = buildRowTree(loops, input.query ?? "")
       // One read for every shown row's sessions, of their metric events only.
       // A read that fails is a host defect, as in `collectRows`.
       const ctx = yield* ExtensionContext
