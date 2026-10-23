@@ -291,6 +291,7 @@ const testExtensionExtensions = (): ExtensionExtensionsService => ({
 const testExtensionAccounts = (): ExtensionAccountsService => ({
   admit: () => Effect.void,
   tiers: () => Effect.succeed({ strongest: [], efficient: [] }),
+  project: (cwd) => Effect.succeed(cwd),
   cancel: () => Effect.void,
   hold: () => Effect.void,
   lanes: Effect.succeed({ providers: [] }),

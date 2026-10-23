@@ -298,20 +298,32 @@
     wins over `tier`. A tier role's round runs the first model of its order
     whose lane `Threads.admitSend` admits under the round's send key, so the
     send takes the lane the pick saw free: `strongest` in the list's order;
-    `efficient` a model with no round of the state yet first (list order),
-    then by priced cost per finished round at the provider's fitted quota
-    weight (`accounts.lanes`), over every run of the machine; a model whose
-    rounds carried no price comes last. The role's
+    `efficient` by spend per accepted unit (`efficientOrder`), read at pick
+    time from the machine's newest 40 ended runs and nothing stored. A run's
+    spend is every round of it, each role's, at its model's fitted quota
+    weight (`accounts.lanes`); a round with no price counts its tokens at
+    the fuel reference prices, and a run with a round that kept neither is
+    not measured. A run whose final state accepts its work (`accepts`,
+    default true) is one unit. Each model that ran rounds of the role in a
+    run takes the run's spend and unit at its share of those rounds; a run
+    weighs half as much as one 10 runs newer. A model is scored in the
+    narrowest scope it has runs in: the run's project (`Accounts.project`,
+    kept on `Started`) and the input's `domain`, else the project, else the
+    machine. A model with no measured run goes first (list order), then the
+    lowest score, one with no unit last. When the role's last 9 runs ran
+    the first model alone, the runner-up goes first, so the rank measures
+    again. Deleting the function leaves the list's order. The role's
     thread is tried first while its model is in the tier, so the role keeps
     its thread and cache; another pick starts a new thread that becomes the
     role's. With no model of the tier free, the round waits (`lane`) until
     the first frees; another tier is never a fallback. Every `RoundEnded`
-    step keeps the thread's model and the turn's `costUsd`. Quality is
+    step keeps the role, the thread's model, and the turn's `costUsd` and
+    tokens; `Finished` keeps whether its state accepts. Quality is
     shown, not picked on: `machine.status` and `MachinesRpc.Quality` (by a
     session of a round thread) count per state and model, over the
     machine's runs, the rounds, dead ones, priced cost, verdicts, the
     check (`pass`/`fail`) and gate (`green`/`red`) moves after each round,
-    and the rounds a finished run took. A verdict is the model's own word,
+    and the rounds a run its final state accepted took. A verdict is the model's own word,
     counted as itself (`constructor` included). The owner is woken only by an ask (`machine-ask`), a final
     state or a failure (`machine-end`), each a queued message under a
     source id the queue drops a repeat of, at a delivery place saved first.

@@ -1869,6 +1869,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
       const { tiers } = yield* configService.get(cwd)
       return { strongest: tiers?.strongest ?? [], efficient: tiers?.efficient ?? [] }
     }),
+    project: (cwd) => configService.project(cwd),
     cancel: (message) => placement.freeReservation(message),
     hold: (message) => placement.holdReservation(message),
     lanes,

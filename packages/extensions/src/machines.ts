@@ -118,6 +118,7 @@ type MachineName = typeof MachineName.Type
 const StateName = Slug.pipe(Schema.brand("StateName"))
 type StateName = typeof StateName.Type
 const RoleName = Slug.pipe(Schema.brand("RoleName"))
+type RoleName = typeof RoleName.Type
 /** A transition key: a thread verdict, an ask choice. `retry`, `stop` and `continue` are reserved. */
 const Verdict = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,31}$/)).pipe(
   Schema.brand("Verdict"),
@@ -224,6 +225,12 @@ const FinalState = Schema.Struct({
   kind: Schema.Literal("final"),
   /** The line the owner's wake carries; default "<machine> finished in <state>". */
   say: Schema.optionalKey(Template),
+  /**
+   * Whether the run's work is accepted here, as a unit the efficient tier's
+   * rank and a model's quality count; default true. A final state that
+   * drops the work, or sends it back for a rewrite, says false.
+   */
+  accepts: Schema.optionalKey(Schema.Boolean),
 })
 
 const MachineState = Schema.Union([
@@ -352,22 +359,37 @@ const Visits = Schema.Struct({
 })
 type Visits = typeof Visits.Type
 
+/** A round's turn's tokens, by class. */
+const RoundTokens = Schema.Struct({
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cacheRead: Schema.Finite,
+  cacheWrite: Schema.Finite,
+})
+
 /** One row of the append-only log. */
 const MachineStep = Schema.TaggedUnion({
-  Started: { machine: MachineName, input: Schema.Json },
+  /** `project`: the project the run's cwd works in (`Accounts.project`). */
+  Started: { machine: MachineName, input: Schema.Json, project: Schema.optionalKey(Schema.String) },
   Dispatched: { action: PendingAction },
   /** The pending action gained its receipt: a round's thread and id, a command's process. */
   Recorded: { action: PendingAction },
   /** Where the next owner message lands, saved before it is sent. */
   PlaceSaved: { place: PlaceRecord },
-  /** `model` and `costUsd`: the round's model and its turn's priced cost, when known. */
+  /**
+   * `role`, `model`, `costUsd` and `tokens`: the role whose thread ran the
+   * round, the thread's model, and its turn's priced cost and tokens, when
+   * known.
+   */
   RoundEnded: {
     state: StateName,
     round: Schema.String,
     verdict: Schema.optionalKey(Verdict),
     dead: Schema.Boolean,
+    role: Schema.optionalKey(RoleName),
     model: Schema.optionalKey(ModelId),
     costUsd: Schema.optionalKey(Schema.Finite),
+    tokens: Schema.optionalKey(RoundTokens),
   },
   CommandEnded: {
     state: StateName,
@@ -393,7 +415,8 @@ const MachineStep = Schema.TaggedUnion({
   /** A `retry` answer to an `exhausted` ask granted the state one visit past its cap. */
   Granted: { state: StateName },
   Moved: { from: StateName, to: StateName, by: Schema.String },
-  Finished: { state: StateName },
+  /** `accepted`: the final state's `accepts`; a step without it accepted. */
+  Finished: { state: StateName, accepted: Schema.optionalKey(Schema.Boolean) },
   Failed: { error: Schema.String },
   Stopped: {},
   /** A stopped run's open round or command was stopped. */
@@ -973,11 +996,15 @@ interface MachineStoreService {
     Option.Option<Extract<MachineStep, { readonly _tag: "Answered" }>>,
     MachineStorageError
   >
-  /** Every ended round of `state` that names its model, in every run of `machine`, oldest first. */
-  readonly roundsOf: (
+  /**
+   * The `Started`, `RoundEnded` and `Finished` steps of the newest `limit`
+   * ended runs of `machine` (final, failed or stopped): newest run first,
+   * each run's steps oldest first.
+   */
+  readonly endedRunsOf: (
     machine: MachineName,
-    state: StateName,
-  ) => Effect.Effect<ReadonlyArray<RoundEnded>, MachineStorageError>
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<RunOutcome>, MachineStorageError>
   /** Every ended round, move and finish in every run of `machine`, by run, oldest first. */
   readonly outcomesOf: (
     machine: MachineName,
@@ -1225,22 +1252,20 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
           },
           Effect.mapError(storageError("Failed to read an answer")),
         ),
-        roundsOf: Effect.fn("MachineStore.roundsOf")(
-          function* (machine, state) {
-            const rows = yield* sql`SELECT s.seq, s.at, s.step_json FROM machine_runs r
-              JOIN machine_steps s ON s.run = r.run AND s.state = ${state}
-              WHERE r.machine = ${machine}
-                AND json_extract(s.step_json, '$._tag') = 'RoundEnded'
-                AND json_extract(s.step_json, '$.model') IS NOT NULL
-              ORDER BY s.at ASC, s.seq ASC`
-            const decoded = yield* decodeStepRows(rows)
-            return decoded.flatMap((row) => {
-              const step = row.step_json
-              if (step._tag !== "RoundEnded") return []
-              return [step]
-            })
+        endedRunsOf: Effect.fn("MachineStore.endedRunsOf")(
+          function* (machine, limit) {
+            const rows = yield* sql`SELECT s.run, s.seq, s.at, s.step_json FROM (
+                SELECT run, updated_at FROM machine_runs
+                WHERE machine = ${machine} AND status IN ('final', 'failed', 'stopped')
+                ORDER BY updated_at DESC, run DESC LIMIT ${limit}
+              ) r
+              JOIN machine_steps s ON s.run = r.run
+              WHERE json_extract(s.step_json, '$._tag') IN ('Started', 'RoundEnded', 'Finished')
+              ORDER BY r.updated_at DESC, r.run DESC, s.seq ASC`
+            const decoded = yield* decodeOutcomeRows(rows)
+            return decoded.map((row) => ({ run: row.run, step: row.step_json }))
           },
-          Effect.mapError(storageError("Failed to read a machine's rounds")),
+          Effect.mapError(storageError("Failed to read a machine's ended runs")),
         ),
         outcomesOf: Effect.fn("MachineStore.outcomesOf")(
           function* (machine) {
@@ -2209,7 +2234,7 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
   switch (state.kind) {
     case "final":
       yield* commitMove(run, { ...run, status: "final" }, [
-        MachineStep.cases.Finished.make({ state: name }),
+        MachineStep.cases.Finished.make({ state: name, accepted: state.accepts ?? true }),
       ])
       return
     case "ask": {
@@ -2360,7 +2385,7 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
     () => !fresh,
   ).pipe(Option.flatten)
   const kept = Option.orElse(Option.fromUndefinedOr(action.thread), () => known)
-  const tiered = yield* tierPick(run, action, role, kept)
+  const tiered = yield* tierPick(run, action, state.thread, role, kept)
   if (Result.isFailure(tiered)) {
     yield* waitForAccount(run, action, { until: tiered.failure, reason: "lane" })
     return Option.none()
@@ -2425,65 +2450,213 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
 
 // ── model tiers ─────────────────────────────────────────────────────────────
 
+/** The ended runs of a machine the efficient rank reads, newest first. */
+const RANK_RUNS = 40
+/** A run counts half as much as one this many runs newer. */
+const RANK_HALF_LIFE = 10
+/** One run in this many puts the runner-up first, so the cheapest is measured against it again. */
+const RANK_EXPLORE = 10
 /**
- * One model's ended rounds of a state, as far as they carried a price: the
- * priced rounds' cost, dead ones too, and how many of them finished. An
- * unpriced round says nothing of what a finished one costs.
+ * What an unpriced round's tokens cost, in dollars per million: the fuel
+ * reference prices (core `FUEL_REFERENCE_WEIGHTS` at $5 an input token).
  */
-interface ModelRounds {
-  readonly costUsd: number
-  readonly priced: number
-  readonly finished: number
+const REFERENCE_PRICES = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }
+
+/**
+ * A round's spend in dollars: its price, else its tokens at the reference
+ * prices (a subscription view lists no price); none when it kept neither.
+ */
+const roundSpend = (round: RoundEnded): Option.Option<number> => {
+  if (Predicate.isNotUndefined(round.costUsd)) return Option.some(round.costUsd)
+  return Option.map(
+    Option.fromUndefinedOr(round.tokens),
+    (tokens) =>
+      (tokens.input * REFERENCE_PRICES.input +
+        tokens.output * REFERENCE_PRICES.output +
+        tokens.cacheRead * REFERENCE_PRICES.cacheRead +
+        tokens.cacheWrite * REFERENCE_PRICES.cacheWrite) /
+      1_000_000,
+  )
 }
 
-const modelRounds = (ended: ReadonlyArray<RoundEnded>): ReadonlyMap<ModelId, ModelRounds> => {
-  const byModel = new Map<ModelId, ModelRounds>()
-  for (const round of ended) {
-    if (Predicate.isUndefined(round.model)) continue
-    const before = byModel.get(round.model) ?? { costUsd: 0, priced: 0, finished: 0 }
-    if (Predicate.isUndefined(round.costUsd)) {
-      byModel.set(round.model, before)
-      continue
+/** One ended run as the rank reads it: where it worked, its rounds, and whether a final state accepted its work. */
+interface RankedRun {
+  readonly project: Option.Option<string>
+  readonly domain: Option.Option<string>
+  readonly accepted: boolean
+  readonly rounds: ReadonlyArray<RoundEnded>
+}
+
+/** The `domain` a run's input names: the area of the code its unit changes. */
+const domainOf = (input: Schema.Json): Option.Option<string> =>
+  Option.map(
+    Schema.decodeUnknownOption(Schema.Struct({ domain: Schema.String }))(input),
+    (named) => named.domain,
+  )
+
+/** `endedRunsOf`'s steps, run by run, in its order. */
+const rankedRuns = (outcomes: ReadonlyArray<RunOutcome>): ReadonlyArray<RankedRun> => {
+  const byRun = new Map<RunId, Array<MachineStep>>()
+  for (const outcome of outcomes) {
+    const steps = byRun.get(outcome.run) ?? []
+    steps.push(outcome.step)
+    byRun.set(outcome.run, steps)
+  }
+  return [...byRun.values()].map((steps) => {
+    let project = Option.none<string>()
+    let domain = Option.none<string>()
+    let accepted = false
+    const rounds: Array<RoundEnded> = []
+    for (const step of steps) {
+      if (step._tag === "Started") {
+        project = Option.fromUndefinedOr(step.project)
+        domain = domainOf(step.input)
+      }
+      if (step._tag === "RoundEnded") rounds.push(step)
+      if (step._tag === "Finished") accepted = step.accepted !== false
     }
-    byModel.set(round.model, {
-      costUsd: before.costUsd + round.costUsd,
-      priced: before.priced + 1,
-      finished: before.finished + Number(!round.dead),
-    })
+    return { project, domain, accepted, rounds }
+  })
+}
+
+/** A model's weighted spend and accepted units in one scope. */
+interface UnitTally {
+  spend: number
+  units: number
+}
+
+const addTally = (scope: Map<ModelId, UnitTally>, model: ModelId, spend: number, units: number) => {
+  const tally = scope.get(model) ?? { spend: 0, units: 0 }
+  tally.spend += spend
+  tally.units += units
+  scope.set(model, tally)
+}
+
+/** How many rounds of `role` each model ran in `run`. */
+const roleRounds = (run: RankedRun, role: RoleName): ReadonlyMap<ModelId, number> => {
+  const byModel = new Map<ModelId, number>()
+  for (const round of run.rounds) {
+    if (round.role !== role || Predicate.isUndefined(round.model)) continue
+    byModel.set(round.model, (byModel.get(round.model) ?? 0) + 1)
   }
   return byModel
 }
 
-/**
- * Where an efficient model stands, lowest first: a model with no round of
- * the state yet, so each gets measured; then the measured ones by cost per
- * finished round at their quota weight, a model that finished none last of
- * them; then the ones whose rounds carried no price.
- */
-const efficientRank = (
-  rounds: Option.Option<ModelRounds>,
-  weight: number,
-): readonly [number, number] =>
-  Option.match(rounds, {
-    onNone: () => [0, 0] as const,
-    onSome: (found) => {
-      if (found.priced === 0) return [2, 0] as const
-      if (found.finished === 0) return [1, Number.POSITIVE_INFINITY] as const
-      return [1, (found.costUsd * weight) / found.finished] as const
-    },
-  })
+/** Every round of `run` at its model's weight; none when a round kept no spend. */
+const runSpend = (run: RankedRun, weightOf: (model: ModelId) => number): Option.Option<number> => {
+  let spend = 0
+  for (const round of run.rounds) {
+    const usd = roundSpend(round)
+    if (Option.isNone(usd)) return Option.none()
+    const weight = Option.match(Option.fromUndefinedOr(round.model), {
+      onNone: () => 1,
+      onSome: weightOf,
+    })
+    spend += usd.value * weight
+  }
+  return Option.some(spend)
+}
+
+/** `efficientOrder`'s scopes over `runs`, and the models each run of `role` ran, newest first. */
+const unitScopes = (
+  runs: ReadonlyArray<RankedRun>,
+  here: { readonly project: string; readonly domain: Option.Option<string> },
+  role: RoleName,
+  weightOf: (model: ModelId) => number,
+) => {
+  const scopes = {
+    domain: new Map<ModelId, UnitTally>(),
+    project: new Map<ModelId, UnitTally>(),
+    machine: new Map<ModelId, UnitTally>(),
+  }
+  const ran: Array<ReadonlySet<ModelId>> = []
+  for (const [index, run] of runs.entries()) {
+    const byModel = roleRounds(run, role)
+    if (byModel.size === 0) continue
+    ran.push(new Set(byModel.keys()))
+    const spend = runSpend(run, weightOf)
+    if (Option.isNone(spend)) continue
+    const weight = 0.5 ** (index / RANK_HALF_LIFE)
+    const inProject = Option.contains(run.project, here.project)
+    const inDomain =
+      inProject && Option.isSome(run.domain) && Option.contains(here.domain, run.domain.value)
+    const total = [...byModel.values()].reduce((sum, count) => sum + count, 0)
+    for (const [model, count] of byModel) {
+      const share = (weight * count) / total
+      const units = share * Number(run.accepted)
+      addTally(scopes.machine, model, share * spend.value, units)
+      if (inProject) addTally(scopes.project, model, share * spend.value, units)
+      if (inDomain) addTally(scopes.domain, model, share * spend.value, units)
+    }
+  }
+  return { scopes, ran }
+}
 
 /**
- * The models of a tier, in the order a round tries them: `strongest` in the
- * list's order; `efficient` by `efficientRank` over every run of the
- * machine, ties in the list's order. A weight is the provider's fitted one
- * (`accounts.lanes`), 1 until fitted.
+ * The efficient tier's models in the order `role`'s round tries them, read
+ * from the machine's ended runs (newest first) and nothing stored: a run's
+ * spend is every round of it, each role's, at its model's quota weight
+ * (`weightOf`); a run whose final state accepts its work is one unit. Each
+ * model that ran a round of `role` in a run takes the run's spend and unit
+ * at its share of the role's rounds there, and a run weighs half as much
+ * as one `RANK_HALF_LIFE` runs newer. A model's score is its spend over its
+ * units in the narrowest scope it ran in: runs of `here`'s project and
+ * domain, else of its project, else of the machine. A model with no
+ * measured run (a new release is a new id) goes first, in the list's order;
+ * then the measured by score, one with no unit last; ties in the list's
+ * order. When the newest `RANK_EXPLORE - 1` runs of the role all ran the
+ * first model alone, the runner-up goes first, so the rank measures again.
+ * Deleting it leaves the list's order.
  */
-const tierOrder = Effect.fn("Machines.tierOrder")(function* (
-  run: Run,
-  state: StateName,
-  tier: Tier,
-) {
+const efficientOrder = (
+  listed: ReadonlyArray<ModelId>,
+  runs: ReadonlyArray<RankedRun>,
+  here: { readonly project: string; readonly domain: Option.Option<string> },
+  role: RoleName,
+  weightOf: (model: ModelId) => number,
+): ReadonlyArray<ModelId> => {
+  const { scopes, ran } = unitScopes(runs, here, role, weightOf)
+  const scoreOf = (model: ModelId): Option.Option<number> =>
+    Option.map(
+      Option.firstSomeOf(
+        [scopes.domain, scopes.project, scopes.machine].map((scope) =>
+          Option.fromUndefinedOr(scope.get(model)),
+        ),
+      ),
+      (tally) => {
+        if (tally.units === 0) return Number.POSITIVE_INFINITY
+        return tally.spend / tally.units
+      },
+    )
+  const ranked = listed
+    .map((model, index) => ({ model, index, score: scoreOf(model) }))
+    .toSorted(
+      (left, right) =>
+        Number(Option.isSome(left.score)) - Number(Option.isSome(right.score)) ||
+        Order.Number(
+          Option.getOrElse(left.score, () => 0),
+          Option.getOrElse(right.score, () => 0),
+        ) ||
+        left.index - right.index,
+    )
+  const [first, second, ...rest] = ranked
+  if (Predicate.isUndefined(first) || Predicate.isUndefined(second)) return listed
+  const settled =
+    Option.isSome(first.score) &&
+    ran.length >= RANK_EXPLORE - 1 &&
+    ran.slice(0, RANK_EXPLORE - 1).every((models) => models.size === 1 && models.has(first.model))
+  if (settled) return [second, first, ...rest].map((entry) => entry.model)
+  return ranked.map((entry) => entry.model)
+}
+
+/**
+ * The models of a tier, in the order `role`'s round tries them:
+ * `strongest` in the list's order; `efficient` by `efficientOrder` over the
+ * machine's ended runs, here being the run's project and its input's
+ * `domain`. A weight is the provider's fitted one (`accounts.lanes`), 1
+ * until fitted.
+ */
+const tierOrder = Effect.fn("Machines.tierOrder")(function* (run: Run, role: RoleName, tier: Tier) {
   const ctx = yield* ExtensionContext
   const listed = (yield* ctx.Accounts.tiers(run.cwd))[tier]
   if (listed.length === 0) {
@@ -2493,22 +2666,13 @@ const tierOrder = Effect.fn("Machines.tierOrder")(function* (
   }
   if (tier === "strongest") return listed
   const store = yield* MachineStore
-  const byModel = modelRounds(yield* store.roundsOf(run.machine, state))
+  const runs = rankedRuns(yield* store.endedRunsOf(run.machine, RANK_RUNS))
   const report = yield* ctx.Accounts.lanes
   const weights = new Map(
     report.providers.flatMap((lanes) => lanes.models).map((entry) => [entry.model, entry.weight]),
   )
-  return listed
-    .map((model, index) => ({
-      model,
-      index,
-      rank: efficientRank(Option.fromUndefinedOr(byModel.get(model)), weights.get(model) ?? 1),
-    }))
-    .toSorted(
-      (left, right) =>
-        left.rank[0] - right.rank[0] || left.rank[1] - right.rank[1] || left.index - right.index,
-    )
-    .map((entry) => entry.model)
+  const here = { project: yield* ctx.Accounts.project(run.cwd), domain: domainOf(run.input) }
+  return efficientOrder(listed, runs, here, role, (model) => weights.get(model) ?? 1)
 })
 
 /**
@@ -2555,6 +2719,7 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
 const tierPick = Effect.fn("Machines.tierPick")(function* (
   run: Run,
   action: RoundAction,
+  name: RoleName,
   role: ThreadRole,
   kept: Option.Option<SessionId>,
 ) {
@@ -2562,7 +2727,7 @@ const tierPick = Effect.fn("Machines.tierPick")(function* (
     return Result.succeed(Option.none<{ readonly model: ModelId; readonly keep: boolean }>())
   }
   const threads = yield* threadsOf
-  const order = yield* tierOrder(run, action.state, role.tier)
+  const order = yield* tierOrder(run, name, role.tier)
   const keptModel = yield* Option.match(kept, {
     onNone: () => Effect.succeedNone,
     onSome: (thread) => threads.model(thread).pipe(Effect.mapError(threadFault)),
@@ -2577,12 +2742,23 @@ const tierPick = Effect.fn("Machines.tierPick")(function* (
 })
 
 /**
- * The round's model and its turn's priced cost, as its `RoundEnded` step
- * keeps them. A zero cost over spent tokens is a catalog with no price (a
- * subscription view): unknown, never free, as placement reads fuel.
+ * The round's role, its model, and its turn's priced cost and tokens, as its
+ * `RoundEnded` step keeps them. A zero cost over spent tokens is a catalog
+ * with no price (a subscription view): unknown, never free, as placement
+ * reads fuel.
  */
-const roundBill = (action: RoundAction, view: { readonly usage?: typeof ChildUsage.Type }) => {
+const roundBill = (
+  action: RoundAction,
+  role: RoleName,
+  view: { readonly usage?: typeof ChildUsage.Type },
+) => {
   const usage = Option.fromUndefinedOr(view.usage)
+  const tokens = Option.map(usage, (spent) => ({
+    input: spent.input,
+    output: spent.output,
+    cacheRead: spent.cacheRead ?? 0,
+    cacheWrite: spent.cacheWrite ?? 0,
+  }))
   const costUsd = Option.flatMap(usage, (spent) =>
     Option.filter(
       Option.fromUndefinedOr(spent.costUsd),
@@ -2591,7 +2767,12 @@ const roundBill = (action: RoundAction, view: { readonly usage?: typeof ChildUsa
         spent.input + spent.output + (spent.cacheRead ?? 0) + (spent.cacheWrite ?? 0) === 0,
     ),
   )
-  return omitUndefined({ model: action.model, costUsd: Option.getOrUndefined(costUsd) })
+  return omitUndefined({
+    role,
+    model: action.model,
+    costUsd: Option.getOrUndefined(costUsd),
+    tokens: Option.getOrUndefined(tokens),
+  })
 }
 
 /**
@@ -2640,7 +2821,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
           state: name,
           round: roundId,
           dead: true,
-          ...roundBill(action, view),
+          ...roundBill(action, state.thread, view),
         }),
         MachineStep.cases.Interrupted.make({ state: name }),
       ],
@@ -2662,7 +2843,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
         state: name,
         round: roundId,
         dead: true,
-        ...roundBill(action, view),
+        ...roundBill(action, state.thread, view),
       }),
     ])
     return
@@ -2684,7 +2865,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
     state: name,
     round: roundId,
     dead,
-    ...roundBill(action, view),
+    ...roundBill(action, state.thread, view),
     ...omitUndefined({
       verdict: Option.getOrUndefined(Option.flatten(verdict)),
     }),
@@ -3514,7 +3695,11 @@ const MachineStartTool = tool({
     }
     // The record first: a stop before the row leaves a record the hook drops.
     yield* ctx.Session.wakeAt({ ...host, sourceId: runSource(runId) })
-    yield* store.insert(run, MachineStep.cases.Started.make({ machine: definition.name, input }))
+    const project = yield* ctx.Accounts.project(cwd)
+    yield* store.insert(
+      run,
+      MachineStep.cases.Started.make({ machine: definition.name, input, project }),
+    )
     yield* armDriver(runId)
     return { run: runId, state: definition.start }
   }),
@@ -3561,7 +3746,8 @@ const runView = (run: Run): typeof RunView.Type => ({
  * How one model fared in one state of a machine, over every run of it. A
  * check (a command's `pass` or `fail`) and a gate (`green` or `red`) count
  * for each model that ran a round since the run's last one. `accepted`: the
- * finished runs it had rounds in, and those rounds, so `rounds / runs` is
+ * runs it had rounds in that reached a final state that accepts the work,
+ * and those rounds, so `rounds / runs` is
  * what a run that got there took of it.
  */
 export const ModelQuality = Schema.Struct({
@@ -3650,7 +3836,7 @@ const tallyRun = (
       tallyRound(tallyOf(step.state, step.model), step, run)
     }
     if (step._tag === "Moved") tallyMove(step.by, run)
-    if (step._tag === "Finished") tallyFinish(run)
+    if (step._tag === "Finished" && step.accepted !== false) tallyFinish(run)
   }
 }
 

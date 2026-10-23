@@ -1457,6 +1457,11 @@ export interface ExtensionAccountsService {
   /** The owner's model tiers as the config of `cwd` names them. */
   readonly tiers: (cwd: string) => Effect.Effect<ModelTiers>
   /**
+   * The project `cwd` works in, as lane holds name it: a clone, a worktree
+   * and a rift of one repository are one project, named by its `origin`.
+   */
+  readonly project: (cwd: string) => Effect.Effect<string>
+  /**
    * The start admitted for `message` will not run: the caller's own
    * admission refused it after `admit` (a busy thread, a full queue, a
    * failed create). Its lane frees now. A message with no lane held is a

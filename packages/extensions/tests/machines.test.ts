@@ -336,6 +336,17 @@ const StepView = Schema.Struct({
   round: Schema.optionalKey(Schema.String),
   model: Schema.optionalKey(Schema.String),
   costUsd: Schema.optionalKey(Schema.Finite),
+  role: Schema.optionalKey(Schema.String),
+  tokens: Schema.optionalKey(
+    Schema.Struct({
+      input: Schema.Finite,
+      output: Schema.Finite,
+      cacheRead: Schema.Finite,
+      cacheWrite: Schema.Finite,
+    }),
+  ),
+  project: Schema.optionalKey(Schema.String),
+  accepted: Schema.optionalKey(Schema.Boolean),
   action: Schema.optionalKey(
     Schema.Struct({
       _tag: Schema.String,
@@ -1512,13 +1523,17 @@ const startRunOn = (
   machine: string,
   /** Names this start's tool calls: a session holds each call id once. */
   tag = machine,
+  /** As machine.start reads none. */
+  input: Schema.Json = {},
 ) =>
   Effect.gen(function* () {
     const [defined] = yield* callOn(client, owner, [
       ["machine.define", `define-${tag}`, { definition }],
     ])
     expect(defined?.failed).toBe(false)
-    const [started] = yield* callOn(client, owner, [["machine.start", `start-${tag}`, { machine }]])
+    const [started] = yield* callOn(client, owner, [
+      ["machine.start", `start-${tag}`, { machine, input }],
+    ])
     expect(started?.failed).toBe(false)
     return decodeStartedRun(started?.result).run
   })
@@ -2344,45 +2359,44 @@ const roundsRan = (steps: ReadonlyArray<typeof StepView.Type>) =>
     return [{ model: step.model, priced: Predicate.isNotUndefined(step.costUsd) }]
   })
 
-/** Efficient rounds, each on a thread of its own, with an ask after each. */
-const EFFICIENT_AGAIN = {
-  name: "efficient-again",
-  threads: { worker: { tier: "efficient" } },
-  start: "work",
-  states: {
-    work: {
-      kind: "thread",
-      thread: "worker",
-      say: "STATE work {{visit}}",
-      next: "gate",
-      fresh: true,
-    },
-    gate: { kind: "ask", ask: "Again?", on: { again: "work", end: "done" } },
-    done: { kind: "final" },
-  },
-}
-
-/** An ended round, a move and a finish as the run's log stores them. */
+/** A start, an ended round, a move and a finish as the run's log stores them. */
+const SeededStarted = Schema.TaggedStruct("Started", {
+  machine: Schema.String,
+  input: Schema.Json,
+  project: Schema.String,
+})
+const SeededTokens = Schema.Struct({
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cacheRead: Schema.Finite,
+  cacheWrite: Schema.Finite,
+})
 const SeededRound = Schema.TaggedStruct("RoundEnded", {
   state: Schema.String,
   round: Schema.String,
   dead: Schema.Boolean,
   model: Schema.String,
   verdict: Schema.optionalKey(Schema.String),
+  role: Schema.optionalKey(Schema.String),
   costUsd: Schema.optionalKey(Schema.Finite),
+  tokens: Schema.optionalKey(SeededTokens),
 })
 const SeededMove = Schema.TaggedStruct("Moved", {
   from: Schema.String,
   to: Schema.String,
   by: Schema.String,
 })
-const SeededFinish = Schema.TaggedStruct("Finished", { state: Schema.String })
-const SeededStep = Schema.Union([SeededRound, SeededMove, SeededFinish])
+const SeededFinish = Schema.TaggedStruct("Finished", {
+  state: Schema.String,
+  accepted: Schema.optionalKey(Schema.Boolean),
+})
+const SeededStep = Schema.Union([SeededStarted, SeededRound, SeededMove, SeededFinish])
 const encodeSeededStep = Schema.encodeSync(Schema.fromJsonString(SeededStep))
 
 /** The state a seeded step's row is filed under, as the store files it. */
 const seededState = (step: typeof SeededStep.Type): string => {
   if (step._tag === "Moved") return step.to
+  if (step._tag === "Started") return "work"
   return step.state
 }
 
@@ -2397,19 +2411,6 @@ const seedSteps = (run: string, steps: ReadonlyArray<typeof SeededStep.Type>) =>
     }
   })
 
-/** Ended rounds of `state` written into the run's log, as earlier rounds of its machine left them. */
-const seedRounds = (
-  run: string,
-  state: string,
-  rounds: ReadonlyArray<{ readonly model: ModelId; readonly costUsd?: number }>,
-) =>
-  seedSteps(
-    run,
-    rounds.map((round, index) =>
-      SeededRound.make({ state, round: `seeded-${10_000 + index}`, dead: false, ...round }),
-    ),
-  )
-
 /** `run`'s row again as `copy`, with no steps: another run of its machine, of the same owner. */
 const copyRun = (run: string, copy: string) =>
   Effect.gen(function* () {
@@ -2419,6 +2420,90 @@ const copyRun = (run: string, copy: string) =>
     yield* sql`INSERT INTO machine_runs SELECT * FROM run_copy`
     yield* sql`DROP TABLE run_copy`
   })
+
+/** One ended run as the efficient rank reads it: its rounds of `work`, by role, and where it worked. */
+interface EndedRun {
+  readonly rounds: ReadonlyArray<{
+    readonly role: string
+    readonly model: ModelId
+    readonly costUsd?: number
+  }>
+  /** Default true: the run's final state accepted its work. */
+  readonly accepted?: boolean
+  /** Default false: the run worked in the source run's project. */
+  readonly elsewhere?: boolean
+  readonly domain?: string
+}
+
+const decodeCwdRows = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ cwd: Schema.String })))
+
+/**
+ * `runs` as ended runs of `source`'s machine, newest first, every one newer
+ * than `source`, whose own steps are dropped so it ranks nothing.
+ */
+const seedEndedRuns = (source: string, runs: ReadonlyArray<EndedRun>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const [row] = decodeCwdRows(yield* sql`SELECT cwd FROM machine_runs WHERE run = ${source}`)
+    yield* sql`DELETE FROM machine_steps WHERE run = ${source}`
+    for (const [index, run] of runs.entries()) {
+      const id = `run-${index.toString(16).padStart(16, "0")}`
+      yield* copyRun(source, id)
+      yield* sql`UPDATE machine_runs SET status = 'final', updated_at = ${1_000_000_000 - index}
+        WHERE run = ${id}`
+      let project = row?.cwd ?? ""
+      if (run.elsewhere === true) project = "/elsewhere"
+      const input = omitUndefined({ domain: run.domain })
+      yield* seedSteps(id, [
+        SeededStarted.make({ machine: "efficient-once", input, project }),
+        ...run.rounds.map((round, at) =>
+          SeededRound.make({ state: "work", round: `ended-${at}`, dead: false, ...round }),
+        ),
+        SeededFinish.make({ state: "done", accepted: run.accepted ?? true }),
+      ])
+    }
+  })
+
+/** One efficient round, then the end. */
+const EFFICIENT_ONCE = {
+  name: "efficient-once",
+  threads: { worker: { tier: "efficient" } },
+  start: "work",
+  states: {
+    work: { kind: "thread", thread: "worker", say: "STATE work {{visit}}", next: "done" },
+    done: { kind: "final" },
+  },
+}
+
+/**
+ * Runs `efficient-once` to have a run to copy, seeds `runs` as the
+ * machine's ended runs, then runs it again: the model its round ran.
+ */
+const rankedPick = (
+  efficient: ReadonlyArray<ModelId>,
+  runs: ReadonlyArray<EndedRun>,
+  input?: Schema.Json,
+) =>
+  Effect.gen(function* () {
+    const home = yield* restartableHome
+    const models = yield* makeModels((round) =>
+      Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+    )
+    const { client } = yield* createRpcClient(
+      home.layerFor(machineModels(models), tieredAccount({ efficient })),
+    )
+    const owner = ownerOf(yield* client.session.create({}))
+    const source = yield* startRunOn(client, owner, EFFICIENT_ONCE, "efficient-once", "source")
+    yield* waitFor(home.sql(runRow(source)), isSettled, 10_000, "the source run's end was told")
+    yield* home.sql(seedEndedRuns(source, runs))
+    const run = yield* startRunOn(client, owner, EFFICIENT_ONCE, "efficient-once", "ranked", input)
+    yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the ranked run's end was told")
+    return roundsRan(yield* home.sql(stepsOf(run))).map((round) => round.model)
+  })
+
+/** `runs` copies of `run`. */
+const times = (count: number, run: EndedRun): ReadonlyArray<EndedRun> =>
+  Array.from({ length: count }, () => run)
 
 /** A request of the machines extension, sent as a session of `session`'s thread. */
 const machinesRequest = <Input, Output>(
@@ -2563,7 +2648,7 @@ describe("a tier role's round", () => {
   )
 
   it.live(
-    "measures each efficient model once, then runs the one with the least cost per finished round",
+    "runs each efficient model's first run on it, then the one whose runs cost least, and keeps what the rank reads",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
@@ -2574,20 +2659,29 @@ describe("a tier role's round", () => {
           home.layerFor(machineModels(models), tieredAccount({ efficient: [OPUS, HAIKU] })),
         )
         const owner = ownerOf(yield* client.session.create({}))
-        const run = yield* startRunOn(client, owner, EFFICIENT_THRICE, "efficient-thrice")
-        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
-        // Opus first, as listed; Haiku once to measure it; then Haiku, a fifth of Opus's price.
-        expect(roundsRan(yield* home.sql(stepsOf(run)))).toEqual([
-          { model: OPUS, priced: true },
-          { model: HAIKU, priced: true },
-          { model: HAIKU, priced: true },
-        ])
+        const picks: Array<string> = []
+        for (const tag of ["first", "second", "third"]) {
+          const run = yield* startRunOn(client, owner, EFFICIENT_ONCE, "efficient-once", tag)
+          yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+          const steps = yield* home.sql(stepsOf(run))
+          picks.push(...roundsRan(steps).map((round) => String(round.model)))
+          if (tag !== "first") continue
+          const started = steps.find((step) => step._tag === "Started")
+          const ended = steps.find((step) => step._tag === "RoundEnded")
+          const finished = steps.find((step) => step._tag === "Finished")
+          expect(started?.project).toBeString()
+          expect(ended?.role).toBe("worker")
+          expect(ended?.tokens).toEqual({ input: 100, output: 20, cacheRead: 0, cacheWrite: 0 })
+          expect(finished?.accepted).toBe(true)
+        }
+        // Opus first, as listed; Haiku has no run yet; then Haiku, a fifth of Opus's price.
+        expect(picks).toEqual([OPUS, HAIKU, HAIKU])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
   )
 
   it.live(
-    "reads a zero price over spent tokens as no price, so a subscription model never ranks free",
+    "reads a zero price over spent tokens as no price, and measures the round by its tokens",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
@@ -2604,12 +2698,15 @@ describe("a tier role's round", () => {
           ),
         )
         const owner = ownerOf(yield* client.session.create({}))
-        const run = yield* startRunOn(client, owner, EFFICIENT_THRICE, "efficient-thrice")
-        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
-        // Each measured once; then Sonnet, the one whose price says what a round costs.
-        expect(roundsRan(yield* home.sql(stepsOf(run)))).toEqual([
+        const first = yield* startRunOn(client, owner, EFFICIENT_ONCE, "efficient-once", "first")
+        yield* waitFor(home.sql(runRow(first)), isSettled, 10_000, "the first run's end was told")
+        expect(roundsRan(yield* home.sql(stepsOf(first)))).toEqual([
           { model: HAIKU, priced: false },
-          { model: SONNET, priced: true },
+        ])
+        // Haiku's run is measured by its tokens, so Sonnet, with none, runs next.
+        const second = yield* startRunOn(client, owner, EFFICIENT_ONCE, "efficient-once", "second")
+        yield* waitFor(home.sql(runRow(second)), isSettled, 10_000, "the second run's end was told")
+        expect(roundsRan(yield* home.sql(stepsOf(second)))).toEqual([
           { model: SONNET, priced: true },
         ])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
@@ -2617,7 +2714,146 @@ describe("a tier role's round", () => {
   )
 
   it.live(
-    "divides a model's priced cost by its priced rounds alone: unpriced ones are not free work",
+    "runs first a listed model with no measured run, before every measured one",
+    () =>
+      Effect.gen(function* () {
+        const picks = yield* rankedPick(
+          [OPUS, HAIKU, SONNET],
+          [
+            { rounds: [{ role: "worker", model: OPUS, costUsd: 1 }] },
+            { rounds: [{ role: "worker", model: HAIKU, costUsd: 0.5 }] },
+          ],
+        )
+        expect(picks).toEqual([SONNET])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "counts a run its final state does not accept as spend with no unit",
+    () =>
+      Effect.gen(function* () {
+        // Haiku: $2 over one accepted run; Opus: $1.5 over one.
+        const picks = yield* rankedPick(
+          [HAIKU, OPUS],
+          [
+            { rounds: [{ role: "worker", model: HAIKU, costUsd: 1 }] },
+            { rounds: [{ role: "worker", model: HAIKU, costUsd: 1 }], accepted: false },
+            { rounds: [{ role: "worker", model: OPUS, costUsd: 1.5 }] },
+          ],
+        )
+        expect(picks).toEqual([OPUS])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "charges a model the whole run it worked in, the other roles' rounds too",
+    () =>
+      Effect.gen(function* () {
+        // Haiku's work is cheap, but its runs took $1 of review; Sonnet's took $0.2.
+        const picks = yield* rankedPick(
+          [HAIKU, SONNET],
+          [
+            {
+              rounds: [
+                { role: "worker", model: HAIKU, costUsd: 0.1 },
+                { role: "reviewer", model: OPUS, costUsd: 1 },
+              ],
+            },
+            {
+              rounds: [
+                { role: "worker", model: SONNET, costUsd: 0.5 },
+                { role: "reviewer", model: OPUS, costUsd: 0.2 },
+              ],
+            },
+          ],
+        )
+        expect(picks).toEqual([SONNET])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "scores a model by its runs of the run's project and domain over its runs elsewhere",
+    () =>
+      Effect.gen(function* () {
+        // Haiku is cheap in other projects' tui work, dear in this one's.
+        const picks = yield* rankedPick(
+          [HAIKU, OPUS],
+          [
+            ...times(3, {
+              rounds: [{ role: "worker", model: HAIKU, costUsd: 0.1 }],
+              elsewhere: true,
+              domain: "tui",
+            }),
+            { rounds: [{ role: "worker", model: HAIKU, costUsd: 2 }], domain: "tui" },
+            { rounds: [{ role: "worker", model: OPUS, costUsd: 1 }], domain: "tui" },
+          ],
+          { domain: "tui" },
+        )
+        expect(picks).toEqual([OPUS])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "scores a model by its runs of the run's domain over its other runs of the project",
+    () =>
+      Effect.gen(function* () {
+        // Haiku is cheap in this project's docs work, dear in its tui work.
+        const picks = yield* rankedPick(
+          [HAIKU, OPUS],
+          [
+            ...times(3, {
+              rounds: [{ role: "worker", model: HAIKU, costUsd: 0.1 }],
+              domain: "docs",
+            }),
+            { rounds: [{ role: "worker", model: HAIKU, costUsd: 2 }], domain: "tui" },
+            { rounds: [{ role: "worker", model: OPUS, costUsd: 1 }], domain: "tui" },
+          ],
+          { domain: "tui" },
+        )
+        expect(picks).toEqual([OPUS])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "weighs a run half as much as one ten runs newer",
+    () =>
+      Effect.gen(function* () {
+        // Haiku's newest run was rejected at $1; its accepted $0.1 run is twenty runs older.
+        const picks = yield* rankedPick(
+          [HAIKU, OPUS],
+          [
+            { rounds: [{ role: "worker", model: HAIKU, costUsd: 1 }], accepted: false },
+            { rounds: [{ role: "worker", model: OPUS, costUsd: 2 }] },
+            ...times(18, { rounds: [{ role: "reviewer", model: SONNET, costUsd: 1 }] }),
+            { rounds: [{ role: "worker", model: HAIKU, costUsd: 0.1 }] },
+          ],
+        )
+        expect(picks).toEqual([OPUS])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "runs the runner-up once the cheapest ran the role's last nine runs alone",
+    () =>
+      Effect.gen(function* () {
+        const cheapest = { rounds: [{ role: "worker", model: HAIKU, costUsd: 0.1 }] }
+        const older = { rounds: [{ role: "worker", model: OPUS, costUsd: 1 }] }
+        const picks = yield* rankedPick([HAIKU, OPUS], [...times(9, cheapest), older])
+        expect(picks).toEqual([OPUS])
+        const fewer = yield* rankedPick([HAIKU, OPUS], [...times(8, cheapest), older])
+        expect(fewer).toEqual([HAIKU])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "writes a final state that does not accept the work, and counts no accepted run for it",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
@@ -2625,35 +2861,21 @@ describe("a tier role's round", () => {
           Effect.succeed(billed(`${round.state} ${round.visit} done`)),
         )
         const { client } = yield* createRpcClient(
-          home.layerFor(machineModels(models), tieredAccount({ efficient: [HAIKU, SONNET] })),
+          home.layerFor(machineModels(models), tieredAccount({ efficient: [HAIKU] })),
         )
         const owner = ownerOf(yield* client.session.create({}))
-        const run = yield* startRunOn(client, owner, EFFICIENT_AGAIN, "efficient-again")
-        const first = yield* askAt(client, owner, 1)
-        yield* callOn(client, owner, [
-          ["machine.answer", "again-1", { run, askId: first.askId, choice: "again" }],
+        const dropped = {
+          ...EFFICIENT_ONCE,
+          states: { ...EFFICIENT_ONCE.states, done: { kind: "final", accepts: false } },
+        }
+        const run = yield* startRunOn(client, owner, dropped, "efficient-once")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        const finished = (yield* home.sql(stepsOf(run))).find((step) => step._tag === "Finished")
+        expect(finished?.accepted).toBe(false)
+        const status = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), { run })
+        expect(status.quality.map((row) => [row.model, row.rounds, row.accepted])).toEqual([
+          [HAIKU, 1, { runs: 0, rounds: 0 }],
         ])
-        const second = yield* askAt(client, owner, 2)
-        const sonnet = (yield* home.sql(stepsOf(run))).find(
-          (step) => step._tag === "RoundEnded" && step.model === SONNET,
-        )?.costUsd
-        expect(sonnet).toBeGreaterThan(0)
-        // Haiku's history: one priced round at five Sonnet rounds, nine unpriced ones.
-        yield* home.sql(
-          seedRounds(run, "work", [
-            { model: HAIKU, costUsd: 5 * (sonnet ?? 0) },
-            ...Array.from({ length: 9 }, () => ({ model: HAIKU })),
-          ]),
-        )
-        yield* callOn(client, owner, [
-          ["machine.answer", "again-2", { run, askId: second.askId, choice: "again" }],
-        ])
-        yield* askAt(client, owner, 3)
-        // Haiku costs (its round + five Sonnet rounds) over two priced rounds: Sonnet is cheaper.
-        const ran = (yield* home.sql(stepsOf(run))).filter(
-          (step) => !(step.round ?? "").startsWith("seeded-"),
-        )
-        expect(roundsRan(ran).map((round) => round.model)).toEqual([HAIKU, SONNET, SONNET])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
   )
@@ -2778,24 +3000,15 @@ describe("a model's quality in a machine's state", () => {
             gates: { green: 1, red: 0 },
             accepted: { runs: 1, rounds: 2 },
           },
-          // This run's own rounds: Opus once to measure it, then Haiku twice.
-          {
-            state: "work",
-            model: HAIKU,
-            rounds: 2,
-            dead: 0,
-            priced: 2,
-            ...none,
-            accepted: { runs: 1, rounds: 2 },
-          },
+          // This run's own rounds: the machine has no ended run, so Opus, as listed, all three.
           {
             state: "work",
             model: OPUS,
-            rounds: 1,
+            rounds: 3,
             dead: 0,
-            priced: 1,
+            priced: 3,
             ...none,
-            accepted: { runs: 1, rounds: 1 },
+            accepted: { runs: 1, rounds: 3 },
           },
           {
             state: "work",
@@ -2809,7 +3022,7 @@ describe("a model's quality in a machine's state", () => {
             accepted: { runs: 1, rounds: 3 },
           },
         ])
-        expect(costs[3]).toBe(0.6)
+        expect(costs[2]).toBe(0.6)
         // The TUI asks by a round's thread: the rows of that thread's state alone.
         const threads = roundThreads(yield* home.sql(stepsOf(run)))
         const quality = ref(MachinesRpc.Quality)
@@ -2817,7 +3030,6 @@ describe("a model's quality in a machine's state", () => {
           session: SessionId.make(threads.at(-1) ?? ""),
         })
         expect(byThread.map((row) => [String(row.state), row.model])).toEqual([
-          ["work", HAIKU],
           ["work", OPUS],
           ["work", SONNET],
         ])
@@ -2832,7 +3044,7 @@ describe("a model's quality in a machine's state", () => {
         const byHandoff = yield* machinesRequest(client, owner, quality, {
           session: handoff.sessionId,
         })
-        expect(byHandoff.map((row) => row.model)).toEqual([HAIKU, OPUS, SONNET])
+        expect(byHandoff.map((row) => row.model)).toEqual([OPUS, SONNET])
         // A thread no round ran on has none.
         expect(
           yield* machinesRequest(client, owner, quality, { session: owner.sessionId }),

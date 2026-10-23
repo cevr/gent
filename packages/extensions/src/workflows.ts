@@ -214,8 +214,9 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
     rewrite: {
       kind: "final",
       say: "Unit {{input.unit}} needs a rewrite from base on a new spec.",
+      accepts: false,
     },
-    dropped: { kind: "final", say: "Unit {{input.unit}} dropped." },
+    dropped: { kind: "final", say: "Unit {{input.unit}} dropped.", accepts: false },
   },
 }
 
@@ -232,7 +233,7 @@ const orchestrateRecipe = (input: string, recordPath: string, machine: string) =
   return [
     `Orchestrate: ${input}`,
     `You coordinate and write no product code. Keep the run's record in ${recordPath}: the units, their order, and each unit's workspace, dir, run and outcome. Read it first; it may hold an earlier run.`,
-    "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from the remote main after a fetch: a merge pushes to the remote main and does not move a local main, so a unit starts only after the units it depends on merged) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate }. Start units at once only when their files do not overlap.",
+    "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from the remote main after a fetch: a merge pushes to the remote main and does not move a local main, so a unit starts only after the units it depends on merged) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate, domain }, domain the area of the code the unit changes in a word or two (tui, core runtime, docs), the same name for every unit of that area. Start units at once only when their files do not overlap.",
     "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the verdicts are accepted and pass and the request's claims hold; after stuck, replan or rewrite. On rewrite, start a new run on a new branch from base with a new spec; a rewrite that ends at decide again goes to the user.",
     machine,
   ].join("\n")

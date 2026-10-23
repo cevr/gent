@@ -163,8 +163,8 @@ export type ProviderConfigEntry = typeof ProviderConfigEntry.Type
  * The owner's two ordered model lists, beside the account order: a machine
  * role of the `strongest` tier (plan, review) runs the first of its list with
  * a free lane; one of the `efficient` tier (implement, verify) runs the one
- * with the least quota per finished round. Intelligence is not scored: the
- * lists are the owner's.
+ * whose recent runs cost least per accepted unit. Intelligence is not
+ * scored: the lists are the owner's.
  */
 const ModelTiersConfig = Schema.Struct({
   strongest: Schema.optional(Schema.Array(ModelId).check(Schema.isMinLength(1))),
