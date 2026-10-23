@@ -785,6 +785,13 @@ const LaneHold = Schema.Struct({
   lanes: Schema.Int,
   /** The project's turns and admitted starts on the sign-in now, any model. */
   used: Schema.Int,
+  /**
+   * Whether admission takes the project's next run now, on the account's
+   * windows (a model's own windows are the run's to count): under its hold
+   * unless every account is held, past it on the lanes the pool has free.
+   * Absent when the sign-in's order cannot be read.
+   */
+  admits: Schema.optionalKey(Schema.Boolean),
 })
 
 /** One provider's lanes. */

@@ -6872,8 +6872,8 @@ describe("account lanes", () => {
       const report = yield* placement.lanes(scopeOf([a]), () => Effect.succeed(held))
       expect(report.providers.map((lanes) => lanes.holds)).toEqual([
         [
-          { project: "blade", lanes: 1, used: 0 },
-          { project: "gent", lanes: 2, used: 1 },
+          { project: "blade", lanes: 1, used: 0, admits: true },
+          { project: "gent", lanes: 2, used: 1, admits: true },
         ],
       ])
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
@@ -6927,6 +6927,41 @@ describe("account lanes", () => {
       yield* placement.freeReservation("gent-1")
       yield* read(a, [{ window: "5h", utilization: 1, resetAt: now + 20 * HOUR, rejected: true }])
       expect(yield* startIn(placement, gentHeld, "gent", "gent-3")).toBe("Spent")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("the lanes report gives admission's answer for each held project's next run", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement, read } = fixture
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      const gentHeld = new Map([["gent", 1]])
+      const holdsIn = (scope: Scope) =>
+        Effect.map(
+          placement.lanes(scopeOf(scope), () => Effect.succeed(gentHeld)),
+          (report) => report.providers[0]?.holds,
+        )
+      // Two hours to the reset: the pace carries runs, so past its hold the pool takes it.
+      yield* fuelBothWindows(fixture, now, 2 * HOUR)
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-1")).toBe("admitted")
+      expect(yield* holdsIn([a])).toEqual([{ project: "gent", lanes: 1, used: 1, admits: true }])
+      yield* placement.freeReservation("gent-1")
+      // Twenty hours to the reset: the pace carries none, so only the hold admits.
+      yield* fuelBothWindows(fixture, now, 20 * HOUR)
+      expect(yield* holdsIn([a])).toEqual([{ project: "gent", lanes: 1, used: 0, admits: true }])
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-2")).toBe("admitted")
+      expect(yield* holdsIn([a])).toEqual([{ project: "gent", lanes: 1, used: 1, admits: false }])
+      yield* placement.freeReservation("gent-2")
+      // Under its hold, but a refusal holds every account of the scope.
+      yield* read(a, [{ window: "5h", utilization: 1, resetAt: now + 20 * HOUR, rejected: true }])
+      expect(yield* holdsIn([a])).toEqual([{ project: "gent", lanes: 1, used: 0, admits: false }])
+      // An order the server cannot read gives no answer.
+      const unread = yield* placement.lanes(
+        () => Effect.succeedNone,
+        () => Effect.succeed(gentHeld),
+      )
+      expect(unread.providers[0]?.holds).toEqual([{ project: "gent", lanes: 1, used: 0 }])
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

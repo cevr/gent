@@ -243,6 +243,104 @@ describe("the lanes band rows", () => {
     ])
   })
 
+  const holding = (
+    report: LaneReport,
+    holds: ProviderLanes["holds"] = [
+      { project: "github.com/cevr/gent", lanes: 2, used: 1, admits: true },
+      { project: "github.com/cevr/okra", lanes: 1, used: 1, admits: false },
+    ],
+  ): LaneReport => ({
+    providers: report.providers.map((provider) => ({ ...provider, holds })),
+  })
+
+  test("each project that holds lanes follows its provider's row with its runs over its lanes", () => {
+    const busy: LaneReport = {
+      providers: measured.providers.map((lanes) => ({ ...lanes, load: 5 })),
+    }
+    // The glyph reads admission's answer for the project's next run.
+    expect(laneRows(holding(measured), NOW, 120, utc)).toEqual([
+      { text: "lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%", state: "free" },
+      { text: "hold github.com/cevr/gent 1/2 used", state: "free" },
+      { text: "hold github.com/cevr/okra 1/1 used", state: "none" },
+    ])
+    // The holds stay when the provider has no lane free, and when nobody knows its lanes.
+    expect(laneRows(holding(busy), NOW, 120, utc).map((row) => row.text)).toEqual([
+      "lanes anthropic 0/5 free · 5 running",
+      "hold github.com/cevr/gent 1/2 used",
+      "hold github.com/cevr/okra 1/1 used",
+    ])
+    expect(laneRows(holding(unrated), NOW, 120, utc)[1]).toEqual({
+      text: "hold github.com/cevr/gent 1/2 used",
+      state: "free",
+    })
+    // The band draws them as lanes rows, before the runs.
+    expect(texts({ lanes: Option.some(holding(measured)), runs: [run({})] }, 120)).toEqual([
+      "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
+      "≡ hold github.com/cevr/gent 1/2 used",
+      "≡ hold github.com/cevr/okra 1/1 used",
+      "▸ track implement r2 4m",
+    ])
+  })
+
+  test("a hold's state is the server's answer, not its count", () => {
+    const states = (holds: ProviderLanes["holds"]) =>
+      laneRows(holding(measured, holds), NOW, 120, utc)
+        .slice(1)
+        .map((row) => [row.text, row.state])
+    expect(
+      states([
+        // Past its hold, on the lanes the pool has free.
+        { project: "gent", lanes: 2, used: 3, admits: true },
+        // Under its hold, but every account is held.
+        { project: "okra", lanes: 2, used: 0, admits: false },
+        // The server could not read the sign-in's order.
+        { project: "rift", lanes: 1, used: 0 },
+      ]),
+    ).toEqual([
+      ["hold gent 3/2 used", "free"],
+      ["hold okra 0/2 used", "none"],
+      ["hold rift 0/1 used", "unknown"],
+    ])
+  })
+
+  test("a narrow hold row keeps its count and a name no other hold shares", () => {
+    const at = (width: number, holds?: ProviderLanes["holds"]) =>
+      laneRows(holding(measured, holds), NOW, width, utc)[1]?.text
+    // Drops `used`, then names the project by shorter suffixes, then by nothing.
+    expect(at(34)).toBe("hold github.com/cevr/gent 1/2 used")
+    expect(at(29)).toBe("hold github.com/cevr/gent 1/2")
+    expect(at(28)).toBe("hold cevr/gent 1/2")
+    expect(at(17)).toBe("hold gent 1/2")
+    expect(at(12)).toBe("1/2 used")
+    for (const width of [34, 29, 28, 17, 12, 8, 3]) {
+      expect(textWidth(at(width) ?? "")).toBeLessThanOrEqual(width)
+      expect(at(width)).toContain("1/2")
+    }
+    // Two projects of one name keep the segment that tells them apart.
+    const twins: ProviderLanes["holds"] = [
+      { project: "github.com/a/gent", lanes: 2, used: 1, admits: true },
+      { project: "github.com/b/gent", lanes: 2, used: 1, admits: true },
+    ]
+    expect(at(20, twins)).toBe("hold a/gent 1/2")
+    expect(at(14, twins)).toBe("1/2 used")
+  })
+
+  test("the band shows two holds per provider and counts the rest; ctl shows all", () => {
+    const four: ProviderLanes["holds"] = ["a", "b", "c", "d"].map((project) => ({
+      project,
+      lanes: 1,
+      used: 0,
+      admits: true,
+    }))
+    expect(texts({ lanes: Option.some(holding(measured, four)), runs: [] }, 120)).toEqual([
+      "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
+      "≡ hold a 0/1 used",
+      "≡ hold b 0/1 used",
+      "≡ +2 more holds",
+    ])
+    expect(laneRows(holding(measured, four), NOW, 120, utc)).toHaveLength(5)
+  })
+
   test("each active run follows the lanes: machine, state, round and age; a waiting round names its clock", () => {
     const data: BandData = {
       lanes: Option.some(measured),

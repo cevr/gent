@@ -6314,6 +6314,25 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
                 used: lanesHeld(provider, Option.none(), now, (held) =>
                   Option.contains(held.project, project),
                 ),
+                // Admission's own answer for the project's next run.
+                ...Option.match(scope, {
+                  onNone: () => ({}),
+                  onSome: (accounts) => ({
+                    admits: Option.isNone(
+                      laneRefusal(
+                        {
+                          provider,
+                          scope: accounts,
+                          asker: Option.none(),
+                          model: Option.none(),
+                          project: Option.some(project),
+                          holds,
+                        },
+                        now,
+                      ),
+                    ),
+                  }),
+                }),
               })),
           })),
         }

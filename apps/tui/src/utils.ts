@@ -586,6 +586,47 @@ const providerLaneRow = (
   ])
 }
 
+type LaneHold = ProviderLanes["holds"][number]
+
+/**
+ * A project's names, its whole path first, then each shorter path suffix
+ * down to the shortest no other project in `others` ends with.
+ */
+const holdNames = (project: string, others: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const segments = project.split("/")
+  const names = [project]
+  for (let from = 1; from < segments.length; from++) {
+    const name = segments.slice(from).join("/")
+    if (others.some((other) => other === name || other.endsWith(`/${name}`))) break
+    names.push(name)
+  }
+  return names
+}
+
+/**
+ * One held project's row, longest form that fits `width` first: its runs on
+ * the sign-in now over the lanes it holds (more than it holds when the pool
+ * takes the rest). A narrow row drops `used`, then names the project by a
+ * shorter path suffix, never one another hold of the sign-in shares, then
+ * keeps the count alone.
+ */
+const holdRow = (hold: LaneHold, others: ReadonlyArray<string>, width: number): string => {
+  const count = `${hold.used}/${hold.lanes}`
+  const candidates = [
+    `hold ${hold.project} ${count} used`,
+    ...holdNames(hold.project, others).map((name) => `hold ${name} ${count}`),
+    `${count} used`,
+  ]
+  return candidates.find((candidate) => textWidth(candidate) <= width) ?? truncate(count, width)
+}
+
+/** Admission's answer for the project's next run: `unknown` when the server could not read the sign-in's order. */
+const holdState = (hold: LaneHold): LaneRow["state"] => {
+  if (Predicate.isUndefined(hold.admits)) return "unknown"
+  if (hold.admits) return "free"
+  return "none"
+}
+
 /** One lanes row: its words, and whether a run can start (`free`), cannot (`none`), or nobody knows. */
 interface LaneRow {
   readonly text: string
@@ -595,21 +636,37 @@ interface LaneRow {
 /**
  * The lanes rows of the band and of `gent ctl lanes --line`: one row per
  * provider gent read a quota window of, `lanes unknown` when it read none.
+ * Each provider's row is followed by a row per project that holds lanes on
+ * it, `free` while admission takes the project's next run, up to `maxHolds`
+ * of them and a count of the rest.
  */
 export const laneRows = (
   report: LaneReport,
   now: number,
   width: number,
   zone: DateTime.TimeZone,
+  maxHolds = Number.POSITIVE_INFINITY,
 ): ReadonlyArray<LaneRow> => {
   if (report.providers.length === 0) {
     return [{ text: truncate("lanes unknown", width), state: "unknown" }]
   }
-  return report.providers.map((lanes): LaneRow => {
+  return report.providers.flatMap((lanes): ReadonlyArray<LaneRow> => {
+    const projects = lanes.holds.map((hold) => hold.project)
+    const shown = lanes.holds.slice(0, maxHolds).map((hold): LaneRow => ({
+      text: holdRow(
+        hold,
+        projects.filter((project) => project !== hold.project),
+        width,
+      ),
+      state: holdState(hold),
+    }))
+    const rest = lanes.holds.length - shown.length
+    const holds: Array<LaneRow> = [...shown]
+    if (rest > 0) holds.push({ text: truncate(`+${rest} more holds`, width), state: "unknown" })
     const text = providerLaneRow(lanes, now, width, zone)
-    if (Predicate.isUndefined(lanes.capacity)) return { text, state: "unknown" }
-    if (freeLanes(lanes.capacity, lanes.load) === 0) return { text, state: "none" }
-    return { text, state: "free" }
+    if (Predicate.isUndefined(lanes.capacity)) return [{ text, state: "unknown" }, ...holds]
+    if (freeLanes(lanes.capacity, lanes.load) === 0) return [{ text, state: "none" }, ...holds]
+    return [{ text, state: "free" }, ...holds]
   })
 }
 

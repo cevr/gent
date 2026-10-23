@@ -60,6 +60,7 @@ const ASK_GLYPH = "?"
 const WAIT_GLYPH = "◷"
 
 const BAND_MAX_RUNS = 4
+const BAND_MAX_HOLDS = 2
 
 const isActive = (run: MachineRunView): boolean =>
   run.status === "running" || run.status === "asking"
@@ -94,8 +95,9 @@ const runRow = (
 }
 
 /**
- * The band: the lanes rows, then one row per active run, oldest first, up
- * to four and a count of the rest. Empty while gent read no quota window
+ * The band: the lanes rows, two held projects per provider and a count of
+ * the rest, then one row per active run, oldest first, up to four and a
+ * count of the rest. Empty while gent read no quota window
  * and no run is active, so the band hides. `width` is the text's columns.
  */
 export const bandRows = (
@@ -108,7 +110,7 @@ export const bandRows = (
   const measured = Option.exists(data.lanes, (report) => report.providers.length > 0)
   if (!measured && active.length === 0) return []
   const report = Option.getOrElse(data.lanes, (): LaneReport => ({ providers: [] }))
-  const lanes = laneRows(report, now, width, zone).map((row): BandRow => ({
+  const lanes = laneRows(report, now, width, zone, BAND_MAX_HOLDS).map((row): BandRow => ({
     glyph: LANES_GLYPH,
     tone: row.state,
     text: row.text,

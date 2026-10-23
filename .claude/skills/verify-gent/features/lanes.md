@@ -1,6 +1,6 @@
 # Lanes band
 
-Under the status row, a band shows how many runs the accounts can carry now and what runs on their own. Its first row is the free lanes per provider (`≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%`: free over capacity, the binding window's fuel per percent, its band and the spend outside gent). Each active machine run of this session's thread follows it (`▸ soak check r1 3s`: machine, state, round, age; `◷ … · wait 13:47` while its round waits for its account; `?` while it asks). The band hides while gent read no quota window and no run is active. `gent ctl lanes` prints the same lanes as JSON, and `--line` prints the band's row.
+Under the status row, a band shows how many runs the accounts can carry now and what runs on their own. Its first row is the free lanes per provider (`≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%`: free over capacity, the binding window's fuel per percent, its band and the spend outside gent). Each project that holds lanes on that provider (`providers.<owner>.authHold` in the user config) follows it (`≡ hold github.com/cevr/gent 1/2 used`: its runs now over its held lanes; the glyph is the free color while admission takes the project's next run; two per provider, then `+N more holds`). Each active machine run of this session's thread follows it (`▸ soak check r1 3s`: machine, state, round, age; `◷ … · wait 13:47` while its round waits for its account; `?` while it asks). The band hides while gent read no quota window and no run is active. `gent ctl lanes` prints the same lanes as JSON, and `--line` prints the band's row.
 
 ## Sub-features
 
@@ -28,7 +28,7 @@ Ledger recipe, run in the run's sibling `evidence/` directory (`mkdir -p "$(dirn
 bun -e '
 const now = Date.now(), h = 3_600_000
 const seg = (endedAt) => ({ provider: "anthropic", slot: "default", window: "5h", endedAt, fuel: 240000, deltaPct: 2, tokens: { input: 1000, output: 1000, cacheRead: 1000, cacheWrite: 0 } })
-await Bun.write("credential-usage.json", JSON.stringify({ buckets: [], readings: [{ provider: "anthropic", slot: "default", window: "5h", utilization: 0.4, resetAt: now + 2 * h, readAt: now - 60000, rejected: false }], segments: [seg(now - 600000), seg(now - 120000)] }))'
+await Bun.write("credential-usage.json", JSON.stringify({ buckets: [], readings: [{ provider: "anthropic", slot: "default", window: "5h", utilization: 0.3, resetAt: now + 2 * h, readAt: now - 60000, rejected: false }], segments: [seg(now - 600000), seg(now - 120000)] }))'
 ```
 
 Script `drives/lanes.json` (the run with the ledger, 120x40):

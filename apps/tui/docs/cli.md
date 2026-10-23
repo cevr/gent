@@ -108,8 +108,11 @@ provider: `lanes <provider> <free>/<capacity> free · <window> <fuel per
 percent>/% ±<band> · out <outside share>` for the window that carries the
 fewest runs, `lanes <provider> 0 free · retry 13:47` when a window is spent
 until a reset, `lanes <provider> 0/<capacity> free · <n> running` when runs
-hold every lane (`· held` when a refusal holds the account), and `lanes unknown` with no reading or no rate. No free lane
-is data, not a failure: the call exits 0.
+hold every lane (`· held` when a refusal holds the account), and `lanes unknown` with no reading or no rate. Each
+provider's row is followed by one row per project that holds lanes on it:
+`hold <project> <used>/<lanes> used`, its runs on the sign-in now over its
+held lanes (more than it holds when the pool takes the rest). A narrow row names
+the project by a shorter path suffix that no other hold shares. No free lane is data, not a failure: the call exits 0.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 
