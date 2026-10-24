@@ -21,6 +21,7 @@ import {
   type LaneReport,
   type LaneWindow,
   lineCount,
+  type LoginLossReason,
   type Model,
   type ProviderLanes,
   roundLanes,
@@ -588,6 +589,32 @@ const providerLaneRow = (
 
 type LaneHold = ProviderLanes["holds"][number]
 
+/** What a lost login's row says it is, by its reason. */
+const LOGIN_LOSS_WORDS: Record<LoginLossReason, string> = {
+  Rejected: "refused",
+  Unavailable: "unavailable",
+}
+
+/**
+ * One lost login's row, longest form that fits `width` first: the provider,
+ * the label, why, and where to sign in again. A narrow row drops the
+ * remedy, then the reason, then the provider, and a row narrower than
+ * `login! <slot>` truncates it.
+ */
+const lostLoginRow = (
+  provider: string,
+  slot: string,
+  reason: LoginLossReason,
+  width: number,
+): string => {
+  const head = `login! ${provider} ${slot} ${LOGIN_LOSS_WORDS[reason]}`
+  const candidates = [`${head} · sign in with /auth`, head, `login! ${provider} ${slot}`]
+  return (
+    candidates.find((candidate) => textWidth(candidate) <= width) ??
+    truncate(`login! ${slot}`, width)
+  )
+}
+
 /**
  * A project's names, its whole path first, then each shorter path suffix
  * down to the shortest no other project in `others` ends with.
@@ -635,8 +662,9 @@ interface LaneRow {
 
 /**
  * The lanes rows of the band and of `gent ctl lanes --line`: one row per
- * provider gent read a quota window of, `lanes unknown` when it read none.
- * Each provider's row is followed by a row per project that holds lanes on
+ * provider gent read a quota window of or lost a login on, `lanes unknown`
+ * when there is none. Each provider's row is followed by a `login!` row per
+ * account whose sign-in is lost, then a row per project that holds lanes on
  * it, `free` while admission takes the project's next run, up to `maxHolds`
  * of them and a count of the rest.
  */
@@ -663,10 +691,16 @@ export const laneRows = (
     const rest = lanes.holds.length - shown.length
     const holds: Array<LaneRow> = [...shown]
     if (rest > 0) holds.push({ text: truncate(`+${rest} more holds`, width), state: "unknown" })
+    const lost = lanes.accounts.flatMap((account): ReadonlyArray<LaneRow> => {
+      if (Predicate.isUndefined(account.loginLost)) return []
+      const text = lostLoginRow(lanes.provider, account.slot, account.loginLost.reason, width)
+      return [{ text, state: "none" }]
+    })
     const text = providerLaneRow(lanes, now, width, zone)
-    if (Predicate.isUndefined(lanes.capacity)) return [{ text, state: "unknown" }, ...holds]
-    if (freeLanes(lanes.capacity, lanes.load) === 0) return [{ text, state: "none" }, ...holds]
-    return [{ text, state: "free" }, ...holds]
+    let state: LaneRow["state"] = "free"
+    if (Predicate.isUndefined(lanes.capacity)) state = "unknown"
+    else if (freeLanes(lanes.capacity, lanes.load) === 0) state = "none"
+    return [{ text, state }, ...lost, ...holds]
   })
 }
 

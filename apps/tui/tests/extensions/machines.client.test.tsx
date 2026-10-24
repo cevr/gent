@@ -325,6 +325,55 @@ describe("the lanes band rows", () => {
     expect(at(14, twins)).toBe("1/2 used")
   })
 
+  test("a lost login follows its provider's row, before the holds, and names where to sign in", () => {
+    const WORK = CredentialSlot.make("work")
+    const lost = (
+      report: LaneReport,
+      reason: "Rejected" | "Unavailable" = "Rejected",
+    ): LaneReport => ({
+      providers: report.providers.map((lanes) => ({
+        ...lanes,
+        accounts: [
+          ...lanes.accounts,
+          { slot: WORK, windows: [], held: false, loginLost: { since: NOW - MINUTE, reason } },
+        ],
+      })),
+    })
+    expect(laneRows(lost(holding(measured)), NOW, 120, utc)).toEqual([
+      { text: "lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%", state: "free" },
+      { text: "login! anthropic work refused · sign in with /auth", state: "none" },
+      { text: "hold github.com/cevr/gent 1/2 used", state: "free" },
+      { text: "hold github.com/cevr/okra 1/1 used", state: "none" },
+    ])
+    // A sign-in gent holds no login for reads unavailable.
+    expect(laneRows(lost(measured, "Unavailable"), NOW, 120, utc)[1]?.text).toBe(
+      "login! anthropic work unavailable · sign in with /auth",
+    )
+    // A narrow row drops the remedy, then the reason, then the provider; `login!` stays.
+    const at = (width: number) => laneRows(lost(measured), NOW, width, utc)[1]?.text
+    expect(at(50)).toBe("login! anthropic work refused · sign in with /auth")
+    expect(at(49)).toBe("login! anthropic work refused")
+    expect(at(28)).toBe("login! anthropic work")
+    expect(at(20)).toBe("login! work")
+    for (const width of [50, 49, 29, 28, 21, 20, 11, 10, 7]) {
+      expect(textWidth(at(width) ?? "")).toBeLessThanOrEqual(width)
+      expect(at(width)).toContain("login!")
+    }
+    // The band draws it as a lanes row; a provider with only a lost login shows too.
+    expect(texts({ lanes: Option.some(lost(measured)), runs: [] }, 120)).toEqual([
+      "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
+      "≡ login! anthropic work refused · sign in with /auth",
+    ])
+    // No reading, no scope: the server lists the provider for its lost login alone.
+    const alone = lost({
+      providers: unrated.providers.map((lanes) => ({ ...lanes, scope: [], accounts: [], load: 0 })),
+    })
+    expect(texts({ lanes: Option.some(alone), runs: [] }, 120)).toEqual([
+      "≡ lanes anthropic unknown",
+      "≡ login! anthropic work refused · sign in with /auth",
+    ])
+  })
+
   test("the band shows two holds per provider and counts the rest; ctl shows all", () => {
     const four: ProviderLanes["holds"] = ["a", "b", "c", "d"].map((project) => ({
       project,

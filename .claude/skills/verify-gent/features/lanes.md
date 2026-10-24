@@ -10,6 +10,7 @@ Under the status row, a band shows how many runs the accounts can carry now and 
 - `band-run`: `debug machine` starts the `soak` machine; `▸ soak check r1 <age>` shows until its 45 s command ends, then goes.
 - `band-narrow`: at 60 columns the full row fits; at 44 it drops the share and the band and keeps `1/1 free`.
 - `ctl-lanes`: `gent ctl lanes` prints `Lanes` with one provider record per line; `--line` prints the band's row text.
+- `band-login-lost`: after the provider answers 401 to a sign-in's key, `≡ login! anthropic default refused · sign in with /auth` follows the provider's row, once however many turns it refuses; at 44 columns `≡ login! anthropic default refused`, at 28 `≡ login! anthropic default`.
 
 ## How to get to it (user POV)
 
@@ -20,7 +21,7 @@ Under the status row, a band shows how many runs the accounts can carry now and 
 
 - **Preconditions:** `band-measured` needs a run launched with a ledger: write `credential-usage.json` with current times (the recipe below), then `verify:launch --dir "$RUN" --data "$(dirname "$RUN")/evidence/credential-usage.json"`. `--data` takes a file only from the run, its sibling `evidence/` directory or the repository's test fixtures. `band-hidden` and `band-unknown` use the baseline run. The scripted model reports no quota window, so a measured row needs the ledger.
 - **States:** default (measured, hidden), loading (the run's command runs), empty (no reading: hidden, then `lanes unknown`). Focus, open and error are `n/a`.
-- **Regression:** `apps/tui/tests/extensions/machines.client.test.tsx`, `apps/tui/tests/ctl.test.ts` (`lanes needs no session`), `packages/extensions/tests/machines.test.ts` (`through the RPC harness`), `packages/e2e/tests/verify.test.ts`.
+- **Regression:** `apps/tui/tests/extensions/machines.client.test.tsx`, `packages/core/tests/runtime/provider.test.ts` (`lost logins`), `packages/core/tests/runtime/turn.test.ts` (lost login), `apps/tui/tests/ctl.test.ts` (`lanes needs no session`), `packages/extensions/tests/machines.test.ts` (`through the RPC harness`), `packages/e2e/tests/verify.test.ts`.
 
 Ledger recipe, run in the run's sibling `evidence/` directory (`mkdir -p "$(dirname "$RUN")/evidence"` first):
 
@@ -45,6 +46,8 @@ Script `drives/lanes-unknown.json` (the baseline run, 100x30):
 1. **Hidden.** `cap 76-no-band`: nothing under the status row. `sh gent ctl lanes --line` prints `lanes unknown`.
 2. **A run.** `send debug machine`, `keys enter`, `waitFor soak check r1`, `cap 77-unknown-with-run`: `≡ lanes unknown`, then `▸ soak check r1 0s`.
 3. **Narrow.** `resize 60 20`, `cap 78-unknown-narrow`.
+
+`band-login-lost` needs a real driver: the scripted model replaces the provider, so its steps carry no credential. Launch a baseline run, then beside it start a local endpoint that answers every request with Anthropic's 401 body (`{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`) on `127.0.0.1`. Copy `$RUN/bin/gent` to `<b>/bin/gent` with its own `GENT_DATA_DIR` and `ANTHROPIC_BASE_URL` set to that endpoint, start `<b>/bin/gent server start --port 0` and record its PID, and copy `run.json` to `<b>/run.json` with `dir`, `work`, `gent`, `url`, `serverPid` and `env` changed. The run's seeded `test-key` then goes only to the local endpoint: no request leaves the machine. `gent -H hello` fails with `InvalidKey`; `verify:drive --dir <b>` waits for the `login!` row and resizes. Stop the server and the endpoint by their PIDs, then `verify:stop` the baseline run.
 
 ## Gotchas
 

@@ -745,12 +745,27 @@ export const LaneWindow = Schema.Struct({
   ),
 })
 
+/**
+ * Why an account's sign-in no longer serves: the provider refused it or its
+ * refresh (`Rejected`), or the label holds no login a request can use
+ * (`Unavailable`: signed out, no refresh token, a rotation stuck in gent's
+ * store).
+ */
+export const LoginLossReason = Schema.Literals(["Rejected", "Unavailable"])
+export type LoginLossReason = typeof LoginLossReason.Type
+
 /** One account of a provider. */
 export const LaneAccount = Schema.Struct({
   slot: CredentialSlot,
   windows: Schema.Array(LaneWindow),
   /** Held by a refusal or a rejected account-wide window: it carries no run now. */
   held: Schema.Boolean,
+  /**
+   * The sign-in failed as a lost login (`loginLoss`), first at `since`, and
+   * no response came on it since. A new sign-in on the label, or a response
+   * on it, clears it.
+   */
+  loginLost: Schema.optionalKey(Schema.Struct({ since: Schema.Finite, reason: LoginLossReason })),
   /**
    * The fewest runs any of its account-wide windows can carry; none when one
    * has no rate or none was read. A model's window is listed but not counted:
@@ -827,7 +842,7 @@ export const ProviderLanes = Schema.Struct({
   holds: Schema.Array(LaneHold),
 })
 
-/** `accounts.lanes`: every provider gent read a quota window of. Labels and numbers only. */
+/** `accounts.lanes`: every provider gent read a quota window of or lost a login on. Labels and numbers only. */
 export const LaneReport = Schema.Struct({ providers: Schema.Array(ProviderLanes) })
 export type LaneReport = typeof LaneReport.Type
 export type LaneAccount = typeof LaneAccount.Type

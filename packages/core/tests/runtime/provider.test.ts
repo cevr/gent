@@ -33,6 +33,7 @@ import {
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
   type LaneReport,
+  type LoginLossReason,
   type ModelCatalogView,
   type ModelDriverContribution,
   modelFromCatalog,
@@ -62,6 +63,7 @@ import {
   listAuthMethods,
   limitResetAt,
   listCatalogProviders,
+  loginLoss,
   makeCredentialPlacement,
   placementLedgerFile,
   makeExtensionModels,
@@ -7771,4 +7773,179 @@ describe("account lanes", () => {
       expect(yield* stampsOf).toEqual(Option.some([2]))
     }).pipe(Effect.scoped),
   )
+
+  describe("lost logins", () => {
+    /** A request on `account` failed as a lost login. */
+    const lose = (
+      placement: Effect.Success<ReturnType<typeof makeCredentialPlacement>>,
+      account: Account,
+      reason: LoginLossReason = "Rejected",
+    ) => {
+      const { slot, signedInAt } = receiptOf(account)
+      return placement.loseLogin({
+        provider: "plan",
+        slot,
+        signedInAt: Option.fromUndefinedOr(signedInAt),
+        reason,
+      })
+    }
+    const lostOf = (report: ProviderLanes) =>
+      report.accounts.flatMap((account) =>
+        Option.toArray(
+          Option.map(Option.fromUndefinedOr(account.loginLost), (lost) => [
+            account.slot,
+            lost.reason,
+          ]),
+        ),
+      )
+
+    it.effect("a lost login lists its provider and account until a request is served on it", () =>
+      Effect.gen(function* () {
+        const { placement, read, spend, lanes } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        const signedIn = { slot: a, signedInAt: 1 }
+        // The first loss is the transition an alert names; a second one is not.
+        expect(yield* lose(placement, signedIn)).toBe(true)
+        expect(yield* lose(placement, signedIn)).toBe(false)
+        // No window of the provider was read: the loss alone lists it.
+        const report = yield* lanes([signedIn])
+        expect(report.accounts).toEqual([
+          { slot: a, windows: [], held: false, loginLost: { since: now, reason: "Rejected" } },
+        ])
+        // A failed step reports no usage: the login stays lost.
+        yield* spend(signedIn, Option.none(), Option.none())
+        expect(lostOf(yield* lanes([signedIn]))).toEqual([[a, "Rejected"]])
+        // A served request clears it, and nothing lists the provider then.
+        yield* spend(signedIn, Option.some(0.01))
+        expect(
+          (yield* placement.lanes(scopeOf([signedIn]), noHolds, Option.none())).providers,
+        ).toEqual([])
+        // A quota reading is a response too.
+        expect(yield* lose(placement, signedIn, "Unavailable")).toBe(true)
+        expect(lostOf(yield* lanes([signedIn]))).toEqual([[a, "Unavailable"]])
+        yield* read(signedIn, [{ window: "5h", utilization: 0.1, resetAt: now + HOUR }])
+        expect(lostOf(yield* lanes([signedIn]))).toEqual([])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("a lost login names the account outside the scope, and only the lost one", () =>
+      Effect.gen(function* () {
+        const { placement, read, lanes } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        yield* read(a, [{ window: "5h", utilization: 0.1, resetAt: now + HOUR }])
+        yield* read(b, [{ window: "5h", utilization: 0.2, resetAt: now + HOUR }])
+        expect(yield* lose(placement, b)).toBe(true)
+        expect(yield* lose(placement, c, "Unavailable")).toBe(true)
+        const report = yield* lanes([a])
+        expect(lostOf(report)).toEqual([
+          [b, "Rejected"],
+          [c, "Unavailable"],
+        ])
+        // The read account keeps its windows beside its loss.
+        expect(
+          report.accounts.find((account) => account.slot === b)?.windows.map((w) => w.window),
+        ).toEqual(["5h"])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "a new sign-in on the label clears a lost login; a late loss of the old one marks nothing",
+      () =>
+        Effect.gen(function* () {
+          const { placement, lanes } = yield* accounts()
+          yield* TestClock.adjust("1 hour")
+          const old = { slot: a, signedInAt: 1 }
+          const replaced = { slot: a, signedInAt: 2 }
+          expect(yield* lose(placement, old)).toBe(true)
+          expect(lostOf(yield* lanes([old]))).toEqual([[a, "Rejected"]])
+          // `gent auth` signs the account in again: the store stamps it anew.
+          expect(lostOf(yield* lanes([replaced]))).toEqual([])
+          // A request the old sign-in sent before the change fails late.
+          expect(yield* lose(placement, old)).toBe(false)
+          expect(
+            (yield* placement.lanes(scopeOf([replaced]), noHolds, Option.none())).providers,
+          ).toEqual([])
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("a renamed sign-in carries its lost login to the new label", () =>
+      Effect.gen(function* () {
+        const { placement, lanes } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const signedIn = { slot: a, signedInAt: 7 }
+        expect(yield* lose(placement, signedIn)).toBe(true)
+        yield* placement.renameLabel({ provider: "plan", from: a, to: c })
+        const renamed = { slot: c, signedInAt: 7 }
+        expect(lostOf(yield* lanes([renamed]))).toEqual([[c, "Rejected"]])
+        // A late loss under the old label counts on the new one, already lost.
+        expect(yield* lose(placement, signedIn)).toBe(false)
+        expect(lostOf(yield* lanes([renamed]))).toEqual([[c, "Rejected"]])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "a lost login is a proved credential failure or a 401 with a response, nothing else",
+      () =>
+        Effect.sync(() => {
+          const failed = (reason: AiError.AiErrorReason) =>
+            AiError.make({ module: "Test", method: "streamText", reason })
+          const request = {
+            method: "POST" as const,
+            url: "http://127.0.0.1/nonexistent/login-probe",
+            urlParams: [],
+            headers: {},
+          }
+          const answered = (status: number) => ({
+            request,
+            response: { status, headers: {} },
+          })
+          const proved = (reason: "Rejected" | "Unavailable" | "UnsupportedModel") =>
+            failed(
+              new AiError.InternalProviderError({
+                description: "refresh refused",
+                metadata: credentialFailureMetadata(
+                  new ProviderAuthError({ message: "refresh refused", credentialFailure: reason }),
+                ),
+              }),
+            )
+          expect(loginLoss(proved("Rejected"))).toEqual(Option.some("Rejected"))
+          expect(loginLoss(proved("Unavailable"))).toEqual(Option.some("Unavailable"))
+          expect(loginLoss(proved("UnsupportedModel"))).toEqual(Option.none())
+          expect(
+            loginLoss(
+              new ProviderAuthError({ message: "signed out", credentialFailure: "Unavailable" }),
+            ),
+          ).toEqual(Option.some("Unavailable"))
+          for (const kind of ["InvalidKey", "ExpiredKey"] as const)
+            expect(
+              loginLoss(failed(new AiError.AuthenticationError({ kind, http: answered(401) }))),
+            ).toEqual(Option.some("Rejected"))
+          // A 403, a key no request carried, an answer-less failure, a quota, a rate limit.
+          expect(
+            loginLoss(
+              failed(
+                new AiError.AuthenticationError({
+                  kind: "InsufficientPermissions",
+                  http: answered(403),
+                }),
+              ),
+            ),
+          ).toEqual(Option.none())
+          expect(
+            loginLoss(
+              failed(new AiError.AuthenticationError({ kind: "MissingKey", http: answered(401) })),
+            ),
+          ).toEqual(Option.none())
+          expect(
+            loginLoss(failed(new AiError.AuthenticationError({ kind: "InvalidKey" }))),
+          ).toEqual(Option.none())
+          expect(
+            loginLoss(failed(new AiError.QuotaExhaustedError({ http: answered(429) }))),
+          ).toEqual(Option.none())
+          expect(loginLoss(failed(new AiError.RateLimitError({})))).toEqual(Option.none())
+        }),
+    )
+  })
 })

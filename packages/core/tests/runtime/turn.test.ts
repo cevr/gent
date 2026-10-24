@@ -3127,6 +3127,73 @@ describe("credential order", () => {
     }),
   )
 
+  /** Each account of the fallback provider the lanes name a lost login on, with its reason. */
+  const lostLoginsOf = (placement: CredentialPlacement["Service"]) =>
+    Effect.map(
+      placement.lanes(
+        () => Effect.succeedSome([{ provider: fallbackProvider, slot: personal }]),
+        noHolds,
+        Option.none(),
+      ),
+      (report) =>
+        report.providers
+          .filter((lanes) => lanes.provider === FALLBACK)
+          .flatMap((lanes) => lanes.accounts)
+          .flatMap((account) =>
+            Option.toArray(
+              Option.map(Option.fromUndefinedOr(account.loginLost), (lost) => [
+                account.slot,
+                lost.reason,
+              ]),
+            ),
+          ),
+    )
+
+  it.live("a refused credential is a lost login the lanes name; the one that served is not", () =>
+    Effect.gen(function* () {
+      const placement = yield* makeCredentialPlacement(Option.none())
+      const run = yield* credentialTurn({
+        name: "lost-login",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        placement,
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        replies: { "sk-a": refusal, "sk-b": answer("done") },
+      })
+      expect(run.sent).toEqual(["sk-a", "sk-b"])
+      expect(yield* lostLoginsOf(placement)).toEqual([[DEFAULT_CREDENTIAL_SLOT, "Rejected"]])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.live("a pinned run's refused credential is a lost login too, and a spent quota is not", () =>
+    Effect.gen(function* () {
+      const placement = yield* makeCredentialPlacement(Option.none())
+      const refused = yield* credentialTurn({
+        name: "lost-login-pinned",
+        order: [personal],
+        pin: personal,
+        placement,
+        stored: [[personal, apiKey("sk-b")]],
+        replies: { "sk-b": refusal },
+      })
+      // The pin is the order: nothing else is tried.
+      expect(refused.sent).toEqual(["sk-b"])
+      expect(yield* lostLoginsOf(placement)).toEqual([[personal, "Rejected"]])
+      const spent = yield* makeCredentialPlacement(Option.none())
+      yield* credentialTurn({
+        name: "spent-quota-pinned",
+        order: [personal],
+        pin: personal,
+        placement: spent,
+        stored: [[personal, apiKey("sk-b")]],
+        replies: { "sk-b": quotaSpent },
+      })
+      expect(yield* lostLoginsOf(spent)).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.live("a run pinned to a credential sends every request on it, whatever the authOrder", () =>
     Effect.gen(function* () {
       const run = yield* credentialTurn({

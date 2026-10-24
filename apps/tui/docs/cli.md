@@ -103,14 +103,16 @@ into a `status` flag (`ctlProjection` in the client contribution): `status
 
 `lanes` names no session: the accounts are the server's. It prints `Lanes`,
 the `accounts.lanes` report, with one record per provider gent read a quota
-window of. `--line` prints the TUI band's lanes rows as text instead, one per
+window of or saw a login lost on. `--line` prints the TUI band's lanes rows as text instead, one per
 provider: `lanes <provider> <free>/<capacity> free · <window> <fuel per
 percent>/% ±<band> · out <outside share>` for the window that carries the
 fewest runs, `lanes <provider> 0 free · retry 13:47` when a window is spent
 until a reset, `lanes <provider> 0/<capacity> free · <n> running` when runs
 hold every lane (`· held` when a refusal holds the account), and `lanes unknown` with no reading or no rate. Each
-provider's row is followed by one row per project that holds lanes on it:
-`hold <project> <used>/<lanes> used`, its runs on the sign-in now over its
+provider's row is followed by a row
+`login! <provider> <slot> refused · sign in with /auth` for each account whose
+login the provider no longer takes (`unavailable` when the driver found no
+credential), then `hold <project> <used>/<lanes> used`, its runs on the sign-in now over its
 held lanes (more than it holds when the pool takes the rest). A narrow row names
 the project by a shorter path suffix that no other hold shares. No free lane is data, not a failure: the call exits 0.
 

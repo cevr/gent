@@ -194,6 +194,7 @@ import {
   retryProviderCall,
   requestCredentialOrder,
   credentialRefusal,
+  loginLoss,
   refusalHoldsModel,
   retryReason,
   requestCost,
@@ -3814,6 +3815,21 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       if (Option.isNone(refusal)) return false
       const failed = yield* Ref.get(used)
       if (Option.isNone(failed)) return false
+      // A lost login is recorded on every order, pinned or not: the lanes
+      // name it until a response comes on it or the label signs in anew.
+      for (const reason of Option.toArray(loginLoss(cause))) {
+        const { provider, slot, signedInAt } = failed.value
+        const lost = yield* placement.loseLogin({
+          provider,
+          slot,
+          signedInAt: Option.fromUndefinedOr(signedInAt),
+          reason,
+        })
+        if (lost)
+          yield* Effect.logWarning("credential.login-lost").pipe(
+            Effect.annotateLogs({ provider, slot, reason }),
+          )
+      }
       // A refused step takes an account that filled its window only when its
       // sign-in allows extra usage: it would be billed past the plan there.
       const moved = yield* leaveCredential({

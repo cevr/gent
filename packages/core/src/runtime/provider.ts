@@ -83,6 +83,7 @@ import {
   type LaneReport,
   LaneUnavailable,
   type LaneWindow,
+  type LoginLossReason,
   type ProviderLanes,
   roundLanes,
   type QuotaReading,
@@ -3777,6 +3778,15 @@ interface PlacementStep extends PlacementSpend {
   readonly model: ModelId
 }
 
+/** A request on a label whose sign-in failed as a lost login (`loginLoss`). */
+interface PlacementLoginLoss {
+  readonly provider: string
+  readonly slot: CredentialSlot
+  /** The sign-in the failed request went out with (`CredentialReceipt.signedInAt`). */
+  readonly signedInAt: Option.Option<number>
+  readonly reason: LoginLossReason
+}
+
 /** What a refusal holds: the whole account, or the account for one model. */
 interface PlacementRefusal {
   readonly provider: string
@@ -3803,6 +3813,15 @@ interface CredentialPlacementService {
    * minutes. A refusal of a sign-in the label no longer holds holds nothing.
    */
   readonly refuse: (refusal: PlacementRefusal) => Effect.Effect<void>
+  /**
+   * A request on `slot` failed as a lost login: the label's sign-in is lost
+   * from now, and `lanes` names it. True when it was not lost already: the
+   * one change an alert names. A loss of a sign-in the label replaced since
+   * marks nothing. A response on the sign-in (`noteFuel` with its usage,
+   * `noteQuota`) or a new sign-in on the label clears it; it holds no
+   * account (`refuse` does).
+   */
+  readonly loseLogin: (loss: PlacementLoginLoss) => Effect.Effect<boolean>
   /**
    * Whether any account of `pool` is eligible for `model` now: not held by
    * a refusal or a rejected quota window, and not `left` by the turn. A run
@@ -3886,8 +3905,9 @@ interface CredentialPlacementService {
    */
   readonly noteFuel: (fuel: PlacementFuel) => Effect.Effect<void>
   /**
-   * The lanes of every provider gent read a quota window of: each account's
-   * windows, fuel per percent and sustainable runs, and the provider's
+   * The lanes of every provider gent read a quota window of or lost a login
+   * on: each account's windows, fuel per percent, sustainable runs and lost
+   * login, and the provider's
    * capacity over the accounts `scopeOf` names (its unpinned runs' accounts),
    * and the lanes `holdsOf` holds for each project with the project's runs now.
    */
@@ -4903,6 +4923,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   >()
   /** provider, slot (and a model, for a hold of one model) → held until. */
   const held = new Map<string, number>()
+  /** provider, slot → the label's sign-in failed as a lost login: since when, and why. */
+  const lostLogins = new Map<
+    string,
+    {
+      readonly provider: string
+      readonly slot: CredentialSlot
+      readonly since: number
+      readonly reason: LoginLossReason
+    }
+  >()
   /** provider, starter, slot → the fresh children warming it. */
   const warming = new Map<string, Set<SessionId>>()
   /** provider, slot, window (and its model, `windowKey`) → the window's latest reading. */
@@ -5107,6 +5137,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       if (ofLabel(key, provider, slot)) spendMeters.delete(key)
     for (const key of [...held.keys()])
       if (key === placementKey(provider, slot) || ofLabel(key, provider, slot)) held.delete(key)
+    lostLogins.delete(placementKey(provider, slot))
   }
   /** A label's quota state and holds move to `to`, whose own go: its sign-in was renamed. */
   const relabel = (provider: string, from: CredentialSlot, to: CredentialSlot) => {
@@ -5144,6 +5175,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         held.delete(key)
         held.set(moved(key), until)
       }
+    }
+    const lost = lostLogins.get(placementKey(provider, from))
+    if (Predicate.isNotUndefined(lost)) {
+      lostLogins.delete(placementKey(provider, from))
+      lostLogins.set(placementKey(provider, to), { ...lost, slot: to })
     }
   }
   /**
@@ -5742,6 +5778,27 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     })
   })
   /**
+   * `accounts` with each lost login of `provider` on its account: one the
+   * lanes do not list (no reading, outside the scope) is listed with no
+   * window. Under the lock.
+   */
+  const withLostLogins = (
+    provider: string,
+    accounts: ReadonlyArray<LaneAccount>,
+  ): ReadonlyArray<LaneAccount> => {
+    const lost = [...lostLogins.values()].filter((entry) => entry.provider === provider)
+    const listed = new Set(accounts.map((account) => account.slot))
+    const unlisted = lost.flatMap((entry): ReadonlyArray<LaneAccount> => {
+      if (listed.has(entry.slot)) return []
+      return [{ slot: entry.slot, windows: [], held: held.has(placementKey(provider, entry.slot)) }]
+    })
+    return [...accounts, ...unlisted].map((account) => {
+      const found = lost.find((entry) => entry.slot === account.slot)
+      if (Predicate.isUndefined(found)) return account
+      return { ...account, loginLost: { since: found.since, reason: found.reason } }
+    })
+  }
+  /**
    * The lanes of one provider over `scope`, under the lock. Account pace
    * remains quota in hand over time to its own reset, for placement. Pool
    * admission takes max(expiring weekly floor, rolling seven-day supply),
@@ -6189,6 +6246,22 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         held.set(key, until)
       })
     }),
+    loseLogin: Effect.fn("CredentialPlacement.loseLogin")(function* (loss: PlacementLoginLoss) {
+      const now = yield* Clock.currentTimeMillis
+      return yield* locked(() => {
+        const slot = reportedOn(loss.provider, loss.slot, loss.signedInAt)
+        if (Option.isNone(slot)) return false
+        const key = placementKey(loss.provider, slot.value)
+        if (lostLogins.has(key)) return false
+        lostLogins.set(key, {
+          provider: loss.provider,
+          slot: slot.value,
+          since: now,
+          reason: loss.reason,
+        })
+        return true
+      })
+    }),
     open: Effect.fn("CredentialPlacement.open")(function* (params: {
       readonly provider: string
       readonly pool: ReadonlyArray<CredentialSlot>
@@ -6349,6 +6422,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         trim(now)
         const slot = reportedOn(quota.provider, quota.slot, quota.signedInAt)
         if (Option.isNone(slot)) return
+        // A response came: the sign-in serves again.
+        lostLogins.delete(placementKey(quota.provider, slot.value))
         for (const reading of quota.readings) read(quota.provider, slot.value, reading, now)
       })
     }),
@@ -6367,6 +6442,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           })
         const slot = reportedOn(spend.provider, spend.slot, spend.signedInAt)
         if (Option.isNone(slot)) return
+        // A response reported its tokens: the sign-in serves again. A failed
+        // or cut step reports none, and leaves a lost login lost.
+        if (Option.isSome(spend.usage)) lostLogins.delete(placementKey(spend.provider, slot.value))
         for (const [key, open] of openSegments) {
           if (!key.startsWith(placementKey(spend.provider, slot.value, ""))) continue
           // Another model's spend never moves a model's window.
@@ -6405,7 +6483,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       const now = yield* Clock.currentTimeMillis
       const providers = yield* locked(() => {
         trim(now)
-        return [...new Set([...readings.values()].map((reading) => reading.provider))].sort()
+        return [
+          ...new Set([
+            ...[...readings.values()].map((reading) => reading.provider),
+            ...[...lostLogins.values()].map((lost) => lost.provider),
+          ]),
+        ].sort()
       })
       const scopes = yield* Effect.forEach(providers, (provider) =>
         Effect.all([Effect.succeed(provider), scopeOf(provider), holdsOf(provider)]),
@@ -6414,8 +6497,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         for (const [provider, scope] of scopes)
           if (Option.isSome(scope)) settle(provider, scope.value)
         return {
-          providers: scopes.map(([provider, scope, holds]) => ({
-            ...providerLanes(
+          providers: scopes.map(([provider, scope, holds]) => {
+            const lanes = providerLanes(
               provider,
               Option.match(scope, {
                 onNone: () => [],
@@ -6424,38 +6507,42 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               Option.none(),
               now,
               night,
-            ).lanes,
-            // A hold counts the project's runs on every account, as admission does.
-            holds: [...holds]
-              .sort(([a], [b]) => Order.String(a, b))
-              .map(([project, lanes]) => ({
-                project,
-                lanes,
-                used: lanesHeld(provider, Option.none(), now, (held) =>
-                  Option.contains(held.project, project),
-                ),
-                // Admission's own answer for the project's next run.
-                ...Option.match(scope, {
-                  onNone: () => ({}),
-                  onSome: (accounts) => ({
-                    admits: Option.isNone(
-                      laneRefusal(
-                        {
-                          provider,
-                          scope: accounts,
-                          asker: Option.none(),
-                          model: Option.none(),
-                          project: Option.some(project),
-                          holds,
-                          night,
-                        },
-                        now,
+            ).lanes
+            return {
+              ...lanes,
+              accounts: withLostLogins(provider, lanes.accounts),
+              // A hold counts the project's runs on every account, as admission does.
+              holds: [...holds]
+                .sort(([a], [b]) => Order.String(a, b))
+                .map(([project, lanes]) => ({
+                  project,
+                  lanes,
+                  used: lanesHeld(provider, Option.none(), now, (held) =>
+                    Option.contains(held.project, project),
+                  ),
+                  // Admission's own answer for the project's next run.
+                  ...Option.match(scope, {
+                    onNone: () => ({}),
+                    onSome: (accounts) => ({
+                      admits: Option.isNone(
+                        laneRefusal(
+                          {
+                            provider,
+                            scope: accounts,
+                            asker: Option.none(),
+                            model: Option.none(),
+                            project: Option.some(project),
+                            holds,
+                            night,
+                          },
+                          now,
+                        ),
                       ),
-                    ),
+                    }),
                   }),
-                }),
-              })),
-          })),
+                })),
+            }
+          }),
         }
       })
     }),
@@ -7607,6 +7694,37 @@ export const credentialRefusal = (error: unknown): Option.Option<string> => {
     Predicate.isNotUndefined(reason.http?.response)
   ) {
     return Option.some("was refused")
+  }
+  return Option.none()
+}
+
+/** Which proved credential failures are a lost login. */
+const LOGIN_LOSS: Record<CredentialFailureReason, Option.Option<LoginLossReason>> = {
+  Unavailable: Option.some("Unavailable"),
+  Rejected: Option.some("Rejected"),
+  UnsupportedModel: Option.none(),
+}
+
+/**
+ * Whether a request's failure means its sign-in is lost, and why: a driver
+ * proved the credential absent or its refresh refused, or the provider
+ * answered 401 to it (a key it calls invalid or expired, after the client
+ * refreshed and sent it once more, `authorizedClient`). None for anything
+ * else: a model the account does not serve, a quota, a rate limit, a 403,
+ * or an authentication error with no response behind it.
+ */
+// oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
+export const loginLoss = (error: unknown): Option.Option<LoginLossReason> => {
+  const proved = credentialFailureReason(error)
+  if (Option.isSome(proved)) return LOGIN_LOSS[proved.value]
+  if (!AiError.isAiError(error)) return Option.none()
+  const reason = error.reason
+  if (
+    reason._tag === "AuthenticationError" &&
+    (reason.kind === "InvalidKey" || reason.kind === "ExpiredKey") &&
+    Predicate.isNotUndefined(reason.http?.response)
+  ) {
+    return Option.some("Rejected")
   }
   return Option.none()
 }

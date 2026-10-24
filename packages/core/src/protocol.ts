@@ -8,6 +8,7 @@ export {
   LaneReport,
   roundLanes,
   type LaneWindow,
+  type LoginLossReason,
   ProviderLanes,
   sameCredential,
 } from "./domain/driver.js"
