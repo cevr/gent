@@ -6331,6 +6331,48 @@ describe("linked Claude Code credential cache", () => {
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
+  it.scopedLive(
+    "a primary refresh the token endpoint refuses is rejected once the CLI fallback fails",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([
+          [PRIMARY_SERVICE, { account: "alice", blob: claudeBlob("fake-revoked", 0) }],
+        ])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const sentTokens: Array<string> = []
+        const failure = yield* resolveFailure(driver, makeOAuthInfo(), (request) => {
+          sentTokens.push(refreshTokenOf(request))
+          return { status: 400, body: encodeExternalJson({ error: "invalid_grant" }) }
+        })
+        // The endpoint refused the stored token and the CLI could not sign
+        // in: the login is lost, and a turn may move to the next credential.
+        expect(Option.map(failure, (error) => error.credentialFailure)).toEqual(
+          Option.some("Rejected"),
+        )
+        expect(sentTokens).toEqual(["fake-revoked-refresh"])
+        expect(keychain.calls.some((call) => call[0] === "claude")).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a primary refresh reply without a token leaves the credential unmarked", () =>
+    Effect.gen(function* () {
+      const keychain = fakeKeychain([
+        [PRIMARY_SERVICE, { account: "alice", blob: claudeBlob("fake-garbled", 0) }],
+      ])
+      const driver = yield* linkedDriver("darwin", keychain.spawner)
+      // The token endpoint answers 200 with no access token: a parse fault,
+      // not a refusal, so the failed CLI fallback proves nothing either.
+      const failure = yield* resolveFailure(driver, makeOAuthInfo(), () => ({
+        status: 200,
+        body: encodeExternalJson({ token_type: "bearer" }),
+      }))
+      expect(Option.isSome(failure)).toBe(true)
+      expect(
+        Option.exists(failure, (error) => Predicate.isUndefined(error.credentialFailure)),
+      ).toBe(true)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
   it.scopedLive("a linked refresh reply without a token leaves the credential unmarked", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

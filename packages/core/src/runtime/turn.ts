@@ -3816,7 +3816,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       const failed = yield* Ref.get(used)
       if (Option.isNone(failed)) return false
       // A lost login is recorded on every order, pinned or not: the lanes
-      // name it until a response comes on it or the label signs in anew.
+      // name it until a step is served on it or the label signs in anew.
       for (const reason of Option.toArray(loginLoss(cause))) {
         const { provider, slot, signedInAt } = failed.value
         const lost = yield* placement.loseLogin({
@@ -3839,6 +3839,24 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         mayTakeFilled: yield* configService.extraUsage(failed.value.provider),
       })
       return Option.isSome(moved)
+    })
+  /**
+   * A step the credential it went out on (`used`) served: a lost login on
+   * that sign-in is found again. Only a whole step counts. A cancelled or cut
+   * step proves nothing, and a summary is not read here: a compactor can
+   * succeed with no model request.
+   */
+  const noteServed = (collected: CollectedTurnResponse) =>
+    Effect.gen(function* () {
+      if (collected.interrupted || collected.streamFailed) return
+      const served = yield* Ref.get(used)
+      if (Option.isNone(served)) return
+      const { provider, slot, signedInAt } = served.value
+      yield* placement.noteServed({
+        provider,
+        slot,
+        signedInAt: Option.fromUndefinedOr(signedInAt),
+      })
     })
   /**
    * Run `attempt`, and run it again each time its failure moves the turn to
@@ -4320,6 +4338,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         return Option.some(error.cause)
       })
       return visit.pipe(
+        Effect.tap(noteServed),
         Effect.catchTag("ProviderError", (streamError) =>
           Effect.flatMap(
             Effect.all([Clock.currentTimeMillis, credential, modelAttempts]),

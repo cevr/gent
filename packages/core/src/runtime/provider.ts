@@ -3787,6 +3787,14 @@ interface PlacementLoginLoss {
   readonly reason: LoginLossReason
 }
 
+/** A request on a label that its sign-in served (`noteServed`). */
+interface PlacementServed {
+  readonly provider: string
+  readonly slot: CredentialSlot
+  /** The sign-in the served request went out with (`CredentialReceipt.signedInAt`). */
+  readonly signedInAt: Option.Option<number>
+}
+
 /** What a refusal holds: the whole account, or the account for one model. */
 interface PlacementRefusal {
   readonly provider: string
@@ -3817,11 +3825,16 @@ interface CredentialPlacementService {
    * A request on `slot` failed as a lost login: the label's sign-in is lost
    * from now, and `lanes` names it. True when it was not lost already: the
    * one change an alert names. A loss of a sign-in the label replaced since
-   * marks nothing. A response on the sign-in (`noteFuel` with its usage,
-   * `noteQuota`) or a new sign-in on the label clears it; it holds no
-   * account (`refuse` does).
+   * marks nothing. A served request on the sign-in (`noteServed`) or a new
+   * sign-in on the label clears it; it holds no account (`refuse` does).
    */
   readonly loseLogin: (loss: PlacementLoginLoss) => Effect.Effect<boolean>
+  /**
+   * A request on `slot` was served: a lost login on its sign-in is found
+   * again. Quota and fuel reports do not clear a loss: a provider sends quota
+   * headers on a refusal too, and a served request can report no usage.
+   */
+  readonly noteServed: (served: PlacementServed) => Effect.Effect<void>
   /**
    * Whether any account of `pool` is eligible for `model` now: not held by
    * a refusal or a rejected quota window, and not `left` by the turn. A run
@@ -6262,6 +6275,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         return true
       })
     }),
+    noteServed: Effect.fn("CredentialPlacement.noteServed")(function* (served: PlacementServed) {
+      yield* locked(() => {
+        const slot = reportedOn(served.provider, served.slot, served.signedInAt)
+        if (Option.isSome(slot)) lostLogins.delete(placementKey(served.provider, slot.value))
+      })
+    }),
     open: Effect.fn("CredentialPlacement.open")(function* (params: {
       readonly provider: string
       readonly pool: ReadonlyArray<CredentialSlot>
@@ -6422,8 +6441,6 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         trim(now)
         const slot = reportedOn(quota.provider, quota.slot, quota.signedInAt)
         if (Option.isNone(slot)) return
-        // A response came: the sign-in serves again.
-        lostLogins.delete(placementKey(quota.provider, slot.value))
         for (const reading of quota.readings) read(quota.provider, slot.value, reading, now)
       })
     }),
@@ -6442,9 +6459,6 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           })
         const slot = reportedOn(spend.provider, spend.slot, spend.signedInAt)
         if (Option.isNone(slot)) return
-        // A response reported its tokens: the sign-in serves again. A failed
-        // or cut step reports none, and leaves a lost login lost.
-        if (Option.isSome(spend.usage)) lostLogins.delete(placementKey(spend.provider, slot.value))
         for (const [key, open] of openSegments) {
           if (!key.startsWith(placementKey(spend.provider, slot.value, ""))) continue
           // Another model's spend never moves a model's window.

@@ -3194,6 +3194,31 @@ describe("credential order", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.live("a step served on a refused credential clears its lost login", () =>
+    Effect.gen(function* () {
+      const placement = yield* makeCredentialPlacement(Option.none())
+      const run = yield* credentialTurn({
+        name: "lost-login-served",
+        order: [personal],
+        pin: personal,
+        placement,
+        stored: [[personal, apiKey("sk-b")]],
+        prompts: ["first", "second"],
+        replies: {
+          "sk-b": (call) => {
+            if (call === 0) return refusal()
+            return answer("back")(call)
+          },
+        },
+      })
+      expect(run.ended.map((event) => [event.credential?.slot, event.outcome])).toEqual([
+        [personal, "Failed"],
+        [personal, "Answered"],
+      ])
+      expect(yield* lostLoginsOf(placement)).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.live("a run pinned to a credential sends every request on it, whatever the authOrder", () =>
     Effect.gen(function* () {
       const run = yield* credentialTurn({

@@ -1080,6 +1080,8 @@ const refreshCandidates = (
  *
  * The failure is `CredentialRefreshUnavailable` when the token endpoint
  * was unreachable and the CLI fallback also failed, so the loop retries.
+ * It is `Rejected` when the endpoint refused every stored refresh token and
+ * the CLI fallback also failed: the login is spent or revoked.
  *
  * This is the primary account's refresh. A linked directory refreshes
  * through `refreshLinked`, which never runs the CLI.
@@ -1100,6 +1102,7 @@ const refreshClaudeCodeCredentials = (
     // them instead of only the last one.
     const failures: Array<string> = []
     let endpointUnavailable = false
+    let refused = 0
     const current = yield* Effect.exit(readClaudeCodeCredentials)
     if (Exit.isFailure(current)) {
       failures.push(
@@ -1123,6 +1126,7 @@ const refreshClaudeCodeCredentials = (
           onSome: (e) => e.message,
         }),
       )
+      if (Option.isSome(error) && refusedToken(error.value)) refused += 1
       // An unreachable endpoint rejects every token alike; stop here.
       if (Option.isSome(error) && error.value._tag === "CredentialRefreshUnavailable") {
         endpointUnavailable = true
@@ -1142,6 +1146,9 @@ const refreshClaudeCodeCredentials = (
       Effect.mapError((cause): CredentialFailure => {
         const message = `${failures.join("; ")}; CLI fallback: ${cause.message}`
         if (endpointUnavailable) return new CredentialRefreshUnavailable({ message, cause })
+        if (candidates.length > 0 && refused === candidates.length) {
+          return new ProviderAuthError({ message, cause, credentialFailure: "Rejected" })
+        }
         return new ProviderAuthError({ message, cause })
       }),
       Effect.interruptible,
@@ -1923,8 +1930,8 @@ const makeSourceCredentialCache = <R>(
       read: Option.some((cached) => io.read(cached).pipe(Effect.provideContext(ioContext))),
       // A refresh failure keeps its own reason (locked keychain, access
       // denied, OAuth 4xx); only a refresh that returns an expired token
-      // gets the generic hint. A linked directory's failure keeps the
-      // reason it proved, so an unpinned turn moves past a refused login.
+      // gets the generic hint. A failure keeps the reason it proved, so an
+      // unpinned turn moves past a refused login and the lanes name it.
       // A rotation stuck in gent's store names its own remedy: no hint.
       refresh: (held) =>
         Effect.gen(function* () {
@@ -1939,9 +1946,9 @@ const makeSourceCredentialCache = <R>(
                 })
               }
               const message = `${subject} sign-in failed: ${cause.message}. ${hint}`
-              if (source._tag === "Primary") return new ProviderAuthError({ message, cause })
               return new ProviderAuthError({
                 message,
+                cause,
                 ...omitUndefined({ credentialFailure: cause.credentialFailure }),
               })
             }),

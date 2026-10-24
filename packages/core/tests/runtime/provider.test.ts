@@ -7799,6 +7799,19 @@ describe("account lanes", () => {
         ),
       )
 
+    /** A request on `account` was served. */
+    const serve = (
+      placement: Effect.Success<ReturnType<typeof makeCredentialPlacement>>,
+      account: Account,
+    ) => {
+      const { slot, signedInAt } = receiptOf(account)
+      return placement.noteServed({
+        provider: "plan",
+        slot,
+        signedInAt: Option.fromUndefinedOr(signedInAt),
+      })
+    }
+
     it.effect("a lost login lists its provider and account until a request is served on it", () =>
       Effect.gen(function* () {
         const { placement, read, spend, lanes } = yield* accounts()
@@ -7813,19 +7826,21 @@ describe("account lanes", () => {
         expect(report.accounts).toEqual([
           { slot: a, windows: [], held: false, loginLost: { since: now, reason: "Rejected" } },
         ])
-        // A failed step reports no usage: the login stays lost.
-        yield* spend(signedIn, Option.none(), Option.none())
-        expect(lostOf(yield* lanes([signedIn]))).toEqual([[a, "Rejected"]])
-        // A served request clears it, and nothing lists the provider then.
+        // A refusal carries quota headers and the failed step's fuel: neither
+        // proves the sign-in serves, and the next refusal is no new loss.
+        yield* read(signedIn, [{ window: "5h", utilization: 0.1, resetAt: now + HOUR }])
         yield* spend(signedIn, Option.some(0.01))
-        expect(
-          (yield* placement.lanes(scopeOf([signedIn]), noHolds, Option.none())).providers,
-        ).toEqual([])
-        // A quota reading is a response too.
+        expect(lostOf(yield* lanes([signedIn]))).toEqual([[a, "Rejected"]])
+        expect(yield* lose(placement, signedIn)).toBe(false)
+        // A served request on an older sign-in of the label clears nothing.
+        yield* serve(placement, { slot: a, signedInAt: 0 })
+        expect(lostOf(yield* lanes([signedIn]))).toEqual([[a, "Rejected"]])
+        // A served request clears it: the provider lists its windows alone.
+        yield* serve(placement, signedIn)
+        expect(lostOf(yield* lanes([signedIn]))).toEqual([])
+        // A loss after that is a new transition.
         expect(yield* lose(placement, signedIn, "Unavailable")).toBe(true)
         expect(lostOf(yield* lanes([signedIn]))).toEqual([[a, "Unavailable"]])
-        yield* read(signedIn, [{ window: "5h", utilization: 0.1, resetAt: now + HOUR }])
-        expect(lostOf(yield* lanes([signedIn]))).toEqual([])
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
 
