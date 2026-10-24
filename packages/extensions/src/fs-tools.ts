@@ -2356,10 +2356,35 @@ const scriptEntries = Effect.fn("OutlineTool.scriptEntries")(function* (
     }
     statements.push(scriptEntry(statement, topLevelLabel(statement), 0, exportedBody(statement)))
   }
-  return [...statements, ...sectionEntries(ast, lines, statements)].toSorted(
-    (left, right) => left.start - right.start,
+  return joinSameLine(
+    [...statements, ...sectionEntries(ast, lines, statements)].toSorted(
+      (left, right) => left.start - right.start,
+    ),
   )
 })
+
+/**
+ * Entries that start on one line join into one: `nextOffset` names a line,
+ * so two entries on a line would be one cursor, and a read takes a whole
+ * line anyway.
+ */
+const joinSameLine = (entries: ReadonlyArray<OutlineEntry>): ReadonlyArray<OutlineEntry> => {
+  const joined: Array<OutlineEntry> = []
+  for (const entry of entries) {
+    const last = joined.at(-1)
+    if (last?.start !== entry.start) {
+      joined.push(entry)
+      continue
+    }
+    joined[joined.length - 1] = {
+      start: last.start,
+      end: Math.max(last.end, entry.end),
+      label: headChars(`${last.label}; ${entry.label}`, OUTLINE_LABEL_CHARS),
+      children: [...last.children, ...entry.children],
+    }
+  }
+  return joined
+}
 
 interface HeadingDraft {
   readonly start: number
@@ -2369,41 +2394,131 @@ interface HeadingDraft {
   readonly children: Array<HeadingDraft>
 }
 
-const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/
-const FENCE = /^ {0,3}(`{3,}|~{3,})/
+const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/
+/** A heading's closing `#`s: alone, or after a space. */
+const CLOSING_HASHES = /(?:^|[ \t]+)#+[ \t]*$/
+const SETEXT_UNDERLINE = /^ {0,3}(=+|-+)[ \t]*$/
+const THEMATIC_BREAK = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/
+/** A list item or a quote, which can interrupt a paragraph: a setext underline under one is not a heading. */
+const LIST_OR_QUOTE = /^ {0,3}(?:(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)|>)/
+/** Indented code, which cannot interrupt a paragraph. */
+const INDENTED_CODE = /^(?: {4}|\t)/
+const FRONT_MATTER_OPEN = /^---[ \t]*$/
+const FRONT_MATTER_CLOSE = /^(?:---|\.\.\.)[ \t]*$/
 
-/** A closing fence repeats the opening one's character, at least as many times. */
-const closesFence = (open: string, marker: string) =>
-  marker[0] === open[0] && marker.length >= open.length
+/** A backtick fence's info string holds no backtick. */
+const opensFence = (marker: string, info: string) =>
+  marker.length > 0 && !(marker.startsWith("`") && info.includes("`"))
 
-/** A Markdown file's headings, outside code fences, each over the lines until the next heading at its level or above. */
-const markdownEntries = (lines: ReadonlyArray<string>): ReadonlyArray<OutlineEntry> => {
+/** A closing fence is bare and repeats the opening one's character, at least as many times. */
+const closesFence = (open: string, marker: string, info: string) =>
+  marker.length > 0 &&
+  info.trim().length === 0 &&
+  marker[0] === open[0] &&
+  marker.length >= open.length
+
+/** The first line after a YAML front matter block at the top, or 0: its closing `---` is not an underline. */
+const frontMatterEnd = (lines: ReadonlyArray<string>) => {
+  if (!FRONT_MATTER_OPEN.test(lines[0] ?? "")) return 0
+  const close = lines.findIndex((line, index) => index > 0 && FRONT_MATTER_CLOSE.test(line))
+  return close + 1
+}
+
+/** A heading a line makes: its level, the 0-indexed line it starts on, its title. */
+interface HeadingLine {
+  readonly level: number
+  readonly index: number
+  readonly title: string
+}
+
+/** A setext underline closes the open paragraph into a heading; an ATX line is a heading itself. */
+const headingAt = (
+  lines: ReadonlyArray<string>,
+  index: number,
+  paragraph: Option.Option<number>,
+): Option.Option<HeadingLine> => {
+  const line = lines[index] ?? ""
+  const [, underline = ""] = SETEXT_UNDERLINE.exec(line) ?? []
+  if (Option.isSome(paragraph) && underline.length > 0) {
+    const title = lines.slice(paragraph.value, index).map((text) => text.trim())
+    return Option.some({
+      level: 1 + Number(underline.startsWith("-")),
+      index: paragraph.value,
+      title: title.join(" "),
+    })
+  }
+  const [, hashes = "", rest = ""] = HEADING.exec(line) ?? []
+  if (hashes.length === 0) return Option.none()
+  return Option.some({
+    level: hashes.length,
+    index,
+    title: rest.replace(CLOSING_HASHES, "").trim(),
+  })
+}
+
+/** Where a text line leaves the scan: in a paragraph from its first line, or in a list item, a quote or indented code. */
+interface TextState {
+  readonly paragraph: Option.Option<number>
+  readonly block: boolean
+}
+
+/** A text line opens or continues a paragraph, unless a list item, a quote or indented code holds it until a blank line. */
+const textLine = (line: string, index: number, state: TextState): TextState => {
+  const block =
+    state.block ||
+    LIST_OR_QUOTE.test(line) ||
+    (Option.isNone(state.paragraph) && INDENTED_CODE.test(line))
+  if (block) return { paragraph: Option.none(), block }
+  return { paragraph: Option.orElse(state.paragraph, () => Option.some(index)), block }
+}
+
+const isTextLine = (line: string) => line.trim().length > 0 && !THEMATIC_BREAK.test(line)
+
+const NO_TEXT: TextState = { paragraph: Option.none(), block: false }
+
+/**
+ * A Markdown file's ATX and setext headings, outside code fences and front
+ * matter, each over the lines until the next heading at its level or above.
+ */
+const markdownEntries = (fileLines: ReadonlyArray<string>): ReadonlyArray<OutlineEntry> => {
+  // A CRLF file's lines keep their `\r`, which no line pattern here allows.
+  const lines = fileLines.map((line) => line.replace(/\r$/, ""))
   const roots: Array<HeadingDraft> = []
   const open: Array<HeadingDraft> = []
-  let fence = Option.none<string>()
-  lines.forEach((line, index) => {
-    const [, marker = ""] = FENCE.exec(line) ?? []
-    if (marker.length > 0) {
-      if (Option.isNone(fence)) fence = Option.some(marker)
-      else if (closesFence(fence.value, marker)) fence = Option.none()
-      return
-    }
-    if (Option.isSome(fence)) return
-    const [, hashes = "", title = ""] = HEADING.exec(line) ?? []
-    if (hashes.length === 0) return
+  const addHeading = ({ level, index, title }: HeadingLine) => {
     // The open headings deepen down the stack, so every one from the first at this level or above closes.
-    const closing = open.findIndex((draft) => draft.level >= hashes.length)
+    const closing = open.findIndex((draft) => draft.level >= level)
     if (closing >= 0) for (const closed of open.splice(closing)) closed.end = index
     const draft: HeadingDraft = {
       start: index + 1,
       end: lines.length,
-      level: hashes.length,
-      label: headChars(`${hashes} ${title}`.trimEnd(), OUTLINE_LABEL_CHARS),
+      level,
+      label: headChars(`${"#".repeat(level)} ${title}`.trimEnd(), OUTLINE_LABEL_CHARS),
       children: [],
     }
     ;(open.at(-1)?.children ?? roots).push(draft)
     open.push(draft)
-  })
+  }
+  let fence = Option.none<string>()
+  let text = NO_TEXT
+  for (let index = frontMatterEnd(lines); index < lines.length; index++) {
+    const line = lines[index] ?? ""
+    const [, marker = "", info = ""] = FENCE.exec(line) ?? []
+    if (Option.isSome(fence)) {
+      if (closesFence(fence.value, marker, info)) fence = Option.none()
+      continue
+    }
+    const heading = headingAt(lines, index, text.paragraph)
+    if (Option.isSome(heading)) addHeading(heading.value)
+    else if (opensFence(marker, info)) fence = Option.some(marker)
+    else if (isTextLine(line)) {
+      text = textLine(line, index, text)
+      continue
+    }
+    // A heading, a fence, a blank line or a thematic break ends the paragraph and the block.
+    text = NO_TEXT
+  }
   return roots
 }
 

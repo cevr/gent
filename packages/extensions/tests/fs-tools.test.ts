@@ -434,6 +434,29 @@ describe("OutlineTool", () => {
       }),
   )
 
+  outlineTest(
+    "nests from 151 lines, not 150, and keeps an inner declaration of 10 lines, not 9",
+    () =>
+      Effect.gen(function* () {
+        const outer = (fill: number) =>
+          [
+            "function outer() {",
+            "  function ten() {",
+            filler(8, "    "),
+            "  }",
+            "  function nine() {",
+            filler(7, "    "),
+            "  }",
+            filler(fill),
+            "}",
+          ].join("\n")
+        const nested = yield* outlineOf("a.ts", outer(130))
+        expect(nested.content).toBe(["1-151 function outer", "  2-11 function ten"].join("\n"))
+        const flat = yield* outlineOf("a.ts", outer(129))
+        expect(flat.content).toBe("1-150 function outer")
+      }),
+  )
+
   outlineTest("names a test file's calls by their string, nested inside a long one", () =>
     Effect.gen(function* () {
       const result = yield* outlineOf(
@@ -530,6 +553,20 @@ describe("OutlineTool", () => {
       }),
   )
 
+  outlineTest("declarations on one line join into one entry, so the cursor always moves on", () =>
+    Effect.gen(function* () {
+      const names = Array.from({ length: 200 }, (_, index) => `longVariableNameNumber${index}`)
+      const line = names.map((name, index) => `const ${name} = ${index}`).join("; ")
+      const result = yield* outlineOf("min.js", `${line}\nconst after = 1`)
+      const label = names
+        .map((name) => `const ${name}`)
+        .join("; ")
+        .slice(0, 80)
+      expect(result.content).toBe([`1 ${label}`, "2 const after"].join("\n"))
+      expect(result.truncated).toBe(false)
+    }),
+  )
+
   outlineTest("outlines Markdown headings by level, skipping fenced code", () =>
     Effect.gen(function* () {
       const result = yield* outlineOf(
@@ -560,10 +597,71 @@ describe("OutlineTool", () => {
     }),
   )
 
+  outlineTest(
+    "outlines setext and empty headings, past front matter, and keeps a fence open to its bare closing line",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* outlineOf(
+          "notes.md",
+          [
+            "---",
+            "title: x",
+            "---",
+            "Title",
+            "=====",
+            "text",
+            "# A",
+            "```js",
+            "```still code",
+            "# hidden",
+            "```",
+            "# visible",
+            "Sub",
+            "part",
+            "---",
+            "##",
+            "# C#",
+          ].join("\r\n"),
+        )
+        expect(result.content).toBe(
+          [
+            "4-6 # Title",
+            "7-11 # A",
+            "12-16 # visible",
+            "  13-15 ## Sub part",
+            "  16 ##",
+            "17 # C#",
+          ].join("\n"),
+        )
+        const unclosed = yield* outlineOf("open.md", ["# A", "```", "# hidden"].join("\n"))
+        expect(unclosed.content).toBe("1-3 # A")
+        // Under a list item or indented code, `---` is a thematic break.
+        const breaks = yield* outlineOf("list.md", ["- item", "---", "    code", "---"].join("\n"))
+        expect(breaks.content).toBe("")
+      }),
+  )
+
+  outlineTest("reads a CRLF script's line ends as one break each", () =>
+    Effect.gen(function* () {
+      const result = yield* outlineOf(
+        "crlf.ts",
+        ["const a = 1", "function f() {", "  return 1", "}"].join("\r\n"),
+      )
+      expect(result.content).toBe(["1 const a", "2-4 function f"].join("\n"))
+    }),
+  )
+
   outlineTest("refuses a file it cannot outline and names read instead", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(outlineOf("data.json", "{}"))
       expect(error.message).toContain("Use read")
+    }),
+  )
+
+  outlineTest("a script the parser cannot recover fails with the parse error", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(outlineOf("broken.ts", "function ("))
+      expect(error.message).toContain("Cannot parse this file")
     }),
   )
 })
