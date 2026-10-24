@@ -108,7 +108,7 @@ import { BuiltinExtensions } from "../src/index.js"
 import { OpenCodeExtension } from "../src/opencode.js"
 import { buildCloudflareModelDriver, CloudflareExtension } from "../src/cloudflare.js"
 import { TypeSafeExtension } from "../src/typesafe.js"
-import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
+import { EditTool, GrepTool, OutlineTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { GoalTool } from "../src/goal.js"
 import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
 import { WebSearchTool } from "../src/network-tools.js"
@@ -2458,6 +2458,10 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   [
     GrepTool,
     "- tools.grep(input: { pattern: string; path?: string; glob?: string; caseSensitive?: boolean; context?: number; limit?: number }): Promise<{ matches: { file: string; line: number; content: string; context?: object }[]; truncated: boolean; unreadable?: number; oversized?: number; undecided?: number }> // Search file contents with regex",
+  ],
+  [
+    OutlineTool,
+    "- tools.outline(input: { path: string; offset?: number; limit?: number }): Promise<{ content: string; path: string; lineCount: number; entries: number; truncated: boolean; nextOffset?: number }> // Outline a source or Markdown file's declarations with line ranges",
   ],
   [
     GoalTool,

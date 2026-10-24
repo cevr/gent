@@ -60,7 +60,8 @@ the VS Code extension. Take ideas, not code. Created the day before this read,
   and top-level declarations with line ranges and one-line signatures, from a
   TypeScript parser gent already ships (TypeScript 7, or the oxc parser behind
   oxlint). No index and no graph: one parse per call, so nothing goes stale and
-  the layer sheds by deleting one tool. Accept: on a Haiku gamut A/B with the
+  the layer sheds by deleting one tool. Shipped 2026-10-24 on `@babel/parser`
+  8 (queue row 36). Accept: on a Haiku gamut A/B with the
   same prompt, `.ts` read chars per task fall, and the gate pass rate holds.
 - V2, completeness line. When `grep` or `usages`-like results are cut, say how
   many matches were cut and where, so the model does not search again. Check

@@ -644,6 +644,14 @@ describe("toolArgSummary", () => {
     )
   })
 
+  test("outline: shortened path and line window, like read", () => {
+    expect(toolArgSummary("outline", { path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
+    expect(toolArgSummary("outline", { path: "/tmp/foo.ts", offset: 10, limit: 20 }, PLACE)).toBe(
+      "/tmp/foo.ts:10-29",
+    )
+    expect(toolArgSummary("outline", {}, PLACE)).toBe("")
+  })
+
   test("edit: shortened path", () => {
     expect(toolArgSummary("edit", { path: `${HOME}/src/app.ts` }, PLACE)).toBe("~/src/app.ts")
     expect(toolArgSummary("edit", {}, PLACE)).toBe("")
@@ -966,6 +974,13 @@ describe("activityHeaderRuns", () => {
     expect(headerText([{ ...cell([]), code: three }])).toBe("Read 3 files")
     expect(headerText([{ ...cell([], "running"), code: three }])).toBe("Reading 3 files")
     expect(headerText([{ ...cell([], "running"), code: reads }])).not.toContain("Promise")
+  })
+
+  test("outline ops count files", () => {
+    expect(headerText([cell([op("outline", "a.ts"), op("outline", "b.md")])])).toBe(
+      "Outlined 2 files",
+    )
+    expect(headerText([cell([op("outline", "a.ts", "running")])])).toBe("Outlining 1 file")
   })
 
   test("a running op reads last in the running tense", () => {

@@ -838,6 +838,7 @@ interface OperationRun {
 /** What a folded frame counts: `12 files`, `3 commands`; a tool not named here counts calls. */
 const FOLD_NOUNS: ReadonlyMap<string, string> = new Map([
   ["read", "file"],
+  ["outline", "file"],
   ["edit", "file"],
   ["write", "file"],
   ["grep", "search"],

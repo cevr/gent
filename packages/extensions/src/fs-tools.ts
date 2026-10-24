@@ -5,11 +5,27 @@ import {
   Option,
   Path,
   type PlatformError,
+  Predicate,
   Result,
   Schema,
   Stream,
 } from "effect"
 import picomatch from "picomatch"
+import type {
+  ClassAccessorProperty,
+  ClassDeclaration,
+  ClassPrivateProperty,
+  ClassProperty,
+  ExportNamedDeclaration,
+  ExpressionStatement,
+  File,
+  Node,
+  ObjectProperty,
+  Statement,
+  TSModuleDeclaration,
+  TSPropertySignature,
+  VariableDeclaration,
+} from "@babel/types"
 import {
   type AgentPathEntry,
   defineExtension,
@@ -983,7 +999,7 @@ export const ReadTool = tool({
   id: "read",
   readonly: true,
   description:
-    "Read file contents. Returns numbered lines. Use offset/limit for large files. A truncated result carries nextOffset — pass it back as offset to continue from the next unread line. A line longer than 2000 characters is cut, with a marker that counts what it lost. A file with bytes that are not valid text shows them as U+FFFD and reports lossy; edit and write refuse that file.",
+    "Read file contents. Returns numbered lines. Use offset/limit for large files. A truncated result carries nextOffset — pass it back as offset to continue from the next unread line. For a large TypeScript, JavaScript or Markdown file, call outline first and read only the ranges you need. A line longer than 2000 characters is cut, with a marker that counts what it lost. A file with bytes that are not valid text shows them as U+FFFD and reports lossy; edit and write refuse that file.",
   promptSnippet: "Read file contents with line numbers",
   params: ReadParams,
   output: ReadResult,
@@ -1921,6 +1937,601 @@ export const GrepTool = tool({
   }),
 })
 
+// ── outline ─────────────────────────────────────────────────────────────────
+
+// Outline Tool Error
+
+class OutlineError extends Schema.TaggedError<OutlineError, { readonly brand: unique symbol }>()(
+  "OutlineError",
+  {
+    message: Schema.String,
+    path: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  },
+) {}
+
+// Outline Tool Params
+
+const OutlineParams = Schema.Struct({
+  path: Schema.String.annotate({
+    description: "Absolute path to a TypeScript, JavaScript or Markdown file",
+  }),
+  offset: Schema.optionalKey(
+    PositiveInt.annotate({
+      description: "Outline only the entries over the lines from this one (1-indexed)",
+    }),
+  ),
+  limit: Schema.optionalKey(
+    PositiveInt.annotate({
+      description: "Number of lines the outlined window covers",
+    }),
+  ),
+})
+
+// Outline Tool Result
+
+const OutlineResult = Schema.Struct({
+  content: Schema.String,
+  path: Schema.String,
+  lineCount: Schema.Finite,
+  /** The lines of `content`: one per entry shown. */
+  entries: Schema.Finite,
+  truncated: Schema.Boolean,
+  /** The 1-indexed line to pass as `offset` to continue. Absent when the outline reached the end. */
+  nextOffset: Schema.optional(Schema.Finite),
+})
+
+// Outline Entries
+
+/** One outline line: a declaration or a heading, its 1-indexed lines, and the entries inside it. */
+interface OutlineEntry {
+  readonly start: number
+  readonly end: number
+  readonly label: string
+  readonly children: ReadonlyArray<OutlineEntry>
+}
+
+/** A declaration longer than this many lines lists the declarations inside it. */
+const OUTLINE_NEST_LINES = 150
+/** An inner declaration shorter than this many lines is left out of its parent's entries. */
+const OUTLINE_INNER_LINES = 10
+/** Declarations nest at most this deep; a top-level entry is depth 0. */
+const OUTLINE_MAX_DEPTH = 3
+/** An outline longer than this is cut, so it fits the cell's 8,000-character view of a result. */
+const OUTLINE_MAX_CHARS = 6000
+const OUTLINE_LABEL_CHARS = 80
+
+const SCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"])
+const TYPESCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"])
+/** JSX would read a `<T>value` type assertion as a tag, so a `.ts` file parses without it. */
+const NO_JSX_EXTENSIONS = new Set([".ts", ".mts", ".cts"])
+const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown", ".mdx"])
+
+// oxlint-disable-next-line effect/noDynamicImports -- the parser loads at the first outline, not at launch
+const loadParser = Effect.promise(() => import("@babel/parser"))
+
+/** A field of a parsed node that holds a node: it has a `type` name and a `loc`. */
+const isNode = (value: unknown): value is Node =>
+  Predicate.hasProperty(value, "type") &&
+  Predicate.isString(value.type) &&
+  Predicate.hasProperty(value, "loc")
+
+const startLine = (node: Node) => node.loc?.start.line ?? 1
+const endLine = (node: Node) => node.loc?.end.line ?? startLine(node)
+const lineSpan = (node: Node) => endLine(node) - startLine(node) + 1
+
+const textOr = (text: Option.Option<string>, fallback: string) =>
+  Option.getOrElse(text, () => fallback)
+
+/** A string as a JSON literal: `describe("read")`, with its quotes and newlines escaped. */
+const quoted = Schema.encodeSync(Schema.fromJsonString(Schema.String))
+
+/** The name a key or a property spells; a computed key spells none. */
+const keyText = (key: Node): Option.Option<string> => {
+  if (key.type === "Identifier") return Option.some(key.name)
+  if (key.type === "StringLiteral" || key.type === "NumericLiteral")
+    return Option.some(String(key.value))
+  if (key.type === "PrivateName") return Option.some(`#${key.id.name}`)
+  return Option.none()
+}
+
+/** `Effect.fn`, `Schema.TaggedError`: the dotted name a call or a member names. */
+function calleeText(node: Node): Option.Option<string> {
+  switch (node.type) {
+    case "Identifier":
+      return Option.some(node.name)
+    case "ThisExpression":
+      return Option.some("this")
+    case "MemberExpression":
+    case "OptionalMemberExpression":
+      return Option.some(
+        `${textOr(calleeText(node.object), "…")}.${textOr(keyText(node.property), "[…]")}`,
+      )
+    case "CallExpression":
+    case "OptionalCallExpression":
+      return calleeText(node.callee)
+    case "TSInstantiationExpression":
+    case "TSNonNullExpression":
+      return calleeText(node.expression)
+    default:
+      return Option.none()
+  }
+}
+
+/** What a value is, after ` = `: a call names its callee, a function shows its arrow. */
+function valueText(node: Node): Option.Option<string> {
+  switch (node.type) {
+    case "TSAsExpression":
+    case "TSSatisfiesExpression":
+      return valueText(node.expression)
+    case "AwaitExpression":
+      return valueText(node.argument)
+    case "CallExpression":
+    case "OptionalCallExpression":
+      return Option.some(`${textOr(calleeText(node.callee), "…")}(…)`)
+    case "NewExpression":
+      return Option.some(`new ${textOr(calleeText(node.callee), "…")}(…)`)
+    case "ArrowFunctionExpression":
+    case "FunctionExpression":
+      return Option.some("(…) =>")
+    case "ClassExpression":
+      return Option.some("class")
+    case "ObjectExpression":
+      return Option.some("{…}")
+    case "ArrayExpression":
+      return Option.some("[…]")
+    default:
+      return Option.none()
+  }
+}
+
+const withValue = (label: string, value: Option.Option<Node>) =>
+  Option.match(Option.flatMap(value, valueText), {
+    onNone: () => label,
+    onSome: (text) => `${label} = ${text}`,
+  })
+
+const variableLabel = (node: VariableDeclaration) => {
+  const names = node.declarations.map((declarator) => {
+    if (declarator.id.type === "Identifier") return declarator.id.name
+    return "{…}"
+  })
+  const label = `${node.kind} ${names.join(", ")}`
+  if (node.declarations.length !== 1) return label
+  return withValue(label, Option.fromNullishOr(node.declarations[0]?.init))
+}
+
+const classLabel = (node: ClassDeclaration) => {
+  const label = `class ${node.id?.name ?? ""}`.trimEnd()
+  return Option.match(Option.fromNullishOr(node.superClass), {
+    onNone: () => label,
+    onSome: (superClass) => `${label} extends ${textOr(calleeText(superClass), "…")}`,
+  })
+}
+
+const moduleLabel = (node: TSModuleDeclaration) => {
+  if (node.id.type === "StringLiteral") return `${node.kind} ${quoted(node.id.value)}`
+  return `${node.kind} ${textOr(calleeText(node.id), "…")}`
+}
+
+const methodLabel = (node: Node, kind: string): string => {
+  if (kind === "constructor") return "constructor"
+  if (!("key" in node) || !isNode(node.key)) return kind
+  const name = textOr(keyText(node.key), "[…]")
+  if (kind === "get" || kind === "set") return `${kind} ${name}`
+  return `${name}()`
+}
+
+const propertyLabel = (
+  node:
+    | ClassProperty
+    | ClassPrivateProperty
+    | ClassAccessorProperty
+    | ObjectProperty
+    | TSPropertySignature,
+) => {
+  const name = textOr(keyText(node.key), "[…]")
+  if (node.type === "TSPropertySignature") return `${name}:`
+  if (node.type === "ObjectProperty")
+    return Option.match(valueText(node.value), {
+      onNone: () => `${name}:`,
+      onSome: (value) => `${name}: ${value}`,
+    })
+  return withValue(name, Option.fromNullishOr(node.value))
+}
+
+/** `describe("read")`: a call statement named by its first argument, a string. */
+const namedCallLabel = (node: ExpressionStatement): Option.Option<string> => {
+  const call = node.expression
+  if (call.type !== "CallExpression") return Option.none()
+  const [first] = call.arguments
+  if (first?.type !== "StringLiteral") return Option.none()
+  return Option.some(`${textOr(calleeText(call.callee), "…")}(${quoted(first.value)})`)
+}
+
+/** A function, class, type, module or variable declaration, or a named call statement. */
+const statementDeclarationLabel = (node: Node): Option.Option<string> => {
+  switch (node.type) {
+    case "FunctionDeclaration":
+    case "TSDeclareFunction":
+      return Option.some(`function ${node.id?.name ?? ""}`.trimEnd())
+    case "ClassDeclaration":
+      return Option.some(classLabel(node))
+    case "TSInterfaceDeclaration":
+      return Option.some(`interface ${node.id.name}`)
+    case "TSTypeAliasDeclaration":
+      return Option.some(`type ${node.id.name}`)
+    case "TSEnumDeclaration":
+      return Option.some(`enum ${node.id.name}`)
+    case "TSModuleDeclaration":
+      return Option.some(moduleLabel(node))
+    case "VariableDeclaration":
+      return Option.some(variableLabel(node))
+    case "ExpressionStatement":
+      return namedCallLabel(node)
+    default:
+      return Option.none()
+  }
+}
+
+/** A class or object member, or a type's member. */
+const memberDeclarationLabel = (node: Node): Option.Option<string> => {
+  switch (node.type) {
+    case "ClassMethod":
+    case "ClassPrivateMethod":
+    case "ObjectMethod":
+    case "TSDeclareMethod":
+    case "TSMethodSignature":
+      return Option.some(methodLabel(node, node.kind ?? "method"))
+    case "ClassProperty":
+    case "ClassPrivateProperty":
+    case "ClassAccessorProperty":
+    case "ObjectProperty":
+    case "TSPropertySignature":
+      return Option.some(propertyLabel(node))
+    default:
+      return Option.none()
+  }
+}
+
+/**
+ * The label of a declaration an outline lists; a node it walks through has
+ * none: a function, a class and its members, a type, a variable, an object
+ * property, or a call named by a string (`describe("read")`).
+ */
+const declarationLabel = (node: Node): Option.Option<string> =>
+  Option.orElse(statementDeclarationLabel(node), () => memberDeclarationLabel(node))
+
+/** `if`, `for of`: the keyword of a top-level statement that declares nothing. */
+const statementLabel = (node: Node) =>
+  node.type
+    .replace(/(Statement|Declaration)$/, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+
+const labelOf = (node: Node) => textOr(declarationLabel(node), statementLabel(node))
+
+const exportLabel = (node: ExportNamedDeclaration): string =>
+  Option.match(Option.fromNullishOr(node.declaration), {
+    onSome: (declaration) => `export ${labelOf(declaration)}`,
+    onNone: () => {
+      const names = node.specifiers.map((specifier) => textOr(keyText(specifier.exported), "…"))
+      const from = Option.match(Option.fromNullishOr(node.source), {
+        onNone: () => "",
+        onSome: (source) => ` from ${quoted(source.value)}`,
+      })
+      return `export { ${names.join(", ")} }${from}`
+    },
+  })
+
+/** A top-level statement's label: an export names what it exports, a bare call its callee. */
+const topLevelLabel = (node: Statement): string => {
+  switch (node.type) {
+    case "ExportNamedDeclaration":
+      return exportLabel(node)
+    case "ExportDefaultDeclaration": {
+      const declaration = node.declaration
+      const label = declarationLabel(declaration).pipe(
+        Option.orElse(() => valueText(declaration)),
+        Option.orElse(() => calleeText(declaration)),
+      )
+      return `export default ${textOr(label, "…")}`.trimEnd()
+    }
+    case "ExportAllDeclaration":
+      return `export * from ${quoted(node.source.value)}`
+    case "ExpressionStatement":
+      return textOr(
+        Option.orElse(namedCallLabel(node), () => valueText(node.expression)),
+        "statement",
+      )
+    default:
+      return labelOf(node)
+  }
+}
+
+/** The nodes directly under `node`, from its fields. */
+const childNodes = (node: Node): ReadonlyArray<Node> =>
+  Object.values(node).flatMap((value): ReadonlyArray<Node> => {
+    if (Array.isArray(value)) return value.filter(isNode)
+    if (isNode(value)) return [value]
+    return []
+  })
+
+/** The nearest declarations under `node`: the walk stops at each one it lists. */
+const nearestDeclarations = (node: Node): ReadonlyArray<Node> =>
+  childNodes(node).flatMap((child) =>
+    Option.match(declarationLabel(child), {
+      onSome: () => [child],
+      onNone: () => nearestDeclarations(child),
+    }),
+  )
+
+/** The declarations inside a long one, each at least `OUTLINE_INNER_LINES` long, nested to `OUTLINE_MAX_DEPTH`. */
+const innerEntries = (node: Node, depth: number): ReadonlyArray<OutlineEntry> => {
+  if (depth > OUTLINE_MAX_DEPTH || lineSpan(node) <= OUTLINE_NEST_LINES) return []
+  return nearestDeclarations(node).flatMap((inner) => {
+    if (lineSpan(inner) < OUTLINE_INNER_LINES) return []
+    return [scriptEntry(inner, labelOf(inner), depth)]
+  })
+}
+
+/** An entry over `node`'s lines, nested from `body`: an export's declaration, not the export itself. */
+const scriptEntry = (
+  node: Node,
+  label: string,
+  depth: number,
+  body: Node = node,
+): OutlineEntry => ({
+  start: startLine(node),
+  end: endLine(node),
+  label: headChars(label, OUTLINE_LABEL_CHARS),
+  children: innerEntries(body, depth + 1),
+})
+
+const exportedBody = (statement: Statement): Node => {
+  if (statement.type === "ExportNamedDeclaration") return statement.declaration ?? statement
+  if (statement.type === "ExportDefaultDeclaration") return statement.declaration
+  return statement
+}
+
+/**
+ * A lone line comment at the left margin, between top-level statements,
+ * followed by a blank line or drawn as a `──` banner: gent's section
+ * headings. A banner's rule is cut to `──`.
+ */
+const sectionEntries = (
+  ast: File,
+  lines: ReadonlyArray<string>,
+  statements: ReadonlyArray<OutlineEntry>,
+): ReadonlyArray<OutlineEntry> =>
+  (ast.comments ?? []).flatMap((comment) => {
+    if (comment.type !== "CommentLine" || comment.loc?.start.column !== 0) return []
+    const line = comment.loc.start.line
+    if (statements.some((entry) => entry.start <= line && line <= entry.end)) return []
+    // The last line of a comment paragraph is not a heading.
+    if ((lines[line - 2] ?? "").trimStart().startsWith("//")) return []
+    const text = comment.value.trim().replace(/─{3,}/g, "──")
+    if (!text.includes("──") && (lines[line] ?? "").trim().length > 0) return []
+    return [
+      { start: line, end: line, label: headChars(`// ${text}`, OUTLINE_LABEL_CHARS), children: [] },
+    ]
+  })
+
+/** A script's outline: its imports as one entry, then each top-level statement and section comment in line order. */
+const scriptEntries = Effect.fn("OutlineTool.scriptEntries")(function* (
+  text: string,
+  lines: ReadonlyArray<string>,
+  extension: string,
+  filePath: string,
+) {
+  const { parse } = yield* loadParser
+  const plugins: Array<"typescript" | "jsx"> = []
+  if (TYPESCRIPT_EXTENSIONS.has(extension)) plugins.push("typescript")
+  if (!NO_JSX_EXTENSIONS.has(extension)) plugins.push("jsx")
+  const ast = yield* Effect.try({
+    try: () =>
+      parse(text, { sourceType: "module", plugins, errorRecovery: true, attachComment: false }),
+    catch: (cause) =>
+      new OutlineError({
+        message: `Cannot parse this file: ${String(cause)}`,
+        path: filePath,
+        cause,
+      }),
+  })
+  const statements: Array<OutlineEntry> = []
+  for (const statement of ast.program.body) {
+    const last = statements.at(-1)
+    if (statement.type === "ImportDeclaration" && last?.label === "imports") {
+      statements[statements.length - 1] = { ...last, end: endLine(statement) }
+      continue
+    }
+    if (statement.type === "ImportDeclaration") {
+      statements.push({
+        start: startLine(statement),
+        end: endLine(statement),
+        label: "imports",
+        children: [],
+      })
+      continue
+    }
+    statements.push(scriptEntry(statement, topLevelLabel(statement), 0, exportedBody(statement)))
+  }
+  return [...statements, ...sectionEntries(ast, lines, statements)].toSorted(
+    (left, right) => left.start - right.start,
+  )
+})
+
+interface HeadingDraft {
+  readonly start: number
+  end: number
+  readonly level: number
+  readonly label: string
+  readonly children: Array<HeadingDraft>
+}
+
+const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/
+const FENCE = /^ {0,3}(`{3,}|~{3,})/
+
+/** A closing fence repeats the opening one's character, at least as many times. */
+const closesFence = (open: string, marker: string) =>
+  marker[0] === open[0] && marker.length >= open.length
+
+/** A Markdown file's headings, outside code fences, each over the lines until the next heading at its level or above. */
+const markdownEntries = (lines: ReadonlyArray<string>): ReadonlyArray<OutlineEntry> => {
+  const roots: Array<HeadingDraft> = []
+  const open: Array<HeadingDraft> = []
+  let fence = Option.none<string>()
+  lines.forEach((line, index) => {
+    const [, marker = ""] = FENCE.exec(line) ?? []
+    if (marker.length > 0) {
+      if (Option.isNone(fence)) fence = Option.some(marker)
+      else if (closesFence(fence.value, marker)) fence = Option.none()
+      return
+    }
+    if (Option.isSome(fence)) return
+    const [, hashes = "", title = ""] = HEADING.exec(line) ?? []
+    if (hashes.length === 0) return
+    // The open headings deepen down the stack, so every one from the first at this level or above closes.
+    const closing = open.findIndex((draft) => draft.level >= hashes.length)
+    if (closing >= 0) for (const closed of open.splice(closing)) closed.end = index
+    const draft: HeadingDraft = {
+      start: index + 1,
+      end: lines.length,
+      level: hashes.length,
+      label: headChars(`${hashes} ${title}`.trimEnd(), OUTLINE_LABEL_CHARS),
+      children: [],
+    }
+    ;(open.at(-1)?.children ?? roots).push(draft)
+    open.push(draft)
+  })
+  return roots
+}
+
+// Outline Rendering
+
+/** The 1-indexed lines `[start, end]` an outline covers. */
+interface OutlineWindow {
+  readonly start: number
+  readonly end: number
+}
+
+const overlaps = (entry: OutlineEntry, window: OutlineWindow) =>
+  entry.end >= window.start && entry.start <= window.end
+
+const rangeText = (entry: OutlineEntry) => {
+  if (entry.start === entry.end) return `${entry.start}`
+  return `${entry.start}-${entry.end}`
+}
+
+/** An entry's lines, nested `depth` more levels; an entry whose inner entries are cut counts them. */
+const entryLines = (
+  entry: OutlineEntry,
+  window: OutlineWindow,
+  depth: number,
+  indent: string,
+): ReadonlyArray<string> => {
+  const inner = entry.children.filter((child) => overlaps(child, window))
+  const line = `${indent}${rangeText(entry)} ${entry.label}`
+  if (inner.length === 0) return [line]
+  if (depth === 0) return [`${line} (+${inner.length} inside)`]
+  return [line, ...inner.flatMap((child) => entryLines(child, window, depth - 1, `${indent}  `))]
+}
+
+/**
+ * The outline of the entries over `window`, under `OUTLINE_MAX_CHARS`: the
+ * deepest level goes first, and a top-level list that is still too long is cut
+ * at an entry, with the line to continue from.
+ */
+const fitOutline = (entries: ReadonlyArray<OutlineEntry>, window: OutlineWindow) => {
+  const shown = entries.filter((entry) => overlaps(entry, window))
+  for (let depth = OUTLINE_MAX_DEPTH; depth >= 0; depth--) {
+    const lines = shown.flatMap((entry) => entryLines(entry, window, depth, ""))
+    const content = lines.join("\n")
+    if (content.length <= OUTLINE_MAX_CHARS)
+      return { content, entries: lines.length, nextOffset: Option.none<number>() }
+  }
+  const kept: Array<string> = []
+  let chars = 0
+  for (const [index, entry] of shown.entries()) {
+    const [line = ""] = entryLines(entry, window, 0, "")
+    if (index > 0 && chars + line.length + 1 > OUTLINE_MAX_CHARS)
+      return {
+        content: kept.join("\n"),
+        entries: kept.length,
+        nextOffset: Option.some(entry.start),
+      }
+    kept.push(line)
+    chars += line.length + 1
+  }
+  return { content: kept.join("\n"), entries: kept.length, nextOffset: Option.none<number>() }
+}
+
+// Outline Tool
+
+export const OutlineTool = tool({
+  id: "outline",
+  readonly: true,
+  description:
+    "Outline a TypeScript, JavaScript or Markdown file: one line per top-level declaration, section comment or heading, with its line range; a declaration over 150 lines lists the declarations inside it. Outline a large file before reading it, then read only the ranges you need. offset/limit outline only the entries over those lines, so an entry marked (+N inside) opens with its own range. A truncated result carries nextOffset — pass it back as offset to continue.",
+  promptSnippet: "Outline a source or Markdown file's declarations with line ranges",
+  params: OutlineParams,
+  output: OutlineResult,
+  summary: (_input, output) => {
+    const outlined = `${output.path} · ${countOf(output.entries, "entry", "entries")}`
+    if (output.truncated) return `${outlined} (truncated)`
+    return outlined
+  },
+  execute: Effect.fn("OutlineTool.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+
+    const filePath = path.resolve(ctx.cwd, params.path)
+    yield* requirePathAccess(filePath, "read")
+
+    const extension = path.extname(filePath).toLowerCase()
+    if (!SCRIPT_EXTENSIONS.has(extension) && !MARKDOWN_EXTENSIONS.has(extension)) {
+      return yield* new OutlineError({
+        message: `outline reads TypeScript, JavaScript and Markdown files, not ${extension || "a file without an extension"}. Use read.`,
+        path: filePath,
+      })
+    }
+    const bytes = yield* fs.readFile(filePath).pipe(
+      Effect.mapError(
+        (e) =>
+          new OutlineError({
+            message: `Failed to read file: ${e.message}`,
+            path: filePath,
+            cause: e,
+          }),
+      ),
+    )
+    const file = decodeFileText(bytes)
+    if (Option.isNone(file)) {
+      return yield* new OutlineError({ message: "Cannot outline a binary file.", path: filePath })
+    }
+    const lines = splitLines(file.value.text)
+    let entries: ReadonlyArray<OutlineEntry>
+    if (MARKDOWN_EXTENSIONS.has(extension)) entries = markdownEntries(lines)
+    else entries = yield* scriptEntries(file.value.text, lines, extension, filePath)
+
+    const start = params.offset ?? 1
+    const end = Option.match(Option.fromUndefinedOr(params.limit), {
+      onNone: () => lines.length,
+      onSome: (limit) => start + limit - 1,
+    })
+    const outline = fitOutline(entries, { start, end })
+    return {
+      content: outline.content,
+      path: filePath,
+      lineCount: lines.length,
+      entries: outline.entries,
+      truncated: Option.isSome(outline.nextOffset),
+      ...(Option.isSome(outline.nextOffset) && { nextOffset: outline.nextOffset.value }),
+    }
+  }),
+})
+
 // ── protocol ────────────────────────────────────────────────────────────────
 
 const FS_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/fs-tools")
@@ -1951,7 +2562,7 @@ export const FsToolsExtension = defineExtension({
   id: FS_TOOLS_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", ReadTool, WriteTool, EditTool, GrepTool)
+    yield* host.register("tool", ReadTool, WriteTool, EditTool, GrepTool, OutlineTool)
     yield* host.register("request", FilesRpc.List)
   }),
 })

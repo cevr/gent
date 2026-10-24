@@ -987,6 +987,7 @@ const toolArgFormatters = {
     return truncate(code.split("\n")[0] ?? "", 60)
   },
   read: summarizeRead,
+  outline: summarizeRead,
   write: summarizeWrite,
   edit: (args, place) => {
     const rawPath = getStringArg(args, "path")
@@ -1521,6 +1522,7 @@ const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<Acti
 /** The unit a header counts each tool's ops in: `read 3 files`, `ran 2 commands`. */
 const TOOL_UNITS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["read", ["file", "files"]],
+  ["outline", ["file", "files"]],
   ["read_session", ["session", "sessions"]],
   ["grep", ["pattern", "patterns"]],
   ["glob", ["pattern", "patterns"]],
@@ -1723,6 +1725,7 @@ export function activityHeaderRuns(
 /** Past and running tense of each tool's verb; a tool not named here shows its id. */
 const TOOL_VERBS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["read", ["Read", "Reading"]],
+  ["outline", ["Outlined", "Outlining"]],
   ["read_session", ["Read", "Reading"]],
   ["grep", ["Searched", "Searching"]],
   ["glob", ["Searched", "Searching"]],

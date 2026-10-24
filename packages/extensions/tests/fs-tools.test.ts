@@ -22,6 +22,7 @@ import {
   FilesRpc,
   FsToolsExtension,
   GrepTool,
+  OutlineTool,
   ReadTool,
   WriteTool,
 } from "../src/fs-tools.js"
@@ -107,6 +108,22 @@ describe("shipped file tool summaries", () => {
         succeeded({ matches: [match, match], truncated: true }),
       ),
     ).toBe("2 matches for TODO (truncated)")
+  })
+  test("outline names the path and the entries shown, and marks a cut outline", () => {
+    expect(
+      toolResultSummary(
+        Option.some(OutlineTool),
+        { path: "a.ts" },
+        succeeded({
+          content: "",
+          path: "/w/a.ts",
+          lineCount: 9,
+          entries: 3,
+          truncated: true,
+          nextOffset: 7,
+        }),
+      ),
+    ).toBe("/w/a.ts · 3 entries (truncated)")
   })
 })
 
@@ -312,6 +329,244 @@ describe("ReadTool", () => {
 })
 
 // ── write tool ──────────────────────────────────────────────────────────────
+
+describe("OutlineTool", () => {
+  const outlineTest = it.scopedLive.layer(BunServices.layer)
+  const outlineOf = (
+    name: string,
+    text: string,
+    params: { offset?: number; limit?: number } = {},
+  ) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/${name}`, text)
+      return yield* runToolWithCtx(OutlineTool, { path: `${tmpDir}/${name}`, ...params }, ctx)
+    })
+  /** `count` lines of filler statements, so a body reaches a length. */
+  const filler = (count: number, indent = "  ") =>
+    Array.from({ length: count }, (_, index) => `${indent}void ${index}`).join("\n")
+
+  outlineTest(
+    "lists the imports as one entry, then each declaration and section comment with its lines",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* outlineOf(
+          "a.ts",
+          [
+            'import { Effect } from "effect"',
+            'import type { Layer } from "effect"',
+            "",
+            "// ── read ─────────────────────",
+            "/** A doc comment is not a section. */",
+            "export interface Page {",
+            "  readonly lines: number",
+            "}",
+            "",
+            "// Read Tool",
+            "",
+            "// A comment paragraph's",
+            "// last line is not a section.",
+            "",
+            'export const ReadTool = tool({ id: "read" })',
+            "const cast = <Page>value",
+            'export class ReadError extends Schema.TaggedError<ReadError>()("ReadError", {}) {',
+            "  run() {}",
+            "}",
+            "type Id = string",
+            "export function countOf(count: number) {",
+            "  // Inside a body: not a section.",
+            "",
+            "  return count",
+            "}",
+            "export { countOf as count }",
+          ].join("\n"),
+        )
+        expect(result.content).toBe(
+          [
+            "1-2 imports",
+            "4 // ── read ──",
+            "6-8 export interface Page",
+            "10 // Read Tool",
+            "15 export const ReadTool = tool(…)",
+            "16 const cast",
+            "17-19 export class ReadError extends Schema.TaggedError",
+            "20 type Id",
+            "21-25 export function countOf",
+            "26 export { count }",
+          ].join("\n"),
+        )
+        expect(result.lineCount).toBe(26)
+        expect(result.entries).toBe(10)
+        expect(result.truncated).toBe(false)
+        expect(result.nextOffset).toBeUndefined()
+      }),
+  )
+
+  outlineTest(
+    "a declaration over 150 lines lists the declarations inside it that run 10 lines or more",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* outlineOf(
+          "big.ts",
+          [
+            "export const run = Effect.gen(function* () {",
+            "  const short = 1",
+            "  function helper() {",
+            filler(10, "    "),
+            "  }",
+            filler(140),
+            "  return {",
+            '    execute: Effect.fn("run.execute")(function* () {',
+            filler(10, "      "),
+            "    }),",
+            "  }",
+            "})",
+          ].join("\n"),
+        )
+        expect(result.content).toBe(
+          [
+            "1-169 export const run = Effect.gen(…)",
+            "  3-14 function helper",
+            "  156-167 execute: Effect.fn(…)",
+          ].join("\n"),
+        )
+      }),
+  )
+
+  outlineTest("names a test file's calls by their string, nested inside a long one", () =>
+    Effect.gen(function* () {
+      const result = yield* outlineOf(
+        "a.test.ts",
+        [
+          'describe("ReadTool", () => {',
+          '  test("reads a file", () => {',
+          filler(150, "    "),
+          "  })",
+          "})",
+        ].join("\n"),
+      )
+      expect(result.content).toBe(
+        ['1-154 describe("ReadTool")', '  2-153 test("reads a file")'].join("\n"),
+      )
+    }),
+  )
+
+  outlineTest("parses JSX in a .tsx file and a type assertion in a .ts file", () =>
+    Effect.gen(function* () {
+      const tsx = yield* outlineOf(
+        "view.tsx",
+        "export const View = () => <box><text>hi</text></box>\n",
+      )
+      expect(tsx.content).toBe("1 export const View = (…) =>")
+      const ts = yield* outlineOf("cast.ts", "const page = <Page>value\n")
+      expect(ts.content).toBe("1 const page")
+    }),
+  )
+
+  outlineTest("offset and limit outline only the entries over those lines", () =>
+    Effect.gen(function* () {
+      const text = Array.from({ length: 6 }, (_, index) => `const v${index + 1} = ${index}`).join(
+        "\n",
+      )
+      const result = yield* outlineOf("a.ts", text, { offset: 3, limit: 2 })
+      expect(result.content).toBe(["3 const v3", "4 const v4"].join("\n"))
+      expect(result.lineCount).toBe(6)
+    }),
+  )
+
+  outlineTest(
+    "a deep outline over the limit drops its inner entries first and counts them on their parent",
+    () =>
+      Effect.gen(function* () {
+        const inner = Array.from(
+          { length: 300 },
+          (_, index) => `  function innerFunctionNumber${index}() {\n${filler(9, "    ")}\n  }`,
+        )
+        const text = ["function outer() {", ...inner, "}"].join("\n")
+        const whole = yield* outlineOf("deep.ts", text)
+        expect(whole.content).toBe("1-3302 function outer (+300 inside)")
+        // A window over the parent opens its inner entries.
+        const window = yield* outlineOf("deep.ts", text, { offset: 2, limit: 22 })
+        expect(window.content).toBe(
+          [
+            "1-3302 function outer",
+            "  2-12 function innerFunctionNumber0",
+            "  13-23 function innerFunctionNumber1",
+          ].join("\n"),
+        )
+      }),
+  )
+
+  outlineTest(
+    "a top-level outline over the limit is cut at an entry, with the line to continue from",
+    () =>
+      Effect.gen(function* () {
+        const text = Array.from(
+          { length: 400 },
+          (_, index) => `export const someLongExportedConstantName${index} = ${index}`,
+        ).join("\n")
+        const first = yield* outlineOf("many.ts", text)
+        expect(first.truncated).toBe(true)
+        expect(first.content.length).toBeLessThanOrEqual(6000)
+        const shown = first.content.split("\n")
+        expect(shown.at(-1)).toBe(
+          `${shown.length} export const someLongExportedConstantName${shown.length - 1}`,
+        )
+        expect(first.nextOffset).toBe(shown.length + 1)
+        let offset = first.nextOffset
+        const lines = [...shown]
+        while (Predicate.isNumber(offset)) {
+          const page = yield* outlineOf("many.ts", text, { offset })
+          lines.push(...page.content.split("\n"))
+          offset = page.nextOffset
+        }
+        expect(lines).toEqual(
+          Array.from(
+            { length: 400 },
+            (_, index) => `${index + 1} export const someLongExportedConstantName${index}`,
+          ),
+        )
+      }),
+  )
+
+  outlineTest("outlines Markdown headings by level, skipping fenced code", () =>
+    Effect.gen(function* () {
+      const result = yield* outlineOf(
+        "notes.md",
+        [
+          "# Title",
+          "",
+          "## Setup",
+          "```sh",
+          "# not a heading",
+          "```",
+          "### Install ###",
+          "text",
+          "## Usage",
+          "text",
+          "# Appendix",
+        ].join("\n"),
+      )
+      expect(result.content).toBe(
+        [
+          "1-10 # Title",
+          "  3-8 ## Setup",
+          "    7-8 ### Install",
+          "  9-10 ## Usage",
+          "11 # Appendix",
+        ].join("\n"),
+      )
+    }),
+  )
+
+  outlineTest("refuses a file it cannot outline and names read instead", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(outlineOf("data.json", "{}"))
+      expect(error.message).toContain("Use read")
+    }),
+  )
+})
 
 describe("WriteTool", () => {
   const writeTest = it.scopedLive.layer(BunServices.layer)
@@ -2113,7 +2368,7 @@ describe("agent paths", () => {
             model: TEST_MODEL_ID,
             agents: {
               painter: {
-                tools: ["read", "write", "edit", "grep"],
+                tools: ["read", "write", "edit", "grep", "outline"],
                 paths: ["films", { path: "skill", access: "read" }],
               },
             },
@@ -2128,6 +2383,7 @@ describe("agent paths", () => {
           },
           { toolName: "read", input: { path: "skill/SKILL.md" } },
           { toolName: "grep", input: { pattern: "rules", path: "skill" } },
+          { toolName: "outline", input: { path: "films/scene.ts" } },
           // Outside, or a write under a read entry: each is refused.
           { toolName: "write", input: { path: "outside.txt", content: "x" } },
           { toolName: "write", input: { path: "skill/SKILL.md", content: "x" } },
@@ -2139,6 +2395,7 @@ describe("agent paths", () => {
           { toolName: "read", input: { path: "films/../outside.txt" } },
           { toolName: "write", input: { path: "films/escape/x.txt", content: "x" } },
           { toolName: "grep", input: { pattern: "untouched" } },
+          { toolName: "outline", input: { path: "outside.txt" } },
         ]
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           multiToolCallStep(...calls),
@@ -2177,6 +2434,8 @@ describe("agent paths", () => {
           false,
           false,
           false,
+          false,
+          true,
           true,
           true,
           true,
@@ -2185,7 +2444,7 @@ describe("agent paths", () => {
           true,
           true,
         ])
-        for (const refused of results.slice(4)) {
+        for (const refused of results.slice(5)) {
           expect(encodeJson(refused.result)).toContain("outside this agent's paths")
         }
         expect(yield* fs.readFileString(path.join(cwd, "films", "new.ts"))).toBe("painted")
