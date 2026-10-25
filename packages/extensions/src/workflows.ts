@@ -88,11 +88,25 @@ const implementorRound = (
     "Spec: {{input.dir}}/spec.md. Gate: {{input.gate}}",
     "Before any edit, read the spec, state.md, and every round-*-findings.md, round-*-verify.md, blocked.md and merge-gate-*.log in the unit dir that is newer than your last request.",
     "The orchestrator's latest notes: {{blocked.note}} {{decide.note}}",
+    "The last merge gate: exit {{gate.exitCode}}, timed out {{gate.timedOut}}, log merge-gate-N.log in the unit dir.",
     "The last push through the integration gate: {{merge}}",
     "Write round-N-request.md, N one more than the last request in the unit dir.",
   ].join("\n"),
   on: { ready: "review", blocked: "blocked" },
   ...entry,
+})
+
+/** The orchestrator's decide ask: `latest` names what it decides on. */
+const decideAsk = (latest: string) => ({
+  kind: "ask" as const,
+  ask: `Unit {{input.unit}} decides. Latest: ${latest} Check the request's claims against the code in the unit dir {{input.dir}}. merge runs the gate, then pushes to main; changes sends your note to a new implementor, replan to the planner; rewrite ends this run for a new one from base.`,
+  on: {
+    merge: "gate",
+    changes: "implement",
+    replan: "plan",
+    rewrite: "rewrite",
+    drop: "dropped",
+  },
 })
 
 /**
@@ -135,7 +149,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       tier: "strongest",
       instructions: [
         WORKER_RULES,
-        "You are the reviewer: read-only on the deliverables, you write only into the unit dir. Read the spec, the request, the diff from its base to its head, and the earlier rounds' findings. Attack the change: look for reasons it is wrong, not reasons it is fine. From round 2, check every line of the fix report against the code, then review only the diff from the last findings' head to the new head; read earlier code only where a new commit touches it. From round 3, a finding about test strength (a test narrower than its rule, a mutant that passes, a weak oracle) goes under Follow-ups, never Major: only a defect in the change blocks. Write round-N-findings.md: first line Verdict: ACCEPTED, PROVEN, CHANGES REQUIRED or STUCK; then Blockers, Major, Minor and Optional, each with an id, file:line, a concrete failure and the expected repair; a new trigger of an earlier finding says repeat of rN <id>. A remaining Blocker or Major is changes; only Minor or Optional is accepted, or proven when the spec's Verify line is receipt and the request's gate log exit line and acceptance check result show green at its head, so no verifier runs; stuck is for a unit no further round can help, or a review you could not finish, never accepted. Verdict: accepted, proven, changes or stuck.",
+        "You are the reviewer: read-only on the deliverables, you write only into the unit dir. Read the spec, the request, the diff from its base to its head, and the earlier rounds' findings. Attack the change: look for reasons it is wrong, not reasons it is fine. A round is the N of the request's round-N-request.md. From round 2, check every line of the fix report against the code, then review the diff from the last findings' head to the new head, with the callers, invariants and tests the new commits can reach; leave the rest of the earlier diff to the earlier rounds. From round 3, a finding about test strength (a test narrower than its rule, a mutant that passes, a weak oracle) goes under Follow-ups, never Major: only a defect in the change blocks. Write round-N-findings.md: first line Verdict: ACCEPTED, PROVEN, CHANGES REQUIRED or STUCK; then Blockers, Major, Minor and Optional, each with an id, file:line, a concrete failure and the expected repair; a new trigger of an earlier finding says repeat of rN <id>. A remaining Blocker or Major is changes; only Minor or Optional is accepted, or proven when the spec's Verify line is receipt and the request's gate log exit line and acceptance check result show green at its head, so no verifier runs; stuck is for a unit no further round can help, or a review you could not finish, never accepted. Verdict: accepted, proven, changes or stuck.",
       ].join("\n"),
     },
     verifier: {
@@ -194,17 +208,9 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       on: { pass: "decide", fail: "fix", stuck: "decide" },
       fresh: true,
     },
-    decide: {
-      kind: "ask",
-      ask: "Unit {{input.unit}} decides. Latest: review {{review.reply.next}} {{review.reply.file}}, verify {{verify.reply.next}} {{verify.reply.file}} (none after proven). Check the request's claims against the code in the unit dir {{input.dir}}. merge runs the gate, then pushes to main; changes sends your note to a new implementor, replan to the planner; rewrite ends this run for a new one from base.",
-      on: {
-        merge: "gate",
-        changes: "implement",
-        replan: "plan",
-        rewrite: "rewrite",
-        drop: "dropped",
-      },
-    },
+    decide: decideAsk(
+      "review {{review.reply.next}} {{review.reply.file}}, verify {{verify.reply.next}} {{verify.reply.file}} (none after proven).",
+    ),
     gate: {
       kind: "run",
       // An empty gate is a syntax error here, so it never passes.
@@ -241,6 +247,9 @@ export const ORCHESTRATE_LIGHT_MACHINE: MachineDefinitionJson = {
       ...implementorRound("fix", { maxVisits: 2, exhausted: "decide" }),
       on: { ready: "decide", blocked: "blocked" },
     },
+    decide: decideAsk(
+      "review {{review.reply.next}} {{review.reply.file}}, verify {{verify.reply.next}} {{verify.reply.file}}, fix {{fix.reply.next}} {{fix.reply.file}}. No second review follows a fix: merge after one only when its fix report answers every finding of the last review or verify, and you find the gate log and acceptance result green at the current head.",
+    ),
   },
 }
 
@@ -259,7 +268,7 @@ const orchestrateRecipe = (input: string, recordPath: string, machines: Readonly
     `You coordinate and write no product code. Keep the run's record in ${recordPath}: the units, their order, and each unit's workspace, dir, run and outcome. Read it first; it may hold an earlier run.`,
     "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from the remote main after a fetch: a merge pushes to the remote main and does not move a local main, so a unit starts only after the units it depends on merged) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate, domain }, domain the area of the code the unit changes in a word or two (tui, core runtime, docs), the same name for every unit of that area. Start units at once only when their files do not overlap. A mechanical unit (an established pattern carried to more files, a rename, a version bump: no new behavior) starts the orchestrate-light machine instead: write its spec.md in the unit dir first, in the planner's sections, with Verify: receipt.",
     "The gate is the fast one: it must finish in 20 minutes, and a slower gate fails. Slow suites (end-to-end, property sweeps, labs) go in the acceptance check, which the implementor and the verifier run.",
-    "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the review is accepted and the verify pass, or the review is proven and the request's gate log and acceptance result hold when you check them, and the request's claims hold; after stuck, replan or rewrite. On rewrite, start a new run on a new branch from base with a new spec; a rewrite that ends at decide again goes to the user.",
+    "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the review is accepted and the verify pass, or the review is proven and the request's gate log and acceptance result hold when you check them, or (orchestrate-light) a fix followed and its fix report answers every finding of the last review or verify with the gate log and acceptance result green at the current head; and the request's claims hold; after stuck, replan or rewrite. On rewrite, start a new run on a new branch from base with a new spec; a rewrite that ends at decide again goes to the user.",
     ...machines,
   ].join("\n")
 }

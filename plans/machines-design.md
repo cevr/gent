@@ -726,7 +726,7 @@ Decisions made from the principles:
   JSON. Each substitution is cut to its last 8,000 characters. `input`, `all`
   and `visit` are reserved state names. There is no expression language.
 - **What a state saves.** A thread state saves `{ text, reply }`. A run
-  state saves `{ exitCode, output }` (the output tail). An ask saves
+  state saves `{ exitCode, timedOut, output }` (the output tail). An ask saves
   `{ choice, note }`.
 - **`cwd` is a start parameter**, not a magic input key. Threads start there,
   and commands run there.
@@ -890,7 +890,7 @@ enter(r, S):
                   result := permit(st.permit, runRecordedCommand(render(st.run), r.cwd,
                               started: (p) -> commit { pending.process := p })) timeout
                   commit { state: st.on[result.pass ? pass : fail], pending: none,
-                           context: save(S, { exitCode, output }) } [CommandEnded, Moved]
+                           context: save(S, { exitCode, timedOut, output }) } [CommandEnded, Moved]
                   poke(run)                    # a failed compare means stop won
     thread -> with step permit:
                 x := Round(S, v, key: "machine:"+run+":"+(r.seq+1), attempt: 1)

@@ -326,6 +326,8 @@ const runRow = (run: string) =>
 
 const StepView = Schema.Struct({
   _tag: Schema.String,
+  state: Schema.optionalKey(Schema.String),
+  value: Schema.optionalKey(Schema.Json),
   mayStillRun: Schema.optionalKey(Schema.Boolean),
   until: Schema.optionalKey(Schema.Finite),
   reason: Schema.optionalKey(Schema.String),
@@ -858,6 +860,38 @@ describe("a machine command across a clean stop", () => {
       ).pipe(Effect.provide(BunServices.layer))
       expect(ran.trim().split("\n")).toEqual(["ran"])
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+})
+
+// ── a command past its time budget ──────────────────────────────────────────
+
+const SLOW_CHECK = {
+  name: "slow-check",
+  threads: {},
+  start: "check",
+  states: {
+    check: { kind: "run", run: "sleep 30", timeoutSeconds: 1, on: { pass: "done", fail: "done" } },
+    done: { kind: "final" },
+  },
+}
+
+describe("a machine command past its time budget", () => {
+  it.live("fails, and saves that it timed out for the next state's template", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(trackWorker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, SLOW_CHECK, "slow-check")
+      yield* waitFor(home.sql(runRow(run)), isSettled, 15_000, "the run's end was told")
+      const steps = yield* home.sql(stepsOf(run))
+      const saved = steps.flatMap((step) => {
+        if (step._tag !== "Saved" || step.state !== "check") return []
+        return [step.value]
+      })
+      // A killed command has no exit code, so only the flag tells a timeout from a red test.
+      expect(saved).toMatchObject([{ timedOut: true, output: "" }])
+    }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
   )
 })
 

@@ -3005,6 +3005,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
       const outputTail = result.output.slice(-OUTPUT_TAIL_CHARS)
       const value: Schema.Json = {
         exitCode: Option.getOrNull(result.exitCode),
+        timedOut: result.timedOut,
         output: outputTail,
       }
       return {
