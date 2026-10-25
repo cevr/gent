@@ -18,6 +18,7 @@ import { AnthropicExtension } from "./anthropic.js"
 import { OpenAIExtension } from "./openai.js"
 import { OpenCodeExtension } from "./opencode.js"
 import { CloudflareExtension } from "./cloudflare.js"
+import { LoginAlertExtension } from "./login-alert.js"
 import { TypeSafeExtension } from "./typesafe.js"
 import { SkillsExtension } from "./skills.js"
 import { WorkflowsExtension } from "./workflows.js"
@@ -95,6 +96,7 @@ export const BuiltinExtensions: ReadonlyArray<
   TypeSafeExtension,
   OpenCodeExtension,
   CloudflareExtension,
+  LoginAlertExtension,
 ].map((extension) => {
   if (Option.isNone(BuiltinArtifactIdentity)) return extension
   return {

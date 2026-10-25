@@ -21,6 +21,7 @@ import {
   type LaneReport,
   type LaneWindow,
   lineCount,
+  LOGIN_LOSS_WORDS,
   type LoginLossReason,
   type Model,
   type ProviderLanes,
@@ -590,11 +591,6 @@ const providerLaneRow = (
 type LaneHold = ProviderLanes["holds"][number]
 
 /** What a lost login's row says it is, by its reason. */
-const LOGIN_LOSS_WORDS: Record<LoginLossReason, string> = {
-  Rejected: "refused",
-  Unavailable: "unavailable",
-}
-
 /**
  * One lost login's row, longest form that fits `width` first: the provider,
  * the label, why, and where to sign in again. A narrow row drops the

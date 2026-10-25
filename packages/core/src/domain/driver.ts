@@ -754,6 +754,12 @@ export const LaneWindow = Schema.Struct({
 export const LoginLossReason = Schema.Literals(["Rejected", "Unavailable"])
 export type LoginLossReason = typeof LoginLossReason.Type
 
+/** A lost login's reason as the band and an alert say it. */
+export const LOGIN_LOSS_WORDS: Record<LoginLossReason, string> = {
+  Rejected: "refused",
+  Unavailable: "unavailable",
+}
+
 /** One account of a provider. */
 export const LaneAccount = Schema.Struct({
   slot: CredentialSlot,

@@ -87,6 +87,7 @@ export {
   SpendLimit,
   modelFromCatalog,
   catalogModelEntry,
+  LOGIN_LOSS_WORDS,
 } from "../domain/driver.js"
 export { InteractionPendingError } from "../domain/interaction.js"
 export type {
@@ -98,6 +99,7 @@ export type {
   CatalogPlan,
   CatalogProvider,
   FailureResponse,
+  LaneReport,
   ModelCatalogView,
   ModelDriverContribution,
   ModelRouteChoice,

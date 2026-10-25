@@ -8,6 +8,7 @@ export {
   LaneReport,
   roundLanes,
   type LaneWindow,
+  LOGIN_LOSS_WORDS,
   type LoginLossReason,
   ProviderLanes,
   sameCredential,
