@@ -252,6 +252,8 @@ describe("WorkflowsExtension via RPC", () => {
         expect(shipped).toContain(`/.gent/results/${sessionId}/${branchId}/orchestrate/plan.md`)
         expect(shipped).toContain("write no product code")
         expect(shipped).toContain("machine.start the orchestrate machine")
+        // A worktree has no node_modules: a merge gate that needs them failed live without this.
+        expect(shipped).toContain("a new worktree has no installed packages")
         expect(shipped).toContain(`The orchestrate machine is ${machineFile}.`)
         expect(shipped).toContain(`The orchestrate-light machine is ${lightFile}.`)
         expect(kept).toContain(
