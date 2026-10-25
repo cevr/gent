@@ -99,9 +99,10 @@ const implementorRound = (
 /** The orchestrator's decide ask: `latest` names what it decides on. */
 const decideAsk = (latest: string) => ({
   kind: "ask" as const,
-  ask: `Unit {{input.unit}} decides. Latest: ${latest} Check the request's claims against the code in the unit dir {{input.dir}}. merge runs the gate and the merge-only legs, then pushes to main; changes sends your note to a new implementor, replan to the planner; rewrite ends this run for a new one from base.`,
+  ask: `Unit {{input.unit}} decides. Latest: ${latest} Check the request's claims against the code in the unit dir {{input.dir}}. merge runs the gate and the merge-only legs, then pushes to main; fix sends your note to the implementor as a failed round (a red acceptance check), changes to a new implementor, replan to the planner; rewrite ends this run for a new one from base.`,
   on: {
     merge: "gate",
+    fix: "fix",
     changes: "implement",
     replan: "plan",
     rewrite: "rewrite",
@@ -114,7 +115,7 @@ const decideAsk = (latest: string) => ({
  * implementor's rounds enter by three states, so the cap counts only failed
  * rounds: `implement` starts a direction (the first round, a replan, a
  * decide `changes`) on a new implementor, `fix` follows a failed round
- * (review `changes`, verify `fail`) and its third entry (the third failed
+ * (review `changes`, verify `fail`, decide `fix`) and its third entry (the third failed
  * round) goes to decide, `resume` follows a blocked answer, a red gate or a
  * red push and counts nothing. Planning and review take the strongest tier,
  * implementing and verifying the efficient one. Ceremony scales with the
@@ -215,9 +216,27 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
     ),
     gate: {
       kind: "run",
-      // An empty gate is a syntax error here, so it never passes.
-      // The merge-only legs run after the round gate passes; `:` keeps an empty one valid.
-      run: 'set -o pipefail\nunit_gate() {\n{{input.gate}}\n}\nmerge_legs() {\n:\n{{input.mergeGate}}\n}\n{ unit_gate && merge_legs; } 2>&1 | tee "{{input.dir}}/merge-gate-{{visit}}.log"',
+      // An empty gate is a syntax error here, so it never passes. Each function
+      // runs as a plain command, never beside && or ||, which turn off a `set -e`
+      // inside it. The merge-only legs run fail-fast after the round gate passes;
+      // `:` keeps an empty one valid.
+      run: [
+        "set -o pipefail",
+        "unit_gate() {",
+        "{{input.gate}}",
+        "}",
+        "merge_legs() {",
+        "set -e",
+        ":",
+        "{{input.mergeGate}}",
+        "}",
+        "{",
+        "unit_gate",
+        "status=$?",
+        '[ "$status" -eq 0 ] || exit "$status"',
+        "merge_legs",
+        '} 2>&1 | tee "{{input.dir}}/merge-gate-{{visit}}.log"',
+      ].join("\n"),
       permit: { name: "gate" },
       // The gate holds the server's one permit, so a slow one stalls every unit.
       timeoutSeconds: 1200,
@@ -271,7 +290,7 @@ const orchestrateRecipe = (input: string, recordPath: string, machines: Readonly
     `You coordinate and write no product code. Keep the run's record in ${recordPath}: the units, their order, and each unit's workspace, dir, run and outcome. Read it first; it may hold an earlier run.`,
     "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from the remote main after a fetch: a merge pushes to the remote main and does not move a local main, so a unit starts only after the units it depends on merged) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate, mergeGate, domain }, domain the area of the code the unit changes in a word or two (tui, core runtime, docs), the same name for every unit of that area. The first unit runs alone through decide before others start, so a flaw in the gate or the spec costs one edit. Start units at once only when their files do not overlap. A mechanical unit (an established pattern carried to more files, a rename, a version bump: no new behavior) starts the orchestrate-light machine instead: write its spec.md in the unit dir first, in the planner's sections, with Path: light.",
     "gate is the round gate, which every round runs: each of its legs finishes in under a minute. A slower leg (end-to-end, a property sweep, a lab) goes in mergeGate, one command that runs once at merge after gate; making it fast is its own unit. The merge gate fails after 20 minutes.",
-    "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the review is accepted and the verify pass, or the review is proven and the acceptance check, which you rerun at the head, is green, or (orchestrate-light) a fix followed and its fix report answers every finding of the last review or verify with the acceptance check green when you rerun it at the head; and the request's claims hold; a red acceptance check is changes; after stuck, replan or rewrite. Add each Test strength finding to the record as its own follow-up unit. On rewrite, start a new run on a new branch from base with a new spec; a rewrite that ends at decide again goes to the user.",
+    "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the review is accepted and the verify pass, or the review is proven and the acceptance check, which you rerun at the head, is green, or (orchestrate-light) a fix followed and its fix report answers every finding of the last review or verify with the acceptance check green when you rerun it at the head; and the request's claims hold; a red acceptance check is fix, a failed round, and at the fix cap decide again: replan or rewrite; after stuck, replan or rewrite. Add each Test strength finding to the record as its own follow-up unit. On rewrite, start a new run on a new branch from base with a new spec; a rewrite that ends at decide again goes to the user.",
     ...machines,
   ].join("\n")
 }

@@ -4130,7 +4130,7 @@ describe("the shipped orchestrate machine", () => {
         expect(decide).toMatchObject({
           state: "decide",
           reason: "asked",
-          choices: ["merge", "changes", "replan", "rewrite", "drop"],
+          choices: ["merge", "fix", "changes", "replan", "rewrite", "drop"],
         })
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         const steps = yield* home.sql(stepsOf(run))
@@ -4349,26 +4349,86 @@ describe("the shipped orchestrate machine", () => {
     45_000,
   )
 
+  // Each fails the merge gate before anything after the failure runs.
+  const redGates = [
+    {
+      name: "a red round gate",
+      gate: "echo gate-ran; false",
+      mergeGate: "echo slow-ran",
+      log: ["gate-ran"],
+    },
+    {
+      name: "a round gate red under its own set -e",
+      gate: "set -e\nfalse\necho wrongly-green",
+      mergeGate: "echo slow-ran",
+      log: [],
+    },
+    {
+      name: "a red merge-only leg",
+      gate: "echo gate-ran",
+      mergeGate: "false\necho masked",
+      log: ["gate-ran"],
+    },
+  ]
+  for (const red of redGates) {
+    it.live(
+      `${red.name} fails the merge gate and goes back to the implementor`,
+      () =>
+        Effect.gen(function* () {
+          const { home, client, owner, run, dir } = yield* unitRun(
+            { "resume:1": "blocked" },
+            { gate: red.gate, mergeGate: red.mergeGate },
+          )
+          yield* answerAsk(client, owner, 1, "go")
+          yield* answerAsk(client, owner, 2, "merge")
+          yield* waitFor(
+            home.sql(stepsOf(run)),
+            (steps) => moves(steps).includes("gate→resume"),
+            10_000,
+            "the red gate went back to the implementor",
+          )
+          const log = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+            fs.readFileString(`${dir}/merge-gate-1.log`),
+          ).pipe(Effect.provide(BunServices.layer))
+          expect(log.split("\n").filter((line) => line.length > 0)).toEqual(red.log)
+        }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+      45_000,
+    )
+  }
+
   it.live(
-    "a red round gate fails the merge gate before its merge-only legs run",
+    "a red acceptance check at decide is a fix, a counted round: the third goes back to decide",
     () =>
       Effect.gen(function* () {
-        const { home, client, owner, run, dir } = yield* unitRun(
-          { "resume:1": "blocked" },
-          { gate: "echo gate-ran; false", mergeGate: "echo slow-ran" },
+        const { home, models, client, owner, run } = yield* unitRun(
+          { "review:1": "changes" },
+          { definition: ORCHESTRATE_LIGHT_MACHINE },
         )
-        yield* answerAsk(client, owner, 1, "go")
-        yield* answerAsk(client, owner, 2, "merge")
-        yield* waitFor(
-          home.sql(stepsOf(run)),
-          (steps) => moves(steps).includes("gate→resume"),
-          10_000,
-          "the red gate went back to the implementor",
-        )
-        const log = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
-          fs.readFileString(`${dir}/merge-gate-1.log`),
-        ).pipe(Effect.provide(BunServices.layer))
-        expect(log.trim().split("\n")).toEqual(["gate-ran"])
+        for (const count of [1, 2]) {
+          const decide = yield* answerAsk(
+            client,
+            owner,
+            count,
+            "fix",
+            "the acceptance check is red",
+          )
+          expect(decide.state).toBe("decide")
+        }
+        const last = yield* answerAsk(client, owner, 3, "drop")
+        expect(last.state).toBe("decide")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        // The second fix from decide is the third failed round: the cap sends it back with no call.
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          "implement→review",
+          "review→fix",
+          "fix→decide",
+          "decide→fix",
+          "fix→decide",
+          "decide→fix",
+          "fix→decide",
+          "decide→dropped",
+        ])
+        expect(yield* Ref.get(models.calls)).toEqual(["implement:1", "review:1", "fix:1", "fix:2"])
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )
