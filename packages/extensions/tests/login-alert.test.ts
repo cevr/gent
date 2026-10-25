@@ -9,6 +9,7 @@ import {
   Path,
   Predicate,
   Ref,
+  Schedule,
   type Scope,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
@@ -118,49 +119,84 @@ const installed = (command: Option.Option<string>, lanes: Ref.Ref<LaneReport>) =
     return { end, reads: Ref.get(reads) }
   })
 
-/** A command that appends each alert's text to `alerts.log` in a fresh directory. */
-const appendingCommand = Effect.gen(function* () {
-  const directory = yield* makeTempDirectoryScoped("gent-login-alert-")
-  const log = (yield* Path.Path).join(directory, "alerts.log")
-  const fs = yield* FileSystem.FileSystem
-  return {
-    command: `printf '%s\\n' "$GENT_LOGIN_ALERT" >> '${log}'`,
-    alerts: fs.exists(log).pipe(
-      Effect.flatMap((exists) => {
-        if (!exists) return Effect.succeed<ReadonlyArray<string>>([])
-        return Effect.map(fs.readFileString(log), (text) => text.trim().split("\n"))
-      }),
-    ),
-  }
-})
+/**
+ * A command that appends each alert's text to `alerts.log` in a fresh
+ * directory, after `delay` seconds; `arrived` waits up to 10 s for `count`
+ * alerts and fails if they never come.
+ */
+const appendingCommand = (delay = 0) =>
+  Effect.gen(function* () {
+    const directory = yield* makeTempDirectoryScoped("gent-login-alert-")
+    const log = (yield* Path.Path).join(directory, "alerts.log")
+    const fs = yield* FileSystem.FileSystem
+    return {
+      command: `sleep ${delay}; printf '%s\\n' "$GENT_LOGIN_ALERT" >> '${log}'`,
+      alerts: fs.exists(log).pipe(
+        Effect.flatMap((exists) => {
+          if (!exists) return Effect.succeed<ReadonlyArray<string>>([])
+          return Effect.map(fs.readFileString(log), (text) => text.trim().split("\n"))
+        }),
+      ),
+    }
+  })
+
+/** Reads `alerts` until it holds `count` lines; fails after 10 s. */
+const arrived = <E>(alerts: Effect.Effect<ReadonlyArray<string>, E>, count: number) =>
+  alerts.pipe(
+    Effect.repeat({
+      until: (lines) => lines.length >= count,
+      schedule: Schedule.spaced("20 millis"),
+    }),
+    Effect.timeoutOrElse({
+      duration: "10 seconds",
+      orElse: () => Effect.die(`fewer than ${count} alerts arrived`),
+    }),
+  )
 
 const REFUSED = "login! anthropic work refused · sign in with /auth"
 
 describe("lost-login alerts", () => {
   it.scopedLive("a lost login runs the alert command once per loss", () =>
     Effect.gen(function* () {
-      const { command, alerts } = yield* appendingCommand
+      const { command, alerts } = yield* appendingCommand()
       const lanes = yield* Ref.make(report(Option.some({ since: 1000 })))
       const { end } = yield* installed(Option.some(command), lanes)
       yield* end
       yield* end
-      expect(yield* alerts).toEqual([REFUSED])
+      expect(yield* arrived(alerts, 1)).toEqual([REFUSED])
       // A served step clears the loss; the next loss on the sign-in alerts again.
       yield* Ref.set(lanes, report(Option.none()))
       yield* end
       yield* Ref.set(lanes, report(Option.some({ since: 2000 })))
       yield* end
-      expect(yield* alerts).toEqual([REFUSED, REFUSED])
+      expect(yield* arrived(alerts, 2)).toEqual([REFUSED, REFUSED])
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("turns that end together alert one loss once", () =>
     Effect.gen(function* () {
-      const { command, alerts } = yield* appendingCommand
+      const { command, alerts } = yield* appendingCommand()
       const lanes = yield* Ref.make(report(Option.some({ since: 1000 })))
       const { end } = yield* installed(Option.some(command), lanes)
       yield* Effect.all([end, end, end, end], { concurrency: "unbounded" })
+      expect(yield* arrived(alerts, 1)).toEqual([REFUSED])
+      // A second alert would have had as long as the first to arrive.
       expect(yield* alerts).toEqual([REFUSED])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a slow alert command never holds a turn's end", () =>
+    Effect.gen(function* () {
+      const { command, alerts } = yield* appendingCommand(2)
+      const lanes = yield* Ref.make(report(Option.some({ since: 1000 })))
+      const { end } = yield* installed(Option.some(command), lanes)
+      yield* end.pipe(
+        Effect.timeoutOrElse({
+          duration: "1 second",
+          orElse: () => Effect.die("the turn's end waited for the alert command"),
+        }),
+      )
+      expect(yield* arrived(alerts, 1)).toEqual([REFUSED])
     }).pipe(Effect.provide(BunServices.layer)),
   )
 

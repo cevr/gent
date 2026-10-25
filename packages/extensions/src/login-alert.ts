@@ -5,7 +5,18 @@
  * alert text in `GENT_LOGIN_ALERT`; with no command the extension does
  * nothing. A project cannot set it: only the environment gent starts in.
  */
-import { Cause, Config, Context, Duration, Effect, Layer, Option, Predicate, Ref } from "effect"
+import {
+  Cause,
+  Config,
+  Context,
+  Duration,
+  Effect,
+  type Fiber,
+  Layer,
+  Option,
+  Predicate,
+  Ref,
+} from "effect"
 import {
   defineExtension,
   defineResource,
@@ -54,9 +65,17 @@ interface LoginAlertsService {
    * sign-in alerts again.
    */
   readonly fresh: (report: LaneReport) => Effect.Effect<ReadonlyArray<LostLogin>>
+  /** Runs `effect` on the resource's own scope, so a turn's end never waits for a command. */
+  readonly spawn: <R>(
+    effect: Effect.Effect<void, never, R>,
+  ) => Effect.Effect<Fiber.Fiber<void>, never, R>
 }
 
-/** The losses alerted on this server: one alert per loss across every session's turns. */
+/**
+ * The losses alerted on this server: one alert per loss across every
+ * session's turns. A rename moves a loss to a new slot and a changed
+ * extension build starts an empty set, so either can alert one loss again.
+ */
 class LoginAlerts extends Context.Service<LoginAlerts, LoginAlertsService>()(
   "@gent/extensions/src/login-alert/LoginAlerts",
 ) {}
@@ -64,6 +83,7 @@ class LoginAlerts extends Context.Service<LoginAlerts, LoginAlertsService>()(
 const LoginAlertsLive: Layer.Layer<LoginAlerts> = Layer.effect(
   LoginAlerts,
   Effect.gen(function* () {
+    const scope = yield* Effect.scope
     const alerted = yield* Ref.make<ReadonlySet<string>>(new Set())
     return LoginAlerts.of({
       fresh: (report) =>
@@ -74,6 +94,7 @@ const LoginAlertsLive: Layer.Layer<LoginAlerts> = Layer.effect(
             new Set(listed.map((loss) => loss.key)),
           ]
         }),
+      spawn: (effect) => Effect.forkIn(effect, scope),
     })
   }),
 )
@@ -106,7 +127,7 @@ const runAlert = (command: string, text: string) =>
     ),
   )
 
-/** After a turn, each lost login not alerted yet runs the command once. */
+/** After a turn, each lost login not alerted yet runs the command once, off the turn. */
 const alertLostLogins = Effect.fn("LoginAlert.afterTurn")(function* () {
   const command = yield* Config.option(Config.NonEmptyString(LOGIN_ALERT_COMMAND)).pipe(
     Effect.orElseSucceed(() => Option.none<string>()),
@@ -115,7 +136,7 @@ const alertLostLogins = Effect.fn("LoginAlert.afterTurn")(function* () {
   const ctx = yield* ExtensionContext
   const alerts = yield* LoginAlerts
   for (const loss of yield* alerts.fresh(yield* ctx.Accounts.lanes)) {
-    yield* runAlert(command.value, loss.text)
+    yield* alerts.spawn(runAlert(command.value, loss.text))
   }
 })
 
