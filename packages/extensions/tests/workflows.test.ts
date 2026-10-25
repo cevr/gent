@@ -13,7 +13,11 @@ import {
   createRpcHarness,
   waitFor,
 } from "@gent/core/test-utils"
-import { ORCHESTRATE_MACHINE, WorkflowsExtension } from "../src/workflows.js"
+import {
+  ORCHESTRATE_LIGHT_MACHINE,
+  ORCHESTRATE_MACHINE,
+  WorkflowsExtension,
+} from "../src/workflows.js"
 import { e2ePreset } from "./helpers/test-preset"
 
 const WORKFLOWS_EXTENSION_ID = WorkflowsExtension.manifest.id
@@ -226,9 +230,11 @@ describe("WorkflowsExtension via RPC", () => {
             input,
           })
         const machineFile = path.join(cwd, ".gent", "machines", "orchestrate.json")
+        const lightFile = path.join(cwd, ".gent", "machines", "orchestrate-light.json")
         yield* orchestrate("  plans/next.md  ")
         // The file machine.start reads, as machine.define would write it.
         expect(decodeJson(yield* fs.readFileString(machineFile))).toEqual(ORCHESTRATE_MACHINE)
+        expect(decodeJson(yield* fs.readFileString(lightFile))).toEqual(ORCHESTRATE_LIGHT_MACHINE)
         const own = '{ "name": "orchestrate", "mine": true }\n'
         yield* fs.writeFileString(machineFile, own)
         yield* orchestrate("plans/next.md")
@@ -247,6 +253,7 @@ describe("WorkflowsExtension via RPC", () => {
         expect(shipped).toContain("write no product code")
         expect(shipped).toContain("machine.start the orchestrate machine")
         expect(shipped).toContain(`The orchestrate machine is ${machineFile}.`)
+        expect(shipped).toContain(`The orchestrate-light machine is ${lightFile}.`)
         expect(kept).toContain(
           `${machineFile} differs from the shipped orchestrate machine and was kept`,
         )

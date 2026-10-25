@@ -76,7 +76,7 @@ import {
   roundEndSignal,
 } from "../src/machines.js"
 import { THREAD_ROUND_END_TYPE } from "../src/threads.js"
-import { ORCHESTRATE_MACHINE } from "../src/workflows.js"
+import { ORCHESTRATE_LIGHT_MACHINE, ORCHESTRATE_MACHINE } from "../src/workflows.js"
 import {
   acted,
   billed,
@@ -4047,7 +4047,11 @@ const answerAsk = (
   })
 
 /** A unit run in a real unit dir under the home's cwd; an empty gate is the unit with none named. */
-const unitRun = (verdicts: Readonly<Record<string, string>>, gate = "") =>
+const unitRun = (
+  verdicts: Readonly<Record<string, string>>,
+  gate = "",
+  definition = ORCHESTRATE_MACHINE,
+) =>
   Effect.gen(function* () {
     const home = yield* restartableHome
     const dir = `${home.cwd}/unit`
@@ -4066,7 +4070,7 @@ const unitRun = (verdicts: Readonly<Record<string, string>>, gate = "") =>
     )
     const owner = ownerOf(yield* client.session.create({}))
     const input = { unit: "u1", goal: "G", dir, gate }
-    const run = yield* startRun(client, owner, ORCHESTRATE_MACHINE, "orchestrate", input)
+    const run = yield* startRun(client, owner, definition, definition.name, input)
     return { home, models, client, owner, run, dir }
   })
 
@@ -4113,6 +4117,50 @@ describe("the shipped orchestrate machine", () => {
           expect(texts.get(round)).toContain(`Spec: ${dir}/spec.md`)
           expect(texts.get(round)).toContain("the newest round-N-request.md")
         }
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a proven review goes to decide with no verifier round",
+    () =>
+      Effect.gen(function* () {
+        const { home, models, client, owner, run } = yield* unitRun({ "review:1": "proven" })
+        yield* answerAsk(client, owner, 1, "go")
+        const decide = yield* answerAsk(client, owner, 2, "drop")
+        expect(decide.state).toBe("decide")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          "plan→approve",
+          "approve→implement",
+          "implement→review",
+          "review→decide",
+          "decide→dropped",
+        ])
+        expect(yield* Ref.get(models.calls)).toEqual(["plan:1", "implement:1", "review:1"])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "the light machine starts at implement, and a fix goes to decide with no second review",
+    () =>
+      Effect.gen(function* () {
+        const { home, models, client, owner, run } = yield* unitRun(
+          { "review:1": "changes" },
+          "",
+          ORCHESTRATE_LIGHT_MACHINE,
+        )
+        const decide = yield* answerAsk(client, owner, 1, "drop")
+        expect(decide.state).toBe("decide")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          "implement→review",
+          "review→fix",
+          "fix→decide",
+          "decide→dropped",
+        ])
+        expect(yield* Ref.get(models.calls)).toEqual(["implement:1", "review:1", "fix:1"])
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )

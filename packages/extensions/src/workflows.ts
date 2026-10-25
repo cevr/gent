@@ -103,9 +103,12 @@ const implementorRound = (
  * (review `changes`, verify `fail`) and its third entry (the third failed
  * round) goes to decide, `resume` follows a blocked answer, a red gate or a
  * red push and counts nothing. Planning and review take the strongest tier,
- * implementing and verifying the efficient one. The run's `input.gate` is
- * the gate of every round and of the merge. Merging runs it under one
- * server-wide permit, then pushes through the integration gate. A rewrite
+ * implementing and verifying the efficient one. Ceremony scales with the
+ * unit's risk: a review of a unit whose spec says `Verify: receipt` replies
+ * `proven` and skips the verifier, and from round 3 a test-strength finding
+ * is a follow-up, not a blocker. The run's `input.gate` is the gate of every
+ * round and of the merge. Merging runs it under one server-wide permit, then
+ * pushes through the integration gate. A rewrite
  * ends the run: the orchestrator starts a new one on a new branch, whose
  * rounds count from 1.
  */
@@ -117,7 +120,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       instructions: [
         WORKER_RULES,
         BLOCKED_RULE,
-        "You are the planner; you change no product code. Write spec.md in the unit dir: Goal; Done, one line; Acceptance check, objective and runnable, red now and green when done (run it and record that it is red); Owns and Do not touch, as exact paths; Gate, exactly the command the round message names (a unit that needs another gate is blocked); Risks, what review should attack hardest. When Done states a rule, the check includes a generated property over the rule's whole domain. Verdict: ready or blocked.",
+        "You are the planner; you change no product code. Write spec.md in the unit dir: Goal; Done, one line; Acceptance check, objective and runnable, red now and green when done (run it and record that it is red); Owns and Do not touch, as exact paths; Gate, exactly the command the round message names (a unit that needs another gate is blocked); Risks, what review should attack hardest; Verify, separate when the unit has a high blast radius (several subsystems, a durable format, a user-facing surface, a device) and receipt otherwise. When Done states a rule, the check includes a generated property over the rule's whole domain. Verdict: ready or blocked.",
       ].join("\n"),
     },
     implementor: {
@@ -132,7 +135,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       tier: "strongest",
       instructions: [
         WORKER_RULES,
-        "You are the reviewer: read-only on the deliverables, you write only into the unit dir. Read the spec, the request, the diff from its base to its head, and the earlier rounds' findings. Attack the change: look for reasons it is wrong, not reasons it is fine. From round 2, check every line of the fix report against the code, then review the new commits. Write round-N-findings.md: first line Verdict: ACCEPTED, CHANGES REQUIRED or STUCK; then Blockers, Major, Minor and Optional, each with an id, file:line, a concrete failure and the expected repair; a new trigger of an earlier finding says repeat of rN <id>. A remaining Blocker or Major is changes; only Minor or Optional is accepted; stuck is for a unit no further round can help, or a review you could not finish, never accepted. Verdict: accepted, changes or stuck.",
+        "You are the reviewer: read-only on the deliverables, you write only into the unit dir. Read the spec, the request, the diff from its base to its head, and the earlier rounds' findings. Attack the change: look for reasons it is wrong, not reasons it is fine. From round 2, check every line of the fix report against the code, then review only the diff from the last findings' head to the new head; read earlier code only where a new commit touches it. From round 3, a finding about test strength (a test narrower than its rule, a mutant that passes, a weak oracle) goes under Follow-ups, never Major: only a defect in the change blocks. Write round-N-findings.md: first line Verdict: ACCEPTED, PROVEN, CHANGES REQUIRED or STUCK; then Blockers, Major, Minor and Optional, each with an id, file:line, a concrete failure and the expected repair; a new trigger of an earlier finding says repeat of rN <id>. A remaining Blocker or Major is changes; only Minor or Optional is accepted, or proven when the spec's Verify line is receipt and the request's gate log exit line and acceptance check result show green at its head, so no verifier runs; stuck is for a unit no further round can help, or a review you could not finish, never accepted. Verdict: accepted, proven, changes or stuck.",
       ].join("\n"),
     },
     verifier: {
@@ -177,7 +180,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
         "Spec: {{input.dir}}/spec.md. Request: the newest round-N-request.md in the unit dir.",
         "Write round-N-findings.md in the unit dir, with the request's N.",
       ].join("\n"),
-      on: { accepted: "verify", changes: "fix", stuck: "decide" },
+      on: { accepted: "verify", proven: "decide", changes: "fix", stuck: "decide" },
       fresh: true,
     },
     verify: {
@@ -193,7 +196,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
     },
     decide: {
       kind: "ask",
-      ask: "Unit {{input.unit}} decides. Latest: review {{review.reply.next}} {{review.reply.file}}, verify {{verify.reply.next}} {{verify.reply.file}}. Check the request's claims against the code in the unit dir {{input.dir}}. merge runs the gate, then pushes to main; changes sends your note to a new implementor, replan to the planner; rewrite ends this run for a new one from base.",
+      ask: "Unit {{input.unit}} decides. Latest: review {{review.reply.next}} {{review.reply.file}}, verify {{verify.reply.next}} {{verify.reply.file}} (none after proven). Check the request's claims against the code in the unit dir {{input.dir}}. merge runs the gate, then pushes to main; changes sends your note to a new implementor, replan to the planner; rewrite ends this run for a new one from base.",
       on: {
         merge: "gate",
         changes: "implement",
@@ -207,6 +210,8 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       // An empty gate is a syntax error here, so it never passes.
       run: 'set -o pipefail\nunit_gate() {\n{{input.gate}}\n}\nunit_gate 2>&1 | tee "{{input.dir}}/merge-gate-{{visit}}.log"',
       permit: { name: "gate" },
+      // The gate holds the server's one permit, so a slow one stalls every unit.
+      timeoutSeconds: 1200,
       on: { pass: "merge", fail: "resume" },
     },
     merge: { kind: "integrate", ref: "main", on: { green: "merged", red: "resume" } },
@@ -220,22 +225,42 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
   },
 }
 
-/** What the command tells the orchestrator of the machine file it wrote, or kept. */
-const machineLine = (shipped: Effect.Success<ReturnType<typeof shipDefinition>>) => {
-  if (shipped.outcome === "kept") {
-    return `The project's ${shipped.path} differs from the shipped orchestrate machine and was kept: tell the user, and run it as it is.`
-  }
-  return `The orchestrate machine is ${shipped.path}.`
+/**
+ * A mechanical unit (an established pattern carried further, no new
+ * behavior): the orchestrator writes the spec, so the run starts at
+ * `implement`, and a fix after a failed round goes to decide without a
+ * second review. A replan still takes the full path through the planner.
+ */
+export const ORCHESTRATE_LIGHT_MACHINE: MachineDefinitionJson = {
+  ...ORCHESTRATE_MACHINE,
+  name: "orchestrate-light",
+  start: "implement",
+  states: {
+    ...ORCHESTRATE_MACHINE.states,
+    fix: {
+      ...implementorRound("fix", { maxVisits: 2, exhausted: "decide" }),
+      on: { ready: "decide", blocked: "blocked" },
+    },
+  },
 }
 
-const orchestrateRecipe = (input: string, recordPath: string, machine: string) => {
+/** What the command tells the orchestrator of a machine file it wrote, or kept. */
+const machineLine = (name: string, shipped: Effect.Success<ReturnType<typeof shipDefinition>>) => {
+  if (shipped.outcome === "kept") {
+    return `The project's ${shipped.path} differs from the shipped ${name} machine and was kept: tell the user, and run it as it is.`
+  }
+  return `The ${name} machine is ${shipped.path}.`
+}
+
+const orchestrateRecipe = (input: string, recordPath: string, machines: ReadonlyArray<string>) => {
   if (input.length === 0) return "Ask which plan or goal to orchestrate."
   return [
     `Orchestrate: ${input}`,
     `You coordinate and write no product code. Keep the run's record in ${recordPath}: the units, their order, and each unit's workspace, dir, run and outcome. Read it first; it may hold an earlier run.`,
-    "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from the remote main after a fetch: a merge pushes to the remote main and does not move a local main, so a unit starts only after the units it depends on merged) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate, domain }, domain the area of the code the unit changes in a word or two (tui, core runtime, docs), the same name for every unit of that area. Start units at once only when their files do not overlap.",
-    "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the verdicts are accepted and pass and the request's claims hold; after stuck, replan or rewrite. On rewrite, start a new run on a new branch from base with a new spec; a rewrite that ends at decide again goes to the user.",
-    machine,
+    "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from the remote main after a fetch: a merge pushes to the remote main and does not move a local main, so a unit starts only after the units it depends on merged) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate, domain }, domain the area of the code the unit changes in a word or two (tui, core runtime, docs), the same name for every unit of that area. Start units at once only when their files do not overlap. A mechanical unit (an established pattern carried to more files, a rename, a version bump: no new behavior) starts the orchestrate-light machine instead: write its spec.md in the unit dir first, in the planner's sections, with Verify: receipt.",
+    "The gate is the fast one: it must finish in 20 minutes, and a slower gate fails. Slow suites (end-to-end, property sweeps, labs) go in the acceptance check, which the implementor and the verifier run.",
+    "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the review is accepted and the verify pass, or the review is proven and the request's gate log and acceptance result hold when you check them, and the request's claims hold; after stuck, replan or rewrite. On rewrite, start a new run on a new branch from base with a new spec; a rewrite that ends at decide again goes to the user.",
+    ...machines,
   ].join("\n")
 }
 
@@ -309,11 +334,17 @@ const orchestrateCommand = request({
   output: Schema.Void,
   execute: (input: string) =>
     Effect.gen(function* () {
-      const shipped = yield* shipDefinition(ORCHESTRATE_MACHINE)
+      const machines = yield* Effect.forEach(
+        [ORCHESTRATE_MACHINE, ORCHESTRATE_LIGHT_MACHINE],
+        (definition) =>
+          Effect.map(shipDefinition(definition), (shipped) =>
+            machineLine(definition.name, shipped),
+          ),
+      )
       const recordPath = yield* resultPath("orchestrate", "plan.md")
       yield* queuePrompt(
         "orchestrate-command",
-        orchestrateRecipe(input.trim(), recordPath, machineLine(shipped)),
+        orchestrateRecipe(input.trim(), recordPath, machines),
       )
     }),
 })
