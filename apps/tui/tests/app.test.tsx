@@ -5524,9 +5524,19 @@ describe("App auth gate at startup", () => {
           extension: {
             listSlashCommands: () =>
               Effect.succeed([{ name: "late", extensionId: "@test/late", capabilityId: "late" }]),
-            request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+            request: (input: {
+              readonly sessionId: SessionId
+              readonly branchId: BranchId
+              readonly capabilityId: string
+              readonly input: unknown
+            }) =>
               Effect.sync(() => {
-                if (input.capabilityId === "late") requests.push(input.input)
+                if (input.capabilityId !== "late") return
+                requests.push({
+                  sessionId: input.sessionId,
+                  branchId: input.branchId,
+                  input: input.input,
+                })
               }),
           },
         },
@@ -5535,8 +5545,25 @@ describe("App auth gate at startup", () => {
         initialPrompt: Option.some("/late now"),
       })
       yield* waitForFrame(setup, () => requests.length + sent.length > 0, "the command answered")
-      expect(requests).toEqual(["now"])
+      // It runs on the startup session and branch.
+      expect(requests).toEqual([{ sessionId: "session-a", branchId: "branch-a", input: "now" }])
       expect(sent).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("a startup prompt that starts with a path is sent as a message", () =>
+    Effect.gen(function* () {
+      const sent: Array<string> = []
+      const { setup } = yield* mountApp({
+        client: {
+          message: recordSends(sent),
+          extension: { listSlashCommands: () => Effect.succeed([]) },
+        },
+        builtins: builtinClientModules,
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+        initialPrompt: Option.some("/tmp/notes.md says what"),
+      })
+      yield* waitForFrame(setup, () => sent.length > 0, "the path sent")
+      expect(sent).toEqual(["/tmp/notes.md says what"])
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("a startup prompt with an unknown command name comes back to its draft", () =>
