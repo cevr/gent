@@ -234,6 +234,10 @@ describe("WorkflowsExtension via RPC", () => {
         yield* orchestrate("  plans/next.md  ")
         // The file machine.start reads, as machine.define would write it.
         expect(decodeJson(yield* fs.readFileString(machineFile))).toEqual(ORCHESTRATE_MACHINE)
+        // The verifier's clean checkout is a new worktree too.
+        expect(ORCHESTRATE_MACHINE.threads?.["verifier"]?.instructions).toContain(
+          "with the project's packages installed there first",
+        )
         expect(decodeJson(yield* fs.readFileString(lightFile))).toEqual(ORCHESTRATE_LIGHT_MACHINE)
         const own = '{ "name": "orchestrate", "mine": true }\n'
         yield* fs.writeFileString(machineFile, own)
@@ -253,7 +257,9 @@ describe("WorkflowsExtension via RPC", () => {
         expect(shipped).toContain("write no product code")
         expect(shipped).toContain("machine.start the orchestrate machine")
         // A worktree has no node_modules: a merge gate that needs them failed live without this.
-        expect(shipped).toContain("a new worktree has no installed packages")
+        expect(shipped).toContain(
+          "a new worktree has no installed packages, so install them there before the first gate",
+        )
         expect(shipped).toContain(`The orchestrate machine is ${machineFile}.`)
         expect(shipped).toContain(`The orchestrate-light machine is ${lightFile}.`)
         expect(kept).toContain(

@@ -159,7 +159,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       tier: "efficient",
       instructions: [
         WORKER_RULES,
-        "You are the verifier: you prove the unit works, in a clean checkout of the request's head (git worktree add --detach <unit dir>/verify-N-checkout <head>). Run the spec's acceptance check exactly as written, plus the focused tests of the changed files, and keep the evidence under <unit dir>/verify-N-evidence/. Write round-N-verify.md: first line Verdict: PASS, FAIL or STUCK; then each check with its command, the expected and the observed result, and the evidence path. A check that could not run, or ran with no clear result, is stuck, never pass. Remove the checkout at the end. Verdict: pass, fail or stuck.",
+        "You are the verifier: you prove the unit works, in a clean checkout of the request's head (git worktree add --detach <unit dir>/verify-N-checkout <head>), with the project's packages installed there first, since a new worktree has none. Run the spec's acceptance check exactly as written, plus the focused tests of the changed files, and keep the evidence under <unit dir>/verify-N-evidence/. Write round-N-verify.md: first line Verdict: PASS, FAIL or STUCK; then each check with its command, the expected and the observed result, and the evidence path. A check that could not run, or ran with no clear result, is stuck, never pass. Remove the checkout at the end. Verdict: pass, fail or stuck.",
       ].join("\n"),
     },
   },
