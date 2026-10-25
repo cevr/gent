@@ -5512,6 +5512,53 @@ describe("App auth gate at startup", () => {
       expect(authChecks).toBeGreaterThan(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // `gent -p "/name args"` runs the command, as the composer would, and an
+  // unknown name comes back to the draft: neither reaches the model as text.
+  it.scopedLive("a startup prompt that names a server command runs it, not sent as a message", () =>
+    Effect.gen(function* () {
+      const requests: Array<unknown> = []
+      const sent: Array<string> = []
+      const { setup } = yield* mountApp({
+        client: {
+          message: recordSends(sent),
+          extension: {
+            listSlashCommands: () =>
+              Effect.succeed([{ name: "late", extensionId: "@test/late", capabilityId: "late" }]),
+            request: (input: { readonly capabilityId: string; readonly input: unknown }) =>
+              Effect.sync(() => {
+                if (input.capabilityId === "late") requests.push(input.input)
+              }),
+          },
+        },
+        builtins: builtinClientModules,
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+        initialPrompt: Option.some("/late now"),
+      })
+      yield* waitForFrame(setup, () => requests.length + sent.length > 0, "the command answered")
+      expect(requests).toEqual(["now"])
+      expect(sent).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.scopedLive("a startup prompt with an unknown command name comes back to its draft", () =>
+    Effect.gen(function* () {
+      const sent: Array<string> = []
+      const { setup } = yield* mountApp({
+        client: {
+          message: recordSends(sent),
+          extension: { listSlashCommands: () => Effect.succeed([]) },
+        },
+        builtins: builtinClientModules,
+        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+        initialPrompt: Option.some("/nowhere else"),
+      })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Unknown command: /nowhere") && frame.includes("/nowhere else"),
+        "the unknown name refused into the draft",
+      )
+      expect(sent).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.scopedLive("enforced auth overlay can retry failed provider loads", () =>
     Effect.gen(function* () {
       let authChecks = 0

@@ -109,7 +109,13 @@ import {
   readFrecencyLookup,
   recordFrecencyPick,
 } from "./autocomplete"
-import { type Command, executeSlashCommand, isSlashCommandName, useCommand } from "./commands"
+import {
+  type Command,
+  executeSlashCommand,
+  isSlashCommandName,
+  parseSlashCommand,
+  useCommand,
+} from "./commands"
 import { createStore, produce, type SetStoreFunction, unwrap } from "solid-js/store"
 import {
   addRetry,
@@ -587,6 +593,11 @@ interface StartupPrompt {
   readonly content: string
   /** `lost` is the request id when the reply was lost, not answered. */
   readonly refuse: (target: SessionIdentity, reason: string, lost: Option.Option<string>) => void
+  /**
+   * Submits it on `target` as the composer would: a `/name` goes to the
+   * session's slash commands, and `send` sends it as a message.
+   */
+  readonly submit: (target: SessionIdentity, send: () => void) => void
 }
 
 type ComposerDraft = Pick<ComposerInteractionState, "draft" | "mode">
@@ -2662,27 +2673,29 @@ export function useSessionFeed(
         sessionId: session,
         branchId: branch,
       })
-      client.runtime.cast(
-        Effect.gen(function* () {
-          const requestId = yield* randomId
-          yield* client.client.message
-            .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
-            .pipe(
-              // A lost connection retries under the one request id; after
-              // the last try the prompt is refused like a composer send.
-              Effect.retry(SEND_RETRY),
-              Effect.catchEager((err) =>
-                Effect.sync(() =>
-                  prompt.refuse(
-                    { sessionId: session, branchId: branch },
-                    formatError(err),
-                    lostRequest(err, requestId),
+      const send = () =>
+        client.runtime.cast(
+          Effect.gen(function* () {
+            const requestId = yield* randomId
+            yield* client.client.message
+              .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
+              .pipe(
+                // A lost connection retries under the one request id; after
+                // the last try the prompt is refused like a composer send.
+                Effect.retry(SEND_RETRY),
+                Effect.catchEager((err) =>
+                  Effect.sync(() =>
+                    prompt.refuse(
+                      { sessionId: session, branchId: branch },
+                      formatError(err),
+                      lostRequest(err, requestId),
+                    ),
                   ),
                 ),
-              ),
-            )
-        }),
-      )
+              )
+          }),
+        )
+      prompt.submit({ sessionId: session, branchId: branch }, send)
     }),
   )
 
@@ -3357,16 +3370,30 @@ export function createSessionController(props: {
     () =>
       Option.map(takePrompt(props.sessionId), (content): StartupPrompt => {
         const order = refusals.nextOrder()
+        const refuse = (target: SessionIdentity, reason: string, lost: Option.Option<string>) => {
+          client.setErrorIn(target, reason)
+          refusals.refuse(
+            target.branchId,
+            { order, text: content, shell: false, requestId: lost },
+            () => client.dismissErrorIn(target, reason),
+          )
+        }
         return {
           content,
-          refuse: (target, reason, lost) => {
-            client.setErrorIn(target, reason)
-            refusals.refuse(
-              target.branchId,
-              { order, text: content, shell: false, requestId: lost },
-              () => client.dismissErrorIn(target, reason),
-            )
-          },
+          refuse,
+          submit: (target, send) =>
+            Option.match(parseSlashCommand(content), {
+              onNone: send,
+              onSome: ([cmd, args]) =>
+                cast(
+                  onSlashCommand({
+                    cmd,
+                    args,
+                    send,
+                    refuse: (reason) => refuse(target, reason, Option.none()),
+                  }),
+                ),
+            }),
         }
       }),
     // Gate prompt send on auth resolution and on the branch picker — the feed

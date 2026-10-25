@@ -41,6 +41,10 @@ session in this directory.
 
 Priority: headless → session → continue → prompt → home
 
+The `-p` prompt is a composer submission: `gent -p "/orchestrate <goal>"` runs
+the command, and an unknown `/name` comes back to the draft with its reason.
+A headless prompt is always a message: `-H` runs no slash command.
+
 A headless run has no user, so it declines every interaction its turn presents,
 with notes that name `--approve-all`. `--approve-all` approves every ask. The
 run follows only its own turn: the live events from the `MessageReceived` of
