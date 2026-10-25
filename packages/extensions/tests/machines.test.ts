@@ -68,6 +68,7 @@ import {
   MACHINE_ASK_TYPE,
   MACHINE_END_TYPE,
   MachineAnswerTool,
+  type MachineDefinitionJson,
   MachineRunStatus,
   MachineStopTool,
   MachinesExtension,
@@ -4083,8 +4084,11 @@ const answerAsk = (
 /** A unit run in a real unit dir under the home's cwd; an empty gate is the unit with none named. */
 const unitRun = (
   verdicts: Readonly<Record<string, string>>,
-  gate = "",
-  definition = ORCHESTRATE_MACHINE,
+  options: {
+    readonly gate?: string
+    readonly mergeGate?: string
+    readonly definition?: MachineDefinitionJson
+  } = {},
 ) =>
   Effect.gen(function* () {
     const home = yield* restartableHome
@@ -4103,7 +4107,8 @@ const unitRun = (
       }),
     )
     const owner = ownerOf(yield* client.session.create({}))
-    const input = { unit: "u1", goal: "G", dir, gate }
+    const { gate = "", mergeGate = "", definition = ORCHESTRATE_MACHINE } = options
+    const input = { unit: "u1", goal: "G", dir, gate, mergeGate }
     const run = yield* startRun(client, owner, definition, definition.name, input)
     return { home, models, client, owner, run, dir }
   })
@@ -4182,8 +4187,7 @@ describe("the shipped orchestrate machine", () => {
       Effect.gen(function* () {
         const { home, models, client, owner, run } = yield* unitRun(
           { "review:1": "changes" },
-          "",
-          ORCHESTRATE_LIGHT_MACHINE,
+          { definition: ORCHESTRATE_LIGHT_MACHINE },
         )
         const decide = yield* answerAsk(client, owner, 1, "drop")
         expect(decide.state).toBe("decide")
@@ -4324,7 +4328,10 @@ describe("the shipped orchestrate machine", () => {
     "merge runs a named gate into the unit dir and goes on to the push",
     () =>
       Effect.gen(function* () {
-        const { home, client, owner, run, dir } = yield* unitRun({}, "echo gate-ran")
+        const { home, client, owner, run, dir } = yield* unitRun(
+          {},
+          { gate: "echo gate-ran", mergeGate: "echo slow-ran" },
+        )
         yield* answerAsk(client, owner, 1, "go")
         yield* answerAsk(client, owner, 2, "merge")
         yield* waitFor(
@@ -4333,10 +4340,35 @@ describe("the shipped orchestrate machine", () => {
           10_000,
           "the gate passed to the push",
         )
+        // The merge-only legs run once here, after the round gate.
         const log = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
           fs.readFileString(`${dir}/merge-gate-1.log`),
         ).pipe(Effect.provide(BunServices.layer))
-        expect(log).toContain("gate-ran")
+        expect(log.trim().split("\n")).toEqual(["gate-ran", "slow-ran"])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a red round gate fails the merge gate before its merge-only legs run",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run, dir } = yield* unitRun(
+          { "resume:1": "blocked" },
+          { gate: "echo gate-ran; false", mergeGate: "echo slow-ran" },
+        )
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "merge")
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => moves(steps).includes("gate→resume"),
+          10_000,
+          "the red gate went back to the implementor",
+        )
+        const log = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.readFileString(`${dir}/merge-gate-1.log`),
+        ).pipe(Effect.provide(BunServices.layer))
+        expect(log.trim().split("\n")).toEqual(["gate-ran"])
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )
