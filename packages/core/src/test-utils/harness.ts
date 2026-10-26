@@ -189,6 +189,7 @@ import {
   type ApiClassContribution,
   type AuthMetadata,
   type CacheWarmer,
+  LaneAdmission,
   type LockSourceRotation,
   type StoredOAuthCredentials,
   type ModelDriverContribution,
@@ -291,7 +292,8 @@ const testExtensionExtensions = (): ExtensionExtensionsService => ({
 
 /** A stub with no quota read: every run is admitted, and no provider has lanes. */
 const testExtensionAccounts = (): ExtensionAccountsService => ({
-  admit: () => Effect.void,
+  admit: () => Effect.succeed(LaneAdmission.cases.Admitted.make({})),
+  awaitLane: () => Effect.succeed(true),
   tiers: () => Effect.succeed({ strongest: [], efficient: [] }),
   project: (cwd) => Effect.succeed(cwd),
   cancel: () => Effect.void,

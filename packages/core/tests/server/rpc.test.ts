@@ -4909,10 +4909,8 @@ describe("AccountsRpcs", () => {
                         cwd: ctx.cwd,
                         modelId,
                       }).pipe(
-                        Effect.as("admitted"),
-                        Effect.catchTag("LaneUnavailable", (refused) =>
-                          Effect.succeed(refused.reason),
-                        ),
+                        Effect.map((answer) => answer._tag),
+                        Effect.catchTag("LaneUnavailable", () => Effect.succeed("Spent")),
                       )
                       yield* Ref.update(admitted, (outcomes) => [...outcomes, outcome])
                       yield* ctx.Accounts.cancel(message)
@@ -4955,7 +4953,7 @@ describe("AccountsRpcs", () => {
             "the probed turn settles",
           )
           // The test model's week is spent; `other`'s windows have room.
-          expect(yield* Ref.get(admitted)).toEqual(["Spent", "admitted"])
+          expect(yield* Ref.get(admitted)).toEqual(["Spent", "Admitted"])
           const { providers } = yield* client.accounts.lanes()
           const own = providers[0]?.accounts[0]?.windows.find(
             (window) => window.window === "5h" && window.model === TEST_MODEL_ID,

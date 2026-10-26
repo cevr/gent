@@ -72,6 +72,7 @@ export {
   CredentialStoreBusy,
   DEFAULT_RETRY_POLICY,
   DriverError,
+  LaneAdmission,
   LaneUnavailable,
   PendingRotation,
   ProviderAuthError,

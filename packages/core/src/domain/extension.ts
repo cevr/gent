@@ -42,6 +42,7 @@ import {
 import type {
   ApiClassContribution,
   LaneReport,
+  LaneAdmission,
   LaneUnavailable,
   ModelDriverContribution,
   ModelRouterContribution,
@@ -1446,14 +1447,26 @@ export interface ExtensionAccountsService {
   /**
    * Admit `run` to a lane of the sign-in its turns spend from, over the
    * accounts they share (a pinned run's pin, else the pool, else the
-   * order's first credential). Fails `LaneUnavailable` when the runs that
-   * hold a lane there reach what the accounts' quota windows carry; the
-   * asking session's own turn holds none against it. An admitted start
-   * holds its lane until the turn of `message` opens, the message joins a
-   * running turn of its session, `cancel` names it, or 2 minutes pass. A
-   * sign-in that reported no quota window admits every run.
+   * order's first credential). When the runs that hold a lane there reach
+   * what the accounts' quota windows carry (the asking session's own turn
+   * holds none against it), or runs wait ahead of it, it is `Queued` in the
+   * pool's fair queue: the asking session that holds the fewest lanes goes
+   * first, then the earliest request; `awaitLane` waits for its grant.
+   * Fails `LaneUnavailable` when the windows carry no run of its size even
+   * with none running. An admitted or granted start holds its lane until
+   * the turn of `message` opens, the message joins a running turn of its
+   * session, `cancel` names it, or 2 minutes pass. Admitted again under the
+   * same `message` and route, it keeps its lane or its place. A sign-in
+   * that reported no quota window admits every run.
    */
-  readonly admit: (run: LaneRun) => Effect.Effect<void, LaneUnavailable>
+  readonly admit: (run: LaneRun) => Effect.Effect<LaneAdmission, LaneUnavailable>
+  /**
+   * Waits while the start queued for `message` waits for its lane: true
+   * once it holds one, false when it neither holds nor waits for one (it
+   * was cancelled, or its grant lapsed). Fails `LaneUnavailable` when the
+   * queue refused it for good: its windows carry no run of its size.
+   */
+  readonly awaitLane: (message: MessageId) => Effect.Effect<boolean, LaneUnavailable>
   /** The owner's model tiers as the config of `cwd` names them. */
   readonly tiers: (cwd: string) => Effect.Effect<ModelTiers>
   /**
@@ -1462,10 +1475,10 @@ export interface ExtensionAccountsService {
    */
   readonly project: (cwd: string) => Effect.Effect<string>
   /**
-   * The start admitted for `message` will not run: the caller's own
-   * admission refused it after `admit` (a busy thread, a full queue, a
-   * failed create). Its lane frees now. A message with no lane held is a
-   * no-op.
+   * The start admitted or queued for `message` will not run: the caller's
+   * own admission refused it after `admit` (a busy thread, a full queue, a
+   * failed create), or it was stopped. Its lane frees now, or it leaves the
+   * queue. A message with no lane held or waited for is a no-op.
    */
   readonly cancel: (message: MessageId) => Effect.Effect<void>
   /**

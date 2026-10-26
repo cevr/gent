@@ -36,6 +36,7 @@ import {
   Crypto,
   Effect,
   Exit,
+  FiberMap,
   FileSystem,
   Layer,
   Match,
@@ -46,6 +47,7 @@ import {
   Predicate,
   PubSub,
   Ref,
+  Result,
   Schema,
   SchemaGetter,
   type Scope,
@@ -53,6 +55,7 @@ import {
   Stream,
 } from "effect"
 import { Hex } from "effect/encoding"
+import type { ChildProcessSpawner } from "effect/process"
 import { SqlClient } from "effect/sql"
 import {
   ActorCommandId,
@@ -70,6 +73,7 @@ import {
   headTailChars,
   initialSessionMetrics,
   LaneUnavailable,
+  type LaneAdmission,
   latestAssistantText,
   MessageId,
   ModelId,
@@ -199,7 +203,7 @@ export class ThreadsOverCap extends Schema.TaggedError<
 
 /**
  * Every fault behind the facade is one caller-facing error. A busy thread,
- * the cap and a full account keep their own words: the model reads them as
+ * the cap and a spent account keep their own words: the model reads them as
  * before, as a `ThreadError`, and the service's callers get the typed refusal.
  */
 const asThreadError = (what: string) =>
@@ -548,12 +552,20 @@ interface ThreadRoundsService {
   /** Drops a round that is still open: its turn was refused, so it never ran. */
   readonly releaseRound: (round: string) => Effect.Effect<void, ThreadStorageError>
   /**
-   * Drops the rounds a deleted session ran. A round it sent stays: the
-   * starter's thread owns it, and its handoffs still read and hear it. A
-   * deleted thread's own threads go with it, spawned below it, and their
-   * rounds with them.
+   * Drops the rounds a deleted session ran, and returns the ids of the ones
+   * still open. A round it sent stays: the starter's thread owns it, and its
+   * handoffs still read and hear it. A deleted thread's own threads go with
+   * it, spawned below it, and their rounds with them.
    */
-  readonly removeSession: (sessionId: SessionId) => Effect.Effect<void, ThreadStorageError>
+  readonly removeSession: (
+    sessionId: SessionId,
+  ) => Effect.Effect<ReadonlyArray<string>, ThreadStorageError>
+  /**
+   * Runs `wait`, a queued round's waiter for its lane, on the server's scope,
+   * one per round: while one runs, a repeat starts none. In memory: a
+   * restart's reconcile queues the round again.
+   */
+  readonly waitLane: (round: string, wait: Effect.Effect<void>) => Effect.Effect<void>
   /** Every round end this server marks, in order. In memory: a restart starts it empty. */
   readonly ended: PubSub.PubSub<RoundEnded>
   /**
@@ -701,6 +713,7 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
         [...starting].filter(([key, entry]) => key !== round && entry.thread === starterThread)
           .length
       const reconciled = yield* makeReconciledBranches
+      const waiters = yield* FiberMap.make<string>()
       yield* ensureThreadRounds
 
       const selectRound = Effect.fn("ThreadRounds.selectRound")(function* (round: string) {
@@ -987,15 +1000,22 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
 
         removeSession: Effect.fn("ThreadRounds.removeSession")(
           function* (sessionId) {
-            yield* sql`
+            const removed = yield* sql<Pick<RoundRow, "round" | "ended_at">>`
               DELETE FROM thread_rounds WHERE session_id = ${sessionId}
+              RETURNING round, ended_at
             `
+            return removed.flatMap((row) => {
+              if (Predicate.isNotNull(row.ended_at)) return []
+              return [row.round]
+            })
           },
           Effect.mapError(storageError("Failed to remove the session's rounds")),
         ),
 
         ended,
         admissions,
+        waitLane: (round, wait) =>
+          Effect.asVoid(FiberMap.run(waiters, round, wait, { onlyIfMissing: true })),
         prepare: (round, starterThread) =>
           Effect.acquireRelease(
             Effect.sync(() => {
@@ -1622,6 +1642,8 @@ interface TurnOutcome {
  */
 const endRound = Effect.fn("Threads.endRound")(function* (round: RoundRow, outcome: TurnOutcome) {
   const rounds = yield* ThreadRounds
+  // A closed round holds no lane and waits in no queue.
+  yield* cancelLane(round.round)
   const text = latestAssistantText(
     startTurnMessages(yield* branchMessages(round), MessageId.make(round.message_id)),
   )
@@ -1701,6 +1723,150 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
   }))
 })
 
+// ── the lane queue ──────────────────────────────────────────────────────────
+
+/** `metadata.customType` on the notice that a queued `starter` round got its lane. */
+export const THREAD_ROUND_START_TYPE = "thread-round-start"
+
+/** The steer that tells a starter its queued round started: its message id derives from it. */
+const roundStartRequestId = (round: string) => RequestId.make(`thread-round-start:${round}`)
+
+/**
+ * The windows refused a round's lane for good: its accounts carry no run
+ * of its size before `retryAt`. The round ends as a turn failed at a usage
+ * limit, with no turn run: a `starter` round wakes its starter with the
+ * refusal, and a machine waits for the reset as for a worker that died there.
+ */
+const refuseRound = Effect.fn("Threads.refuseRound")(function* (
+  round: RoundRow,
+  refusal: LaneUnavailable,
+) {
+  yield* endRound(round, {
+    interrupted: false,
+    streamFailed: true,
+    unanswered: false,
+    error: Option.some(refusal.message),
+    retryAt: Option.some(refusal.retryAt),
+    usage: Option.none(),
+  })
+})
+
+/**
+ * A queued round got its lane: its turn goes out, and the starter of a
+ * `starter` round reads that it started at its next turn, with no turn of
+ * its own: the round's end is what wakes it.
+ */
+const startQueuedRound = Effect.fn("Threads.startQueuedRound")(function* (round: RoundRow) {
+  const ctx = yield* ExtensionContext
+  yield* sendClaimedRound(round)
+  if (round.notify !== "starter") return
+  const place = yield* wakeTarget(round)
+  yield* ctx.Session.send({
+    delivery: "steer",
+    ...place,
+    requestId: roundStartRequestId(round.round),
+    wake: false,
+    content: `Round ${round.number} (${round.round}) of thread ${round.thread} waited for a lane and started. Its end wakes you.`,
+    metadata: {
+      customType: THREAD_ROUND_START_TYPE,
+      details: { round: round.round, thread: round.thread, number: round.number },
+    },
+  })
+})
+
+/**
+ * A queued round's waiter: it waits for the round's lane, then starts the
+ * round. A round a stop, an interrupt or a delete closed meanwhile sends
+ * nothing and leaves the queue. A waiter freed while its round stays open
+ * (its grant lapsed) asks again; a refusal for good ends the round.
+ */
+const awaitRoundLane = Effect.fn("Threads.awaitRoundLane")(function* (
+  round: RoundRow,
+  lane: RoundLane,
+) {
+  const ctx = yield* ExtensionContext
+  const rounds = yield* ThreadRounds
+  const message = roundMessageId(round.round)
+  let granted = yield* Effect.result(ctx.Accounts.awaitLane(message))
+  for (;;) {
+    const open = Option.filter(
+      yield* rounds.round(round.round),
+      (found) => Predicate.isNull(found.ended_at) && Predicate.isNull(found.stopped_at),
+    )
+    if (Option.isNone(open)) return yield* cancelLane(round.round)
+    if (Result.isFailure(granted)) return yield* refuseRound(open.value, granted.failure)
+    if (granted.success) return yield* startQueuedRound(open.value)
+    const again = yield* Effect.result(admitLane(round.round, lane))
+    if (Result.isFailure(again)) return yield* refuseRound(open.value, again.failure)
+    if (again.success._tag === "Admitted") return yield* startQueuedRound(open.value)
+    granted = yield* Effect.result(ctx.Accounts.awaitLane(message))
+  }
+})
+
+/** Puts a queued round's waiter on the server's scope; one already waiting stays the only one. */
+const queueRound = Effect.fn("Threads.queueRound")(function* (round: RoundRow, lane: RoundLane) {
+  const rounds = yield* ThreadRounds
+  // The waiter outlives the call: it runs with the caller's services.
+  const services = yield* Effect.context<
+    | ExtensionContext
+    | ThreadRounds
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Crypto.Crypto
+    | FileSystem.FileSystem
+    | Path.Path
+  >()
+  yield* rounds.waitLane(
+    round.round,
+    awaitRoundLane(round, lane).pipe(
+      logFailure("threads.lane-wait.failed"),
+      Effect.annotateLogs({ round: round.round }),
+      Effect.provideContext(services),
+    ),
+  )
+})
+
+/**
+ * Starts a claimed round whose turn has not reached its thread, as its lane
+ * answered: admitted, its turn goes out now; queued, its waiter sends it
+ * when the grant comes. Returns the waiters ahead of it when queued.
+ */
+const startRound = Effect.fn("Threads.startRound")(function* (
+  round: RoundRow,
+  admission: LaneAdmission,
+  lane: RoundLane,
+) {
+  if (admission._tag === "Admitted") {
+    yield* sendClaimedRound(round)
+    return Option.none<number>()
+  }
+  yield* queueRound(round, lane)
+  return Option.some(admission.ahead)
+})
+
+/**
+ * A claimed round that never reached its thread (a retry, a restart's
+ * reconcile) asks for its lane again under its key, which keeps a lane or
+ * a place it holds, then starts; a refusal for good ends it.
+ */
+const admitClaimedRound = Effect.fn("Threads.admitClaimedRound")(function* (
+  round: RoundRow,
+  lane: RoundLane,
+) {
+  const answer = yield* Effect.result(admitLane(round.round, lane))
+  if (Result.isFailure(answer)) {
+    yield* refuseRound(round, answer.failure)
+    return Option.none<number>()
+  }
+  return yield* startRound(round, answer.success, lane)
+})
+
+/** Drops a deleted session's rounds; an open one's lane frees, or it leaves the queue. */
+const dropSessionRounds = Effect.fn("Threads.dropSessionRounds")(function* (sessionId: SessionId) {
+  const rounds = yield* ThreadRounds
+  const open = yield* rounds.removeSession(sessionId)
+  yield* Effect.forEach(open, cancelLane, { discard: true })
+})
+
 // ── reconcile ───────────────────────────────────────────────────────────────
 
 /** A random id no earlier request shares, for a request that must not repeat one. */
@@ -1715,7 +1881,8 @@ const randomNonce = Effect.gen(function* () {
  * recorded and delivered. A stopped round whose turn never reached the
  * branch is closed. A turn with no receipt is running, was cut short,
  * or was never sent (the process died between saving the round and sending
- * it): the starter side re-sends the round. A repeat of its command with
+ * it, or it waited in the lane queue): the starter side re-sends the round,
+ * a never-sent one through its lane again. A repeat of its command with
  * `completion: "admission"` admits nothing new and returns at once, and it
  * opens the thread's loop, which resumes a turn cut short; a round never
  * sent is admitted now, though the thread's loop is open and idle. The
@@ -1729,9 +1896,8 @@ const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
 ) {
   const ctx = yield* ExtensionContext
   const sessionId = SessionId.make(round.session_id)
-  if (Predicate.isUndefined(yield* ctx.Session.getSession(sessionId))) {
-    return yield* Effect.flatMap(ThreadRounds, (rounds) => rounds.removeSession(sessionId))
-  }
+  const session = yield* ctx.Session.getSession(sessionId)
+  if (Predicate.isUndefined(session)) return yield* dropSessionRounds(sessionId)
   if (Predicate.isNotNull(round.ended_at)) return yield* deliverRoundEnd(round)
   const recorded = yield* recordedOutcome(round)
   if (Option.isSome(recorded)) return yield* endRound(round, recorded.value)
@@ -1751,7 +1917,9 @@ const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
     return
   }
   if (!starterSide) return
-  yield* sendClaimedRound(round)
+  // A turn that reached the branch resumes; one that never did asks for its lane again.
+  if (yield* admitted(round)) return yield* sendClaimedRound(round)
+  yield* admitClaimedRound(round, session)
 })
 
 /**
@@ -2125,7 +2293,20 @@ export const StartParams = Schema.Struct({
   ),
 })
 
-const RoundHandle = Schema.Struct({ round: Schema.String, number: Schema.Finite })
+const RoundHandle = Schema.Struct({
+  round: Schema.String,
+  number: Schema.Finite,
+  /**
+   * The round waits for a lane: this many requests are ahead of it in its
+   * account's queue. It starts on its own when a lane frees for it.
+   */
+  queued: Schema.optionalKey(
+    Schema.Int.annotate({
+      description:
+        "Present when the round waits for a lane: the requests ahead of it. It starts on its own when a lane frees; do not send it again.",
+    }),
+  ),
+})
 
 const StartResult = Schema.Struct({
   /** The thread's key: its first session's id. */
@@ -2269,12 +2450,13 @@ const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* (cap: number,
 type RoundLane = Pick<StoredSession, "cwd" | "admission" | "modelId">
 
 /**
- * The account admits the round's run to a lane, or refuses it as busy or
- * spent. The lane is held under the round's message until its turn opens.
+ * The account admits the round's run to a lane, queues it in its pool's
+ * fair queue, or refuses it as spent. The lane is held under the round's
+ * message until its turn opens.
  */
 const admitLane = Effect.fn("Threads.admitLane")(function* (roundId: string, lane: RoundLane) {
   const ctx = yield* ExtensionContext
-  yield* ctx.Accounts.admit({
+  return yield* ctx.Accounts.admit({
     message: roundMessageId(roundId),
     cwd: lane.cwd ?? ctx.cwd,
     ...omitUndefined({ admission: lane.admission, modelId: lane.modelId }),
@@ -2306,9 +2488,13 @@ const roundIdOf = Effect.fn("Threads.roundIdOf")(function* (kind: string, key: s
  * Admits one round under the cap and its account's lanes. A retry under the
  * same key is handed the round it admitted before any refusal applies, and
  * is sent only when its first call never admitted it (a crash between the
- * row and the send). `request` runs under the permit after the cap and lane
- * checks, so a start makes its session only when both admit it, and two
- * calls in one model step cannot both take the last place.
+ * row and the send, or a round still in the lane queue), through its lane
+ * again. `request` runs under the permit after the cap and lane checks, so
+ * a start makes its session only when both admit it, and two calls in one
+ * model step cannot both take the last place. A round the lane queues is
+ * claimed and returns at once with its place (`queued`): it starts when its
+ * grant comes, and its end reaches the starter as any end does. A spent
+ * account refuses it before its row.
  */
 const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
   kind: string,
@@ -2325,21 +2511,24 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
     thread: yield* callerThread(),
   }
   const cap = yield* runningCap()
-  const claim = yield* Semaphore.withPermit(
+  const { claim, admission } = yield* Semaphore.withPermit(
     rounds.admissions,
     Effect.gen(function* () {
       const retry = yield* rounds.round(roundId)
       if (Option.isSome(retry)) {
-        return RoundClaim.cases.Ready.make({ round: retry.value, fresh: false })
+        return {
+          claim: RoundClaim.cases.Ready.make({ round: retry.value, fresh: false }),
+          admission: Option.none<LaneAdmission>(),
+        }
       }
       // A cap refusal frees the lane a sender admitted for this round first
       // (`admitSend`): the round does not run now.
       yield* refuseOverCap(cap, roundId).pipe(Effect.tapError(() => cancelLane(roundId)))
-      yield* admitLane(roundId, lane)
+      const answer = yield* admitLane(roundId, lane)
       // Past the lane, a failed create or a claim that refuses (a busy
       // thread, the cap) runs no round: the lane it took frees with it.
       const input = yield* request.pipe(Effect.tapError(() => cancelLane(roundId)))
-      return yield* rounds
+      const claimed = yield* rounds
         .claimRound({
           round: roundId,
           cap,
@@ -2367,6 +2556,7 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
           }),
           Effect.tapError(() => cancelLane(roundId)),
         )
+      return { claim: claimed, admission: Option.some(answer) }
     }),
   )
   if (claim._tag === "OverCap") {
@@ -2380,10 +2570,19 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
     })
   }
   const round = claim.round
+  let queued = Option.none<number>()
   if (claim.fresh || (Predicate.isNull(round.ended_at) && !(yield* admitted(round)))) {
-    yield* sendClaimedRound(round)
+    queued = yield* Option.match(admission, {
+      onSome: (answer) => startRound(round, answer, lane),
+      onNone: () => admitClaimedRound(round, lane),
+    })
   }
-  return { round: round.round, number: round.number, thread: SessionId.make(round.thread) }
+  return {
+    round: round.round,
+    number: round.number,
+    thread: SessionId.make(round.thread),
+    ...omitUndefined({ queued: Option.getOrUndefined(queued) }),
+  }
 })
 
 /**
@@ -2618,7 +2817,11 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
             })),
           ).pipe(
             Effect.map((admitted) =>
-              Option.some({ round: admitted.round, number: admitted.number }),
+              Option.some({
+                round: admitted.round,
+                number: admitted.number,
+                ...omitUndefined({ queued: admitted.queued }),
+              }),
             ),
           ),
       })
@@ -2698,7 +2901,11 @@ const sendToThread = Effect.fn("Threads.send")(function* (input: ThreadSendInput
       workPlace,
     })),
   )
-  return { round: admitted.round, number: admitted.number }
+  return {
+    round: admitted.round,
+    number: admitted.number,
+    ...omitUndefined({ queued: admitted.queued }),
+  }
 })
 
 /**
@@ -3009,7 +3216,7 @@ const ThreadSendTool = tool({
   id: "thread.send",
   resources: [ThreadsResource],
   description:
-    "Send a thread you started one round, to its current session, and return the round's id at admission, never its answer. A thread runs one round at a time.",
+    "Send a thread you started one round, to its current session, and return the round's id at admission, never its answer. A thread runs one round at a time. With no free lane on its account the round is queued: it returns `queued` and starts on its own when a lane frees.",
   promptSnippet: "Give a thread one round",
   promptGuidelines: [
     'With notify "starter", end your turn after sending: the round\'s end wakes you, and thread.round reads it. Do not poll.',
@@ -3245,8 +3452,7 @@ export const THREAD_LINES = [
 
 /** A hook step that fails logs and ends; the next loop open reconciles what it left. */
 const removeSessionRounds = Effect.fn("Threads.sessionDeleted")(function* (sessionId: SessionId) {
-  const rounds = yield* ThreadRounds
-  yield* rounds.removeSession(sessionId)
+  yield* dropSessionRounds(sessionId)
 })
 
 /**

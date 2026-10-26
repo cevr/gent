@@ -5,6 +5,7 @@ import {
   Config,
   Context,
   DateTime,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -81,11 +82,11 @@ import {
   type LaneAccount,
   type LaneModel,
   type LaneReport,
+  LaneAdmission,
   LaneUnavailable,
   type LaneWindow,
   type LoginLossReason,
   type ProviderLanes,
-  roundLanes,
   type QuotaReading,
   SpendLimit,
   type RetryPolicy,
@@ -3650,8 +3651,40 @@ const MODEL_FIT_PASSES = 20
  * a start whose send was lost frees the lane. A guess.
  */
 const LANE_RESERVATION_MS = 2 * 60_000
-/** When a run refused for a busy lane checks again: no run says when it ends. A guess. */
-const LANE_BUSY_RETRY_MS = 60_000
+/**
+ * When a run refused as spent checks again at the soonest, when no window
+ * or hold names a later time. A guess.
+ */
+const LANE_SPENT_RETRY_MS = 60_000
+
+/**
+ * Why a run gets no lane now. `pool`: the account's windows are full, which
+ * every run of its pool shares; false when only its project's night lanes
+ * or its model's own windows are. `spent`: the refusal for good, when the
+ * windows carry no run of its size even with none running.
+ */
+interface LaneBlock {
+  readonly pool: boolean
+  readonly spent: Option.Option<LaneUnavailable>
+}
+
+/** A run's admission check: why it gets no lane now, and whether its project runs under its hold. */
+interface LaneCheck {
+  readonly block: Option.Option<LaneBlock>
+  readonly underHold: boolean
+}
+
+/** A lane a serve granted: the start's key, and which admission under it. */
+interface LaneGrant {
+  readonly key: string
+  readonly admission: number
+}
+
+/** An admission's answer, and the grants its serve made on the way. */
+interface LaneAnswer {
+  readonly grants: ReadonlyArray<LaneGrant>
+  readonly outcome: Result.Result<LaneAdmission, LaneUnavailable>
+}
 
 /** A provider's lanes report, and the unfloored supply admission checks against. */
 interface LaneSupply {
@@ -3893,27 +3926,46 @@ interface CredentialPlacementService {
     readonly signedInAt: Option.Option<number>
     readonly model: ModelId
   }) => Effect.Effect<Option.Option<number>>
-  /** The session's turn ended: its lane and a warming guard it holds are released. */
+  /** The session's turn ended: its lane and a warming guard it holds are released, and the queue is served. */
   readonly release: (sessionId: SessionId) => Effect.Effect<void>
   /**
-   * Admit a run to a lane of `provider` over `scope`: refused when the runs
-   * holding a lane there (turns open on those accounts, and starts admitted
-   * whose turn has not opened, the asker's own turn left out) and the lanes
-   * other projects hold and do not use reach the scope's capacity. A run of
-   * a project under its hold is admitted whatever the pace, refused only
-   * when every account of the scope is held. An admitted start holds its
-   * lane, under `key`, until its turn opens, `freeReservation` names it, or
-   * 2 minutes pass; admitted again under `key` on the same provider and
-   * model, it keeps that lane, and on another route it gives it up and is
-   * admitted afresh. With no capacity read, every run is admitted.
+   * Admit a run to a lane of `provider` over `scope`, through the pool's
+   * fair queue (one per provider and scope). A run joins the queue, and the
+   * queue is served: in order, the asker that holds the fewest lanes of the
+   * provider (running or granted) first, then the earliest request, then
+   * the key. A waiter is granted a lane while the runs holding one there
+   * (turns open on those accounts, and starts granted whose turn has not
+   * opened, the asker's own turn left out) and the lanes other projects
+   * hold and do not use leave room for it. Strict head of line: behind a
+   * waiter the pool's lanes cannot carry, no later waiter takes a pool lane;
+   * one that waits only for its project's night lanes or its model's own
+   * windows blocks nobody, and a run of a project under its hold passes
+   * (it is admitted whatever the pace, refused only when every account of
+   * the scope is held). The answer is `Admitted` when the run got its lane
+   * in that serve, else `Queued` with the waiters ahead of it. Fails, and
+   * joins nothing, when the windows carry no run of its size even with none
+   * running. A granted start holds its lane, under `key`, until its turn
+   * opens, `freeReservation` names it, or 2 minutes pass; a grant that
+   * lapses serves the queue. Admitted again under `key` on the same
+   * provider and model, it keeps its lane or its place; on another route it
+   * gives them up and is admitted afresh. With no capacity read, every run
+   * is admitted.
    */
-  readonly admitLane: (request: LaneRequest) => Effect.Effect<void, LaneUnavailable>
+  readonly admitLane: (request: LaneRequest) => Effect.Effect<LaneAdmission, LaneUnavailable>
+  /**
+   * Waits while the start under `key` waits in its queue: true once it holds
+   * a lane, false when it neither holds nor waits for one (freed, or its
+   * grant lapsed). Fails when a serve found its windows spent: it leaves the
+   * queue for good.
+   */
+  readonly awaitLane: (key: string) => Effect.Effect<boolean, LaneUnavailable>
   /** The session's turn opened on `provider`: it holds a lane until it ends, and the start admitted under `key` no longer does. */
   readonly openLane: (lane: OpenLane) => Effect.Effect<void>
   /**
-   * The start admitted under `key` opens no turn of its own: its message
-   * joined a turn that holds its session's lane already, or its caller's
-   * admission failed after the lane admitted it. Its lane frees now.
+   * The start admitted or queued under `key` opens no turn of its own: its
+   * message joined a turn that holds its session's lane already, its
+   * caller's admission failed after the lane admitted it, or it was
+   * stopped. Its lane frees, or it leaves the queue, and the queue is served.
    */
   readonly freeReservation: (key: string) => Effect.Effect<void>
   /**
@@ -3941,7 +3993,7 @@ interface CredentialPlacementService {
    * the account since the window's last reading. A rejected window holds the
    * account until its reset. A response of a sign-in the label no longer
    * holds is dropped, and one of a sign-in renamed since is read on its
-   * new label.
+   * new label. A reading serves the lane queue.
    */
   readonly noteQuota: (quota: PlacementQuota) => Effect.Effect<void>
   /**
@@ -4954,6 +5006,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
 ) {
   const lock = yield* Semaphore.make(1)
   const writeLock = yield* Semaphore.make(1)
+  /** Where a grant's lapse and the queue's reset alarm run: the placement's own lifetime. */
+  const scope = yield* Effect.scope
   const buckets = new Map<string, HeldBucket>()
   /** provider, session → the bucket (provider, slot, hour) the session is counted in. */
   const counted = new Map<string, { readonly bucket: string; readonly hour: number }>()
@@ -5013,7 +5067,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   /**
    * session → the provider, accounts, model and project its open turn
    * spends from, when it opened, and the fuel it spent since (none once an
-   * unpriced request fell in it): its lane, and that lane's burn.
+   * unpriced request fell in it): its lane, and that lane's burn. `starter`
+   * is the session that asked for its lane, none for a turn no start
+   * admitted: the queue's order counts its lane against that session.
    */
   const running = new Map<
     SessionId,
@@ -5022,6 +5078,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly scope: ReadonlyArray<CredentialSlot>
       readonly model: Option.Option<ModelId>
       readonly project: Option.Option<string>
+      readonly starter: Option.Option<SessionId>
       readonly openedAt: number
       readonly fuel: Option.Option<number>
     }
@@ -5051,7 +5108,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * `until`, or while any of its `holders` holds it through its preparation.
    * `admission` tells one admission under a key from a later one, so a hold
    * releases only the reservation it held. `model` is the model its turns
-   * will run, none when its route named none; `project` the project it works in.
+   * will run, none when its route named none; `project` the project it works
+   * in; `starter` the session that asked for it.
    */
   const reserved = new Map<
     string,
@@ -5060,12 +5118,30 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly scope: ReadonlyArray<CredentialSlot>
       readonly model: Option.Option<ModelId>
       readonly project: Option.Option<string>
+      readonly starter: Option.Option<SessionId>
       readonly until: number
       readonly holders: number
       readonly admission: number
     }
   >()
   let lastAdmission = 0
+  /**
+   * message key → a start that waits in its pool's queue (`laneQueueKey`):
+   * its request, its arrival (the queue's tie after the held lanes), and
+   * the deferred its waiters read. The deferred completes when the waiter
+   * leaves the queue: granted, freed or replaced (success, read again by
+   * `awaitLane`), or refused for good (failure).
+   */
+  const waiting = new Map<
+    string,
+    {
+      readonly request: LaneRequest
+      readonly pool: string
+      readonly arrival: number
+      readonly done: Deferred.Deferred<void, LaneUnavailable>
+    }
+  >()
+  let lastArrival = 0
   const reserving = (entry: { readonly until: number; readonly holders: number }, now: number) =>
     entry.holders > 0 || entry.until > now
   /**
@@ -6084,16 +6160,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     return Math.min(...ready)
   }
   /**
-   * Why a run of `request` gets no lane now, under the lock: the runs that
-   * hold one and the lanes other projects hold and do not use reach the
-   * capacity of the account's windows or of the model's own. A run of a
-   * project under its hold is refused only when every account of the scope
-   * is held. None when it would be admitted.
+   * Whether a run of `request` gets a lane now, under the lock. `block` is
+   * why not: the runs that hold one and the lanes other projects hold and
+   * do not use reach the capacity of the account's windows (`pool`, which
+   * every run of the pool shares) or of the model's own, or its project
+   * runs its night lanes; `spent` is the refusal for good when the windows
+   * carry no run of its size even with none running. None when it fits.
+   * `underHold`: its project runs fewer lanes than it holds, so it is
+   * blocked only when every account of the scope is held.
    */
-  const laneRefusal = (
-    request: Omit<LaneRequest, "key">,
-    now: number,
-  ): Option.Option<LaneUnavailable> => {
+  const laneCheck = (request: Omit<LaneRequest, "key">, now: number): LaneCheck => {
     settle(request.provider, request.scope)
     const scope = request.scope.map((account) => account.slot)
     // A hold is on the sign-in: it counts the project's lanes on every
@@ -6114,23 +6190,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         request.holds.get(project) ?? 0,
         Option.getOrElse(nightLanes, () => Infinity),
       )
-    const night = Option.flatMap(Option.all([request.project, nightLanes]), ([project, lanes]) =>
-      Option.filter(
-        Option.some({ project, lanes, load: heldLoad(project) }),
-        (run) => run.load >= lanes,
-      ),
+    const nightFull = Option.exists(
+      Option.all([request.project, nightLanes]),
+      ([project, lanes]) => heldLoad(project) >= lanes,
     )
-    if (Option.isSome(night))
-      return Option.some(
-        new LaneUnavailable({
-          message: `No lane on ${request.provider} at night: ${night.value.project} runs ${night.value.load}, and its night lanes are ${night.value.lanes}; one frees when a run ends`,
-          provider: request.provider,
-          reason: "Busy",
-          capacity: night.value.lanes,
-          load: night.value.load,
-          retryAt: now + LANE_BUSY_RETRY_MS,
-        }),
-      )
+    // Its own project's night lanes: one frees when that project's run ends.
+    if (nightFull)
+      return { underHold: false, block: Option.some({ pool: false, spent: Option.none() }) }
     const underHold = Option.exists(
       request.project,
       (project) => heldLoad(project) < holdOf(project),
@@ -6163,6 +6229,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             supply: lanesFree,
             size,
             reserved,
+            pool: Option.isNone(model),
             capacity: Math.floor(lanesFree + 1e-9),
           })),
           (check) => {
@@ -6172,28 +6239,241 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         )
       },
     )
-    return Option.map(full, ({ lanes, load, supply, size, reserved, capacity }) => {
-      let reason: LaneUnavailable["reason"] = "Busy"
-      let retryAt = now + LANE_BUSY_RETRY_MS
-      let heldText = ""
-      if (reserved > 0) heldText = `, and ${reserved} held for other projects`
-      let message = `No lane on ${request.provider}: ${roundLanes(load)} of ${roundLanes(supply)} lanes are running${heldText}; one frees when a run ends`
-      // Spent: the windows carry no run of this size even with none running.
-      if (size > supply + 1e-9) {
-        reason = "Spent"
-        retryAt = Math.max(spentUntil(lanes, now), retryAt)
-        message = `No lane on ${request.provider}: its quota windows carry no run before ${DateTime.formatIso(DateTime.makeUnsafe(retryAt))}`
-      }
-      return new LaneUnavailable({
-        message,
-        provider: request.provider,
-        reason,
-        capacity,
-        load,
-        retryAt,
-      })
-    })
+    return {
+      underHold,
+      block: Option.map(full, ({ lanes, load, supply, size, pool, capacity }) => ({
+        pool,
+        // Spent: the windows carry no run of this size even with none running.
+        spent: Option.map(
+          Option.liftPredicate(size, (needed) => needed > supply + 1e-9),
+          () => {
+            const retryAt = Math.max(spentUntil(lanes, now), now + LANE_SPENT_RETRY_MS)
+            return new LaneUnavailable({
+              message: `No lane on ${request.provider}: its quota windows carry no run before ${DateTime.formatIso(DateTime.makeUnsafe(retryAt))}`,
+              provider: request.provider,
+              capacity,
+              load,
+              retryAt,
+            })
+          },
+        ),
+      })),
+    }
   }
+  /** The queue a run waits in: its provider and the accounts its turns spend from. */
+  const laneQueueKey = (request: Pick<LaneRequest, "provider" | "scope">) =>
+    placementKey(
+      request.provider,
+      ...Arr.sort(
+        request.scope.map((account) => account.slot),
+        Order.String,
+      ),
+    )
+  /** The lanes of `provider` held for the starts `asker` asked for: their open turns and their grants. */
+  const lanesOfAsker = (provider: string, asker: Option.Option<SessionId>, now: number) => {
+    if (Option.isNone(asker)) return 0
+    let lanes = 0
+    for (const open of running.values())
+      if (open.provider === provider && Option.contains(open.starter, asker.value)) lanes += 1
+    for (const held of reserved.values())
+      if (
+        held.provider === provider &&
+        reserving(held, now) &&
+        Option.contains(held.starter, asker.value)
+      )
+        lanes += 1
+    return lanes
+  }
+  /**
+   * The waiters of `pool` in serving order: the asker that holds the fewest
+   * lanes first, then the earliest request, then the key.
+   */
+  const queueOrder = (pool: string, now: number) =>
+    [...waiting]
+      .flatMap(([key, waiter]) => {
+        if (waiter.pool !== pool) return []
+        return [
+          {
+            key,
+            waiter,
+            held: lanesOfAsker(waiter.request.provider, waiter.request.asker, now),
+          },
+        ]
+      })
+      .sort(
+        (left, right) =>
+          left.held - right.held ||
+          left.waiter.arrival - right.waiter.arrival ||
+          Order.String(left.key, right.key),
+      )
+  /** The waiters ahead of the one under `key` in its queue. */
+  const aheadOf = (key: string, pool: string, now: number) =>
+    Math.max(
+      0,
+      queueOrder(pool, now).findIndex((entry) => entry.key === key),
+    )
+  /** The waiter under `key` leaves its queue; its readers read `exit`. */
+  const leaveQueue = (key: string, exit: Effect.Effect<void, LaneUnavailable>) => {
+    const waiter = waiting.get(key)
+    if (Predicate.isUndefined(waiter)) return
+    waiting.delete(key)
+    Deferred.doneUnsafe(waiter.done, exit)
+  }
+  /** `request` takes a lane under `key` until its turn opens or 2 minutes pass. */
+  const grantLane = (key: string, request: LaneRequest, now: number): LaneGrant => {
+    const admission = (lastAdmission += 1)
+    reserved.set(key, {
+      provider: request.provider,
+      scope: request.scope.map((account) => account.slot),
+      model: request.model,
+      project: request.project,
+      starter: request.asker,
+      until: now + LANE_RESERVATION_MS,
+      holders: 0,
+      admission,
+    })
+    return { key, admission }
+  }
+  /**
+   * Serves every queue, under the lock, each pool's waiters in order. A
+   * waiter that fits takes a lane, and the walk starts again, as its grant
+   * moves its asker back. A waiter whose windows are spent leaves for good.
+   * Strict head of line: behind a waiter the pool's lanes cannot carry,
+   * only a run under its project's hold takes a lane; a waiter that waits
+   * for its own night lanes or its model's own windows blocks nobody.
+   * Returns the grants it made.
+   */
+  const serve = (now: number) => {
+    const grants: Array<LaneGrant> = []
+    for (const [key, held] of reserved) if (!reserving(held, now)) reserved.delete(key)
+    const pools = new Set(Array.from(waiting.values(), (waiter) => waiter.pool))
+    for (const pool of pools) {
+      let granted = serveOne(pool, now)
+      while (Option.isSome(granted)) {
+        grants.push(granted.value)
+        granted = serveOne(pool, now)
+      }
+    }
+    return grants
+  }
+  /**
+   * One walk of `pool`'s queue in order, under the lock: the first waiter
+   * that may take a lane takes it; none when no waiter may. A spent waiter
+   * leaves on the way.
+   */
+  const serveOne = (pool: string, now: number): Option.Option<LaneGrant> => {
+    let poolFull = false
+    for (const { key, waiter } of queueOrder(pool, now)) {
+      const check = laneCheck(waiter.request, now)
+      if (Option.isNone(check.block)) {
+        if (poolFull && !check.underHold) continue
+        waiting.delete(key)
+        const granted = grantLane(key, waiter.request, now)
+        Deferred.doneUnsafe(waiter.done, Effect.void)
+        return Option.some(granted)
+      }
+      const block = check.block.value
+      if (Option.isSome(block.spent)) leaveQueue(key, Effect.fail(block.spent.value))
+      else if (block.pool) poolFull = true
+    }
+    return Option.none()
+  }
+  /** The armed serve that waits for the next reset or hold end while runs wait. */
+  let alarm = Option.none<{ readonly at: number; readonly fiber: Fiber.Fiber<void> }>()
+  /**
+   * After a serve: each grant lapses on its own clock, and while runs wait,
+   * the queue is served again at the next window reset or account hold end
+   * (a pace that rose with no run ending).
+   */
+  const afterServe = (grants: ReadonlyArray<LaneGrant>): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      for (const granted of grants)
+        yield* Effect.forkIn(lapse(granted.key, granted.admission), scope)
+      const now = yield* Clock.currentTimeMillis
+      const next = yield* locked(() => {
+        if (waiting.size === 0) return Option.none<number>()
+        const times = [
+          ...Array.from(readings.values(), (reading) => reading.resetAt),
+          ...held.values(),
+        ].filter((at) => at > now)
+        return Option.liftPredicate(Math.min(...times), () => times.length > 0)
+      })
+      if (Option.isNone(next)) return
+      const at = next.value
+      if (Option.exists(alarm, (armed) => armed.at <= at && armed.at > now)) return
+      const before = alarm
+      const fiber = yield* Effect.forkIn(
+        Effect.sleep(Duration.millis(at - now)).pipe(
+          Effect.andThen(
+            Effect.suspend(() => {
+              if (Option.exists(alarm, (armed) => armed.at === at)) alarm = Option.none()
+              return serveNow
+            }),
+          ),
+        ),
+        scope,
+      )
+      alarm = Option.some({ at, fiber })
+      if (Option.isSome(before)) yield* Fiber.interrupt(before.value.fiber)
+    })
+  /** Serves the queues now, outside any other step. */
+  const serveNow: Effect.Effect<void> = Effect.suspend(() =>
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      Effect.flatMap(
+        locked(() => serve(now)),
+        afterServe,
+      ),
+    ),
+  )
+  /**
+   * The grant `admission` under `key` lapses: when its time passes with no
+   * holder, its lane frees and the queue is served. A hold moves its time;
+   * its turn opening or a free ends it.
+   */
+  const lapse = (key: string, admission: number): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      let wait = Option.some(LANE_RESERVATION_MS)
+      while (Option.isSome(wait)) {
+        yield* Effect.sleep(Duration.millis(wait.value))
+        const now = yield* Clock.currentTimeMillis
+        const step = yield* locked(() => {
+          const entry = Option.filter(
+            Option.fromUndefinedOr(reserved.get(key)),
+            (found) => found.admission === admission,
+          )
+          if (Option.isNone(entry)) return { wait: Option.none<number>(), grants: [] }
+          if (entry.value.holders > 0) return { wait: Option.some(LANE_RESERVATION_MS), grants: [] }
+          if (entry.value.until > now)
+            return { wait: Option.some(entry.value.until - now), grants: [] }
+          reserved.delete(key)
+          return { wait: Option.none<number>(), grants: serve(now) }
+        })
+        wait = step.wait
+        yield* afterServe(step.grants)
+      }
+    })
+  /** `awaitLane`: reads the key's state again each time its waiter leaves the queue. */
+  const awaitLane = (key: string): Effect.Effect<boolean, LaneUnavailable> =>
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      Effect.flatMap(
+        locked(() => {
+          const held = reserved.get(key)
+          if (Predicate.isNotUndefined(held) && reserving(held, now))
+            return { holds: true, waiter: Option.none<Deferred.Deferred<void, LaneUnavailable>>() }
+          return {
+            holds: false,
+            waiter: Option.map(Option.fromUndefinedOr(waiting.get(key)), (found) => found.done),
+          }
+        }),
+        ({ holds, waiter }) => {
+          if (holds) return Effect.succeed(true)
+          return Option.match(waiter, {
+            onNone: () => Effect.succeed(false),
+            onSome: (done) => Effect.andThen(Deferred.await(done), awaitLane(key)),
+          })
+        },
+      ),
+    )
   return {
     place: Effect.fn("CredentialPlacement.place")(function* (request: PlacementRequest) {
       const now = yield* Clock.currentTimeMillis
@@ -6356,49 +6636,76 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }),
     release: Effect.fn("CredentialPlacement.release")(function* (sessionId: SessionId) {
       const now = yield* Clock.currentTimeMillis
-      yield* locked(() => {
+      // A lane end serves the queue.
+      const grants = yield* locked(() => {
         unguard(sessionId)
         const lane = Option.fromUndefinedOr(running.get(sessionId))
         running.delete(sessionId)
         if (Option.isSome(lane)) burnLane(lane.value, now)
+        return serve(now)
       })
+      yield* afterServe(grants)
     }),
     admitLane: Effect.fn("CredentialPlacement.admitLane")(function* (request: LaneRequest) {
       const now = yield* Clock.currentTimeMillis
-      const refusal = yield* locked((): Option.Option<LaneUnavailable> => {
+      const done = yield* Deferred.make<void, LaneUnavailable>()
+      const answer = yield* locked((): LaneAnswer => {
         trim(now)
         for (const [key, held] of reserved) if (!reserving(held, now)) reserved.delete(key)
-        // A start admitted again under its key keeps the lane it holds, on
-        // the provider and model it was admitted for. Another route frees
-        // that lane and is admitted afresh: a held lane never admits a model
-        // its windows refuse.
+        const pool = laneQueueKey(request)
+        // A start admitted again under its key keeps the lane it holds, or
+        // its place in the queue, on the provider and model it was admitted
+        // for. Another route gives them up and is admitted afresh: a held
+        // lane never admits a model its windows refuse.
+        const sameRoute = (route: {
+          readonly provider: string
+          readonly model: Option.Option<ModelId>
+        }) =>
+          route.provider === request.provider &&
+          Option.getOrUndefined(route.model) === Option.getOrUndefined(request.model)
         const held = Option.fromUndefinedOr(reserved.get(request.key))
         if (Option.isSome(held)) {
-          const sameRoute =
-            held.value.provider === request.provider &&
-            Option.getOrUndefined(held.value.model) === Option.getOrUndefined(request.model)
-          if (sameRoute) return Option.none()
+          if (sameRoute(held.value))
+            return { grants: [], outcome: Result.succeed(LaneAdmission.cases.Admitted.make({})) }
           reserved.delete(request.key)
         }
-        const refused = laneRefusal(request, now)
-        if (Option.isSome(refused)) return refused
-        reserved.set(request.key, {
-          provider: request.provider,
-          scope: request.scope.map((account) => account.slot),
-          model: request.model,
-          project: request.project,
-          until: now + LANE_RESERVATION_MS,
-          holders: 0,
-          admission: (lastAdmission += 1),
-        })
-        return Option.none()
+        const queued = Option.fromUndefinedOr(waiting.get(request.key))
+        if (Option.isSome(queued)) {
+          if (sameRoute(queued.value.request) && queued.value.pool === pool)
+            return {
+              grants: [],
+              outcome: Result.succeed(
+                LaneAdmission.cases.Queued.make({ ahead: aheadOf(request.key, pool, now) }),
+              ),
+            }
+          leaveQueue(request.key, Effect.void)
+        }
+        // A run its windows cannot carry even with none running joins nothing.
+        const spent = Option.flatMap(laneCheck(request, now).block, (block) => block.spent)
+        if (Option.isSome(spent)) return { grants: serve(now), outcome: Result.fail(spent.value) }
+        waiting.set(request.key, { request, pool, arrival: (lastArrival += 1), done })
+        const grants = serve(now)
+        if (reserved.has(request.key))
+          return { grants, outcome: Result.succeed(LaneAdmission.cases.Admitted.make({})) }
+        return {
+          grants,
+          outcome: Result.succeed(
+            LaneAdmission.cases.Queued.make({ ahead: aheadOf(request.key, pool, now) }),
+          ),
+        }
       })
-      if (Option.isSome(refusal)) return yield* refusal.value
+      yield* afterServe(answer.grants)
+      return yield* Effect.fromResult(answer.outcome)
     }),
+    awaitLane: (key: string) => awaitLane(key),
     openLane: Effect.fn("CredentialPlacement.openLane")(function* (lane: OpenLane) {
       const now = yield* Clock.currentTimeMillis
-      yield* locked(() => {
+      const grants = yield* locked(() => {
+        const admitted = Option.fromUndefinedOr(reserved.get(lane.key))
         reserved.delete(lane.key)
+        // A turn that opens with no grant (a restart, a joined message) runs:
+        // its start waits no longer.
+        leaveQueue(lane.key, Effect.void)
         settle(lane.provider, lane.scope)
         // A turn that opens while its session's lane is open goes on in it.
         const before = Option.filter(
@@ -6410,15 +6717,27 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           scope: lane.scope.map((account) => account.slot),
           model: Option.some(lane.model),
           project: lane.project,
+          starter: Option.match(before, {
+            onNone: () => Option.flatMap(admitted, (start) => start.starter),
+            onSome: (open) => open.starter,
+          }),
           openedAt: Option.match(before, { onNone: () => now, onSome: (open) => open.openedAt }),
           fuel: Option.match(before, { onNone: () => Option.some(0), onSome: (open) => open.fuel }),
         })
+        // A grant that joined its session's open lane frees one.
+        return serve(now)
       })
+      yield* afterServe(grants)
     }),
     freeReservation: Effect.fn("CredentialPlacement.freeReservation")(function* (key: string) {
-      yield* locked(() => {
+      const now = yield* Clock.currentTimeMillis
+      // A hold's end, or a waiter that leaves, serves the queue.
+      const grants = yield* locked(() => {
         reserved.delete(key)
+        leaveQueue(key, Effect.void)
+        return serve(now)
       })
+      yield* afterServe(grants)
     }),
     holdReservation: (key: string) => {
       // The last holder out starts the 2 minutes again.
@@ -6470,12 +6789,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }),
     noteQuota: Effect.fn("CredentialPlacement.noteQuota")(function* (quota: PlacementQuota) {
       const now = yield* Clock.currentTimeMillis
-      yield* locked(() => {
+      // A quota reading serves the queue: the pace it reads may carry a waiter.
+      const grants = yield* locked(() => {
         trim(now)
         const slot = reportedOn(quota.provider, quota.slot, quota.signedInAt)
-        if (Option.isNone(slot)) return
+        if (Option.isNone(slot)) return []
         for (const reading of quota.readings) read(quota.provider, slot.value, reading, now)
+        return serve(now)
       })
+      yield* afterServe(grants)
     }),
     noteFuel: Effect.fn("CredentialPlacement.noteFuel")(function* (spend: PlacementFuel) {
       const priced = fuelOf(spend.costUsd, spend.usage)
@@ -6572,7 +6894,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
                     onNone: () => ({}),
                     onSome: (accounts) => ({
                       admits: Option.isNone(
-                        laneRefusal(
+                        laneCheck(
                           {
                             provider,
                             scope: accounts,
@@ -6583,7 +6905,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
                             night,
                           },
                           now,
-                        ),
+                        ).block,
                       ),
                     }),
                   }),

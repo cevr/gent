@@ -3166,7 +3166,7 @@ describe("credential order", () => {
       })
       expect(run.sent).toEqual(["sk-a", "sk-b"])
       expect(yield* lostLoginsOf(placement)).toEqual([[DEFAULT_CREDENTIAL_SLOT, "Rejected"]])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 
   it.live("a pinned run's refused credential is a lost login too, and a spent quota is not", () =>
@@ -3193,7 +3193,7 @@ describe("credential order", () => {
         replies: { "sk-b": quotaSpent },
       })
       expect(yield* lostLoginsOf(spent)).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 
   it.live("a step served on a refused credential clears its lost login", () =>
@@ -3218,7 +3218,7 @@ describe("credential order", () => {
         [personal, "Answered"],
       ])
       expect(yield* lostLoginsOf(placement)).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 
   it.live("a run pinned to a credential sends every request on it, whatever the authOrder", () =>

@@ -2437,7 +2437,7 @@ const bracketed = tool({
 const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   [
     ThreadStartTool,
-    '- tools.thread.start(input?: { task?: string; name?: string; agent?: string; model?: string; effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; account?: string; cwd?: string; instructions?: string; tools?: string[]; notify?: "user" | "starter"; workspace?: { snapshot?: true; rift?: object; path?: string }; fork?: boolean }): Promise<{ thread: string; sessionId: string; branchId: string; round?: { round: string; number: number }; workspace?: { path: string; branch?: string; note?: string } }> // Start a thread: a subagent, side work, or a long-lived worker',
+    '- tools.thread.start(input?: { task?: string; name?: string; agent?: string; model?: string; effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; account?: string; cwd?: string; instructions?: string; tools?: string[]; notify?: "user" | "starter"; workspace?: { snapshot?: true; rift?: object; path?: string }; fork?: boolean }): Promise<{ thread: string; sessionId: string; branchId: string; round?: { round: string; number: number; queued?: number }; workspace?: { path: string; branch?: string; note?: string } }> // Start a thread: a subagent, side work, or a long-lived worker',
   ],
   [
     BashTool,

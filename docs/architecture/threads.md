@@ -173,11 +173,12 @@
     subscription is in memory, so after a restart a consumer reads its rows.
     A send it refuses fails with `ThreadBusy` (the open round), with
     `ThreadsOverCap` (the threads at the running cap), with
-    `LaneUnavailable` (the account has no lane: `Busy` or `Spent`, with its
-    `retryAt`), or with the thread loop's `FollowUpQueueFull`, so a sender
-    that is not a model turn waits on the first three and fails on the rest;
-    the tools wrap the first three in a `ThreadError` with the same words,
-    which is the text the model reads.
+    `LaneUnavailable` (the account is spent, with its `retryAt`), or with
+    the thread loop's `FollowUpQueueFull`, so a sender that is not a model
+    turn waits on the first three and fails on the rest; the tools wrap the
+    first three in a `ThreadError` with the same words, which is the text
+    the model reads. A round with no free lane is no refusal: it is claimed
+    and queued (below).
     A deleted session's `sessionDeleted` drops the rounds it ran; the rounds
     it sent stay, since the starter's thread owns them and its handoffs read
     and hear them.
@@ -223,8 +224,24 @@
     cannot each pass and one be refused after its copy is made. Under the same permit, after
     the cap, the account admits the round (`ExtensionContext.Accounts.admit`,
     keyed by the round's message id, with the thread session's cwd, admission
-    and model): a full account refuses it as `Busy`, a spent one (capacity 0) as `Spent`, and a start it refuses makes no session and no copy (a
-    workspace start asks before its copy too). A start's order: resolve
+    and model): a spent account refuses it (`LaneUnavailable`), and a start
+    it refuses makes no session and no copy (a workspace start asks before
+    its copy too). A full account queues it (lanes.md): the round is
+    claimed, `thread.start` and `thread.send` return at admission with
+    `queued`, the requests ahead of it, and a waiter on the server's scope
+    (`queueRound`, one per round, the caller's services) sends its turn when
+    the grant comes. A `starter` round that waited tells its starter it
+    started with a parked steer (`THREAD_ROUND_START_TYPE`, no wake: its end
+    is what wakes the starter, and a wake per start would spend a starter
+    turn on news it cannot act on). A round's end of any kind (a stop, the
+    starter's interrupt, a delete) frees its lane or takes it out of the
+    queue (`endRound`, `dropSessionRounds`). A waiter refused for good (its
+    windows became spent while it waited) ends its round as a turn that
+    failed at a usage limit, with the refusal as its error and the reset as
+    its `retryAt`, and that end wakes a `starter` round's starter. The
+    queue is in memory: a round queued when the server stopped is an open
+    row whose message never reached the thread, and the starter's loop-open
+    reconcile, or a retry under its key, asks for its lane again. A start's order: resolve
     the place (`Workspaces.locate`), admit the cap and the lane, hold the
     lane (`Accounts.hold`, so setup hooks longer than the lane's 2 minutes
     do not lapse it), copy and run the hooks, create the session, bind,
@@ -280,8 +297,12 @@
     goes out with `notify: "none"`; its `thread.reply` value, decoded, names
     the next state. A dead worker or no verdict runs the round once more on
     a new thread, then asks `no-verdict`; a round stopped from outside asks
-    `interrupted`. A round the account refuses (`LaneUnavailable`, at start
-    or send) or whose worker died at a usage limit (the round's `retryAt`,
+    `interrupted`. A round with no free lane is queued by its send and the
+    driver waits for its end as for any open round; a tier pick admits each
+    model of the tier under the send key and, with none free, leaves the key
+    in the queue of the first that is not spent. A round the account
+    refuses as spent (`LaneUnavailable`, at start or send) or whose worker
+    died at a usage limit (the round's `retryAt`,
     stored in `thread_rounds.retry_at` and read from the turn's
     `ErrorOccurred` when a reconcile records the end) waits: the run commits
     a `Waiting` step (`lane` or `quota`) and `Round.notBefore`, its driver

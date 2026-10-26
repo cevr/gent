@@ -66,6 +66,7 @@ import { AgentsExtension } from "../src/agents.js"
 import { SESSION_TOOLS_EXTENSION_ID, SessionToolsExtension } from "../src/session-tools.js"
 import {
   THREAD_ROUND_END_TYPE,
+  THREAD_ROUND_START_TYPE,
   THREAD_ROUND_TYPE,
   ThreadBusy,
   threadRoundText,
@@ -142,6 +143,7 @@ interface ThreadOp {
     | "thread.list"
     | "thread.stop"
     | "thread.send"
+    | "thread.round"
     | "probe.lane-on-end"
     | "probe.start-key"
     | "probe.admit-send"
@@ -161,13 +163,37 @@ const THREAD_TOOLS = new Set([
   "thread.list",
   "thread.stop",
   "thread.send",
+  "thread.round",
   "probe.lane-on-end",
   "probe.start-key",
   "probe.admit-send",
 ])
 
-const StartedResult = Schema.Struct({ thread: SessionId, sessionId: SessionId, branchId: BranchId })
+const StartedResult = Schema.Struct({
+  thread: SessionId,
+  sessionId: SessionId,
+  branchId: BranchId,
+  round: Schema.optionalKey(
+    Schema.Struct({
+      round: Schema.String,
+      number: Schema.Finite,
+      queued: Schema.optionalKey(Schema.Finite),
+    }),
+  ),
+})
 const StartedOutput = Schema.fromJsonString(StartedResult)
+/** `thread.round`'s view of one round, as much of it as the lane tests read. */
+const decodeRoundRead = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      status: Schema.Literals(["open", "ended"]),
+      streamFailed: Schema.Boolean,
+      interrupted: Schema.Boolean,
+      error: Schema.optionalKey(Schema.String),
+      retryAt: Schema.optionalKey(Schema.Finite),
+    }),
+  ),
+)
 const ListedOutput = Schema.fromJsonString(
   Schema.Array(
     Schema.Struct({
@@ -352,22 +378,32 @@ const accountsRig = (options: RigAccounts) =>
 /**
  * Holds each thread round's turn in its `turnAfter`, after the threads' own
  * hook heard the round's end and before the turn exits, until `hold` opens.
- * Its tool sends `first` a round, sends `second` one beside it, and sends
- * `second` one again as `first`'s end is heard, then opens `hold`.
+ * Its tool sends `first` a round, sends `second` one beside it, and returns
+ * as `first`'s end is heard, then opens `hold`.
  */
-const LaneOutcome = Schema.Literals(["sent", "busy", "spent", "other"])
+const LaneOutcome = Schema.Literals(["sent", "queued", "spent", "other"])
 type LaneOutcome = typeof LaneOutcome.Type
-const LaneOnEnd = Schema.Struct({ beside: LaneOutcome, onEnd: LaneOutcome })
+const LaneOnEnd = Schema.Struct({ beside: LaneOutcome })
 const decodeLaneOnEnd = Schema.decodeEffect(Schema.fromJsonString(LaneOnEnd))
+
+/** A send's or a start's answer that names a round waiting for a lane. */
+const isQueued = Schema.is(
+  Schema.Union([
+    Schema.Struct({ queued: Schema.Finite }),
+    Schema.Struct({ round: Schema.Struct({ queued: Schema.Finite }) }),
+  ]),
+)
 
 const laneOutcome = <A, E, R>(send: Effect.Effect<A, E, R>) =>
   send.pipe(
     Effect.match({
-      onSuccess: (): LaneOutcome => "sent",
+      onSuccess: (answer): LaneOutcome => {
+        if (isQueued(answer)) return "queued"
+        return "sent"
+      },
       onFailure: (error): LaneOutcome => {
-        if (!Schema.is(LaneUnavailable)(error)) return "other"
-        if (error.reason === "Spent") return "spent"
-        return "busy"
+        if (Schema.is(LaneUnavailable)(error)) return "spent"
+        return "other"
       },
     }),
   )
@@ -395,8 +431,7 @@ const laneProbe = (hold: Deferred.Deferred<void>) =>
                 const beside = yield* laneOutcome(send(params.second, "lane-beside"))
                 let ended = yield* PubSub.take(ends)
                 while (ended.round !== sent.round) ended = yield* PubSub.take(ends)
-                const onEnd = yield* laneOutcome(send(params.second, "lane-on-end"))
-                return { beside, onEnd }
+                return { beside }
               }),
             ).pipe(Effect.ensuring(Deferred.succeed(hold, void 0)))
           }),
@@ -433,7 +468,13 @@ const startKeyProbe = defineExtension({
           const started = threads.start({ task: THREAD_TASK, key: params.key, notify: "none" })
           return yield* started.pipe(
             Effect.map((result): typeof StartKeyed.Type => ({
-              outcome: "sent",
+              outcome: Option.getOrElse(
+                Option.map(
+                  Option.fromUndefinedOr(result.round?.queued),
+                  (): LaneOutcome => "queued",
+                ),
+                (): LaneOutcome => "sent",
+              ),
               ...omitUndefined({ round: result.round?.round }),
             })),
             Effect.catch((error) =>
@@ -916,7 +957,7 @@ describe("threads", () => {
     )
 
     it.live(
-      "a full account refuses a second round while one runs, and a round sent as the first one's end is heard takes its lane",
+      "a full account queues a second round while one runs, and the first one's end starts it with no new send",
       () =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -946,7 +987,7 @@ describe("threads", () => {
               rig.starter,
               rig.op("probe.lane-on-end", { first: first.thread, second: second.thread }),
             )
-            expect(yield* decodeLaneOnEnd(probed)).toEqual({ beside: "busy", onEnd: "sent" })
+            expect(yield* decodeLaneOnEnd(probed)).toEqual({ beside: "queued" })
             yield* waitFor(
               rig.threadRequests,
               (sent) => sent >= 2,
@@ -960,7 +1001,7 @@ describe("threads", () => {
     )
 
     it.live(
-      "a lane admitted for a send under its key is the send's: a round beside it is refused, the send under the key takes it",
+      "a lane admitted for a send under its key is the send's: a round beside it waits, the send under the key takes it",
       () =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -987,9 +1028,13 @@ describe("threads", () => {
               rig.starter,
               rig.op("probe.admit-send", { thread: first.thread, beside: second.thread }),
             )
-            expect(yield* decodeSendAdmitted(probed)).toEqual({ beside: "busy", admitted: "sent" })
-            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the admitted round")
-            yield* loadIs(rig, 0, "the lane frees once the round ends")
+            expect(yield* decodeSendAdmitted(probed)).toEqual({
+              beside: "queued",
+              admitted: "sent",
+            })
+            // The admitted round's end gives its lane to the round that waited beside it.
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "both rounds ran")
+            yield* loadIs(rig, 0, "the lane frees once the rounds end")
           }).pipe(Effect.timeout("12 seconds")),
         ),
       15_000,
@@ -1104,11 +1149,12 @@ describe("threads", () => {
               4_000,
               "the round holds the one lane",
             )
-            expect(yield* startUnder("other")).toEqual({ outcome: "busy" })
+            expect((yield* startUnder("other")).outcome).toBe("queued")
             expect(yield* startUnder("keyed")).toEqual(first)
             expect(yield* rig.threadRequests).toBe(1)
             yield* Deferred.succeed(rig.gate, true)
-            yield* loadIs(rig, 0, "every lane is free once the round ends")
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "the queued round ran")
+            yield* loadIs(rig, 0, "every lane is free once the rounds end")
           }).pipe(Effect.timeout("12 seconds")),
         ),
       15_000,
@@ -1134,7 +1180,120 @@ describe("threads", () => {
     )
 
     it.live(
-      "a stopped round frees its lane for the next start",
+      "a queued round that is stopped leaves the queue: a later start counts only the rounds still waiting",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const rig = yield* accountsRig({ ...metered, quota: oneLane(now) })
+            // The gate stays shut: the round runs and holds the one lane.
+            yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            const stopped = yield* rig.start(rig.starter, THREAD_TASK)
+            const behind = yield* rig.start(rig.starter, THREAD_TASK)
+            expect([stopped.round?.queued, behind.round?.queued]).toEqual([0, 1])
+            yield* rig.stop(rig.starter, stopped.thread)
+            // The stopped round left: one round waits ahead of the next start.
+            const next = yield* rig.start(rig.starter, THREAD_TASK)
+            expect(next.round?.queued).toBe(1)
+            expect(yield* rig.threadRequests).toBe(1)
+            yield* Deferred.succeed(rig.gate, true)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 3, 4_000, "the waiting rounds ran")
+            yield* loadIs(rig, 0, "every lane is free once the rounds end")
+            expect(yield* rig.threadRequests).toBe(3)
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a queued starter round that gets its lane tells its starter, with no turn of the starter's own",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const rig = yield* accountsRig({ ...metered, quota: oneLane(now) })
+            const running = yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            const queued = yield* Effect.flatMap(
+              rig.one(
+                rig.starter,
+                rig.op("thread.start", { task: THREAD_TASK, notify: "starter" }),
+              ),
+              decodeStarted,
+            )
+            expect(queued.round?.queued).toBe(0)
+            yield* rig.stop(rig.starter, running.thread)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "the queued round runs")
+            const told = yield* waitFor(
+              rig.client.session.getSnapshot(rig.starter),
+              (current) =>
+                current.messages.some(
+                  (message) => message.metadata?.customType === THREAD_ROUND_START_TYPE,
+                ),
+              4_000,
+              "the starter reads that its round started",
+            )
+            const notice = told.messages.find(
+              (message) => message.metadata?.customType === THREAD_ROUND_START_TYPE,
+            )
+            expect(notice?.metadata?.details).toMatchObject({ round: queued.round?.round })
+            // The notice woke no turn: the starter ran only its own tool steps.
+            expect(told.runtime._tag).toBe("Idle")
+            yield* Deferred.succeed(rig.gate, true)
+            yield* loadIs(rig, 0, "every lane is free once the rounds end")
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a queued round whose account is spent while it waits ends with the refusal and its reset, and never runs",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const resetAt = now + 3_600_000
+            // The fourth starter step reads the window rejected until the reset.
+            const rig = yield* accountsRig({
+              ...metered,
+              quota: (step) => {
+                if (step < 4) return oneLane(now)(step)
+                return [{ window: "7d", utilization: 1, resetAt, rejected: true }]
+              },
+            })
+            yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            const queued = yield* rig.start(rig.starter, THREAD_TASK)
+            const round = queued.round?.round ?? ""
+            expect(queued.round?.queued).toBe(0)
+            const read = Effect.flatMap(
+              rig.one(rig.starter, rig.op("thread.round", { round })),
+              decodeRoundRead,
+            )
+            const ended = yield* waitFor(
+              read,
+              (view) => view.status === "ended",
+              4_000,
+              "the refused round ended",
+            )
+            expect(ended).toMatchObject({
+              streamFailed: true,
+              interrupted: false,
+              retryAt: resetAt,
+            })
+            expect(ended.error).toContain(
+              "No lane on anthropic: its quota windows carry no run before",
+            )
+            expect(yield* rig.threadRequests).toBe(1)
+            yield* Deferred.succeed(rig.gate, true)
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a stopped round's lane goes to the start queued behind it",
       () =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -1144,15 +1303,13 @@ describe("threads", () => {
             const running = yield* rig.start(rig.starter, THREAD_TASK)
             yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
             yield* loadIs(rig, 1, "the round holds the lane")
-            const [refused] = yield* rig.act(rig.starter, [
-              rig.op("thread.start", { task: THREAD_TASK }),
-            ])
-            expect(refused?.ok).toBe(false)
-            expect(refused?.output).toContain("No lane on anthropic: 1 of 1.3 lanes are running")
+            // The start returns at admission, its round queued with nothing ahead.
+            const queued = yield* rig.start(rig.starter, THREAD_TASK)
+            expect(queued.round?.queued).toBe(0)
+            expect(yield* rig.threadRequests).toBe(1)
             yield* rig.stop(rig.starter, running.thread)
-            yield* loadIs(rig, 0, "the stop frees the lane")
-            yield* rig.start(rig.starter, THREAD_TASK)
-            yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "the next round runs")
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "the queued round runs")
+            yield* loadIs(rig, 1, "the queued round holds the lane")
             yield* Deferred.succeed(rig.gate, true)
             yield* loadIs(rig, 0, "every lane is free once the rounds end")
           }).pipe(Effect.timeout("12 seconds")),

@@ -121,6 +121,7 @@ import {
   type CacheWarmer,
   type CredentialReceipt,
   type ModelRouterContribution,
+  LaneAdmission,
   ProviderAuthError,
   type ProviderHints,
   ProviderReport,
@@ -1915,8 +1916,8 @@ export const makeExtensionAccounts = Effect.gen(function* () {
   return (asker: SessionId): ExtensionAccountsService => ({
     admit: Effect.fn("ExtensionAccounts.admit")(function* (run: LaneRun) {
       const lane = yield* runLane(run)
-      if (Option.isNone(lane)) return
-      yield* placement.admitLane({
+      if (Option.isNone(lane)) return LaneAdmission.cases.Admitted.make({})
+      return yield* placement.admitLane({
         provider: lane.value.provider,
         scope: lane.value.scope,
         key: run.message,
@@ -1932,6 +1933,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
       return { strongest: tiers?.strongest ?? [], efficient: tiers?.efficient ?? [] }
     }),
     project: (cwd) => configService.project(cwd),
+    awaitLane: (message) => placement.awaitLane(message),
     cancel: (message) => placement.freeReservation(message),
     hold: (message) => placement.holdReservation(message),
     lanes,

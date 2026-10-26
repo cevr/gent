@@ -860,11 +860,11 @@ export const roundLanes = (lanes: number) => Math.round(lanes * 10) / 10
 export type ProviderLanes = typeof ProviderLanes.Type
 
 /**
- * A run refused a lane at admission: the provider's accounts carry no more
- * runs now. `Busy`: every lane is held by a run; one frees when a run ends.
- * `Spent`: the quota windows carry no run until one resets (or a refusal's
- * hold ends). `retryAt` is the next useful admission check (epoch ms), never
- * a promise of a lane.
+ * A run refused a lane for good: the provider's quota windows carry no run
+ * of its size until one resets (or a refusal's hold ends), even with none
+ * running. A run that waits only for a running one to end is queued, never
+ * refused (`LaneAdmission`). `retryAt` is when the windows can carry it
+ * again (epoch ms), never a promise of a lane.
  */
 export class LaneUnavailable extends Schema.TaggedError<
   LaneUnavailable,
@@ -872,11 +872,21 @@ export class LaneUnavailable extends Schema.TaggedError<
 >()("LaneUnavailable", {
   message: Schema.String,
   provider: Schema.String,
-  reason: Schema.Literals(["Busy", "Spent"]),
   capacity: Schema.Int,
   load: Schema.Finite,
   retryAt: Schema.Finite,
 }) {}
+
+/**
+ * A run's answer at lane admission. `Admitted`: it holds a lane now.
+ * `Queued`: it waits in its pool's fair queue, `ahead` requests before it,
+ * and takes a lane when one frees for it.
+ */
+export const LaneAdmission = Schema.TaggedUnion({
+  Admitted: {},
+  Queued: { ahead: Schema.Int },
+})
+export type LaneAdmission = typeof LaneAdmission.Type
 
 /**
  * Stop reasons that say the context window filled while the model wrote:

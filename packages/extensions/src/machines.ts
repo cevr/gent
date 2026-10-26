@@ -70,7 +70,6 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
-  type LaneUnavailable,
   ModelId,
   omitUndefined,
   request,
@@ -399,9 +398,10 @@ const MachineStep = Schema.TaggedUnion({
   },
   Interrupted: { state: StateName },
   /**
-   * The pending round waits until `until`: the account had no lane for it
-   * (`lane`), or its worker died at a usage limit (`quota`). A pending
-   * integrate waits for a gate that is not clear (`integration`). No visit is spent.
+   * The pending round waits until `until`: the account's windows carried no
+   * run of it (`lane`, spent at its admission), or its worker died at a
+   * usage limit (`quota`). A pending integrate waits for a gate that is not
+   * clear (`integration`). No visit is spent.
    */
   Waiting: {
     state: StateName,
@@ -2307,10 +2307,12 @@ const threadStateOf = Effect.fn("Machines.threadStateOf")(function* (run: Run, n
  * fixes before the send) are committed first, with a role's thread: a stop
  * or a crash after the admission then finds the round it must stop. A
  * commit that another writer beat sends nothing: the next read decides. A
- * busy thread or the running cap waits for a round end and sends again. An
- * account with no lane (`LaneUnavailable`: a model the round names, or a
- * tier pick whose lane lapsed before the send) makes the round wait until
- * the time it names, as the same round.
+ * busy thread or the running cap waits for a round end and sends again. A
+ * round with no free lane is queued by the send and starts when its grant
+ * comes; the driver waits for its end as for any open round. An account
+ * whose windows are spent (`LaneUnavailable`: a model the round names, or
+ * a tier pick that was spent by the send) makes the round wait until the
+ * time it names, as the same round.
  */
 const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
   run: Run,
@@ -2368,8 +2370,8 @@ const ownThread = (state: ThreadState, action: RoundAction) =>
  * thread's model: the run and the round as committed, or none when another
  * writer moved the row first. A tier role's round runs the model its tier
  * picks: on the role's thread while that thread's model is the pick, else
- * on a new thread that becomes the role's. With no model of the tier free,
- * the round waits for the earliest to free, and none is returned.
+ * on a new thread that becomes the role's. With every model of the tier
+ * spent, the round waits for the earliest reset, and none is returned.
  */
 const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   run: Run,
@@ -2684,10 +2686,13 @@ const tierOrder = Effect.fn("Machines.tierOrder")(function* (run: Run, role: Rol
 
 /**
  * The first of `models` whose lane is free now, admitted under the round's
- * send key, so the send takes the lane the pick saw free; fails with the
- * earliest time any of them frees. A pick whose commit loses keeps its lane
- * until the hold lapses (2 minutes): another driver may send under the same
- * key, so none cancels it.
+ * send key, so the send takes the lane the pick saw free. With none free,
+ * the first that is not spent: the key waits in that model's lane queue,
+ * and the send finds its place. Fails with the earliest time any of them
+ * can carry a run when all are spent. Each admission under the key gives
+ * the last one's lane or place up. A pick whose commit loses keeps its
+ * lane until the hold lapses (2 minutes): another driver may send under
+ * the same key, so none cancels it.
  */
 const freeModel = Effect.fn("Machines.freeModel")(function* (
   run: Run,
@@ -2704,24 +2709,35 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
       ),
     }),
   }
-  const retries: Array<number> = []
-  for (const modelId of models) {
-    const refused = yield* threads.admitSend(action.key, { cwd: run.cwd, modelId, admission }).pipe(
-      Effect.as(Option.none<LaneUnavailable>()),
-      Effect.catchTag("LaneUnavailable", (lane) => Effect.succeedSome(lane)),
+  const admit = (modelId: ModelId) =>
+    threads.admitSend(action.key, { cwd: run.cwd, modelId, admission }).pipe(
+      Effect.map(Result.succeed),
+      Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(Result.fail(refused))),
     )
-    if (Option.isNone(refused)) return Result.succeed(modelId)
-    retries.push(refused.value.retryAt)
+  const retries: Array<number> = []
+  const waiting: Array<ModelId> = []
+  for (const modelId of models) {
+    const answer = yield* admit(modelId)
+    if (Result.isFailure(answer)) retries.push(answer.failure.retryAt)
+    else if (answer.success._tag === "Admitted") return Result.succeed(modelId)
+    else waiting.push(modelId)
   }
-  return Result.fail(Math.min(...retries))
+  const first = Option.fromUndefinedOr(waiting[0])
+  if (Option.isNone(first)) return Result.fail(Math.min(...retries))
+  // The last try left the key on another model: it waits on the first again.
+  const queued = yield* admit(first.value)
+  if (Result.isFailure(queued)) return Result.fail(queued.failure.retryAt)
+  return Result.succeed(first.value)
 })
 
 /**
  * The model a tier role's round runs, and whether it keeps `kept`, the
  * role's thread: that thread's model is tried first while the tier lists
  * it, so the role keeps its thread and cache while that model has a lane.
- * None for a role that names a `model` or no tier. Fails with the time the
- * first model of the tier frees when none has a lane.
+ * None for a role that names a `model` or no tier. With no model of the
+ * tier free, the first that is not spent, whose queue the round waits in.
+ * Fails with the time the first model of the tier can carry a run again
+ * when every one is spent.
  */
 const tierPick = Effect.fn("Machines.tierPick")(function* (
   run: Run,
