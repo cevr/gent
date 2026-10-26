@@ -245,16 +245,24 @@
   cost lands on the event and the session's cost, and the turn's ledger
   charges it once per turn, a recovered turn too (`noteRoute`). The auth gate asks for the
   driver of a virtual model's default choice (`routeCredentialDriver`).
-  A selection nothing loaded serves (its router is gone, or its driver:
-  `ModelResolver.serves` reaches no registered driver and no catalog
-  provider) falls back, as the shed rule asks (`unservedSelection`,
-  `runtime/turn.ts`): the turn runs on the branch's last concrete model (its
-  last request's, which a route picked), else on the default model
-  (`SessionRoute.defaultModelId`, what an unset selection resolves to), the
-  first of them the profile serves, with an `ErrorOccurred` notice at the
-  turn's first step that names both; with neither, the turn fails and says
-  why. The turn's lane is opened on that model, and the auth gate asks for
-  the default's driver.
+  A selection nothing loaded serves (`ModelResolver.serves` reaches no
+  registered driver and no catalog provider a loaded API class speaks, and
+  no router serves it) falls back only when the log proves it was a
+  virtual model: a `ModelRouted` on the branch, on the branch it was forked
+  from, or on a spawned child's caller's branch names it as `selected`
+  (`unservedSelection`, `runtime/turn.ts`). The turn then runs on the
+  newest model that lineage answered a step on (`StreamEnded` with outcome
+  `Answered` or `ToolCalls`: a model a notice announced whose request
+  failed never ran), else on the default model
+  (`SessionRoute.defaultModelId`), the first the profile serves. Its first
+  step writes an `ErrorOccurred` notice and a fallback `ModelRouted` (no
+  choice, `fallback: true`), so the status row names the model and the next
+  turn has provenance. Any other selection nothing serves, a provider typo
+  or a virtual model never run before its router went, fails the turn and
+  names it. Execution, the turn's lane and the auth gate (the session's
+  active branch) read the same decision. A start admitted before its run
+  has a log (`ExtensionAccounts.admit`) has no provenance and takes no
+  lane.
   The shipped router (`packages/extensions/src/router.ts`, `@gent/router`)
   reads `routers` from `~/.gent/config.json` and from a trusted project's
   `.gent/config.json` (by name over the user's) when the extensions load; a

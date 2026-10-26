@@ -1733,20 +1733,21 @@ export const resolveSessionRoute = (params: {
 
 /**
  * The model a route's turn spends on. A selection nothing serves spends on
- * the model the turn falls back to (`unservedSelection`, after `last`, the
- * branch's last concrete model), and on none when there is none. A virtual
- * model spends on its default choice: the model its turn runs on when its
- * router does not choose. A route with no model spends on none.
+ * the model the turn falls back to (`unservedSelection`, over the
+ * provenance of the turn's branch; none for a run not started), and on none
+ * when there is none. A virtual model spends on its default choice: the model its turn
+ * runs on when its router does not choose. A route with no model spends on
+ * none.
  */
-const routeSpendModel = Effect.fn("TurnHelpers.routeSpendModel")(function* (
+const routeSpendModel = Effect.fn("TurnHelpers.routeSpendModel")(function* <E, R>(
   route: SessionRoute,
   registry: ExtensionRegistryService,
-  last: Option.Option<ModelId>,
+  provenanceOf: (selected: ModelId) => Effect.Effect<Option.Option<Option.Option<ModelId>>, E, R>,
 ) {
   if (Option.isNone(route.modelId)) return Option.none<ModelId>()
   const unserved = yield* unservedSelection({
     selected: route.modelId.value,
-    last,
+    provenance: provenanceOf(route.modelId.value),
     defaultModel: route.defaultModelId,
     driverRef: route.driverRef,
     registry,
@@ -1764,12 +1765,25 @@ const routeSpendModel = Effect.fn("TurnHelpers.routeSpendModel")(function* (
   )
 })
 
-/** The driver a route's turn needs a credential for: its spend model's (`routeSpendModel`). */
+/**
+ * The driver a route's turn needs a credential for: its spend model's
+ * (`routeSpendModel`), for a turn of `branch`, the session's active one;
+ * none when the session has no branch yet.
+ */
 export const routeCredentialDriver = Effect.fn("TurnHelpers.routeCredentialDriver")(function* (
   route: SessionRoute,
   registry: ExtensionRegistryService,
+  branch: Option.Option<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
 ) {
-  const modelId = yield* routeSpendModel(route, registry, Option.none())
+  const modelId = yield* routeSpendModel(route, registry, (selected) =>
+    Option.match(branch, {
+      onNone: () => noProvenance,
+      onSome: (target) =>
+        Effect.flatMap(readSelectionHistory(target), (own) =>
+          selectionProvenance({ sessionId: target.sessionId, own }, selected),
+        ),
+    }),
+  )
   return Option.flatMap(modelId, (spend) => effectiveModelDriver(route.driverRef, spend).driverId)
 })
 
@@ -1782,12 +1796,14 @@ export const routeCredentialDriver = Effect.fn("TurnHelpers.routeCredentialDrive
  * `modelId` in `cwd`. None for a route with no model, or a sign-in whose
  * order does not read.
  */
-const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
+const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* <E, R>(run: {
   readonly cwd: Option.Option<string>
   readonly admission: Option.Option<SessionAdmission>
   readonly modelId: Option.Option<ModelId>
-  /** The model the branch last ran on: a selection nothing serves spends on it. */
-  readonly last: Option.Option<ModelId>
+  /** The provenance of the turn's branch (`routeSpendModel`); none for a run not started yet. */
+  readonly provenanceOf: (
+    selected: ModelId,
+  ) => Effect.Effect<Option.Option<Option.Option<ModelId>>, E, R>
 }) {
   const registry = yield* ExtensionRegistry
   const configService = yield* ConfigService
@@ -1798,7 +1814,7 @@ const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
     config,
     session: omitUndefined({ modelId: Option.getOrUndefined(run.modelId) }),
   })
-  const modelId = yield* routeSpendModel(route, registry, run.last)
+  const modelId = yield* routeSpendModel(route, registry, run.provenanceOf)
   if (Option.isNone(modelId)) return Option.none()
   const pin = Option.flatMap(run.admission, (admission) =>
     Option.fromUndefinedOr(admission.runSpec?.credentialSlot),
@@ -1824,8 +1840,8 @@ const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
 const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
   readonly sessionId: SessionId
   readonly messageId: MessageId
-  /** The model the turn's branch last ran on (`sessionLane`). */
-  readonly last: Option.Option<ModelId>
+  /** The selection history of the turn's branch (`sessionLane`). */
+  readonly own: SelectionHistory
 }) {
   const session = yield* (yield* SessionStorage).getSession(params.sessionId)
   if (Predicate.isUndefined(session)) return
@@ -1833,7 +1849,8 @@ const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
     cwd: Option.fromUndefinedOr(session.cwd),
     admission: Option.fromUndefinedOr(session.admission),
     modelId: Option.fromUndefinedOr(session.modelId),
-    last: params.last,
+    provenanceOf: (selected) =>
+      selectionProvenance({ sessionId: params.sessionId, own: params.own }, selected),
   })
   if (Option.isNone(lane)) return
   yield* (yield* CredentialPlacement).openLane({
@@ -1886,7 +1903,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
           admission: Option.fromUndefinedOr(run.admission),
           modelId: Option.fromUndefinedOr(run.modelId),
           // A run admitted before it starts has no branch history yet.
-          last: Option.none(),
+          provenanceOf: () => noProvenance,
         }).pipe(
           Effect.provideService(ExtensionRegistry, registryService),
           Effect.provideService(ConfigService, configService),
@@ -2451,10 +2468,122 @@ const applyTurnRoute = <Resolved extends ResolvedTurnContext>(
   }
 }
 
-/** The model a turn on a selection nothing serves runs on, and the notice that says so. */
+/*
+ * A selection nothing loaded serves. Deleting a router falls back to plain
+ * behavior (the shed rule), but only for a selection the log proves was a
+ * virtual model: a route (`ModelRouted.selected`) served it on the branch,
+ * the branch it was forked from, or the caller's branch of a spawned child.
+ * Such a turn runs on the newest model that lineage ran a step on, else the
+ * route's default, and records the pick as a fallback `ModelRouted`, so the
+ * status row names it and the next turn has the same provenance. Any other
+ * selection nothing serves (a provider typo, a virtual model never run
+ * before its router went) fails the turn and says why: a typo never falls
+ * back to a model the user did not pick. Execution, the turn's lane and the
+ * auth gate read the same decision (`unservedSelection`).
+ */
+
+/** What a branch's log says about the selections it ran. */
+interface SelectionHistory {
+  /** Each selection a model route (`ModelRouted`, not effort-only) served on the branch. */
+  readonly routed: ReadonlySet<string>
+  /**
+   * The model of the branch's newest step the model answered (`StreamEnded`
+   * with outcome `Answered` or `ToolCalls`). A model a notice announced
+   * whose request then failed or was cancelled never ran.
+   */
+  readonly lastRun: Option.Option<ModelIdType>
+  /** The branch this one was forked from (`BranchCreated.parentBranchId`). */
+  readonly forkedFrom: Option.Option<BranchId>
+}
+
+const emptySelectionHistory: SelectionHistory = {
+  routed: new Set(),
+  lastRun: Option.none(),
+  forkedFrom: Option.none(),
+}
+
+/** Whether the model answered a step: the step's receipt (an old one without its outcome, by its usage). */
+const stepAnswered = (ended: Extract<AgentEvent, { readonly _tag: "StreamEnded" }>) =>
+  Option.match(Option.fromUndefinedOr(ended.outcome), {
+    onNone: () => Predicate.isNotUndefined(ended.usage),
+    onSome: (outcome) => outcome === "Answered" || outcome === "ToolCalls",
+  })
+
+/** `history` with what `events` of branch `branchId` add, in order. */
+const foldSelectionHistory = (
+  history: SelectionHistory,
+  branchId: BranchId,
+  events: ReadonlyArray<EventEnvelope>,
+): SelectionHistory =>
+  events.reduce((known, { event }): SelectionHistory => {
+    if (event._tag === "ModelRouted" && event.effortOnly !== true)
+      return { ...known, routed: new Set([...known.routed, event.selected]) }
+    if (event._tag === "StreamEnded" && stepAnswered(event))
+      return {
+        ...known,
+        lastRun: Option.orElse(Option.fromUndefinedOr(event.model), () => known.lastRun),
+      }
+    if (event._tag === "BranchCreated" && event.branchId === branchId)
+      return { ...known, forkedFrom: Option.fromUndefinedOr(event.parentBranchId) }
+    return known
+  }, history)
+
+/** A branch's selection history, from its whole log. */
+const readSelectionHistory = Effect.fn("TurnHelpers.readSelectionHistory")(function* (target: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}) {
+  const events = yield* (yield* EventStorage).listEvents(target)
+  return foldSelectionHistory(emptySelectionHistory, target.branchId, events)
+})
+
+/** A branch of a session, with its own selection history. */
+interface SelectionLineage {
+  readonly sessionId: SessionId
+  readonly own: SelectionHistory
+}
+
+/**
+ * The model a lineage falls back to for `selected`: its newest run model
+ * (none when it ran none), or none when no route of the lineage served
+ * `selected`. The lineage is the branch, then the branch it was forked
+ * from (a fork copies messages, not their step events), then for a spawned
+ * child its caller's branch (a child inherits its caller's selection), one
+ * level each.
+ */
+const selectionProvenance = Effect.fn("TurnHelpers.selectionProvenance")(function* (
+  lineage: SelectionLineage,
+  selected: ModelIdType,
+) {
+  const { own } = lineage
+  const ranThrough = (history: SelectionHistory) =>
+    Option.some(Option.orElse(own.lastRun, () => history.lastRun))
+  if (own.routed.has(selected)) return ranThrough(own)
+  if (Option.isSome(own.forkedFrom)) {
+    const source = yield* readSelectionHistory({
+      sessionId: lineage.sessionId,
+      branchId: own.forkedFrom.value,
+    })
+    if (source.routed.has(selected)) return ranThrough(source)
+  }
+  const session = yield* (yield* SessionStorage).getSession(lineage.sessionId)
+  if (Predicate.isUndefined(session) || !isSpawnedSession(session)) return Option.none()
+  const { parentSessionId, parentBranchId } = session
+  if (Predicate.isUndefined(parentSessionId) || Predicate.isUndefined(parentBranchId))
+    return Option.none()
+  const caller = yield* readSelectionHistory({
+    sessionId: parentSessionId,
+    branchId: parentBranchId,
+  })
+  if (caller.routed.has(selected)) return ranThrough(caller)
+  return Option.none<Option.Option<ModelIdType>>()
+})
+
+/** The model a turn on a selection nothing serves runs on, and why. */
 interface UnservedFallback {
   readonly model: ModelIdType
-  readonly notice: string
+  /** Which model it is: the lineage's newest run model, or the default. */
+  readonly why: string
 }
 
 /**
@@ -2474,89 +2603,126 @@ const profileServes = Effect.fn("TurnHelpers.profileServes")(function* (
 })
 
 /**
- * A selection nothing in the profile serves: a virtual model whose router is
- * gone, or a model whose driver is. Deleting the router falls back to plain
- * behavior (the shed rule): the turn runs on the branch's last concrete
- * model (`last`, the model its last request ran on, which a route picked),
- * else on the route's default (`SessionRoute.defaultModelId`, the model an
- * unset selection resolves to), the first of them the profile serves, and
- * the notice names both. None when the profile serves `selected`; a failure
- * naming why when it serves neither fallback.
+ * The one decision on a selection the profile does not serve (see the
+ * banner above): none when it serves `selected`; else the model the turn
+ * runs on, the lineage's newest run model, then the route's default
+ * (`SessionRoute.defaultModelId`), the first the profile serves (so never
+ * `selected` itself); a failure naming why when the log does not prove
+ * `selected` virtual or neither model is served. `provenance` reads the
+ * log only when the profile does not serve `selected`: `selectionProvenance`
+ * of the turn's lineage, or none for a run not started (it has no log).
  */
-const unservedSelection = Effect.fn("TurnHelpers.unservedSelection")(function* (params: {
+const unservedSelection = Effect.fn("TurnHelpers.unservedSelection")(function* <E, R>(params: {
   readonly selected: ModelIdType
-  readonly last: Option.Option<ModelIdType>
+  readonly provenance: Effect.Effect<Option.Option<Option.Option<ModelIdType>>, E, R>
   readonly defaultModel: Option.Option<ModelIdType>
   readonly driverRef: Option.Option<DriverRef>
   readonly registry: ExtensionRegistryService
 }) {
+  type Decision = Option.Option<Result.Result<UnservedFallback, string>>
+  const decided = (decision: Decision) => decision
   const serves = (modelId: ModelIdType) => profileServes(modelId, params.driverRef, params.registry)
-  if (yield* serves(params.selected)) return Option.none<Result.Result<UnservedFallback, string>>()
+  if (yield* serves(params.selected)) return decided(Option.none())
+  const provenance = yield* params.provenance
+  if (Option.isNone(provenance))
+    return decided(
+      Option.some(
+        Result.fail(
+          `Nothing loaded serves "${params.selected}": no router or driver of it is loaded, and this branch never ran it through a router`,
+        ),
+      ),
+    )
   const candidates = [
     ...Option.toArray(
-      Option.map(params.last, (model) => ({ model, why: "the model the branch last ran on" })),
+      Option.map(provenance.value, (model) => ({ model, why: "the model the branch last ran on" })),
     ),
     ...Option.toArray(
+      // A default that is the selection itself is never served: the check below skips it.
       Option.map(params.defaultModel, (model) => ({ model, why: "the default model" })),
     ),
   ]
   const fallback = yield* Effect.findFirst(candidates, ({ model }) => serves(model))
-  return Option.some(
-    Option.match(fallback, {
-      onNone: () =>
-        Result.fail(
-          `Nothing loaded serves "${params.selected}", and the branch has no other model to run on`,
-        ),
-      onSome: ({ model, why }) =>
-        Result.succeed<UnservedFallback>({
-          model,
-          notice: `Nothing loaded serves "${params.selected}"; this turn runs on "${model}", ${why}`,
-        }),
-    }),
+  return decided(
+    Option.some(
+      Result.fromOption(
+        fallback,
+        () =>
+          `Nothing loaded serves "${params.selected}" (its router is gone), and no model the branch ran on or its default is served`,
+      ),
+    ),
   )
 })
 
+/** No provenance: a run not started yet has no log. */
+const noProvenance = Effect.succeed(Option.none<Option.Option<ModelIdType>>())
+
 /**
  * The turn on a model the profile serves: unchanged when it serves the
- * selection, else on the model `unservedSelection` falls back to, with its
- * notice at the turn's first step; a failure naming why when there is none.
+ * selection; else on the model `unservedSelection` falls back to. The
+ * turn's first step records it as a fallback `ModelRouted`, with a notice;
+ * a later step and a recovered turn run on that record. A failure names
+ * why when there is no fallback.
  */
 const atServedModel = Effect.fn("TurnHelpers.atServedModel")(function* <
   Resolved extends ResolvedTurnContext,
 >(params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
+  readonly messageId: MessageId
   readonly step: number
   readonly resolved: Resolved
-  readonly last: Option.Option<ModelIdType>
+  readonly own: SelectionHistory
+  /** The branch's newest `ModelRouted`. */
+  readonly routed: Option.Option<ModelRouted>
   readonly registry: ExtensionRegistryService
 }) {
   const { resolved } = params
+  const selected = resolved.modelId
   const unserved = yield* unservedSelection({
-    selected: resolved.modelId,
-    last: params.last,
+    selected,
+    provenance: selectionProvenance({ sessionId: params.sessionId, own: params.own }, selected),
     defaultModel: resolved.defaultModelId,
     driverRef: resolved.driverRef,
     registry: params.registry,
   })
-  const runs = (next: Resolved): Result.Result<Resolved, string> => Result.succeed(next)
-  if (Option.isNone(unserved)) return runs(resolved)
+  const runs = (model: ModelIdType): Result.Result<Resolved, string> =>
+    Result.succeed({
+      ...resolved,
+      modelId: model,
+      modelDriver: effectiveModelDriver(resolved.driverRef, model),
+    })
+  if (Option.isNone(unserved)) return Result.succeed(resolved)
+  const recorded = Option.filter(
+    params.routed,
+    (event) => event.messageId === params.messageId && event.selected === selected,
+  )
+  if (Option.isSome(recorded)) return runs(recorded.value.model)
   if (Result.isFailure(unserved.value)) return Result.fail(unserved.value.failure)
-  const { model, notice } = unserved.value.success
-  if (params.step === 1)
+  const { model, why } = unserved.value.success
+  if (params.step === 1) {
     yield* publishEventOrDie(
       ErrorOccurred.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
-        error: notice,
+        error: `Nothing loaded serves "${selected}"; this turn runs on "${model}", ${why}`,
         notice: true,
       }),
     )
-  return runs({
-    ...resolved,
-    modelId: model,
-    modelDriver: effectiveModelDriver(resolved.driverRef, model),
-  })
+    // No router was asked: no choice, classifier or cost, and no time spent.
+    yield* publishEventOrDie(
+      ModelRouted.make({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        messageId: params.messageId,
+        selected,
+        model,
+        reason: `No router serves it; ${why}`,
+        fallback: true,
+        durationMs: 0,
+      }),
+    )
+  }
+  return runs(model)
 })
 
 /** The sum of the calls' prices; none when one is unpriced or there was no call. */
@@ -5042,6 +5208,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly credentials: ReadonlyMap<string, StepCredential>
       /** The branch this one was forked from, when `branch.fork` made it. */
       readonly forkedFrom: Option.Option<BranchId>
+      /** The selections the branch routed and the model it last ran on (`unservedSelection`). */
+      readonly selection: SelectionHistory
     }
     const unknownSteps = {
       model: Option.none<ModelIdType>(),
@@ -5056,6 +5224,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       effortRouted: Option.none<ModelRouted>(),
       credentials: new Map<string, StepCredential>(),
       forkedFrom: Option.none<BranchId>(),
+      selection: emptySelectionHistory,
     }
     const lastKnownStep = yield* Ref.make<KnownSteps>({ cursor: 0, ...unknownSteps })
     const newest = <A>(
@@ -5094,6 +5263,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         effortRouted: newest(events, knownEffortRoute, known.effortRouted),
         credentials: withStepCredentials(known.credentials, events),
         forkedFrom: newest(events, knownForkSource, known.forkedFrom),
+        selection: foldSelectionHistory(known.selection, scope.branchId, events),
       }
       yield* Ref.set(lastKnownStep, current)
       return current
@@ -6813,9 +6983,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const served = yield* atServedModel({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
+        messageId: params.state.message.id,
         step: params.step,
         resolved,
-        last: knownSteps.model,
+        own: knownSteps.selection,
+        routed: knownSteps.routed,
         registry: extensionRegistry,
       })
       if (Result.isFailure(served)) return yield* unrunnable(served.failure)
@@ -7236,7 +7408,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             openTurnLane({
               sessionId: scope.sessionId,
               messageId: state.message.id,
-              last: known.model,
+              own: known.selection,
             }),
           ),
           Effect.catch((error) =>

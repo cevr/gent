@@ -4688,7 +4688,7 @@ describe("generic providers", () => {
   )
 
   it.live(
-    "the resolver serves a registered driver and a catalog provider, never a disabled or unknown one",
+    "the resolver serves a registered driver and a catalog provider, never a disabled, unspoken or unknown one",
     () =>
       Effect.gen(function* () {
         const serves = (driverId: string) =>
@@ -4696,11 +4696,13 @@ describe("generic providers", () => {
             const resolver = yield* ModelResolver
             return yield* resolver.serves(driverId, yield* ExtensionRegistry)
           })
+        // `unspoken` speaks a protocol no loaded API class speaks: resolving it fails.
         const answers = yield* Effect.forEach(
-          ["adapted", "open", "regional", "router"],
+          ["adapted", "open", "regional", "unspoken", "router"],
           serves,
         ).pipe(inProfile({ config: { disabledProviders: ["regional"] } }))
-        expect(answers).toEqual([true, true, false, false])
+        expect(answers).toEqual([true, true, false, false, false])
+        expect(yield* resolveFailure("unspoken/g", {})).toBe("Unknown provider: unspoken")
       }),
   )
 

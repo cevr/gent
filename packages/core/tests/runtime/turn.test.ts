@@ -136,6 +136,7 @@ import {
   ToolRunner,
 } from "../../src/runtime/tools"
 import {
+  apiKeyAuth,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
@@ -221,6 +222,7 @@ import { Database } from "bun:sqlite"
 import { Decision, DecisionModel, type LanguageModel } from "effect/ai"
 import {
   ExtensionServiceError,
+  type GentExtension,
   LoadedArtifactIdentity,
   type LoadedExtension,
 } from "../../src/domain/extension"
@@ -9210,8 +9212,8 @@ describe("virtual model routing", () => {
 
 const SERVED_LIGHT = ModelId.make("served/light")
 const SERVED_STRONG = ModelId.make("served/strong")
-/** A model of a second driver, for a lane that tells the fallbacks apart. */
 const OTHER_LIGHT = ModelId.make("other/light")
+const OTHER_STRONG = ModelId.make("other/strong")
 
 /** A driver that answers each of its models with the scripted `providerLayer`. */
 const servedDriver = (
@@ -9223,16 +9225,71 @@ const servedDriver = (
   resolveModel: () => Effect.succeed(AiModel.make(id, "model", providerLayer)),
 })
 
-/** The `served` and `other` drivers alone: no router serves `router/auto`. */
-const servedOnly = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+/** The drivers named `ids` alone: no router serves `router/auto`. */
+const driversOnly = (
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+  ids: ReadonlyArray<string>,
+) =>
   defineExtension({
     id: "test-served",
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
-      yield* host.register("modelDriver", servedDriver(providerLayer))
-      yield* host.register("modelDriver", servedDriver(providerLayer, "other"))
+      for (const id of ids) yield* host.register("modelDriver", servedDriver(providerLayer, id))
     }),
   })
+
+/** A driver whose every request fails before it goes out. */
+const brokenDriver = (id: string): ModelDriverContribution => ({
+  id,
+  name: id,
+  resolveModel: () => Effect.die(`${id} is down`),
+})
+
+/** A router whose `router/auto` always picks `model`, beside the drivers named `ids` and `broken`. */
+const routerTo = (
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+  model: ModelId,
+  ids: ReadonlyArray<string>,
+  broken: ReadonlyArray<string> = [],
+) =>
+  routingExtension({
+    choices: [
+      { model: SERVED_LIGHT, reason: "light work" },
+      { model, reason: "hard work" },
+    ],
+    route: () => Effect.succeed({ choice: 1, reason: "hard" }),
+    drivers: [...ids.map((id) => servedDriver(providerLayer, id)), ...broken.map(brokenDriver)],
+  })
+
+/** An agent that names no model: it runs the model its starter chose. */
+const WORKER = AgentName.make("worker")
+const fallbackAgents = [
+  AgentDefinition.make({ ...testAgent, model: SERVED_LIGHT }),
+  AgentDefinition.make({ name: WORKER, description: "Worker" }),
+]
+
+/** A signed-in key for each test driver: a route offers only signed-in choices. */
+const driverKeys = apiKeyAuth([
+  ["served", DEFAULT_CREDENTIAL_SLOT, "sk-served"],
+  ["other", DEFAULT_CREDENTIAL_SLOT, "sk-other"],
+])
+
+/** One process over the database at `dbPath`, its requests resolved through its drivers. */
+const processOn = (
+  dbPath: string,
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+  extensionInputs: ReadonlyArray<GentExtension>,
+) =>
+  createRpcClient(
+    createE2ELayer({
+      agents: fallbackAgents,
+      providerLayer,
+      resolver: "drivers",
+      authLayer: driverKeys,
+      extensionInputs,
+      storagePath: dbPath,
+    }),
+  )
 
 /** The turn notices a branch published (`ErrorOccurred.notice`). */
 const noticeTexts = (events: ReadonlyArray<AgentEvent>) =>
@@ -9248,130 +9305,286 @@ const errorTexts = (events: ReadonlyArray<AgentEvent>) =>
     return [event.error]
   })
 
+/** What a model change to `model` in the session writes. */
+const selectModel = (client: RoutingClient, sessionId: SessionId, model: ModelId) =>
+  client.session.updateSettings({
+    sessionId,
+    modelId: Option.some(model),
+    reasoningLevel: Option.none(),
+  })
+
+/**
+ * A first process whose router serves `router/auto` and runs one turn on
+ * it, picking `routed`; its drivers are `ids`. Returns the session, after
+ * `more` runs in that process.
+ */
+const routedOnce = Effect.fn("test.routedOnce")(function* <A = void, E = never>(params: {
+  readonly dbPath: string
+  readonly routed: ModelId
+  readonly ids: ReadonlyArray<string>
+  /** Drivers whose every request fails in this process. */
+  readonly broken?: ReadonlyArray<string>
+  readonly more?: (
+    client: RoutingClient,
+    run: { readonly sessionId: SessionId; readonly branchId: BranchId },
+  ) => Effect.Effect<A, E, Scope.Scope>
+}) {
+  const { layer } = yield* LanguageModelLayers.sequence([textStep("routed answer")])
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const { client } = yield* processOn(params.dbPath, layer, [
+        routerTo(layer, params.routed, params.ids, params.broken),
+      ])
+      const run = yield* client.session.create({})
+      const afterTurns = yield* recordBranchEvents(client, run)
+      yield* selectAuto(client, run.sessionId)
+      yield* client.message.send({ ...run, content: "first" })
+      const events = yield* afterTurns(1)
+      expect(stepModels(events)).toEqual([params.routed])
+      if (Predicate.isNotUndefined(params.more)) yield* params.more(client, run)
+      return run
+    }),
+  )
+})
+
 describe("a virtual model no router serves", () => {
   it.scopedLive(
-    "runs the turn on the branch's last concrete model, with a notice",
+    "runs the turn on the model the branch last ran on, records the fallback route and says so",
     () =>
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          textStep("strong answer"),
-          textStep("still strong"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          agents: [AgentDefinition.make({ ...testAgent, model: SERVED_LIGHT })],
-          providerLayer,
-          resolver: "drivers",
-          extensionInputs: [servedOnly(providerLayer)],
-        })
-        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
-        yield* client.session.updateSettings({
-          sessionId,
-          modelId: Option.some(SERVED_STRONG),
-          reasoningLevel: Option.none(),
-        })
-        yield* client.message.send({ sessionId, branchId, content: "first" })
-        yield* afterTurns(1)
-        // The router is gone: the selection names a model nothing serves.
-        yield* selectAuto(client, sessionId)
-        yield* client.message.send({ sessionId, branchId, content: "second" })
+        const dbPath = `${yield* makeTempDirectoryScoped("gent-router-gone-")}/gent.db`
+        const run = yield* routedOnce({ dbPath, routed: SERVED_STRONG, ids: ["served"] })
+        // The router is gone: the second process loads the driver alone.
+        const { layer } = yield* LanguageModelLayers.sequence([textStep("still strong")])
+        const { client } = yield* processOn(dbPath, layer, [driversOnly(layer, ["served"])])
+        const afterTurns = yield* recordBranchEvents(client, run)
+        yield* client.message.send({ ...run, content: "second" })
         const events = yield* afterTurns(2)
         expect(errorTexts(events)).toEqual([])
-        // The branch's last model, not the agent's.
         expect(stepModels(events)).toEqual([SERVED_STRONG, SERVED_STRONG])
         expect(noticeTexts(events)).toEqual([
           `Nothing loaded serves "${AUTO_MODEL}"; this turn runs on "${SERVED_STRONG}", the model the branch last ran on`,
         ])
-      }).pipe(Effect.timeout("15 seconds")),
-    20_000,
+        const fellBack = routedEvents(events)[1]
+        expect(fellBack).toMatchObject({
+          selected: AUTO_MODEL,
+          model: SERVED_STRONG,
+          fallback: true,
+          durationMs: 0,
+        })
+        expect(fellBack?.choice).toBeUndefined()
+        // The status row reads the fallback route.
+        const snapshot = yield* client.session.getSnapshot(run)
+        expect(snapshot.metrics.routed).toMatchObject({
+          selected: AUTO_MODEL,
+          model: SERVED_STRONG,
+          fallback: true,
+        })
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
   )
 
   it.scopedLive(
-    "runs the turn on the default model when the branch ran on none, with a notice",
+    "never falls back to a model a notice announced but no step ran",
     () =>
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          textStep("light answer"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          agents: [AgentDefinition.make({ ...testAgent, model: SERVED_LIGHT })],
-          providerLayer,
-          resolver: "drivers",
-          extensionInputs: [servedOnly(providerLayer)],
+        const dbPath = `${yield* makeTempDirectoryScoped("gent-router-gone-")}/gent.db`
+        // In the first process `other` is down: the switch to `other/light`
+        // is announced, and its request fails before it goes out.
+        const run = yield* routedOnce({
+          dbPath,
+          routed: SERVED_STRONG,
+          ids: ["served"],
+          broken: ["other"],
+          more: (client, target) =>
+            Effect.gen(function* () {
+              const afterTurns = yield* recordBranchEvents(client, target)
+              yield* selectModel(client, target.sessionId, OTHER_LIGHT)
+              yield* client.message.send({ ...target, content: "on other" })
+              const events = yield* afterTurns(2)
+              expect(stepModels(events)).toEqual([SERVED_STRONG, OTHER_LIGHT])
+              expect(
+                events.some(
+                  (event) =>
+                    event._tag === "StreamEnded" &&
+                    event.model === OTHER_LIGHT &&
+                    event.outcome === "Failed",
+                ),
+              ).toBe(true)
+              yield* selectAuto(client, target.sessionId)
+            }),
         })
-        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
-        yield* selectAuto(client, sessionId)
-        yield* client.message.send({ sessionId, branchId, content: "hello" })
-        const events = yield* afterTurns(1)
+        const { layer } = yield* LanguageModelLayers.sequence([textStep("back on strong")])
+        const { client } = yield* processOn(dbPath, layer, [
+          driversOnly(layer, ["served", "other"]),
+        ])
+        const afterTurns = yield* recordBranchEvents(client, run)
+        yield* client.message.send({ ...run, content: "third" })
+        const events = yield* afterTurns(3)
+        expect(stepModels(events).at(-1)).toBe(SERVED_STRONG)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "runs the turn on the default model when the model the branch ran on is gone too",
+    () =>
+      Effect.gen(function* () {
+        const dbPath = `${yield* makeTempDirectoryScoped("gent-router-gone-")}/gent.db`
+        const run = yield* routedOnce({
+          dbPath,
+          routed: OTHER_STRONG,
+          ids: ["served", "other"],
+        })
+        const { layer } = yield* LanguageModelLayers.sequence([textStep("light answer")])
+        const { client } = yield* processOn(dbPath, layer, [driversOnly(layer, ["served"])])
+        const afterTurns = yield* recordBranchEvents(client, run)
+        yield* client.message.send({ ...run, content: "second" })
+        const events = yield* afterTurns(2)
         expect(errorTexts(events)).toEqual([])
-        expect(stepModels(events)).toEqual([SERVED_LIGHT])
+        expect(stepModels(events)).toEqual([OTHER_STRONG, SERVED_LIGHT])
         expect(noticeTexts(events)).toEqual([
           `Nothing loaded serves "${AUTO_MODEL}"; this turn runs on "${SERVED_LIGHT}", the default model`,
         ])
-      }).pipe(Effect.timeout("15 seconds")),
-    20_000,
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
   )
 
   it.scopedLive(
-    "the turn holds its account lane on the model it falls back to",
+    "a selection no route ever served fails the turn and names it, whatever the branch ran on",
     () =>
       Effect.gen(function* () {
-        const resetAt = 1_800_000_000_000
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          {
-            ...textStep("strong answer"),
-            quota: [{ window: "5h", utilization: 0.25, resetAt, rejected: false }],
-          },
-          { ...textStep("still strong"), gated: true },
+        const typo = ModelId.make("ollma/local")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("strong answer"),
         ])
-        // The default is another driver's model: only the branch's last
-        // model puts the lane on `served`.
         const { client, sessionId, branchId } = yield* createRpcHarness({
-          agents: [AgentDefinition.make({ ...testAgent, model: OTHER_LIGHT })],
+          agents: fallbackAgents,
           providerLayer,
           resolver: "drivers",
-          extensionInputs: [servedOnly(providerLayer)],
+          authLayer: driverKeys,
+          extensionInputs: [driversOnly(providerLayer, ["served"])],
         })
         const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
-        yield* client.session.updateSettings({
-          sessionId,
-          modelId: Option.some(SERVED_STRONG),
-          reasoningLevel: Option.none(),
-        })
+        yield* selectModel(client, sessionId, SERVED_STRONG)
         yield* client.message.send({ sessionId, branchId, content: "first" })
         yield* afterTurns(1)
-        const servedLoad = Effect.map(client.accounts.lanes(), ({ providers }) =>
-          providers.filter((lanes) => lanes.provider === "served").map((lanes) => lanes.load),
-        )
-        expect(yield* servedLoad).toEqual([0])
-        yield* selectAuto(client, sessionId)
+        yield* selectModel(client, sessionId, typo)
         yield* client.message.send({ sessionId, branchId, content: "second" })
-        yield* controls.waitForCall(1)
-        expect(yield* servedLoad).toEqual([1])
-        yield* controls.emitAll(1)
-        expect(stepModels(yield* afterTurns(2))).toEqual([SERVED_STRONG, SERVED_STRONG])
+        const events = yield* afterTurns(2)
+        expect(stepModels(events)).toEqual([SERVED_STRONG])
+        expect(noticeTexts(events)).toEqual([])
+        expect(errorTexts(events)).toEqual([
+          `Nothing loaded serves "${typo}": no router or driver of it is loaded, and this branch never ran it through a router`,
+        ])
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
   )
 
   it.scopedLive(
-    "the auth gate asks for the driver of the default model a selection nothing serves falls back to",
+    "the auth gate and the turn's lane take the model the branch last ran on, not the default",
     () =>
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-        const { client, sessionId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-          resolver: "drivers",
+        const dbPath = `${yield* makeTempDirectoryScoped("gent-router-gone-")}/gent.db`
+        const run = yield* routedOnce({
+          dbPath,
+          routed: OTHER_STRONG,
+          ids: ["served", "other"],
         })
-        yield* selectAuto(client, sessionId)
-        const providers = yield* client.auth.listProviders({ sessionId })
+        const resetAt = 1_800_000_000_000
+        const { layer, controls } = yield* LanguageModelLayers.sequence([
+          {
+            ...textStep("on other"),
+            quota: [{ window: "5h", utilization: 0.25, resetAt, rejected: false }],
+          },
+          { ...textStep("still on other"), gated: true },
+        ])
+        const { client } = yield* processOn(dbPath, layer, [
+          driversOnly(layer, ["served", "other"]),
+        ])
+        // The default is `served/light`; the branch last ran on `other/strong`.
+        const providers = yield* client.auth.listProviders({ sessionId: run.sessionId })
         expect(
           providers
             .filter((provider) => provider.required)
             .map((provider) => String(provider.provider)),
-        ).toEqual(TEST_MODEL_ID.split("/").slice(0, 1))
-      }).pipe(Effect.timeout("15 seconds")),
-    20_000,
+        ).toEqual(["other"])
+        const afterTurns = yield* recordBranchEvents(client, run)
+        yield* client.message.send({ ...run, content: "second" })
+        yield* afterTurns(2)
+        const loadOn = (provider: string) =>
+          Effect.map(client.accounts.lanes(), ({ providers: lanes }) =>
+            lanes.filter((each) => each.provider === provider).map((each) => each.load),
+          )
+        expect(yield* loadOn("other")).toEqual([0])
+        yield* client.message.send({ ...run, content: "third" })
+        yield* controls.waitForCall(1)
+        expect(yield* loadOn("other")).toEqual([1])
+        yield* controls.emitAll(1)
+        expect(stepModels(yield* afterTurns(3))).toEqual([OTHER_STRONG, OTHER_STRONG, OTHER_STRONG])
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a spawned child that inherited the selection runs on the model its caller ran on",
+    () =>
+      Effect.gen(function* () {
+        const dbPath = `${yield* makeTempDirectoryScoped("gent-router-gone-")}/gent.db`
+        const children = yield* Ref.make<
+          ReadonlyArray<{ sessionId: SessionId; branchId: BranchId }>
+        >([])
+        const parent = yield* routedOnce({
+          dbPath,
+          routed: SERVED_STRONG,
+          ids: ["served"],
+          more: (client, target) =>
+            client.session
+              .create({
+                parentSessionId: target.sessionId,
+                parentBranchId: target.branchId,
+                admission: { agent: WORKER, runSpec: { inheritedModel: AUTO_MODEL } },
+              })
+              .pipe(Effect.flatMap((child) => Ref.set(children, [child]))),
+        })
+        const [child] = yield* Ref.get(children)
+        if (Predicate.isUndefined(child)) return yield* Effect.die("no child session")
+        expect(child.sessionId).not.toBe(parent.sessionId)
+        const { layer } = yield* LanguageModelLayers.sequence([textStep("child answer")])
+        const { client } = yield* processOn(dbPath, layer, [driversOnly(layer, ["served"])])
+        const afterTurns = yield* recordBranchEvents(client, child)
+        yield* client.message.send({ ...child, content: "child work" })
+        const events = yield* afterTurns(1)
+        expect(errorTexts(events)).toEqual([])
+        expect(stepModels(events)).toEqual([SERVED_STRONG])
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a fork runs on the model its source branch ran on",
+    () =>
+      Effect.gen(function* () {
+        const dbPath = `${yield* makeTempDirectoryScoped("gent-router-gone-")}/gent.db`
+        const run = yield* routedOnce({ dbPath, routed: SERVED_STRONG, ids: ["served"] })
+        const { layer } = yield* LanguageModelLayers.sequence([textStep("fork answer")])
+        const { client } = yield* processOn(dbPath, layer, [driversOnly(layer, ["served"])])
+        const snapshot = yield* client.session.getSnapshot(run)
+        const last = snapshot.messages.at(-1)
+        if (Predicate.isUndefined(last)) return yield* Effect.die("no message to fork at")
+        const fork = yield* client.branch.fork({
+          sessionId: run.sessionId,
+          fromBranchId: run.branchId,
+          atMessageId: last.id,
+        })
+        const target = { sessionId: run.sessionId, branchId: fork.branchId }
+        const afterTurns = yield* recordBranchEvents(client, target)
+        yield* client.message.send({ ...target, content: "on the fork" })
+        const events = yield* afterTurns(1)
+        expect(errorTexts(events)).toEqual([])
+        expect(stepModels(events)).toEqual([SERVED_STRONG])
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
   )
 
   it.scopedLive(
@@ -9382,19 +9595,11 @@ describe("a virtual model no router serves", () => {
           textStep("routed answer"),
         ])
         const { client, sessionId, branchId } = yield* createRpcHarness({
-          agents: [AgentDefinition.make({ ...testAgent, model: SERVED_LIGHT })],
+          agents: fallbackAgents,
           providerLayer,
           resolver: "drivers",
-          extensionInputs: [
-            routingExtension({
-              choices: [
-                { model: SERVED_LIGHT, reason: "light work" },
-                { model: SERVED_STRONG, reason: "hard work" },
-              ],
-              route: () => Effect.succeed({ choice: 1, reason: "hard" }),
-              drivers: [servedDriver(providerLayer)],
-            }),
-          ],
+          authLayer: driverKeys,
+          extensionInputs: [routerTo(providerLayer, SERVED_STRONG, ["served"])],
         })
         const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
         yield* selectAuto(client, sessionId)
@@ -9403,8 +9608,9 @@ describe("a virtual model no router serves", () => {
         expect(errorTexts(events)).toEqual([])
         expect(noticeTexts(events)).toEqual([])
         const [routed] = routedEvents(events)
-        expect(routed?.selected).toBe(AUTO_MODEL)
-        expect(stepModels(events)).toEqual([routed?.model])
+        expect(routed).toMatchObject({ selected: AUTO_MODEL, model: SERVED_STRONG, choice: 1 })
+        expect(routed?.fallback).toBeUndefined()
+        expect(stepModels(events)).toEqual([SERVED_STRONG])
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
   )

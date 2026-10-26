@@ -1911,12 +1911,25 @@ const RpcHandlers = GentRpcs.toLayer(
           // The driver a turn routes through: the agent's driver, else the
           // config override, else the model id's provider segment; for a
           // virtual model, its default choice's; for a selection nothing
-          // serves, the default model's the turn falls back to.
+          // serves, the model a turn of the active branch falls back to.
           const driverFor = (admission: Option.Option<SessionAdmission>) =>
             routeCredentialDriver(
               resolveSessionRoute({ agents, admission, config, session }),
               registry,
-            ).pipe(Effect.provideService(ModelResolver, modelResolver))
+              Option.map(Option.fromUndefinedOr(session.activeBranchId), (branchId) => ({
+                sessionId,
+                branchId,
+              })),
+            ).pipe(
+              Effect.provideService(ModelResolver, modelResolver),
+              Effect.catchTag(
+                "EventDecodeError",
+                (cause) =>
+                  new InvalidStateError({
+                    message: `Failed to read session events: ${cause.message}`,
+                  }),
+              ),
+            )
           // The session's own agent, then an agent the caller asks about.
           const admissions = [Option.fromUndefinedOr(session.admission)]
           if (!Predicate.isUndefined(agentName)) admissions.push(Option.some({ agent: agentName }))

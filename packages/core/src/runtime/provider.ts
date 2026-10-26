@@ -3148,8 +3148,9 @@ interface ModelResolverService {
   /**
    * Whether `resolve` reaches a driver for `driverId` in the profile of
    * `registry`: a registered one, or the generic driver of a catalog
-   * provider (`servesDriver`). False for a driver no loaded extension or
-   * catalog provider serves, such as the id of a router that is gone. A
+   * provider a loaded API class speaks (`servingDriver`). False for a driver
+   * no loaded extension or catalog provider serves, such as the id of a
+   * router that is gone. A
    * resolver that serves a scripted model serves every driver.
    */
   readonly serves: (driverId: string, registry: ExtensionRegistryService) => Effect.Effect<boolean>
@@ -3166,20 +3167,36 @@ interface ModelResolverService {
 }
 
 /**
- * `ModelResolver.serves` for the production resolver: a driver the profile
- * of `registry` registers, else a catalog provider `resolve` builds the
- * generic driver of (`genericCandidates`), as `resolveProviderModel` finds it.
+ * The driver a request through `driverId` resolves with: the one the profile
+ * registers, else the generic driver of a catalog provider no driver adapts,
+ * the config does not disable and a loaded API class speaks
+ * (`genericProviderDriver`). None for any other id.
  */
+const servingDriver = (
+  resolved: ResolvedProfile,
+  config: ProviderConfig,
+  catalog: LoadedModelCatalog,
+  driverId: string,
+): Effect.Effect<Option.Option<ModelDriverContribution>> =>
+  Option.match(Option.fromUndefinedOr(resolved.modelDrivers.get(driverId)), {
+    onSome: (driver) => Effect.succeedSome(driver),
+    onNone: () => {
+      if (!genericCandidates(resolved, config, catalog).includes(driverId))
+        return Effect.succeedNone
+      return genericProviderDriver(resolved, config, catalog, driverId)
+    },
+  })
+
+/** `ModelResolver.serves` for the production resolver: `resolve` finds a driver (`servingDriver`). */
 const servesDriver = Effect.fn("ModelResolver.servesDriver")(function* (
   driverId: string,
   registry: ExtensionRegistryService,
   catalogSource: ModelCatalogSourceService,
 ) {
   const resolved = registry.getResolved()
-  if (resolved.modelDrivers.has(driverId)) return true
   const config = yield* registry.providerConfig
   const catalog = configuredCatalog(yield* catalogSource.read, config, resolved.apiClasses)
-  return genericCandidates(resolved, config, catalog).includes(driverId)
+  return Option.isSome(yield* servingDriver(resolved, config, catalog, driverId))
 })
 
 /**
@@ -3411,18 +3428,7 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   const config = yield* extensionRegistry.providerConfig
   yield* credentialOrder(resolved.modelDrivers, config, providerName)
   const catalog = configuredCatalog(source, config, resolved.apiClasses)
-  const extensionProvider = yield* Option.match(
-    Option.fromUndefinedOr(resolved.modelDrivers.get(providerName)),
-    {
-      onSome: (driver) => Effect.succeedSome(driver),
-      onNone: () => {
-        if (!genericCandidates(resolved, config, catalog).includes(providerName)) {
-          return Effect.succeedNone
-        }
-        return genericProviderDriver(resolved, config, catalog, providerName)
-      },
-    },
-  )
+  const extensionProvider = yield* servingDriver(resolved, config, catalog, providerName)
   if (Option.isNone(extensionProvider)) {
     return yield* new ProviderError({
       message: `Unknown provider: ${providerName}`,
