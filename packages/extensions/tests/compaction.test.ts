@@ -2,21 +2,19 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import {
   Cause,
-  Clock,
   Context,
   Deferred,
   Effect,
   Exit,
   Fiber,
   Layer,
-  Logger,
   Option,
   Predicate,
-  References,
   Schema,
   Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
+import { TestClock } from "effect/testing"
 import { LanguageModel } from "effect/ai"
 import * as Prompt from "effect/ai/Prompt"
 import * as AiError from "effect/ai/AiError"
@@ -67,7 +65,6 @@ import {
   referencedBindings,
   replayWindow,
   RetainedBindings,
-  RoleWindow,
   selectSummarySource,
   type TuneReport,
   tuneWindows,
@@ -1243,7 +1240,7 @@ const fleet = (
   Array.from({ length: agents }, (_, index) => branchSteps(index, inputs, { compactedAt })).flat()
 
 const tune = (steps: ReadonlyArray<WindowStep>, rereads: ReadonlyArray<WindowReread> = []) =>
-  tuneWindows({ steps, rereads, cutoff: 0, finishedAt: 0 })
+  tuneWindows({ steps, rereads, finishedAt: 0 })
 
 const windowOf = (report: TuneReport) => report.rows.map((row) => row.windowTokens)
 
@@ -1259,25 +1256,6 @@ const windowDatabase = Effect.gen(function* () {
     Effect.map((context) => Context.get(context, ContextWindows)),
   )
   return { file, sqlLayer, sql, build }
-})
-
-/** A finished tune `ageMs` old, as an earlier server left it. */
-const seedTune = (ageMs: number) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
-    const finished = (yield* Clock.currentTimeMillis) - ageMs
-    yield* sql`
-      INSERT INTO context_window_tunes (cutoff, finished_at, report_json)
-      VALUES (${finished}, ${finished}, '{}')
-    `
-  })
-
-const tuneCount = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  const rows = yield* sql<{
-    readonly count: number
-  }>`SELECT COUNT(*) AS count FROM context_window_tunes`
-  return rows[0]?.count ?? 0
 })
 
 describe("role windows", () => {
@@ -1572,7 +1550,7 @@ describe("role windows", () => {
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
       let replays = 0
-      // The tune's read of the samples, counted; the first holds until released.
+      // The tunes' reads of the samples, counted; the build's runs, the next holds until released.
       const held = Layer.effect(
         SqlClient.SqlClient,
         Effect.map(
@@ -1592,7 +1570,7 @@ describe("role windows", () => {
                 }
                 return Effect.suspend(() => {
                   replays += 1
-                  if (replays > 1) return statement
+                  if (replays !== 2) return statement
                   return Deferred.succeed(entered, void 0).pipe(
                     Effect.andThen(Deferred.await(release)),
                     Effect.andThen(statement),
@@ -1606,82 +1584,84 @@ describe("role windows", () => {
         yield* Layer.build(ContextWindows.Live.pipe(Layer.provide(held))),
         ContextWindows,
       )
+      // The build tuned: a turn end within the day runs none.
+      expect(replays).toBe(1)
+      expect(Option.isNone(yield* windows.tuneIfStale)).toBe(true)
+      yield* TestClock.adjust("25 hours")
       const first = yield* Effect.forkChild(windows.tuneIfStale)
       yield* Deferred.await(entered)
       // A second turn end while the first tune reads its samples.
       expect(Option.isNone(yield* windows.tuneIfStale)).toBe(true)
       yield* Deferred.succeed(release, void 0)
       expect(Option.isSome(yield* Fiber.join(first))).toBe(true)
-      expect(replays).toBe(1)
-      expect(yield* database.sql(tuneCount)).toBe(1)
-    }).pipe(Effect.provide(platform), Effect.timeout("20 seconds")),
+      expect(replays).toBe(2)
+    }).pipe(Effect.provide(Layer.merge(platform, TestClock.layer())), Effect.timeout("20 seconds")),
   )
 
-  it.scopedLive("a server whose tune another finished answers with that tune's windows", () =>
+  it.scopedLive("a failed prune keeps the windows, and the next turn end tunes again", () =>
+    Effect.gen(function* () {
+      const database = yield* windowDatabase
+      let failPrune = false
+      // The tune's prune of old samples fails while `failPrune` is set.
+      const failing = Layer.effect(
+        SqlClient.SqlClient,
+        Effect.map(
+          SqlClient.SqlClient,
+          (sql) =>
+            new Proxy(sql, {
+              // A template call builds a statement; a string names an identifier.
+              apply: (
+                target,
+                _thisArg,
+                [strings, ...values]: [TemplateStringsArray | string, ...Array<unknown>],
+              ) => {
+                if (Predicate.isString(strings)) return target(strings)
+                const statement = target(strings, ...values)
+                if (!strings.join("?").includes("DELETE FROM context_window_steps")) {
+                  return statement
+                }
+                return Effect.suspend(() => {
+                  if (!failPrune) return statement
+                  return Effect.die("prune refused")
+                })
+              },
+            }),
+        ),
+      ).pipe(Layer.provide(database.sqlLayer))
+      const windows = Context.get(
+        yield* Layer.build(ContextWindows.Live.pipe(Layer.provide(failing))),
+        ContextWindows,
+      )
+      const steps = Array.from({ length: 20 }, (_, index) =>
+        branchSteps(index, [10_000], { ceilingTokens: 33_000 }),
+      ).flat()
+      yield* windows.record({ steps, rereads: [] })
+      yield* TestClock.adjust("25 hours")
+      failPrune = true
+      expect(Exit.isFailure(yield* Effect.exit(windows.tuneIfStale))).toBe(true)
+      expect(yield* windows.window(workerRole)).toEqual(Option.none())
+      failPrune = false
+      expect(Option.isSome(yield* windows.tuneIfStale)).toBe(true)
+      expect(yield* windows.window(workerRole)).toEqual(Option.some(33_000))
+    }).pipe(Effect.provide(Layer.merge(platform, TestClock.layer())), Effect.timeout("20 seconds")),
+  )
+
+  it.scopedLive("a build tunes from the stored samples: a restart answers at once", () =>
     Effect.gen(function* () {
       const database = yield* windowDatabase
       const first = yield* database.build
-      yield* database.sql(seedTune(25 * 3_600_000))
-      const second = yield* database.build
-      // Twenty workers ramp to about 219k on a 200k model; the second server tunes.
-      const inputs = ramp(20_000, 1_000, 200)
-      yield* second.record({ steps: fleet(20, inputs), rereads: [] })
-      expect(Option.isSome(yield* second.tuneIfStale)).toBe(true)
-      const tuned = yield* second.window(workerRole)
-      expect(Option.isSome(tuned)).toBe(true)
-      // The first server still holds the stale tune; its check finds the
-      // fresh one, runs none, and answers with its window.
-      expect(yield* first.window(workerRole)).toEqual(Option.none())
+      // Twenty workers ramp to about 219k on a 200k model.
+      const steps = fleet(20, ramp(20_000, 1_000, 200))
+      yield* first.record({ steps, rereads: [] })
+      // The first build tuned before the samples: within the day it keeps none.
       expect(Option.isNone(yield* first.tuneIfStale)).toBe(true)
-      expect(yield* first.window(workerRole)).toEqual(tuned)
-      // A restart over the fresh tune runs none either.
+      expect(yield* first.window(workerRole)).toEqual(Option.none())
       const restarted = yield* database.build
-      expect(Option.isNone(yield* restarted.tuneIfStale)).toBe(true)
-      expect(yield* restarted.window(workerRole)).toEqual(tuned)
-      expect(yield* database.sql(tuneCount)).toBe(2)
+      const [tuned] = windowOf(tune(steps))
+      expect(Predicate.isNumber(tuned)).toBe(true)
+      expect(yield* restarted.window(workerRole)).toEqual(Option.fromUndefinedOr(tuned))
     }).pipe(Effect.provide(platform), Effect.timeout("20 seconds")),
   )
-
-  it.scopedLive("a corrupt row warns and leaves its role at the model window", () => {
-    const warnings: Array<string> = []
-    const capture = Logger.make(({ message }) => {
-      warnings.push(String(message))
-    })
-    return Effect.gen(function* () {
-      const database = yield* windowDatabase
-      yield* database.build
-      const good = yield* Schema.encodeEffect(Schema.fromJsonString(RoleWindow))({
-        role: workerRole,
-        windowTokens: 140_000,
-        ceilingTokens: 200_000,
-        agents: 20,
-        rereadTokens: 0,
-        rereadSource: "Role",
-        costByWindow: [],
-      })
-      yield* database.sql(
-        Effect.gen(function* () {
-          const sql = yield* SqlClient.SqlClient
-          yield* sql`
-            INSERT INTO context_windows (agent, child, row_json, tuned_at)
-            VALUES ('worker', 0, ${good}, 0), ('main', 0, '{not json', 0)
-          `
-        }),
-      )
-      const windows = yield* database.build
-      expect(yield* windows.window(workerRole)).toEqual(Option.some(140_000))
-      expect(yield* windows.window({ agent: DEFAULT_AGENT_NAME, child: false })).toEqual(
-        Option.none(),
-      )
-      expect(warnings.some((text) => text.includes("compaction.windows.row.corrupt"))).toBe(true)
-    }).pipe(
-      Effect.provide(Logger.layer([capture])),
-      // The test preload turns logs off; this test reads the warning.
-      Effect.provideService(References.MinimumLogLevel, "Debug"),
-      Effect.provide(platform),
-      Effect.timeout("20 seconds"),
-    )
-  })
 
   it.scopedLive(
     "a tuned window reaches the loop: a root hands off when its next turn starts past it",
@@ -1689,31 +1669,24 @@ describe("role windows", () => {
       Effect.gen(function* () {
         const dir = yield* makeTempDirectoryScoped("compaction-tuned-")
         const storagePath = `${dir}/gent.db`
-        // The server's database as an earlier tune left it: the kernel's
-        // tables, a fresh run and a 33k window for the root agent. A database
-        // with no kernel version is wiped when the server opens it. The model's 128k window reserves 32k
-        // for output, so a turn that starts past about 1k hands off.
-        const row = yield* Schema.encodeEffect(Schema.fromJsonString(RoleWindow))({
-          role: { agent: DEFAULT_AGENT_NAME, child: false },
-          windowTokens: 33_000,
-          ceilingTokens: 128_000,
-          agents: 20,
-          rereadTokens: 0,
-          rereadSource: "Role",
-          costByWindow: [],
-        })
+        // The server's database as earlier turns left it: the kernel's
+        // tables and twenty root branches sampled on a 33k model, so the
+        // server's build tunes the root agent to a 33k window. A database
+        // with no kernel version is wiped when the server opens it. The
+        // model's 128k window reserves 32k for output, so a turn that starts
+        // past about 1k hands off.
         yield* Effect.gen(function* () {
-          yield* Layer.build(ContextWindows.Live)
-          const sql = yield* SqlClient.SqlClient
-          const now = yield* Clock.currentTimeMillis
-          yield* sql`
-            INSERT INTO context_window_tunes (cutoff, finished_at, report_json)
-            VALUES (${now}, ${now}, '{}')
-          `
-          yield* sql`
-            INSERT INTO context_windows (agent, child, row_json, tuned_at)
-            VALUES (${DEFAULT_AGENT_NAME}, 0, ${row}, ${now})
-          `
+          const windows = Context.get(yield* Layer.build(ContextWindows.Live), ContextWindows)
+          yield* windows.record({
+            steps: Array.from({ length: 20 }, (_, index) =>
+              branchSteps(index, [10_000], {
+                agent: DEFAULT_AGENT_NAME,
+                spawned: false,
+                ceilingTokens: 33_000,
+              }),
+            ).flat(),
+            rereads: [],
+          })
         }).pipe(
           Effect.provide(
             SqliteStorage.WithSql(BunSqlite.file(storagePath)).pipe(

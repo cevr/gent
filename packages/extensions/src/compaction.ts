@@ -608,8 +608,9 @@ export const ModelContextCompactorLive = Layer.succeed(
  * records each `read` after a handoff of a path read before it (a re-read).
  * Once a day the tuner replays each role's steps at each candidate window
  * with `planWindow`, the rule the loop hands off by, and keeps the largest
- * window within 1% of the cheapest. The tables live in a server Resource, so
- * the samples of every place reach one role. The loop reads the result
+ * window within 1% of the cheapest. The samples live in a server Resource's
+ * tables, so the samples of every place reach one role; the windows are a
+ * memo of them in memory, tuned again at each build. The loop reads the result
  * through `ModelContextWindowPolicy`: a spawned session hands off between
  * steps at its window, a root only when a turn starts past it.
  */
@@ -890,7 +891,7 @@ const RereadSource = Schema.Literals(["Role", "Fleet", "Prior"])
 type RereadSource = typeof RereadSource.Type
 
 /** A tuned role: its window and the cost at each candidate it was chosen from. */
-export const RoleWindow = Schema.Struct({
+const RoleWindow = Schema.Struct({
   role: ContextRole,
   windowTokens: Schema.Int,
   ceilingTokens: Schema.Int,
@@ -901,12 +902,10 @@ export const RoleWindow = Schema.Struct({
     Schema.Struct({ windowTokens: Schema.Int, cost: Schema.Finite, handoffs: Schema.Int }),
   ),
 })
-export type RoleWindow = typeof RoleWindow.Type
+type RoleWindow = typeof RoleWindow.Type
 
-/** What one tune found; stored with its run. */
+/** What one tune found. */
 export const TuneReport = Schema.Struct({
-  /** The hour the tune ran in: one tune per cutoff. */
-  cutoff: Schema.Int,
   finishedAt: Schema.Int,
   /**
    * The share of the re-reads seen that went through `read` rather than a
@@ -932,7 +931,6 @@ const roleKey = (role: ContextRole): string => `${role.agent}\u0000${Number(role
 export const tuneWindows = (params: {
   readonly steps: ReadonlyArray<WindowStep>
   readonly rereads: ReadonlyArray<WindowReread>
-  readonly cutoff: number
   readonly finishedAt: number
 }): TuneReport => {
   const roles = new Map<string, { role: ContextRole; branches: Map<string, Array<WindowStep>> }>()
@@ -1007,7 +1005,6 @@ export const tuneWindows = (params: {
   }
   const seen = params.rereads.length
   return {
-    cutoff: params.cutoff,
     finishedAt: params.finishedAt,
     ...(seen > 0 && { readCoverage: read.length / seen }),
     rows,
@@ -1027,9 +1024,10 @@ const windowStorageError = (message: string) => (cause: unknown) =>
   new ContextWindowStorageError({ message, cause })
 
 /**
- * The role windows' tables, in the server's database, kept at their own
- * schema version. Each step keeps its output reserve and input cap, so a
- * replay uses the limits the step ran under.
+ * The role windows' samples, in the server's database, kept at their own
+ * schema version: the extension's own log of the turns it saw, since an
+ * extension reads only its workspace's events. Each step keeps its output
+ * reserve and input cap, so a replay uses the limits the step ran under.
  */
 const createContextWindowTables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -1065,18 +1063,6 @@ const createContextWindowTables = Effect.gen(function* () {
         PRIMARY KEY (session_id, branch_id, tool_call_id)
       )`,
       `CREATE INDEX context_window_rereads_recorded ON context_window_rereads (recorded_at)`,
-      `CREATE TABLE context_windows (
-        agent TEXT NOT NULL,
-        child INTEGER NOT NULL,
-        row_json TEXT NOT NULL,
-        tuned_at INTEGER NOT NULL,
-        PRIMARY KEY (agent, child)
-      )`,
-      `CREATE TABLE context_window_tunes (
-        cutoff INTEGER PRIMARY KEY,
-        finished_at INTEGER NOT NULL,
-        report_json TEXT NOT NULL
-      )`,
     ],
     (statement) => sql.unsafe(statement),
     { discard: true },
@@ -1086,12 +1072,7 @@ const createContextWindowTables = Effect.gen(function* () {
 const ensureContextWindowTables = ensureExtensionTables({
   owner: "@gent/compaction",
   version: 1,
-  tables: [
-    "context_window_steps",
-    "context_window_rereads",
-    "context_windows",
-    "context_window_tunes",
-  ],
+  tables: ["context_window_steps", "context_window_rereads"],
   create: createContextWindowTables,
 }).pipe(Effect.mapError(windowStorageError("Context window table setup failed")))
 
@@ -1148,23 +1129,17 @@ const rereadOfRow = (row: RereadRow): WindowReread => ({
   tokens: row.tokens,
 })
 
-const RoleWindowJson = Schema.fromJsonString(RoleWindow)
-const decodeRoleWindow = Schema.decodeUnknownOption(RoleWindowJson)
-const encodeRoleWindow = Schema.encodeEffect(RoleWindowJson)
-const encodeTuneReport = Schema.encodeEffect(Schema.fromJsonString(TuneReport))
-
 /** SQLite has no boolean: a flag is stored as 0 or 1. */
 const flag = (value: boolean) => Number(value)
 
 interface ContextWindowsService {
   /** Stores a turn's samples; a repeat of the same step or call is a no-op. */
   readonly record: (samples: WindowSamples) => Effect.Effect<void, ContextWindowStorageError>
-  /** The role's tuned window; none when it has no row. */
+  /** The role's tuned window; none when the last tune gave it none. */
   readonly window: (role: ContextRole) => Effect.Effect<Option.Option<number>>
   /**
-   * Runs one tune when the last finished over `TUNE_EVERY_MS` ago and none
-   * runs on this server; the report it wrote, none when it ran nothing or
-   * another server wrote the same cutoff first.
+   * Runs one tune when the last finished over `TUNE_EVERY_MS` ago, or none
+   * finished, and none runs; the report, none when it ran nothing.
    */
   readonly tuneIfStale: Effect.Effect<Option.Option<TuneReport>, ContextWindowStorageError>
   /** Starts `tuneIfStale` in the Resource's scope; the caller does not wait. */
@@ -1172,9 +1147,14 @@ interface ContextWindowsService {
 }
 
 /**
- * The role windows, their samples and their tune runs. Building it creates
- * the tables and loads the windows; a failed table setup or load leaves every
- * role at its model window, and a corrupt row leaves its own role there.
+ * The role windows and their samples. The windows are a memo of the
+ * samples, held in memory and never stored: building it creates the tables
+ * and tunes from the last `SAMPLE_MS` of them, so a restart answers with
+ * the windows at once and a changed tune rule answers from the next build.
+ * Two servers on one database each tune their own memo from the same
+ * samples. A failed table setup leaves every role at its model window; a
+ * failed tune leaves the windows as they were, and the next turn end tries
+ * again.
  */
 export class ContextWindows extends Context.Service<ContextWindows, ContextWindowsService>()(
   "@gent/extensions/src/compaction/ContextWindows",
@@ -1204,41 +1184,6 @@ export class ContextWindows extends Context.Service<ContextWindows, ContextWindo
           startTune: Effect.void,
         })
       }
-
-      const latestTune = sql<{ readonly finished_at: number }>`
-        SELECT finished_at FROM context_window_tunes ORDER BY finished_at DESC LIMIT 1
-      `.pipe(
-        Effect.map((rows) => Option.map(Option.fromUndefinedOr(rows[0]), (row) => row.finished_at)),
-        Effect.mapError(windowStorageError("Context window tunes read failed")),
-      )
-
-      const loadWindows = Effect.gen(function* () {
-        const rows = yield* sql<{
-          readonly agent: string
-          readonly child: number
-          readonly row_json: string
-        }>`
-          SELECT agent, child, row_json FROM context_windows
-        `.pipe(Effect.mapError(windowStorageError("Context windows read failed")))
-        const loaded = new Map<string, number>()
-        for (const row of rows) {
-          const decoded = decodeRoleWindow(row.row_json)
-          if (Option.isNone(decoded)) {
-            yield* Effect.logWarning("compaction.windows.row.corrupt").pipe(
-              Effect.annotateLogs({ agent: row.agent, child: row.child === 1 }),
-            )
-            continue
-          }
-          loaded.set(roleKey(decoded.value.role), decoded.value.windowTokens)
-        }
-        yield* Ref.set(windows, loaded)
-      })
-
-      yield* loadWindows.pipe(Effect.catchCause(warn("compaction.windows.load.failed")))
-      yield* latestTune.pipe(
-        Effect.flatMap((finished) => Ref.set(lastFinished, finished)),
-        Effect.catchCause(warn("compaction.windows.load.failed")),
-      )
 
       const record = Effect.fn("ContextWindows.record")(function* (samples: WindowSamples) {
         if (samples.steps.length === 0 && samples.rereads.length === 0) return
@@ -1281,16 +1226,6 @@ export class ContextWindows extends Context.Service<ContextWindows, ContextWindo
       })
 
       const runTune = Effect.fn("ContextWindows.runTune")(function* (now: number) {
-        const fresh = (finished: Option.Option<number>) =>
-          Option.exists(finished, (at) => now - at < TUNE_EVERY_MS)
-        // Another server may have tuned since this one loaded: its windows
-        // are the ones to answer with from now on.
-        const stored = yield* latestTune
-        yield* Ref.set(lastFinished, stored)
-        if (fresh(stored)) {
-          yield* loadWindows
-          return Option.none<TuneReport>()
-        }
         const since = now - SAMPLE_MS
         const steps = yield* sql<StepRow>`
           SELECT * FROM context_window_steps
@@ -1302,66 +1237,35 @@ export class ContextWindows extends Context.Service<ContextWindows, ContextWindo
         const report = tuneWindows({
           steps: steps.map(stepOfRow),
           rereads: rereads.map(rereadOfRow),
-          cutoff: Math.floor(now / HOUR_MS) * HOUR_MS,
           finishedAt: now,
         })
-        const reportJson = yield* encodeTuneReport(report).pipe(
-          Effect.mapError(windowStorageError("Context window report encode failed")),
-        )
-        const rowJson = yield* Effect.forEach(report.rows, (row) =>
-          encodeRoleWindow(row).pipe(
-            Effect.map((json) => ({ row, json })),
-            Effect.mapError(windowStorageError("Context window row encode failed")),
-          ),
-        )
-        const wrote = yield* Effect.gen(function* () {
-          // The write lock is held from here: a tune another server finished
-          // meanwhile, or one with the same cutoff, makes this one a no-op.
-          if (fresh(yield* latestTune)) return false
-          const inserted = yield* sql`
-            INSERT INTO context_window_tunes (cutoff, finished_at, report_json)
-            VALUES (${report.cutoff}, ${now}, ${reportJson})
-            ON CONFLICT (cutoff) DO NOTHING RETURNING cutoff
-          `.pipe(Effect.mapError(windowStorageError("Context window tune write failed")))
-          if (inserted.length === 0) return false
-          yield* sql`DELETE FROM context_windows`
-          yield* Effect.forEach(
-            rowJson,
-            ({ row, json }) => sql`
-              INSERT INTO context_windows (agent, child, row_json, tuned_at)
-              VALUES (${row.role.agent}, ${flag(row.role.child)}, ${json}, ${now})
-            `,
-            { discard: true },
-          )
-          yield* sql`DELETE FROM context_window_steps WHERE recorded_at < ${since}`
-          yield* sql`DELETE FROM context_window_rereads WHERE recorded_at < ${since}`
-          return true
-        }).pipe(
+        // Samples past the tune's span leave the tables; a failed prune fails
+        // the tune, so the memo stays as it was and the next turn end retries.
+        yield* sql`DELETE FROM context_window_steps WHERE recorded_at < ${since}`.pipe(
+          Effect.andThen(sql`DELETE FROM context_window_rereads WHERE recorded_at < ${since}`),
           sql.withTransaction,
-          Effect.mapError(windowStorageError("Context window tune write failed")),
+          Effect.mapError(windowStorageError("Context window samples prune failed")),
         )
-        if (!wrote) {
-          yield* Ref.set(lastFinished, yield* latestTune)
-          yield* loadWindows
-          return Option.none<TuneReport>()
-        }
         yield* Ref.set(
           windows,
           new Map(report.rows.map((row) => [roleKey(row.role), row.windowTokens])),
         )
         yield* Ref.set(lastFinished, Option.some(now))
-        return Option.some(report)
+        return report
       })
 
       const tuneIfStale = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis
         const last = yield* Ref.get(lastFinished)
         if (Option.exists(last, (at) => now - at < TUNE_EVERY_MS)) return Option.none<TuneReport>()
-        // One tune at a time on this server; the cutoff key covers the others.
+        // One tune at a time on this server.
         const claimed = yield* Ref.modify(running, (busy) => [!busy, true])
         if (!claimed) return Option.none<TuneReport>()
-        return yield* runTune(now).pipe(Effect.ensuring(Ref.set(running, false)))
+        return yield* runTune(now).pipe(Effect.asSome, Effect.ensuring(Ref.set(running, false)))
       }).pipe(Effect.withSpan("ContextWindows.tuneIfStale"))
+
+      // The build's tune: the windows are the samples' from the start.
+      yield* tuneIfStale.pipe(Effect.catchCause(warn("compaction.windows.tune.failed")))
 
       return ContextWindows.of({
         record,
