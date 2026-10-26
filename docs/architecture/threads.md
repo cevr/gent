@@ -230,18 +230,25 @@
     claimed, `thread.start` and `thread.send` return at admission with
     `queued`, the requests ahead of it, and a waiter on the server's scope
     (`queueRound`, one per round, the caller's services) sends its turn when
-    the grant comes. A `starter` round that waited tells its starter it
-    started with a parked steer (`THREAD_ROUND_START_TYPE`, no wake: its end
-    is what wakes the starter, and a wake per start would spend a starter
-    turn on news it cannot act on). A round's end of any kind (a stop, the
-    starter's interrupt, a delete) frees its lane or takes it out of the
-    queue (`endRound`, `dropSessionRounds`). A waiter refused for good (its
+    the grant comes. The starter hears nothing at the start: the
+    `queued` return told it, and the round's end, or a refusal for good,
+    is what reaches it. The waiter takes the grant (`Accounts.awaitLane`)
+    before it sends, as a start admitted at once does, so the grant holds
+    its lane until the turn opens or the round ends and never lapses under
+    a slow send. A round's end of any kind (a stop, the starter's
+    interrupt, a delete) frees its lane or takes it out of the queue
+    (`endRound`, `dropSessionRounds`). A waiter refused for good (its
     windows became spent while it waited) ends its round as a turn that
     failed at a usage limit, with the refusal as its error and the reset as
-    its `retryAt`, and that end wakes a `starter` round's starter. The
-    queue is in memory: a round queued when the server stopped is an open
-    row whose message never reached the thread, and the starter's loop-open
-    reconcile, or a retry under its key, asks for its lane again. A start's order: resolve
+    its `retryAt`, and that end wakes a `starter` round's starter. A thread
+    whose follow-up queue filled while its round waited refuses the turn at
+    the grant: the round ends unanswered, with the full queue as its error,
+    its end reaches whoever hears it and its lane frees (`startQueuedRound`).
+    The queue is in memory: a round queued when the server stopped is an
+    open row whose message never reached the thread, and the starter's
+    loop-open reconcile, or a retry under its key, asks for its lane again.
+    Opening only the thread does not: a round whose starter never opens
+    again stays an open row. A start's order: resolve
     the place (`Workspaces.locate`), admit the cap and the lane, hold the
     lane (`Accounts.hold`, so setup hooks longer than the lane's 2 minutes
     do not lapse it), copy and run the hooks, create the session, bind,

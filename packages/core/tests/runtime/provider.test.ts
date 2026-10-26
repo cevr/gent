@@ -6652,26 +6652,28 @@ describe("account lanes", () => {
       .find((account) => account.slot === a)
       ?.windows.find((window) => window.window === "5h" && window.model === model)?.fuelPerPct
   /**
-   * Fuel both 5h windows of `a`, which reset `resetIn` from `now`: $1 of glm
-   * and $3 of the plan's model. The account's moves 4 points, glm's 2.
+   * Fuel both 5h windows of `account` (`a` by default), which reset
+   * `resetIn` from `now`: $1 of glm and $3 of the plan's model. The
+   * account's moves 4 points, glm's 2.
    */
   const fuelBothWindows = (
     fixture: Effect.Success<ReturnType<typeof accounts>>,
     now: number,
     resetIn = 5 * HOUR,
+    account: Account = a,
   ) =>
     Effect.gen(function* () {
       const resetAt = now + resetIn
       // The account's window runs to 90%, so it starts 10 points lower than
       // the model's to leave both 86 points.
-      yield* fixture.read(a, [
+      yield* fixture.read(account, [
         { window: "5h", utilization: 0, resetAt },
         { window: "5h", model: glm, utilization: 0.1, resetAt },
       ])
-      yield* fixture.spend(a, Option.some(1), usage, runner, glm)
-      yield* fixture.spend(a, Option.some(3))
+      yield* fixture.spend(account, Option.some(1), usage, runner, glm)
+      yield* fixture.spend(account, Option.some(3))
       yield* TestClock.adjust("1 minute")
-      yield* fixture.read(a, [
+      yield* fixture.read(account, [
         { window: "5h", utilization: 0.04, resetAt },
         { window: "5h", model: glm, utilization: 0.12, resetAt },
       ])
@@ -7288,6 +7290,97 @@ describe("account lanes", () => {
       })
       // Its turn opened: the run holds the same lane.
       expect(yield* askLane(placement, Option.none(), "start-3")).toBe("queued")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a granted start its caller took holds its lane past the grant's lapse", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement, lanes } = fixture
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      expect(yield* askLane(placement, Option.none(), "taken")).toBe("admitted")
+      expect(yield* askLane(placement, Option.none(), "unused")).toBe("admitted")
+      expect(yield* askLane(placement, Option.none(), "next")).toBe("queued")
+      // The caller takes its grant to send its turn, which has not opened yet.
+      expect(yield* placement.awaitLane("taken")).toBe(true)
+      // Past 2 minutes the unused grant lapses and its lane goes to the waiter;
+      // the taken one still holds its lane, so a third start waits.
+      yield* TestClock.adjust("2 minutes")
+      expect(yield* askLane(placement, Option.none(), "next")).toBe("admitted")
+      expect(yield* askLane(placement, Option.none(), "third")).toBe("queued")
+      expect((yield* lanes([a])).load).toBeCloseTo(2)
+      // A free ends the taken grant: its lane goes to the next waiter.
+      yield* placement.freeReservation("taken")
+      expect(yield* askLane(placement, Option.none(), "third")).toBe("admitted")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a waiter is served on the sign-in its label holds now, not the one it asked under",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        const { placement, read, admit, lanes } = fixture
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        const old = { slot: a, signedInAt: 1 }
+        const replaced = { slot: a, signedInAt: 2 }
+        yield* fuelBothWindows(fixture, now, 2 * HOUR, old)
+        expect(yield* admit([old], "fill-1")).toBe("admitted")
+        expect(yield* admit([old], "fill-2")).toBe("admitted")
+        expect(yield* admit([old], "waits")).toBe("queued")
+        const awaiting = yield* Effect.forkChild(Effect.flip(placement.awaitLane("waits")), {
+          startImmediately: true,
+        })
+        // A new sign-in on the label reads its window rejected.
+        yield* read(replaced, [
+          { window: "5h", utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
+        ])
+        yield* placement.freeReservation("fill-1")
+        // The waiter reads the new sign-in's windows: refused for good. Its old
+        // stamp never rebinds the label, so the new sign-in keeps its reading.
+        const refused = yield* Fiber.join(awaiting)
+        expect(refused.message).toContain("No lane on plan: its quota windows carry no run before")
+        const account = (yield* lanes([replaced])).accounts.find((found) => found.slot === a)
+        expect(account?.windows.map((window) => [window.window, window.rejected])).toEqual([
+          ["5h", true],
+        ])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("an account hold that ends while runs wait frees its lanes to the queue", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement, admit } = fixture
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      // Each account's window carries two runs.
+      yield* fuelBothWindows(fixture, now, 2 * HOUR)
+      yield* fuelBothWindows(fixture, now, 2 * HOUR, b)
+      // A refusal holds a for ten minutes: b alone carries runs.
+      yield* placement.refuse({
+        provider: "plan",
+        slot: a,
+        signedInAt: Option.none(),
+        model: Option.none(),
+        retryAt: Option.some(now + 10 * 60_000),
+      })
+      for (const key of ["run-1", "run-2"]) {
+        expect(yield* admit([a, b], key)).toBe("admitted")
+        yield* placement.openLane({
+          sessionId: SessionId.make(key),
+          key,
+          provider: "plan",
+          scope: [receiptOf(a), receiptOf(b)],
+          model: planModel,
+          project: Option.none(),
+        })
+      }
+      expect(yield* admit([a, b], "waits")).toBe("queued")
+      // The hold ends with both runs still open: the queue is served on a's lanes.
+      yield* TestClock.adjust("11 minutes")
+      expect(yield* admit([a, b], "waits")).toBe("admitted")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

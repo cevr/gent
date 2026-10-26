@@ -66,7 +66,6 @@ import { AgentsExtension } from "../src/agents.js"
 import { SESSION_TOOLS_EXTENSION_ID, SessionToolsExtension } from "../src/session-tools.js"
 import {
   THREAD_ROUND_END_TYPE,
-  THREAD_ROUND_START_TYPE,
   THREAD_ROUND_TYPE,
   ThreadBusy,
   threadRoundText,
@@ -182,6 +181,16 @@ const StartedResult = Schema.Struct({
   ),
 })
 const StartedOutput = Schema.fromJsonString(StartedResult)
+/** A round handle as `thread.send` returns it, with its place in the lane queue. */
+const decodeQueuedHandle = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      round: Schema.String,
+      number: Schema.Finite,
+      queued: Schema.optionalKey(Schema.Finite),
+    }),
+  ),
+)
 /** `thread.round`'s view of one round, as much of it as the lane tests read. */
 const decodeRoundRead = Schema.decodeEffect(
   Schema.fromJsonString(
@@ -189,6 +198,7 @@ const decodeRoundRead = Schema.decodeEffect(
       status: Schema.Literals(["open", "ended"]),
       streamFailed: Schema.Boolean,
       interrupted: Schema.Boolean,
+      unanswered: Schema.Boolean,
       error: Schema.optionalKey(Schema.String),
       retryAt: Schema.optionalKey(Schema.Finite),
     }),
@@ -1207,41 +1217,75 @@ describe("threads", () => {
     )
 
     it.live(
-      "a queued starter round that gets its lane tells its starter, with no turn of the starter's own",
+      "a queued round whose thread's follow-up queue is full when its lane comes ends unanswered, wakes its starter, and frees the lane",
       () =>
         Effect.scoped(
           Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis
-            const rig = yield* accountsRig({ ...metered, quota: oneLane(now) })
+            // Ten hours to the reset: 89 points carry 2.6 runs, two lanes.
+            const rig = yield* accountsRig({
+              ...metered,
+              quota: (step) => [
+                {
+                  window: "7d",
+                  utilization: Option.getOrElse(
+                    Option.liftPredicate(0.1, () => step === 1),
+                    () => 0.11,
+                  ),
+                  resetAt: now + 10 * 3_600_000,
+                  rejected: false,
+                },
+              ],
+            })
             const running = yield* rig.start(rig.starter, THREAD_TASK)
             yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
-            const queued = yield* Effect.flatMap(
+            const [made] = yield* rig.act(rig.starter, [rig.op("thread.start", { name: "idle" })])
+            if (Predicate.isUndefined(made) || !made.ok) return yield* Effect.die("no idle thread")
+            const idle = yield* decodeStarted(made.output)
+            const idlePlace = { sessionId: idle.sessionId, branchId: idle.branchId }
+            // The user keeps the idle thread busy: its own turn takes the second lane.
+            yield* rig.client.message.send({ ...idlePlace, content: `${THREAD_TASK} hold` })
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "the user's turn")
+            yield* loadIs(rig, 2, "two turns hold both lanes")
+            const sent = yield* Effect.flatMap(
               rig.one(
                 rig.starter,
-                rig.op("thread.start", { task: THREAD_TASK, notify: "starter" }),
+                rig.op("thread.send", {
+                  thread: idle.thread,
+                  message: "the queued round",
+                  notify: "starter",
+                }),
               ),
-              decodeStarted,
+              decodeQueuedHandle,
             )
-            expect(queued.round?.queued).toBe(0)
+            expect(sent.queued).toBe(0)
+            // The thread's follow-up queue fills while the round waits.
+            for (const index of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+              yield* rig.client.message.send({ ...idlePlace, content: `queued ${index}` })
+            // The running round stops: its lane goes to the queued round, whose turn the thread refuses.
             yield* rig.stop(rig.starter, running.thread)
-            yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "the queued round runs")
-            const told = yield* waitFor(
+            const ended = yield* waitFor(
+              Effect.flatMap(
+                rig.one(rig.starter, rig.op("thread.round", { round: sent.round })),
+                decodeRoundRead,
+              ),
+              (view) => view.status === "ended",
+              4_000,
+              "the refused round ended",
+            )
+            expect(ended).toMatchObject({ unanswered: true, streamFailed: false })
+            expect(ended.error).toContain("follow-up queue was full")
+            yield* waitFor(
               rig.client.session.getSnapshot(rig.starter),
               (current) =>
                 current.messages.some(
-                  (message) => message.metadata?.customType === THREAD_ROUND_START_TYPE,
+                  (message) => message.metadata?.customType === THREAD_ROUND_END_TYPE,
                 ),
               4_000,
-              "the starter reads that its round started",
+              "the round's end woke the starter",
             )
-            const notice = told.messages.find(
-              (message) => message.metadata?.customType === THREAD_ROUND_START_TYPE,
-            )
-            expect(notice?.metadata?.details).toMatchObject({ round: queued.round?.round })
-            // The notice woke no turn: the starter ran only its own tool steps.
-            expect(told.runtime._tag).toBe("Idle")
+            yield* loadIs(rig, 1, "the refused round holds no lane")
             yield* Deferred.succeed(rig.gate, true)
-            yield* loadIs(rig, 0, "every lane is free once the rounds end")
           }).pipe(Effect.timeout("12 seconds")),
         ),
       15_000,

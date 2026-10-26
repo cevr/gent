@@ -1725,12 +1725,6 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
 
 // ── the lane queue ──────────────────────────────────────────────────────────
 
-/** `metadata.customType` on the notice that a queued `starter` round got its lane. */
-export const THREAD_ROUND_START_TYPE = "thread-round-start"
-
-/** The steer that tells a starter its queued round started: its message id derives from it. */
-const roundStartRequestId = (round: string) => RequestId.make(`thread-round-start:${round}`)
-
 /**
  * The windows refused a round's lane for good: its accounts carry no run
  * of its size before `retryAt`. The round ends as a turn failed at a usage
@@ -1751,32 +1745,35 @@ const refuseRound = Effect.fn("Threads.refuseRound")(function* (
   })
 })
 
-/**
- * A queued round got its lane: its turn goes out, and the starter of a
- * `starter` round reads that it started at its next turn, with no turn of
- * its own: the round's end is what wakes it.
- */
-const startQueuedRound = Effect.fn("Threads.startQueuedRound")(function* (round: RoundRow) {
-  const ctx = yield* ExtensionContext
-  yield* sendClaimedRound(round)
-  if (round.notify !== "starter") return
-  const place = yield* wakeTarget(round)
-  yield* ctx.Session.send({
-    delivery: "steer",
-    ...place,
-    requestId: roundStartRequestId(round.round),
-    wake: false,
-    content: `Round ${round.number} (${round.round}) of thread ${round.thread} waited for a lane and started. Its end wakes you.`,
-    metadata: {
-      customType: THREAD_ROUND_START_TYPE,
-      details: { round: round.round, thread: round.thread, number: round.number },
-    },
-  })
+/** The round never ran: the thread's loop refused its turn with its follow-up queue full. */
+const queueFullOutcome = (full: FollowUpQueueFull): TurnOutcome => ({
+  interrupted: false,
+  streamFailed: false,
+  unanswered: true,
+  error: Option.some(
+    `The thread's follow-up queue was full (${full.max} waiting) when the round got its lane: the round never ran`,
+  ),
+  retryAt: Option.none(),
+  usage: Option.none(),
 })
 
 /**
- * A queued round's waiter: it waits for the round's lane, then starts the
- * round. A round a stop, an interrupt or a delete closed meanwhile sends
+ * A queued round got its lane: its turn goes out. Its starter was answered
+ * at admission and waits for its end, so a thread whose follow-up queue is
+ * full ends the round as unanswered, and that end reaches whoever hears it
+ * and frees the lane (`endRound`), where a direct send's caller reads the
+ * refusal instead.
+ */
+const startQueuedRound = Effect.fn("Threads.startQueuedRound")(function* (round: RoundRow) {
+  yield* sendRoundTurn(round).pipe(
+    Effect.catchTag("FollowUpQueueFull", (full) => endRound(round, queueFullOutcome(full))),
+  )
+})
+
+/**
+ * A queued round's waiter: it waits for the round's lane and takes the
+ * grant (`awaitLane`), which then holds until the round's turn opens or
+ * the round ends, then starts the round. A round a stop, an interrupt or a delete closed meanwhile sends
  * nothing and leaves the queue. A waiter freed while its round stays open
  * (its grant lapsed) asks again; a refusal for good ends the round.
  */
@@ -1798,7 +1795,11 @@ const awaitRoundLane = Effect.fn("Threads.awaitRoundLane")(function* (
     if (granted.success) return yield* startQueuedRound(open.value)
     const again = yield* Effect.result(admitLane(round.round, lane))
     if (Result.isFailure(again)) return yield* refuseRound(open.value, again.failure)
-    if (again.success._tag === "Admitted") return yield* startQueuedRound(open.value)
+    if (again.success._tag === "Admitted") {
+      // Take the grant before the send; a run with no lane read has none to take.
+      yield* ctx.Accounts.awaitLane(message)
+      return yield* startQueuedRound(open.value)
+    }
     granted = yield* Effect.result(ctx.Accounts.awaitLane(message))
   }
 })
@@ -1836,6 +1837,9 @@ const startRound = Effect.fn("Threads.startRound")(function* (
   lane: RoundLane,
 ) {
   if (admission._tag === "Admitted") {
+    // The send takes its grant first: it lapses no more until its turn opens.
+    const ctx = yield* ExtensionContext
+    yield* ctx.Accounts.awaitLane(roundMessageId(round.round))
     yield* sendClaimedRound(round)
     return Option.none<number>()
   }

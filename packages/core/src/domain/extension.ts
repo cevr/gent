@@ -1462,9 +1462,12 @@ export interface ExtensionAccountsService {
   readonly admit: (run: LaneRun) => Effect.Effect<LaneAdmission, LaneUnavailable>
   /**
    * Waits while the start queued for `message` waits for its lane: true
-   * once it holds one, false when it neither holds nor waits for one (it
-   * was cancelled, or its grant lapsed). Fails `LaneUnavailable` when the
-   * queue refused it for good: its windows carry no run of its size.
+   * once it holds one, which the call takes for the start's turn: from then
+   * it no longer lapses, and holds its lane until the turn of `message`
+   * opens or `cancel` names it. Call it right before sending the turn.
+   * False when it neither holds nor waits for one (it was cancelled, or its
+   * grant lapsed). Fails `LaneUnavailable` when the queue refused it for
+   * good: its windows carry no run of its size.
    */
   readonly awaitLane: (message: MessageId) => Effect.Effect<boolean, LaneUnavailable>
   /** The owner's model tiers as the config of `cwd` names them. */

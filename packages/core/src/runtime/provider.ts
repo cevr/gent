@@ -3954,7 +3954,9 @@ interface CredentialPlacementService {
   readonly admitLane: (request: LaneRequest) => Effect.Effect<LaneAdmission, LaneUnavailable>
   /**
    * Waits while the start under `key` waits in its queue: true once it holds
-   * a lane, false when it neither holds nor waits for one (freed, or its
+   * a lane, which the call takes for the start's turn: the grant no longer
+   * lapses, and holds its lane until the turn opens or `freeReservation`
+   * names it. False when it neither holds nor waits for one (freed, or its
    * grant lapsed). Fails when a serve found its windows spent: it leaves the
    * queue for good.
    */
@@ -5109,7 +5111,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * `admission` tells one admission under a key from a later one, so a hold
    * releases only the reservation it held. `model` is the model its turns
    * will run, none when its route named none; `project` the project it works
-   * in; `starter` the session that asked for it.
+   * in; `starter` the session that asked for it. `started`: its caller took
+   * the grant to send its turn (`awaitLane`): it no longer lapses, and holds
+   * its lane until its turn opens or a free names it.
    */
   const reserved = new Map<
     string,
@@ -5121,6 +5125,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly starter: Option.Option<SessionId>
       readonly until: number
       readonly holders: number
+      readonly started: boolean
       readonly admission: number
     }
   >()
@@ -5142,8 +5147,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }
   >()
   let lastArrival = 0
-  const reserving = (entry: { readonly until: number; readonly holders: number }, now: number) =>
-    entry.holders > 0 || entry.until > now
+  const reserving = (
+    entry: { readonly until: number; readonly holders: number; readonly started: boolean },
+    now: number,
+  ) => entry.started || entry.holders > 0 || entry.until > now
   /**
    * The runs holding a lane on `provider` that `counts`, each at its `size`
    * (one by default); `asker`'s own open turn is left out.
@@ -6260,6 +6267,19 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       })),
     }
   }
+  /**
+   * `scope` as the placement holds its accounts now: each label with the
+   * sign-in bound to it, none for an unstamped one. A queued request reads
+   * its accounts through this, never through the stamps it arrived with: a
+   * newer sign-in reported since must not be rebound to the old one.
+   */
+  const currentScope = (provider: string, scope: LaneScope): LaneScope =>
+    Arr.map(scope, (account) =>
+      Option.match(signedInOf(provider, account.slot), {
+        onNone: () => ({ provider: account.provider, slot: account.slot }),
+        onSome: (signedInAt) => ({ provider: account.provider, slot: account.slot, signedInAt }),
+      }),
+    )
   /** The queue a run waits in: its provider and the accounts its turns spend from. */
   const laneQueueKey = (request: Pick<LaneRequest, "provider" | "scope">) =>
     placementKey(
@@ -6330,6 +6350,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       starter: request.asker,
       until: now + LANE_RESERVATION_MS,
       holders: 0,
+      started: false,
       admission,
     })
     return { key, admission }
@@ -6344,6 +6365,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * Returns the grants it made.
    */
   const serve = (now: number) => {
+    // Expired account holds and readings no longer bound capacity.
+    trim(now)
     const grants: Array<LaneGrant> = []
     for (const [key, held] of reserved) if (!reserving(held, now)) reserved.delete(key)
     const pools = new Set(Array.from(waiting.values(), (waiter) => waiter.pool))
@@ -6364,11 +6387,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const serveOne = (pool: string, now: number): Option.Option<LaneGrant> => {
     let poolFull = false
     for (const { key, waiter } of queueOrder(pool, now)) {
-      const check = laneCheck(waiter.request, now)
+      const request = {
+        ...waiter.request,
+        scope: currentScope(waiter.request.provider, waiter.request.scope),
+      }
+      const check = laneCheck(request, now)
       if (Option.isNone(check.block)) {
         if (poolFull && !check.underHold) continue
         waiting.delete(key)
-        const granted = grantLane(key, waiter.request, now)
+        const granted = grantLane(key, request, now)
         Deferred.doneUnsafe(waiter.done, Effect.void)
         return Option.some(granted)
       }
@@ -6392,6 +6419,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       const now = yield* Clock.currentTimeMillis
       const next = yield* locked(() => {
         if (waiting.size === 0) return Option.none<number>()
+        // Expired readings and account holds name no next time.
+        trim(now)
         const times = [
           ...Array.from(readings.values(), (reading) => reading.resetAt),
           ...held.values(),
@@ -6441,7 +6470,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             Option.fromUndefinedOr(reserved.get(key)),
             (found) => found.admission === admission,
           )
-          if (Option.isNone(entry)) return { wait: Option.none<number>(), grants: [] }
+          // A started grant holds its lane until its turn opens or a free.
+          if (Option.isNone(entry) || entry.value.started)
+            return { wait: Option.none<number>(), grants: [] }
           if (entry.value.holders > 0) return { wait: Option.some(LANE_RESERVATION_MS), grants: [] }
           if (entry.value.until > now)
             return { wait: Option.some(entry.value.until - now), grants: [] }
@@ -6458,8 +6489,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       Effect.flatMap(
         locked(() => {
           const held = reserved.get(key)
-          if (Predicate.isNotUndefined(held) && reserving(held, now))
+          if (Predicate.isNotUndefined(held) && reserving(held, now)) {
+            // The caller takes the grant: it lapses no more.
+            reserved.set(key, { ...held, started: true })
             return { holds: true, waiter: Option.none<Deferred.Deferred<void, LaneUnavailable>>() }
+          }
           return {
             holds: false,
             waiter: Option.map(Option.fromUndefinedOr(waiting.get(key)), (found) => found.done),
