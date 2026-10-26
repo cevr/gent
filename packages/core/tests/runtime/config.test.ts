@@ -853,38 +853,41 @@ describe("user configuration", () => {
 
     // Project lane holds are gone: the pace alone admits a run. A user file
     // that still holds lanes loads, its entry's other fields still count,
-    // and an order write keeps the key inside the entry as written.
-    it.scopedLive("a user file that still sets the retired authHold key loads and keeps it", () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const cwd = yield* fs.makeTempDirectoryScoped()
-        const home = yield* fs.makeTempDirectoryScoped()
-        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
-        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
-        // A hold of 0 lanes failed the file while holds were read.
-        const authHold = { "~/gent": 2, "/work/okra": 0 }
-        yield* fs.writeFileString(
-          userConfigPath,
-          encodeJson({ providers: { anthropic: { authHold, extraUsage: true } } }),
-        )
-        const readRaw = fs
-          .readFileString(userConfigPath)
-          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
-        const work = CredentialSlot.make("work")
-        yield* Effect.gen(function* () {
-          const cfg = yield* ConfigService
-          const fresh = yield* cfg.getFresh(cwd)
-          expect(fresh.failures).toEqual([])
-          expect(yield* cfg.extraUsage("anthropic")).toBe(true)
-          yield* cfg.setAuthOrder("anthropic", [work, DEFAULT_CREDENTIAL_SLOT], [], cwd)
-          expect(yield* readRaw).toEqual({
-            providers: {
-              anthropic: { authHold, extraUsage: true, authOrder: ["work", "default"] },
-            },
-          })
-        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
-      }).pipe(Effect.provide(BunServices.layer)),
+    // and an order write keeps the key inside the entry as written. A write
+    // that empties the entry drops it with the entry: nothing reads it.
+    it.scopedLive(
+      "a user file that still sets the retired authHold key loads, and an order write keeps it",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const home = yield* fs.makeTempDirectoryScoped()
+          const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+          yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+          // A hold of 0 lanes failed the file while holds were read.
+          const authHold = { "~/gent": 2, "/work/okra": 0 }
+          yield* fs.writeFileString(
+            userConfigPath,
+            encodeJson({ providers: { anthropic: { authHold, extraUsage: true } } }),
+          )
+          const readRaw = fs
+            .readFileString(userConfigPath)
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+          const work = CredentialSlot.make("work")
+          yield* Effect.gen(function* () {
+            const cfg = yield* ConfigService
+            const fresh = yield* cfg.getFresh(cwd)
+            expect(fresh.failures).toEqual([])
+            expect(yield* cfg.extraUsage("anthropic")).toBe(true)
+            yield* cfg.setAuthOrder("anthropic", [work, DEFAULT_CREDENTIAL_SLOT], [], cwd)
+            expect(yield* readRaw).toEqual({
+              providers: {
+                anthropic: { authHold, extraUsage: true, authOrder: ["work", "default"] },
+              },
+            })
+          }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+        }).pipe(Effect.provide(BunServices.layer)),
     )
 
     // A config file is the user's: a write leaves each agent entry as the
