@@ -7,7 +7,7 @@
  * the Worker, or the Alchemy or Effect versions.
  */
 import { expect } from "bun:test"
-import * as Cloudflare from "alchemy/Cloudflare"
+import * as Cloudflare from "@alchemy.run/cloudflare"
 import * as Test from "alchemy/Test/Bun"
 import { Effect, Option, Schedule } from "effect"
 import { HttpClient } from "effect/http"
