@@ -116,9 +116,7 @@ hold every lane (`· held` when a refusal holds the account), and `lanes unknown
 provider's row is followed by a row
 `login! <provider> <slot> refused · sign in with /auth` for each account whose
 login the provider no longer takes (`unavailable` when the driver found no
-credential), then `hold <project> <used>/<lanes> used`, its runs on the sign-in now over its
-held lanes (more than it holds when the pool takes the rest). A narrow row names
-the project by a shorter path suffix that no other hold shares. No free lane is data, not a failure: the call exits 0.
+credential). No free lane is data, not a failure: the call exits 0.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 

@@ -337,7 +337,10 @@
     weighs half as much as one 10 runs newer. A model is scored in the
     narrowest scope it has runs in: the run's project (`Accounts.project`,
     kept on `Started`) and the input's `domain`, else the project, else the
-    machine. A model with no measured run goes first (list order), then the
+    machine. A run's project (`ConfigService.project`) is the nearest
+    directory at or above its cwd that holds `.git`, named by its `origin`
+    after git's `insteadOf` rewrites, so a clone, a worktree and a rift of
+    one repository are one project; else that root's real path. A model with no measured run goes first (list order), then the
     lowest score, one with no unit last. When the role's last 9 runs in
     the first model's scope ran it alone, the runner-up goes first, so the
     rank measures again. Deleting the function leaves the list's order. The role's

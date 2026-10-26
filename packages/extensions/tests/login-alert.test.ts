@@ -47,7 +47,6 @@ const report = (loss: Option.Option<{ readonly since: number }>): LaneReport => 
       fuelPerHour: 0,
       laneHours: 0,
       models: [],
-      holds: [],
     },
   ],
 })

@@ -1790,8 +1790,7 @@ export const routeCredentialDriver = Effect.fn("TurnHelpers.routeCredentialDrive
 
 /**
  * The lane a session's turns take: the sign-in their route spends from, the
- * accounts it is counted over, the model it spends on, the project it works
- * in and the lanes the user holds for projects on that sign-in, as
+ * accounts it is counted over and the model it spends on, as
  * `resolveSessionRoute` routes a turn of a session with `admission` and
  * `modelId` in `cwd`. None for a route with no model, or a sign-in whose
  * order does not read.
@@ -1823,12 +1822,7 @@ const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* <E, R>(run: {
   if (Option.isNone(driverId)) return Option.none()
   const lane = yield* credentialLane(driverId.value, pin, registry)
   if (Option.isNone(lane)) return Option.none()
-  return Option.some({
-    ...lane.value,
-    modelId: modelId.value,
-    project: yield* Effect.transposeOption(Option.map(run.cwd, configService.project)),
-    holds: yield* configService.laneHolds(lane.value.provider),
-  })
+  return Option.some({ ...lane.value, modelId: modelId.value })
 })
 
 /**
@@ -1858,7 +1852,6 @@ const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
     provider: lane.value.provider,
     scope: lane.value.scope,
     model: lane.value.modelId,
-    project: lane.value.project,
   })
 })
 
@@ -1879,15 +1872,13 @@ export const makeExtensionAccounts = Effect.gen(function* () {
   const lanes = Effect.scoped(
     Effect.gen(function* () {
       const { registryService } = yield* profiles.resolve(hostCwd)
-      return yield* placement.lanes(
-        (provider) =>
-          Effect.map(
-            credentialLane(provider, Option.none(), registryService).pipe(
-              Effect.provideService(ModelRegistry, modelRegistry),
-            ),
-            Option.map((lane) => lane.scope),
+      return yield* placement.lanes((provider) =>
+        Effect.map(
+          credentialLane(provider, Option.none(), registryService).pipe(
+            Effect.provideService(ModelRegistry, modelRegistry),
           ),
-        configService.laneHolds,
+          Option.map((lane) => lane.scope),
+        ),
       )
     }),
   )
@@ -1920,8 +1911,6 @@ export const makeExtensionAccounts = Effect.gen(function* () {
         key: run.message,
         asker: Option.some(asker),
         model: Option.some(lane.value.modelId),
-        project: lane.value.project,
-        holds: lane.value.holds,
       })
     }),
     tiers: Effect.fn("ExtensionAccounts.tiers")(function* (cwd: string) {

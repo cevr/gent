@@ -796,25 +796,6 @@ export const LaneModel = Schema.Struct({
   spanHours: Schema.Finite,
 })
 
-/**
- * A project's held lanes on a sign-in (`providers.<owner>.authHold`): runs
- * of the project up to `lanes` are admitted whatever the pace.
- */
-const LaneHold = Schema.Struct({
-  /** The project, as `ConfigService.project` names it. */
-  project: Schema.String,
-  lanes: Schema.Int,
-  /** The project's turns and admitted starts on the sign-in now, any model. */
-  used: Schema.Int,
-  /**
-   * Whether admission takes the project's next run now, on the account's
-   * windows (a model's own windows are the run's to count): under its hold
-   * unless every account is held, past it on the lanes the pool has free.
-   * Absent when the sign-in's order cannot be read.
-   */
-  admits: Schema.optionalKey(Schema.Boolean),
-})
-
 /** One provider's lanes. */
 export const ProviderLanes = Schema.Struct({
   provider: Schema.String,
@@ -844,8 +825,6 @@ export const ProviderLanes = Schema.Struct({
   laneHours: Schema.Finite,
   /** Each model whose fuel fell in a kept segment of an account window, with its quota weight. */
   models: Schema.Array(LaneModel),
-  /** The projects the owner holds lanes for on this sign-in, by project. */
-  holds: Schema.Array(LaneHold),
 })
 
 /** `accounts.lanes`: every provider gent read a quota window of or lost a login on. Labels and numbers only. */

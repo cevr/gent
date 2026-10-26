@@ -147,9 +147,9 @@ describe("user configuration", () => {
     )
   })
 
-  describe("lane holds", () => {
+  describe("projects", () => {
     it.scopedLive(
-      "a hold names a repository: its clones, worktrees and rifts are one project, and only the user file holds",
+      "a project names a repository: its clones, worktrees and rifts are one project",
       () =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
@@ -205,19 +205,7 @@ describe("user configuration", () => {
           yield* fs.makeDirectory(path.join(local, ".git"), { recursive: true })
           yield* fs.writeFileString(path.join(local, ".git", "config"), "[core]\n")
           const plain = path.join(root, "plain")
-          yield* fs.makeDirectory(path.join(plain, ".gent"), { recursive: true })
-          // The project file holds lanes for itself: it does not count.
-          yield* fs.writeFileString(
-            path.join(plain, ConfigService.CONFIG_RELATIVE),
-            encodeJson({ providers: { anthropic: { authHold: { [plain]: 3 } } } }),
-          )
-          yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
-          yield* fs.writeFileString(
-            path.join(home, ConfigService.CONFIG_RELATIVE),
-            encodeJson({
-              providers: { anthropic: { authHold: { [main]: 2, [rift]: 1, "~/local": 1 } } },
-            }),
-          )
+          yield* fs.makeDirectory(plain, { recursive: true })
           const live = ConfigService.Live.pipe(
             Layer.provide(RuntimeEnvironment.Live({ cwd: plain, home })),
             Layer.provide(BunServices.layer),
@@ -232,13 +220,6 @@ describe("user configuration", () => {
             expect(yield* cfg.project(scp)).toBe("git:example.com/2222/owner/repo")
             expect(yield* cfg.project(local)).toBe(local)
             expect(yield* cfg.project(plain)).toBe(plain)
-            expect(yield* cfg.laneHolds("anthropic")).toEqual(
-              new Map([
-                [gent, 2],
-                [local, 1],
-              ]),
-            )
-            expect(yield* cfg.laneHolds("openai")).toEqual(new Map())
           }).pipe(Effect.provide(live))
         }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -302,7 +283,7 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
-    it.scopedLive("a project file's authHold and extraUsage are ignored and warn once", () =>
+    it.scopedLive("a project file's extraUsage is ignored and warns once", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
@@ -314,7 +295,7 @@ describe("user configuration", () => {
         yield* writeProject(
           encodeJson({
             providers: {
-              anthropic: { authHold: { [cwd]: 3 }, extraUsage: true },
+              anthropic: { extraUsage: true },
               openai: { extraUsage: true },
             },
           }),
@@ -344,13 +325,12 @@ describe("user configuration", () => {
           yield* cfg.get(cwd)
           expect(yield* cfg.extraUsage("anthropic")).toBe(false)
           expect(yield* cfg.extraUsage("openai")).toBe(true)
-          expect(yield* cfg.laneHolds("anthropic")).toEqual(new Map())
           // The same fields in another order are the same set.
           yield* writeProject(
             encodeJson({
               providers: {
                 openai: { extraUsage: true, authOrder: ["default"] },
-                anthropic: { authHold: { [cwd]: 3 }, extraUsage: true },
+                anthropic: { extraUsage: true },
               },
             }),
           )
@@ -360,7 +340,7 @@ describe("user configuration", () => {
           yield* cfg.get(cwd)
           const prefix = "Project config sets fields only the user config counts; they are ignored"
           expect(warnings).toEqual([
-            `${prefix} providers.anthropic.authHold, providers.anthropic.extraUsage, providers.openai.extraUsage`,
+            `${prefix} providers.anthropic.extraUsage, providers.openai.extraUsage`,
             `${prefix} providers.anthropic.extraUsage`,
           ])
         }).pipe(
@@ -866,6 +846,42 @@ describe("user configuration", () => {
             night,
             // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test reads back
             driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
+          })
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    // Project lane holds are gone: the pace alone admits a run. A user file
+    // that still holds lanes loads, its entry's other fields still count,
+    // and an order write keeps the key inside the entry as written.
+    it.scopedLive("a user file that still sets the retired authHold key loads and keeps it", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        // A hold of 0 lanes failed the file while holds were read.
+        const authHold = { "~/gent": 2, "/work/okra": 0 }
+        yield* fs.writeFileString(
+          userConfigPath,
+          encodeJson({ providers: { anthropic: { authHold, extraUsage: true } } }),
+        )
+        const readRaw = fs
+          .readFileString(userConfigPath)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+        const work = CredentialSlot.make("work")
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const fresh = yield* cfg.getFresh(cwd)
+          expect(fresh.failures).toEqual([])
+          expect(yield* cfg.extraUsage("anthropic")).toBe(true)
+          yield* cfg.setAuthOrder("anthropic", [work, DEFAULT_CREDENTIAL_SLOT], [], cwd)
+          expect(yield* readRaw).toEqual({
+            providers: {
+              anthropic: { authHold, extraUsage: true, authOrder: ["work", "default"] },
+            },
           })
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),

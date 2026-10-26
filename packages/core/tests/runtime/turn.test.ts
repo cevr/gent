@@ -268,9 +268,6 @@ const captureEvents = () =>
     return { events, layer }
   })
 
-/** A sign-in on which the owner holds no project's lanes. */
-const noHolds = () => Effect.succeed<ReadonlyMap<string, number>>(new Map())
-
 describe("agent turn response collectors", () => {
   test("missing or invalid token totals stay unknown while explicit zero stays known", () => {
     const usage = Schema.decodeUnknownSync(Response.FinishPart)(
@@ -3132,10 +3129,7 @@ describe("credential order", () => {
   /** Each account of the fallback provider the lanes name a lost login on, with its reason. */
   const lostLoginsOf = (placement: CredentialPlacement["Service"]) =>
     Effect.map(
-      placement.lanes(
-        () => Effect.succeedSome([{ provider: fallbackProvider, slot: personal }]),
-        noHolds,
-      ),
+      placement.lanes(() => Effect.succeedSome([{ provider: fallbackProvider, slot: personal }])),
       (report) =>
         report.providers
           .filter((lanes) => lanes.provider === FALLBACK)
@@ -6703,9 +6697,8 @@ describe("credential order", () => {
           yield* runOn(root, "second")
           expect(root.sent).toEqual(["sk-a", "sk-a", "sk-a"])
           // A step, the summary and a step: three requests of the ten the window holds.
-          const report = yield* world.placement.lanes(
-            () => Effect.succeedSome([{ provider: fallbackProvider, slot: a }]),
-            noHolds,
+          const report = yield* world.placement.lanes(() =>
+            Effect.succeedSome([{ provider: fallbackProvider, slot: a }]),
           )
           const window = report.providers
             .find((lanes) => lanes.provider === FALLBACK)

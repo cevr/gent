@@ -1473,8 +1473,8 @@ export interface ExtensionAccountsService {
   /** The owner's model tiers as the config of `cwd` names them. */
   readonly tiers: (cwd: string) => Effect.Effect<ModelTiers>
   /**
-   * The project `cwd` works in, as lane holds name it: a clone, a worktree
-   * and a rift of one repository are one project, named by its `origin`.
+   * The project `cwd` works in: a clone, a worktree and a rift of one
+   * repository are one project, named by its `origin`.
    */
   readonly project: (cwd: string) => Effect.Effect<string>
   /**

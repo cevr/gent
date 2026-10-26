@@ -132,10 +132,7 @@ export const readDisabledExtensions = (params: { home: string; cwd: string }) =>
  * placement, runtime/provider.ts). A pool is opt-in: an order may hold a
  * billed key as a fallback that nobody wants spread onto. A pool that names
  * a credential its order does not (with no `authOrder`, the order is the
- * default alone) fails that sign-in, as conflicting orders do. `authHold`
- * holds lanes of the sign-in for projects, by repository path: a project
- * runs that many at once whatever the pace, and other work leaves room for
- * them (`ConfigService.laneHolds`). Only the user file's holds count.
+ * default alone) fails that sign-in, as conflicting orders do.
  * `extraUsage` lets a turn whose accounts all filled their windows go on
  * past them, on the plan's extra usage, instead of stopping until the
  * first reset (`ConfigService.extraUsage`). It is off by default, and only
@@ -144,9 +141,6 @@ export const readDisabledExtensions = (params: { home: string; cwd: string }) =>
 const ProviderConfigEntry = Schema.Struct({
   authOrder: Schema.optional(CredentialOrder.check(Schema.isMinLength(1))),
   authSpread: Schema.optional(CredentialOrder.check(Schema.isMinLength(2))),
-  authHold: Schema.optional(
-    Schema.Record(Schema.String, Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
-  ),
   extraUsage: Schema.optional(Schema.Boolean),
   name: Schema.optional(Schema.String),
   class: Schema.optional(Schema.String),
@@ -715,7 +709,7 @@ const repositoryOrigin = Effect.fn("Config.repositoryOrigin")(function* (
 })
 
 /**
- * The project `dir` works in, as lane holds name it: the nearest directory
+ * The project `dir` works in: the nearest directory
  * at or above it that holds `.git`, named by the repository's `origin`, so
  * a clone, a worktree and a rift of one repository are one project; by the
  * root's real path when it has no origin; by `dir`'s own when no repository
@@ -761,16 +755,8 @@ interface ConfigServiceService {
    * health, providers and the route a client reads use the lenient config.
    */
   readonly getFresh: (cwd: string) => Effect.Effect<FreshConfig>
-  /** The project `cwd` works in, as lane holds name it (`projectOf`). */
+  /** The project `cwd` works in (`projectOf`). */
   readonly project: (cwd: string) => Effect.Effect<string>
-  /**
-   * The lanes the user file holds for each project on `owner`'s sign-in
-   * (`providers.<owner>.authHold`), by project (`project` of each path; `~`
-   * is home). Only the user file counts: every run reads the same holds, and
-   * a project file holds no lane for itself. Two paths of one project hold
-   * the larger.
-   */
-  readonly laneHolds: (owner: string) => Effect.Effect<ReadonlyMap<string, number>>
   /**
    * Whether a turn on `owner`'s sign-in goes on past every account's full
    * window (`providers.<owner>.extraUsage`). Only the user file counts.
@@ -1104,14 +1090,14 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           )
         })
 
-      // `authHold` and `extraUsage` count only in the user file: a
-      // project file that sets them is read without them, and says so.
+      // `extraUsage` counts only in the user file: a project file that
+      // sets it is read without it, and says so.
       const warnUserOnlyFields = (filePath: string, project: UserConfig) =>
         Effect.gen(function* () {
           const fields: Array<string> = []
           for (const [owner, entry] of Object.entries(project.providers ?? {}))
-            for (const field of ["authHold", "extraUsage"] as const)
-              if (Predicate.isNotUndefined(entry[field])) fields.push(`providers.${owner}.${field}`)
+            if (Predicate.isNotUndefined(entry.extraUsage))
+              fields.push(`providers.${owner}.extraUsage`)
           if (fields.length === 0) return
           // The key is the set: a file that reorders its providers warns no more.
           fields.sort(Order.String)
@@ -1383,16 +1369,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
 
         project,
 
-        laneHolds: Effect.fn("ConfigService.laneHolds")(function* (owner) {
-          const { user } = yield* readUser
-          const holds = new Map<string, number>()
-          for (const [dir, lanes] of Object.entries(user.providers?.[owner]?.authHold ?? {})) {
-            const held = yield* project(path.resolve(home, dir.replace(/^~(?=\/|$)/, home)))
-            holds.set(held, Math.max(lanes, holds.get(held) ?? 0))
-          }
-          return holds
-        }),
-
         extraUsage: Effect.fn("ConfigService.extraUsage")(function* (owner) {
           const { user } = yield* readUser
           return user.providers?.[owner]?.extraUsage ?? false
@@ -1495,13 +1471,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 fingerprint: "test",
               }
             }),
-          // No filesystem: a cwd is its own project, and a hold path names it as written.
+          // No filesystem: a cwd is its own project.
           project: (cwd) => Effect.succeed(cwd),
-          laneHolds: (owner) =>
-            Effect.map(
-              SynchronizedRef.get(userConfigRef),
-              (user) => new Map(Object.entries(user.providers?.[owner]?.authHold ?? {})),
-            ),
           extraUsage: (owner) =>
             Effect.map(
               SynchronizedRef.get(userConfigRef),

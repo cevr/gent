@@ -1885,15 +1885,13 @@ const RpcHandlers = GentRpcs.toLayer(
       "accounts.lanes": () =>
         Effect.gen(function* () {
           const profile = yield* profileForCwd(Option.none())
-          return yield* placement.lanes(
-            (provider) =>
-              Effect.map(
-                credentialLane(provider, Option.none(), profile.registryService).pipe(
-                  Effect.provideService(ModelRegistry, modelRegistry),
-                ),
-                Option.map((lane) => lane.scope),
+          return yield* placement.lanes((provider) =>
+            Effect.map(
+              credentialLane(provider, Option.none(), profile.registryService).pipe(
+                Effect.provideService(ModelRegistry, modelRegistry),
               ),
-            configService.laneHolds,
+              Option.map((lane) => lane.scope),
+            ),
           )
         }).pipe(Effect.scoped),
 

@@ -213,9 +213,6 @@ const failThenSucceed = (error: ProviderOrAuth, failures: number, config = fast)
 }
 type ProviderOrAuth = ProviderError | ProviderAuthError
 
-/** A sign-in on which the owner holds no project's lanes. */
-const noHolds = () => Effect.succeed<ReadonlyMap<string, number>>(new Map())
-
 describe("provider retry", () => {
   it.effect("waits the provider's retry-after before retrying a typed rate limit", () =>
     Effect.gen(function* () {
@@ -5692,7 +5689,7 @@ describe("account lanes", () => {
         })
       }
       const lanes = (scope: Scope) =>
-        Effect.map(placement.lanes(scopeOf(scope), noHolds), (report) => {
+        Effect.map(placement.lanes(scopeOf(scope)), (report) => {
           const found = report.providers.find((lanes) => lanes.provider === "plan")
           if (Predicate.isUndefined(found)) return Option.none()
           return Option.some(found)
@@ -5716,8 +5713,6 @@ describe("account lanes", () => {
             key,
             asker: Option.none(),
             model: Option.some(model),
-            project: Option.none(),
-            holds: new Map(),
           })
           .pipe(laneOutcome)
       /** Where a run of `session` and `model` goes over the pool `[a, b]`, in walk order. */
@@ -6311,7 +6306,7 @@ describe("account lanes", () => {
           Effect.succeedSome(Arr.make({ provider: ProviderId.make(provider), slot: a }))
         const free = (report: LaneReport) =>
           report.providers.map((lanes) => [lanes.provider, lanes.capacity] as const)
-        const both = free(yield* placement.lanes(scopes, noHolds))
+        const both = free(yield* placement.lanes(scopes))
         expect(both.map(([provider]) => provider)).toEqual(["anthropic", "openai"])
         for (const [, capacity] of both) expect(capacity).toBeGreaterThan(0)
         const admit = (provider: string) =>
@@ -6322,8 +6317,6 @@ describe("account lanes", () => {
               key: `start-${provider}`,
               asker: Option.none(),
               model: Option.some(ModelId.make(`${provider}/model`)),
-              project: Option.none(),
-              holds: new Map(),
             })
             .pipe(laneOutcome)
         // ChatGPT's week is spent: only its runs are refused.
@@ -6407,7 +6400,7 @@ describe("account lanes", () => {
               })
             yield* quota(0.1)
             // A file with no burn reads the prior.
-            const before = (yield* placement.lanes(scopeOf([a]), noHolds)).providers[0]
+            const before = (yield* placement.lanes(scopeOf([a]))).providers[0]
             expect(before?.fuelPerHour).toBe(3_400_000)
             expect(before?.laneHours).toBe(0)
             // One lane runs 2 hours on $11: 2.2 M fuel, 1.1 M a lane-hour.
@@ -6417,7 +6410,6 @@ describe("account lanes", () => {
               provider: "plan",
               scope: [receiptOf(a)],
               model: planModel,
-              project: Option.none(),
             })
             yield* fuel(1)
             yield* quota(0.11)
@@ -6429,7 +6421,7 @@ describe("account lanes", () => {
         const restarted = yield* Effect.scoped(
           Effect.gen(function* () {
             const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
-            return yield* placement.lanes(scopeOf([a]), noHolds)
+            return yield* placement.lanes(scopeOf([a]))
           }),
         )
         const window = restarted.providers[0]?.accounts[0]?.windows[0]
@@ -6476,7 +6468,6 @@ describe("account lanes", () => {
               provider: "plan",
               scope: [receiptOf(a)],
               model: planModel,
-              project: Option.none(),
             })
             yield* spend(a, costUsd, usage, sessionId)
             yield* TestClock.adjust(Duration.hours(hours))
@@ -6519,7 +6510,7 @@ describe("account lanes", () => {
         // `gent auth` signed a new account in under a: the store stamps it anew.
         expect(yield* admit([replaced], "after")).toBe("admitted")
         // The old sign-in's reading went with it: no window of the provider is read now.
-        expect((yield* placement.lanes(scopeOf([replaced]), noHolds)).providers).toEqual([])
+        expect((yield* placement.lanes(scopeOf([replaced]))).providers).toEqual([])
         // The new sign-in reads its own window; then a response of a request the
         // old sign-in sent before the change lands late, and leaves that reading.
         yield* read(replaced, [{ window: "5h", utilization: 0.1, resetAt: now + HOUR }])
@@ -6714,7 +6705,6 @@ describe("account lanes", () => {
         provider: "plan",
         scope: [receiptOf(a)],
         model: glm,
-        project: Option.none(),
       })
       yield* placement.freeReservation("plan-start")
       expect(yield* admit([a], "glm-second", glm)).toBe("queued")
@@ -6759,7 +6749,6 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: big,
-          project: Option.none(),
         })
         expect((yield* lanes([a])).load).toBeCloseTo(2)
         expect(yield* admit([a], "big-2", big)).toBe("queued")
@@ -6794,30 +6783,6 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
-  it.effect("a hold reserves the account's lanes, not a model's own window", () =>
-    Effect.gen(function* () {
-      const fixture = yield* accounts()
-      yield* TestClock.adjust("1 hour")
-      // The account's window carries 2 runs, glm's own 1.
-      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
-      const start = (holds: ReadonlyMap<string, number>, project: string, key: string) =>
-        fixture.placement
-          .admitLane({
-            provider: "plan",
-            scope: [receiptOf(a)],
-            key,
-            asker: Option.none(),
-            model: Option.some(glm),
-            project: Option.some(project),
-            holds,
-          })
-          .pipe(laneOutcome)
-      // gent's unused lane leaves the account one: glm's window carries the run.
-      expect(yield* start(new Map([["gent", 1]]), "other", "glm-1")).toBe("admitted")
-      expect(yield* start(new Map([["gent", 1]]), "other", "glm-2")).toBe("queued")
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
   it.effect(
     "placement weighs live sessions at their model's price against the account's pace",
     () =>
@@ -6843,159 +6808,6 @@ describe("account lanes", () => {
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
-  /** Admit a run of the plan model in `project` under `key` on `scope`, with `holds`: "admitted", else the refusal's reason. */
-  const startIn = (
-    placement: Effect.Success<ReturnType<typeof makeCredentialPlacement>>,
-    holds: ReadonlyMap<string, number>,
-    project: string,
-    key: string,
-    scope: Scope = [a],
-  ) =>
-    placement
-      .admitLane({
-        provider: "plan",
-        scope: Arr.map(scope, receiptOf),
-        key,
-        asker: Option.none(),
-        model: Option.some(planModel),
-        project: Option.some(project),
-        holds,
-      })
-      .pipe(laneOutcome)
-
-  it.effect("a held project gets its lane with the pool full, and no more", () =>
-    Effect.gen(function* () {
-      const fixture = yield* accounts()
-      const { placement } = fixture
-      yield* TestClock.adjust("1 hour")
-      // The account's window carries 2 runs.
-      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
-      const start = (holds: ReadonlyMap<string, number>, project: string, key: string) =>
-        startIn(placement, holds, project, key)
-      // With nothing held, other work fills the pool: it is at free 0.
-      expect(yield* start(new Map(), "other", "other-1")).toBe("admitted")
-      expect(yield* start(new Map(), "other", "other-2")).toBe("admitted")
-      const gentHeld = new Map([["gent", 1]])
-      expect(yield* start(gentHeld, "gent", "gent-1")).toBe("admitted")
-      expect(yield* start(gentHeld, "gent", "gent-2")).toBe("queued")
-      expect(yield* start(gentHeld, "other", "other-3")).toBe("queued")
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
-  it.effect("the lane report shows each held project with its runs now", () =>
-    Effect.gen(function* () {
-      const fixture = yield* accounts()
-      const { placement } = fixture
-      yield* TestClock.adjust("1 hour")
-      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
-      const held = new Map([
-        ["gent", 2],
-        ["blade", 1],
-      ])
-      expect(yield* startIn(placement, held, "gent", "gent-1")).toBe("admitted")
-      const report = yield* placement.lanes(scopeOf([a]), () => Effect.succeed(held))
-      expect(report.providers.map((lanes) => lanes.holds)).toEqual([
-        [
-          { project: "blade", lanes: 1, used: 0, admits: true },
-          { project: "gent", lanes: 2, used: 1, admits: true },
-        ],
-      ])
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
-  it.effect("other work leaves room for a held lane that is not in use", () =>
-    Effect.gen(function* () {
-      const fixture = yield* accounts()
-      const { placement } = fixture
-      yield* TestClock.adjust("1 hour")
-      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
-      const gentHeld = new Map([["gent", 1]])
-      const start = (project: string, key: string) => startIn(placement, gentHeld, project, key)
-      expect(yield* start("other", "other-1")).toBe("admitted")
-      // 1 of 2.6 lanes run, and gent holds 1: another run waits.
-      expect(yield* start("other", "other-waits")).toBe("queued")
-      // Gent takes its held lane past the waiter; once the other run ends,
-      // the free lane goes to the waiter, and a new run waits.
-      expect(yield* start("gent", "gent-1")).toBe("admitted")
-      yield* placement.freeReservation("other-1")
-      expect(yield* start("other", "other-waits")).toBe("admitted")
-      expect(yield* start("other", "other-2")).toBe("queued")
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
-  it.effect("a held lane admits its project whatever the pace, but not on a held account", () =>
-    Effect.gen(function* () {
-      const fixture = yield* accounts()
-      const { placement, read, lanes } = fixture
-      yield* TestClock.adjust("1 hour")
-      const now = yield* Clock.currentTimeMillis
-      // Twenty hours to the reset at the prior burn: the pace carries no run.
-      yield* fuelBothWindows(fixture, now, 20 * HOUR)
-      const paced = yield* lanes([a])
-      expect(paced.capacity).toBe(0)
-      expect(paced.accounts.map((account) => account.held)).toEqual([false])
-      const gentHeld = new Map([["gent", 1]])
-      expect(yield* startIn(placement, gentHeld, "other", "other-1")).toBe("Spent")
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-1")).toBe("admitted")
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-2")).toBe("Spent")
-      // A rejected window holds the account: no hold runs on it.
-      yield* placement.freeReservation("gent-1")
-      yield* read(a, [{ window: "5h", utilization: 1, resetAt: now + 20 * HOUR, rejected: true }])
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-3")).toBe("Spent")
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
-  it.effect("the lanes report gives admission's answer for each held project's next run", () =>
-    Effect.gen(function* () {
-      const fixture = yield* accounts()
-      const { placement, read } = fixture
-      yield* TestClock.adjust("1 hour")
-      const now = yield* Clock.currentTimeMillis
-      const gentHeld = new Map([["gent", 1]])
-      const holdsIn = (scope: Scope) =>
-        Effect.map(
-          placement.lanes(scopeOf(scope), () => Effect.succeed(gentHeld)),
-          (report) => report.providers[0]?.holds,
-        )
-      // Two hours to the reset: the pace carries runs, so past its hold the pool takes it.
-      yield* fuelBothWindows(fixture, now, 2 * HOUR)
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-1")).toBe("admitted")
-      expect(yield* holdsIn([a])).toEqual([{ project: "gent", lanes: 1, used: 1, admits: true }])
-      yield* placement.freeReservation("gent-1")
-      // Twenty hours to the reset: the pace carries none, so only the hold admits.
-      yield* fuelBothWindows(fixture, now, 20 * HOUR)
-      expect(yield* holdsIn([a])).toEqual([{ project: "gent", lanes: 1, used: 0, admits: true }])
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-2")).toBe("admitted")
-      expect(yield* holdsIn([a])).toEqual([{ project: "gent", lanes: 1, used: 1, admits: false }])
-      yield* placement.freeReservation("gent-2")
-      // Under its hold, but a refusal holds every account of the scope.
-      yield* read(a, [{ window: "5h", utilization: 1, resetAt: now + 20 * HOUR, rejected: true }])
-      expect(yield* holdsIn([a])).toEqual([{ project: "gent", lanes: 1, used: 0, admits: false }])
-      // An order the server cannot read gives no answer.
-      const unread = yield* placement.lanes(
-        () => Effect.succeedNone,
-        () => Effect.succeed(gentHeld),
-      )
-      expect(unread.providers[0]?.holds).toEqual([{ project: "gent", lanes: 1, used: 0 }])
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
-  it.effect("a hold is on the sign-in: a pin on another account takes no second held lane", () =>
-    Effect.gen(function* () {
-      const fixture = yield* accounts()
-      const { placement, read } = fixture
-      yield* TestClock.adjust("1 hour")
-      const now = yield* Clock.currentTimeMillis
-      // Twenty hours to the reset: neither account's pace carries a run.
-      yield* fuelBothWindows(fixture, now, 20 * HOUR)
-      yield* read(b, [{ window: "5h", utilization: 0.14, resetAt: now + 20 * HOUR }])
-      const gentHeld = new Map([["gent", 1]])
-      expect(yield* startIn(placement, gentHeld, "other", "other-b", [b])).toBe("Spent")
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-a", [a])).toBe("admitted")
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-b", [b])).toBe("Spent")
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
   /** Admit a run of the plan model on `[a]` under `key` for `asker`: "admitted", "queued" or "Spent". */
   const askLane = (
     placement: Effect.Success<ReturnType<typeof makeCredentialPlacement>>,
@@ -7010,8 +6822,6 @@ describe("account lanes", () => {
         key,
         asker,
         model: Option.some(model),
-        project: Option.none(),
-        holds: new Map(),
       })
       .pipe(laneOutcome)
 
@@ -7126,7 +6936,6 @@ describe("account lanes", () => {
         provider: "plan",
         scope: [receiptOf(a)],
         model: planModel,
-        project: Option.none(),
       })
       expect(yield* askLane(placement, Option.none(), "fill")).toBe("admitted")
       expect(yield* askLane(placement, Option.none(), "head")).toBe("queued")
@@ -7155,7 +6964,6 @@ describe("account lanes", () => {
         provider: "plan",
         scope: [receiptOf(a)],
         model: planModel,
-        project: Option.none(),
       })
       // Its turn opened: the run holds the same lane.
       expect(yield* askLane(placement, Option.none(), "start-3")).toBe("queued")
@@ -7243,7 +7051,6 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a), receiptOf(b)],
           model: planModel,
-          project: Option.none(),
         })
       }
       expect(yield* admit([a, b], "waits")).toBe("queued")
@@ -7271,33 +7078,6 @@ describe("account lanes", () => {
       expect(yield* askLane(placement, Option.none(), "waits")).toBe("Spent")
       const refused = yield* Fiber.join(awaiting)
       expect(refused.message).toContain("No lane on plan: its quota windows carry no run before")
-    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
-  )
-
-  it.effect("an open turn counts against its project's hold", () =>
-    Effect.gen(function* () {
-      const fixture = yield* accounts()
-      const { placement } = fixture
-      yield* TestClock.adjust("1 hour")
-      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
-      const gentHeld = new Map([["gent", 1]])
-      expect(yield* startIn(placement, new Map(), "other", "other-1")).toBe("admitted")
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-1")).toBe("admitted")
-      yield* placement.openLane({
-        sessionId: SessionId.make("gent-run"),
-        key: "gent-1",
-        provider: "plan",
-        scope: [receiptOf(a)],
-        model: planModel,
-        project: Option.some("gent"),
-      })
-      // The open turn holds gent's lane, and the other run fills the pool.
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-2")).toBe("queued")
-      yield* placement.release(SessionId.make("gent-run"))
-      yield* placement.freeReservation("other-1")
-      expect(yield* startIn(placement, gentHeld, "other", "other-2")).toBe("admitted")
-      expect(yield* startIn(placement, gentHeld, "other", "other-3")).toBe("queued")
-      expect(yield* startIn(placement, gentHeld, "gent", "gent-2")).toBe("admitted")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -7425,7 +7205,7 @@ describe("account lanes", () => {
         yield* TestClock.adjust("1 hour")
         yield* spend(a, Option.none(), usage, runner, glm, limits)
         // Unknown spend is never zero: neither window reads.
-        expect((yield* placement.lanes(scopeOf([a]), noHolds)).providers).toEqual([])
+        expect((yield* placement.lanes(scopeOf([a]))).providers).toEqual([])
         // Six hours on, the unpriced hour has left the 5h window alone.
         yield* TestClock.adjust("6 hours")
         expect(windowsOfA(yield* lanes([a]))).toEqual([["5h", glm, 0, false]])
@@ -7484,7 +7264,6 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: glm,
-          project: Option.none(),
         })
         yield* before.spend(a, Option.some(1), million, glmRun, glm, limits)
         // 99 points at 200,000 fuel each, over 5 hours of runs at a fifth of 3.4 M.
@@ -7504,7 +7283,6 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: planModel,
-          project: Option.none(),
         })
         yield* before.spend(a, Option.some(10), usage, planRun)
         yield* TestClock.adjust("1 hour")
@@ -7523,7 +7301,6 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: glm,
-          project: Option.none(),
         })
         const report = yield* after.lanes([a])
         expect(weightOf(report, glm)?.fitted).not.toBe(true)
@@ -7634,7 +7411,6 @@ describe("account lanes", () => {
         provider: "plan",
         scope: [receiptOf(a)],
         model: haiku,
-        project: Option.none(),
       })
       // No meter prices haiku and no lane burned: its fuel per hour is the mean run's.
       expect((yield* fixture.lanes([a])).load).toBeCloseTo(weight?.weight ?? Number.NaN)
@@ -7812,7 +7588,7 @@ describe("account lanes", () => {
       expect((yield* Ref.get(file)).segments?.length).toBe(1)
       // Eight days on, nothing new was recorded; a read of the lanes trims.
       yield* TestClock.adjust("8 days")
-      expect((yield* placement.lanes(scopeOf([a]), noHolds)).providers).toEqual([])
+      expect((yield* placement.lanes(scopeOf([a]))).providers).toEqual([])
       yield* placement.flush
       const saved = yield* Ref.get(file)
       expect(saved.readings).toBeUndefined()
@@ -8022,7 +7798,7 @@ describe("account lanes", () => {
           expect(lostOf(yield* lanes([replaced]))).toEqual([])
           // A request the old sign-in sent before the change fails late.
           expect(yield* lose(placement, old)).toBe(false)
-          expect((yield* placement.lanes(scopeOf([replaced]), noHolds)).providers).toEqual([])
+          expect((yield* placement.lanes(scopeOf([replaced]))).providers).toEqual([])
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
 

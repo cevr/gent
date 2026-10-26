@@ -65,7 +65,7 @@ when to read it.
 - `extension-host.md` — extension shape, dependency direction, the boundary contract, the API inventory, server extension buckets, hooks, Resource scopes, events, extension state, the entry rules and extension authority; read when you change the extension API or author an extension.
 - `models.md` — the models.dev catalog, API classes, generic providers, drivers; read when you change model discovery or a provider driver.
 - `credentials.md` — credential slots and placement: labels, logins, rotation, `authSpread`; read when you change auth.
-- `lanes.md` — account lanes: quota windows, fuel per percent, model weights, pace, lane capacity, admission and project holds (`authHold`); read when you change quota reads, admission or placement by quota.
+- `lanes.md` — account lanes: quota windows, fuel per percent, model weights, pace, lane capacity, admission and the fair queue; read when you change quota reads, admission or placement by quota.
 - `shipped-extensions.md` — `/btw`, wake alarms and monitors, bash and background jobs, goals, the integration gate, the regex worker, fs-tools, workflow results, bundled skills; read when you change one of them.
 - `checkpoints.md` — turn checkpoints: capture, store, refs, reads, revert, retention; read when you change `@gent/checkpoints` or `/revert`.
 - `tui.md` — the TUI as a client over the contract: its production shape, boundaries and rules; read with `apps/tui/AGENTS.md`, which points to the TUI topic files, when you change the TUI.
