@@ -1,7 +1,6 @@
 import {
   Clock,
   Context,
-  DateTime,
   Effect,
   Equal,
   FileSystem,
@@ -172,33 +171,6 @@ const ModelTiersConfig = Schema.Struct({
   efficient: Schema.optional(Schema.Array(ModelId).check(Schema.isMinLength(1))),
 })
 
-/** An hour of the local day, 0 to 24. */
-const DayHour = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 24 }))
-
-/**
- * The owner's night (`night` in the user file): the local hours from
- * `start` to `end`, past midnight when `start` is the later, in `timeZone`
- * (an IANA name, the system's when absent). Nobody answers an agent then, so
- * a night hour counts `weight` of a day hour in each pool's weekly pace: the
- * pool spends its weeks in the day. `lanes` is the most runs a project takes
- * on a provider at night beside the turn that starts them: an orchestrator
- * keeps `lanes` children. With no `night`, every hour counts alike.
- */
-export const NightPace = Schema.Struct({
-  start: DayHour,
-  end: DayHour,
-  weight: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1, exclusiveMinimum: true })),
-  lanes: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
-  timeZone: Schema.optional(
-    Schema.String.check(
-      Schema.makeFilter((zone: string) => Option.isSome(DateTime.zoneMakeNamed(zone)), {
-        message: "is not a time zone",
-      }),
-    ),
-  ),
-})
-export type NightPace = typeof NightPace.Type
-
 export class UserConfig extends Schema.Class<UserConfig, { readonly brand: unique symbol }>(
   "UserConfig",
 )({
@@ -249,8 +221,6 @@ export class UserConfig extends Schema.Class<UserConfig, { readonly brand: uniqu
   model: Schema.optional(ModelId),
   /** The owner's model tiers (`ModelTiersConfig`). A project list shadows the user's, list by list. */
   tiers: Schema.optional(ModelTiersConfig),
-  /** The owner's night (`NightPace`). Only the user file's counts. */
-  night: Schema.optional(NightPace),
 }) {}
 
 /** The provider settings of a config: what the generic providers read. */
@@ -806,8 +776,6 @@ interface ConfigServiceService {
    * window (`providers.<owner>.extraUsage`). Only the user file counts.
    */
   readonly extraUsage: (owner: string) => Effect.Effect<boolean>
-  /** The user file's night (`NightPace`); none paces every hour alike. */
-  readonly night: Effect.Effect<Option.Option<NightPace>>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
    *  The write starts from the user config on disk now, so a hand edit
    *  made while gent runs survives. Fails with
@@ -1136,12 +1104,11 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           )
         })
 
-      // `authHold`, `extraUsage` and `night` count only in the user file: a
+      // `authHold` and `extraUsage` count only in the user file: a
       // project file that sets them is read without them, and says so.
       const warnUserOnlyFields = (filePath: string, project: UserConfig) =>
         Effect.gen(function* () {
           const fields: Array<string> = []
-          if (Predicate.isNotUndefined(project.night)) fields.push("night")
           for (const [owner, entry] of Object.entries(project.providers ?? {}))
             for (const field of ["authHold", "extraUsage"] as const)
               if (Predicate.isNotUndefined(entry[field])) fields.push(`providers.${owner}.${field}`)
@@ -1431,8 +1398,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           return user.providers?.[owner]?.extraUsage ?? false
         }),
 
-        night: Effect.map(readUser, ({ user }) => Option.fromUndefinedOr(user.night)),
-
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
           yield* mutateUserConfig((current) => ({
             updated: configUpdates.setDriverOverride(current, agent, driver),
@@ -1542,9 +1507,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               SynchronizedRef.get(userConfigRef),
               (user) => user.providers?.[owner]?.extraUsage ?? false,
             ),
-          night: Effect.map(SynchronizedRef.get(userConfigRef), (user) =>
-            Option.fromUndefinedOr(user.night),
-          ),
           setDriverOverride: (agent, driver) =>
             SynchronizedRef.update(userConfigRef, (current) =>
               configUpdates.setDriverOverride(current, agent, driver),

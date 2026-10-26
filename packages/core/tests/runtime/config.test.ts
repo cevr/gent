@@ -377,60 +377,6 @@ describe("user configuration", () => {
         )
       }).pipe(Effect.provide(BunServices.layer)),
     )
-    it.scopedLive("night counts only in the user file, and a bad time zone fails the file", () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const cwd = yield* fs.makeTempDirectoryScoped()
-        const home = yield* fs.makeTempDirectoryScoped()
-        const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
-        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
-        yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
-        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
-        yield* fs.writeFileString(
-          projectConfigPath,
-          encodeJson({ night: { start: 0, end: 8, weight: 0.5 } }),
-        )
-        const night = { start: 22, end: 7, weight: 0.25, lanes: 1, timeZone: "America/Montreal" }
-        yield* fs.writeFileString(userConfigPath, encodeJson({ night }))
-        const warnings: Array<string> = []
-        const captureLogger = Logger.make(({ message, fiber }) => {
-          let rendered = String(message)
-          if (Array.isArray(message)) rendered = message.map((entry) => String(entry)).join(" ")
-          if (rendered.includes("only the user config counts"))
-            warnings.push(String(fiber.getRef(References.CurrentLogAnnotations)["fields"]))
-        })
-        const live = ConfigService.Live.pipe(
-          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
-          Layer.provide(BunServices.layer),
-        )
-        yield* Effect.gen(function* () {
-          const cfg = yield* ConfigService
-          yield* cfg.get(cwd)
-          expect(warnings).toEqual(["night"])
-          expect(yield* cfg.night).toEqual(Option.some(night))
-          // A zone the clock cannot name fails the whole file; the last good one holds.
-          yield* fs.writeFileString(
-            userConfigPath,
-            encodeJson({ night: { ...night, timeZone: "Mars/Olympus" } }),
-          )
-          const fresh = yield* cfg.getFresh(cwd)
-          expect(fresh.failures.map((failure) => failure.path)).toEqual([userConfigPath])
-          expect(yield* cfg.night).toEqual(Option.some(night))
-        }).pipe(
-          Effect.provide(
-            Layer.provideMerge(
-              live,
-              // The test preload silences logs; this test reads the warning.
-              Layer.merge(
-                Logger.layer([captureLogger]),
-                Layer.succeed(References.MinimumLogLevel, "Warn"),
-              ),
-            ),
-          ),
-        )
-      }).pipe(Effect.provide(BunServices.layer)),
-    )
   })
 
   describe("concurrent writes", () => {
@@ -888,6 +834,38 @@ describe("user configuration", () => {
             trustedProjects: ["/x"],
             futureField: { nested: [1, 2] },
             agents: { main: { reasoningEffort: "high" } },
+          })
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    // Day and night pacing is gone: a user file written for it still loads,
+    // and a write keeps the key as the user wrote it.
+    it.scopedLive("a user file that still sets the retired night key loads and keeps it", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        // A zone the clock cannot name failed the file while night was read.
+        const night = { start: 22, end: 7, weight: 0.25, lanes: 1, timeZone: "Mars/Olympus" }
+        yield* fs.writeFileString(userConfigPath, encodeJson({ model: "plan/model", night }))
+        const readRaw = fs
+          .readFileString(userConfigPath)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const fresh = yield* cfg.getFresh(cwd)
+          expect(fresh.failures).toEqual([])
+          expect(fresh.config.model).toBe(ModelId.make("plan/model"))
+          yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
+          expect(yield* readRaw).toEqual({
+            model: "plan/model",
+            night,
+            // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test reads back
+            driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
           })
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),

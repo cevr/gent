@@ -94,12 +94,7 @@ import {
   type VirtualModel,
 } from "../domain/driver.js"
 import { GentPlatform, resolveDataDir, writeFileAtomic } from "./gent-platform.js"
-import {
-  type NightPace,
-  type ProviderConfig,
-  type ProviderConfigEntry,
-  RuntimeEnvironment,
-} from "./config.js"
+import { type ProviderConfig, type ProviderConfigEntry, RuntimeEnvironment } from "./config.js"
 import { DecisionModel, LanguageModel } from "effect/ai"
 import { ProviderError } from "../domain/errors.js"
 import * as AiError from "effect/ai/AiError"
@@ -3659,8 +3654,8 @@ const LANE_SPENT_RETRY_MS = 60_000
 
 /**
  * Why a run gets no lane now. `pool`: the account's windows are full, which
- * every run of its pool shares; false when only its project's night lanes
- * or its model's own windows are. `spent`: the refusal for good, when the
+ * every run of its pool shares; false when only its model's own windows
+ * are. `spent`: the refusal for good, when the
  * windows carry no run of its size even with none running.
  */
 interface LaneBlock {
@@ -3938,8 +3933,7 @@ interface CredentialPlacementService {
    * opened, the asker's own turn left out) and the lanes other projects
    * hold and do not use leave room for it. Strict head of line: behind a
    * waiter the pool's lanes cannot carry, no later waiter takes a pool lane;
-   * one that waits only for its project's night lanes or its model's own
-   * windows blocks nobody, and a run of a project under its hold passes
+   * one that waits only for its model's own windows blocks nobody, and a run of a project under its hold passes
    * (it is admitted whatever the pace, refused only when every account of
    * the scope is held). The answer is `Admitted` when the run got its lane
    * in that serve, else `Queued` with the waiters ahead of it. Fails, and
@@ -4011,11 +4005,7 @@ interface CredentialPlacementService {
    * capacity over the accounts `scopeOf` names (its unpinned runs' accounts),
    * and the lanes `holdsOf` holds for each project with the project's runs now.
    */
-  readonly lanes: (
-    scopeOf: LaneScopeOf,
-    holdsOf: LaneHoldsOf,
-    night: Option.Option<NightPace>,
-  ) => Effect.Effect<LaneReport>
+  readonly lanes: (scopeOf: LaneScopeOf, holdsOf: LaneHoldsOf) => Effect.Effect<LaneReport>
   /** Write the usage ledger now, when anything was recorded since the last write. */
   readonly flush: Effect.Effect<void>
 }
@@ -4050,12 +4040,6 @@ interface LaneRequest {
    * other does. Other work leaves room for the held lanes not in use.
    */
   readonly holds: ReadonlyMap<string, number>
-  /**
-   * The owner's night (`ConfigService.night`): it weights the pool's
-   * weekly pace, and at night a project takes at most its `lanes` on the
-   * sign-in, its hold included.
-   */
-  readonly night: Option.Option<NightPace>
 }
 
 /** A turn that opened on a provider's accounts. */
@@ -4311,71 +4295,10 @@ const quotaHours = (window: LaneWindow, now: number, length: number): number => 
 }
 
 /**
- * Hours as the weekly pace counts them from now: plain, or under the owner's
- * night, where a night hour counts the night's weight (`NightPace`).
- */
-interface PaceClock {
-  /** The weight of the hour now. */
-  readonly weight: number
-  /** The counted hours in the first `hours` plain hours from now. */
-  readonly hours: (hours: number) => number
-}
-
-const PLAIN_HOURS: PaceClock = { weight: 1, hours: (hours) => hours }
-
-/** A quarter hour: every zone's hour starts on one, so each quarter lies in one local hour. */
-const QUARTER_MS = 15 * 60_000
-
-/**
- * Whether an instant falls in the owner's night, in its zone or the
- * system's. The zone resolves once: the system's builds a formatter.
- */
-const nightAt = (night: NightPace) => {
-  const timeZone = Option.match(Option.fromUndefinedOr(night.timeZone), {
-    onNone: () => DateTime.zoneMakeLocal(),
-    onSome: (zone) => DateTime.zoneMakeNamedUnsafe(zone),
-  })
-  return (at: number): boolean => {
-    const hour = DateTime.getPart(DateTime.makeZonedUnsafe(at, { timeZone }), "hour")
-    if (night.start <= night.end) return hour >= night.start && hour < night.end
-    return hour >= night.start || hour < night.end
-  }
-}
-
-/** The weekly pace's clock from `now`: each quarter hour weighs once, as a read first reaches it. */
-const paceClock = (night: Option.Option<NightPace>, now: number): PaceClock => {
-  if (Option.isNone(night)) return PLAIN_HOURS
-  const isNight = nightAt(night.value)
-  const weightAt = (at: number) => {
-    if (isNight(at)) return night.value.weight
-    return 1
-  }
-  const first = (Math.floor(now / QUARTER_MS) + 1) * QUARTER_MS
-  // `counted[k]`: the counted hours from now to the kth quarter boundary after `first`.
-  const counted = [(weightAt(now) * (first - now)) / 3_600_000]
-  return {
-    weight: weightAt(now),
-    hours: (hours) => {
-      const to = now + hours * 3_600_000
-      if (to <= first) return (weightAt(now) * (to - now)) / 3_600_000
-      const quarter = Math.floor((to - first) / QUARTER_MS)
-      while (counted.length <= quarter) {
-        const at = first + (counted.length - 1) * QUARTER_MS
-        counted.push((counted.at(-1) ?? 0) + (weightAt(at) * QUARTER_MS) / 3_600_000)
-      }
-      const start = first + quarter * QUARTER_MS
-      return (counted[quarter] ?? 0) + (weightAt(start) * (to - start)) / 3_600_000
-    },
-  }
-}
-
-/**
  * In-hand expiry floor and rolling seven-day supply, under each weekly
- * prefix ceiling. The floor and the rolling supply spread over counted
- * hours (`PaceClock`) and run at the weight of the hour now; the ceilings
- * are plain hours, as the quota resets in them.
+ * prefix ceiling: each spends its fuel evenly over the hours to its reset.
  */
-const weeklyPoolPace = (weeks: ReadonlyArray<PoolWeek>, clock: PaceClock) => {
+const weeklyPoolPace = (weeks: ReadonlyArray<PoolWeek>) => {
   let expiring = 0
   let floor = 0
   let fuel = weeks.reduce((sum, week) => sum + week.remaining, 0)
@@ -4385,16 +4308,14 @@ const weeklyPoolPace = (weeks: ReadonlyArray<PoolWeek>, clock: PaceClock) => {
   for (const week of [...weeks].sort((left, right) => left.hours - right.hours)) {
     ceiling = Math.min(ceiling, fuel / week.hours)
     expiring += week.remaining
-    floor = Math.max(floor, (expiring / clock.hours(week.hours)) * clock.weight)
+    floor = Math.max(floor, expiring / week.hours)
     fuel += week.full - week.remaining
   }
   const rolling =
-    (weeks.reduce(
+    weeks.reduce(
       (sum, week) => sum + week.remaining + (week.full * Math.max(0, 168 - week.hours)) / 168,
       0,
-    ) /
-      clock.hours(168)) *
-    clock.weight
+    ) / 168
   return { sustainable: Math.max(floor, rolling), ceiling }
 }
 
@@ -5944,7 +5865,6 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     scope: ReadonlyArray<CredentialSlot>,
     model: Option.Option<ModelId>,
     now: number,
-    night: Option.Option<NightPace>,
   ): LaneSupply => {
     const fuelPerHour = fuelPerHourOf(provider)
     const counts = (name: WindowName) => meters(name, model)
@@ -6102,7 +6022,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         )
       )
         return Option.none()
-      const weekly = weeklyPoolPace(due, paceClock(night, now))
+      const weekly = weeklyPoolPace(due)
       const short = fiveHourPoolCeiling(due, now)
       if (Option.isNone(short)) return Option.none()
       // Other driver windows, a model's own among them, retain their current ceiling.
@@ -6170,8 +6090,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * Whether a run of `request` gets a lane now, under the lock. `block` is
    * why not: the runs that hold one and the lanes other projects hold and
    * do not use reach the capacity of the account's windows (`pool`, which
-   * every run of the pool shares) or of the model's own, or its project
-   * runs its night lanes; `spent` is the refusal for good when the windows
+   * every run of the pool shares) or of the model's own; `spent` is the refusal for good when the windows
    * carry no run of its size even with none running. None when it fits.
    * `underHold`: its project runs fewer lanes than it holds, so it is
    * blocked only when every account of the scope is held.
@@ -6185,25 +6104,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       lanesHeld(request.provider, request.asker, now, (held) =>
         Option.contains(held.project, project),
       )
-    // At night a project runs at most the night's lanes beside the asker's
-    // own turn, so a hold reserves no more than them. The asker is the
-    // parent of the run it starts: an orchestrator keeps `lanes` children.
-    const nightLanes = Option.flatMap(
-      Option.filter(request.night, (night) => nightAt(night)(now)),
-      (night) => Option.fromUndefinedOr(night.lanes),
-    )
-    const holdOf = (project: string) =>
-      Math.min(
-        request.holds.get(project) ?? 0,
-        Option.getOrElse(nightLanes, () => Infinity),
-      )
-    const nightFull = Option.exists(
-      Option.all([request.project, nightLanes]),
-      ([project, lanes]) => heldLoad(project) >= lanes,
-    )
-    // Its own project's night lanes: one frees when that project's run ends.
-    if (nightFull)
-      return { underHold: false, block: Option.some({ pool: false, spent: Option.none() }) }
+    const holdOf = (project: string) => request.holds.get(project) ?? 0
     const underHold = Option.exists(
       request.project,
       (project) => heldLoad(project) < holdOf(project),
@@ -6218,7 +6119,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     const full = Arr.findFirst(
       [Option.none<ModelId>(), ...Option.toArray(request.model).map(Option.some)],
       (model) => {
-        const { lanes, supply } = providerLanes(request.provider, scope, model, now, request.night)
+        const { lanes, supply } = providerLanes(request.provider, scope, model, now)
         const load = laneLoad(request.provider, scope, model, lanes.models, request.asker, now)
         // The account's windows count the run at its share; a model's own, whole.
         const size = Option.match(model, {
@@ -6361,7 +6262,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * moves its asker back. A waiter whose windows are spent leaves for good.
    * Strict head of line: behind a waiter the pool's lanes cannot carry,
    * only a run under its project's hold takes a lane; a waiter that waits
-   * for its own night lanes or its model's own windows blocks nobody.
+   * for its model's own windows blocks nobody.
    * Returns the grants it made.
    */
   const serve = (now: number) => {
@@ -6535,14 +6436,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           )
         // A held account can report sustainable 0 with no reading. It is
         // not quota pace: an unread pool keeps the stage-0 ranking.
-        // Accounts rank by their own paces; the night weights the pool's alone.
-        const { lanes } = providerLanes(
-          request.provider,
-          open,
-          Option.some(request.model),
-          now,
-          Option.none(),
-        )
+        // Accounts rank by their own paces.
+        const { lanes } = providerLanes(request.provider, open, Option.some(request.model), now)
         const accounts = lanes.accounts.filter((account) => account.windows.length > 0)
         // The report paces runs of the placed model; live sessions weigh
         // their own. Both read in mean runs, so a cheap run's pace and an
@@ -6881,7 +6776,6 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     lanes: Effect.fn("CredentialPlacement.lanes")(function* (
       scopeOf: LaneScopeOf,
       holdsOf: LaneHoldsOf,
-      night: Option.Option<NightPace>,
     ) {
       const now = yield* Clock.currentTimeMillis
       const providers = yield* locked(() => {
@@ -6909,7 +6803,6 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               }),
               Option.none(),
               now,
-              night,
             ).lanes
             return {
               ...lanes,
@@ -6936,7 +6829,6 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
                             model: Option.none(),
                             project: Option.some(project),
                             holds,
-                            night,
                           },
                           now,
                         ).block,

@@ -3135,7 +3135,6 @@ describe("credential order", () => {
       placement.lanes(
         () => Effect.succeedSome([{ provider: fallbackProvider, slot: personal }]),
         noHolds,
-        Option.none(),
       ),
       (report) =>
         report.providers
@@ -6707,7 +6706,6 @@ describe("credential order", () => {
           const report = yield* world.placement.lanes(
             () => Effect.succeedSome([{ provider: fallbackProvider, slot: a }]),
             noHolds,
-            Option.none(),
           )
           const window = report.providers
             .find((lanes) => lanes.provider === FALLBACK)
