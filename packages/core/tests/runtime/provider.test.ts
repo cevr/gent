@@ -4688,6 +4688,23 @@ describe("generic providers", () => {
   )
 
   it.live(
+    "the resolver serves a registered driver and a catalog provider, never a disabled or unknown one",
+    () =>
+      Effect.gen(function* () {
+        const serves = (driverId: string) =>
+          Effect.gen(function* () {
+            const resolver = yield* ModelResolver
+            return yield* resolver.serves(driverId, yield* ExtensionRegistry)
+          })
+        const answers = yield* Effect.forEach(
+          ["adapted", "open", "regional", "router"],
+          serves,
+        ).pipe(inProfile({ config: { disabledProviders: ["regional"] } }))
+        expect(answers).toEqual([true, true, false, false])
+      }),
+  )
+
+  it.live(
     "an adapter's catalog provider resolves through the adapter, never a generic driver",
     () =>
       Effect.gen(function* () {

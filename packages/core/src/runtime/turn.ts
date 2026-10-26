@@ -1605,6 +1605,8 @@ interface ResolvedTurnContext {
   child: boolean
   /** The driver the agent names; a routed turn derives `modelDriver` from it again. */
   driverRef: Option.Option<DriverRef>
+  /** The route's model without the session's own (`SessionRoute.defaultModelId`). */
+  defaultModelId: Option.Option<ModelIdType>
   /** The effort the session itself set; it wins over a routed choice's. */
   sessionReasoning: Option.Option<ReasoningEffort>
   /** `/effort auto`: the effort router picks the turn's level (`routeEffort`). */
@@ -1646,6 +1648,12 @@ interface SessionRoute {
    * `model`); none when nobody named one. Gent ships no default model.
    */
   readonly modelId: Option.Option<ModelId>
+  /**
+   * The model without the session's own: what clearing it falls back to, and
+   * what a turn runs on when nothing serves the selection and the branch ran
+   * on no other model (`unservedSelection`).
+   */
+  readonly defaultModelId: Option.Option<ModelId>
   readonly reasoningLevel: Option.Option<ReasoningEffort>
   /** The level without the session's own: what clearing it falls back to. */
   readonly defaultReasoningLevel: Option.Option<ReasoningEffort>
@@ -1689,14 +1697,18 @@ export const resolveSessionRoute = (params: {
       Option.fromUndefinedOr(admission.runSpec?.overrides),
     ),
   })
-  const modelId = sessionModel({
-    session: Option.fromUndefinedOr(params.session.modelId),
+  const defaultModelId = sessionModel({
+    session: Option.none(),
     agent: definition,
     inherited: Option.flatMap(params.admission, (admission) =>
       Option.fromUndefinedOr(admission.runSpec?.inheritedModel),
     ),
     config: Option.fromUndefinedOr(params.config.model),
   })
+  const modelId = Option.orElse(
+    Option.fromUndefinedOr(params.session.modelId),
+    () => defaultModelId,
+  )
   const defaultReasoningLevel = Option.flatMap(definition, (agent) =>
     Option.fromUndefinedOr(agent.reasoningEffort),
   )
@@ -1709,6 +1721,7 @@ export const resolveSessionRoute = (params: {
     name,
     definition,
     modelId,
+    defaultModelId,
     reasoningLevel: Option.orElse(
       Option.fromUndefinedOr(params.session.reasoningLevel),
       () => defaultReasoningLevel,
@@ -1719,31 +1732,46 @@ export const resolveSessionRoute = (params: {
 }
 
 /**
- * The model a route's turn spends on. A virtual model spends on its default
- * choice: the model its turn runs on when its router does not choose. A route
- * with no model spends on none.
+ * The model a route's turn spends on. A selection nothing serves spends on
+ * the model the turn falls back to (`unservedSelection`, after `last`, the
+ * branch's last concrete model), and on none when there is none. A virtual
+ * model spends on its default choice: the model its turn runs on when its
+ * router does not choose. A route with no model spends on none.
  */
-const routeSpendModel = (
+const routeSpendModel = Effect.fn("TurnHelpers.routeSpendModel")(function* (
   route: SessionRoute,
-  profile: Parameters<typeof servedVirtualModel>[0],
-): Option.Option<ModelId> =>
-  Option.map(route.modelId, (selected) =>
-    servedVirtualModel(profile, selected).pipe(
+  registry: ExtensionRegistryService,
+  last: Option.Option<ModelId>,
+) {
+  if (Option.isNone(route.modelId)) return Option.none<ModelId>()
+  const unserved = yield* unservedSelection({
+    selected: route.modelId.value,
+    last,
+    defaultModel: route.defaultModelId,
+    driverRef: route.driverRef,
+    registry,
+  })
+  const runs = Option.match(unserved, {
+    onNone: () => route.modelId,
+    onSome: (fallback) => Option.map(Result.getSuccess(fallback), ({ model }) => model),
+  })
+  return Option.map(runs, (selected) =>
+    servedVirtualModel(registry.getResolved(), selected).pipe(
       Option.flatMap(Result.getSuccess),
       Option.flatMap((served) => virtualDefaultModel(served.model)),
       Option.getOrElse(() => selected),
     ),
   )
+})
 
 /** The driver a route's turn needs a credential for: its spend model's (`routeSpendModel`). */
-export const routeCredentialDriver = (
+export const routeCredentialDriver = Effect.fn("TurnHelpers.routeCredentialDriver")(function* (
   route: SessionRoute,
-  profile: Parameters<typeof servedVirtualModel>[0],
-): Option.Option<string> =>
-  Option.flatMap(
-    routeSpendModel(route, profile),
-    (modelId) => effectiveModelDriver(route.driverRef, modelId).driverId,
-  )
+  registry: ExtensionRegistryService,
+) {
+  const modelId = yield* routeSpendModel(route, registry, Option.none())
+  return Option.flatMap(modelId, (spend) => effectiveModelDriver(route.driverRef, spend).driverId)
+})
 
 /**
  * The lane a session's turns take: the sign-in their route spends from, the
@@ -1758,6 +1786,8 @@ const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
   readonly cwd: Option.Option<string>
   readonly admission: Option.Option<SessionAdmission>
   readonly modelId: Option.Option<ModelId>
+  /** The model the branch last ran on: a selection nothing serves spends on it. */
+  readonly last: Option.Option<ModelId>
 }) {
   const registry = yield* ExtensionRegistry
   const configService = yield* ConfigService
@@ -1768,7 +1798,7 @@ const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
     config,
     session: omitUndefined({ modelId: Option.getOrUndefined(run.modelId) }),
   })
-  const modelId = routeSpendModel(route, registry.getResolved())
+  const modelId = yield* routeSpendModel(route, registry, run.last)
   if (Option.isNone(modelId)) return Option.none()
   const pin = Option.flatMap(run.admission, (admission) =>
     Option.fromUndefinedOr(admission.runSpec?.credentialSlot),
@@ -1794,6 +1824,8 @@ const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
 const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
   readonly sessionId: SessionId
   readonly messageId: MessageId
+  /** The model the turn's branch last ran on (`sessionLane`). */
+  readonly last: Option.Option<ModelId>
 }) {
   const session = yield* (yield* SessionStorage).getSession(params.sessionId)
   if (Predicate.isUndefined(session)) return
@@ -1801,6 +1833,7 @@ const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
     cwd: Option.fromUndefinedOr(session.cwd),
     admission: Option.fromUndefinedOr(session.admission),
     modelId: Option.fromUndefinedOr(session.modelId),
+    last: params.last,
   })
   if (Option.isNone(lane)) return
   yield* (yield* CredentialPlacement).openLane({
@@ -1824,6 +1857,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
   const placement = yield* CredentialPlacement
   const configService = yield* ConfigService
   const modelRegistry = yield* ModelRegistry
+  const modelResolver = yield* ModelResolver
   const profiles = yield* SessionProfileCache
   const { cwd: hostCwd } = yield* RuntimeEnvironment
   const lanes = Effect.scoped(
@@ -1851,10 +1885,13 @@ export const makeExtensionAccounts = Effect.gen(function* () {
           cwd: Option.some(run.cwd),
           admission: Option.fromUndefinedOr(run.admission),
           modelId: Option.fromUndefinedOr(run.modelId),
+          // A run admitted before it starts has no branch history yet.
+          last: Option.none(),
         }).pipe(
           Effect.provideService(ExtensionRegistry, registryService),
           Effect.provideService(ConfigService, configService),
           Effect.provideService(ModelRegistry, modelRegistry),
+          Effect.provideService(ModelResolver, modelResolver),
         )
       }),
     )
@@ -2089,6 +2126,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     spawned: Option.exists(session, isSpawnedSession),
     child: Option.exists(session, isSpawnedSession) && dispatchAgent.promptCache !== "session",
     driverRef: route.driverRef,
+    defaultModelId: route.defaultModelId,
     sessionReasoning: Option.flatMap(session, (value) =>
       Option.fromUndefinedOr(value.reasoningLevel),
     ),
@@ -2412,6 +2450,114 @@ const applyTurnRoute = <Resolved extends ResolvedTurnContext>(
     ...omitUndefined({ reasoning: Option.getOrUndefined(reasoning) }),
   }
 }
+
+/** The model a turn on a selection nothing serves runs on, and the notice that says so. */
+interface UnservedFallback {
+  readonly model: ModelIdType
+  readonly notice: string
+}
+
+/**
+ * Whether the profile of `registry` serves `modelId`: a router's virtual
+ * model, or a model whose driver the resolver reaches (`ModelResolver.serves`).
+ */
+const profileServes = Effect.fn("TurnHelpers.profileServes")(function* (
+  modelId: ModelIdType,
+  driverRef: Option.Option<DriverRef>,
+  registry: ExtensionRegistryService,
+) {
+  if (Option.isSome(servedVirtualModel(registry.getResolved(), modelId))) return true
+  const driverId = effectiveModelDriver(driverRef, modelId).driverId
+  // An id with no provider segment names no driver: the resolver says why.
+  if (Option.isNone(driverId)) return true
+  return yield* (yield* ModelResolver).serves(driverId.value, registry)
+})
+
+/**
+ * A selection nothing in the profile serves: a virtual model whose router is
+ * gone, or a model whose driver is. Deleting the router falls back to plain
+ * behavior (the shed rule): the turn runs on the branch's last concrete
+ * model (`last`, the model its last request ran on, which a route picked),
+ * else on the route's default (`SessionRoute.defaultModelId`, the model an
+ * unset selection resolves to), the first of them the profile serves, and
+ * the notice names both. None when the profile serves `selected`; a failure
+ * naming why when it serves neither fallback.
+ */
+const unservedSelection = Effect.fn("TurnHelpers.unservedSelection")(function* (params: {
+  readonly selected: ModelIdType
+  readonly last: Option.Option<ModelIdType>
+  readonly defaultModel: Option.Option<ModelIdType>
+  readonly driverRef: Option.Option<DriverRef>
+  readonly registry: ExtensionRegistryService
+}) {
+  const serves = (modelId: ModelIdType) => profileServes(modelId, params.driverRef, params.registry)
+  if (yield* serves(params.selected)) return Option.none<Result.Result<UnservedFallback, string>>()
+  const candidates = [
+    ...Option.toArray(
+      Option.map(params.last, (model) => ({ model, why: "the model the branch last ran on" })),
+    ),
+    ...Option.toArray(
+      Option.map(params.defaultModel, (model) => ({ model, why: "the default model" })),
+    ),
+  ]
+  const fallback = yield* Effect.findFirst(candidates, ({ model }) => serves(model))
+  return Option.some(
+    Option.match(fallback, {
+      onNone: () =>
+        Result.fail(
+          `Nothing loaded serves "${params.selected}", and the branch has no other model to run on`,
+        ),
+      onSome: ({ model, why }) =>
+        Result.succeed<UnservedFallback>({
+          model,
+          notice: `Nothing loaded serves "${params.selected}"; this turn runs on "${model}", ${why}`,
+        }),
+    }),
+  )
+})
+
+/**
+ * The turn on a model the profile serves: unchanged when it serves the
+ * selection, else on the model `unservedSelection` falls back to, with its
+ * notice at the turn's first step; a failure naming why when there is none.
+ */
+const atServedModel = Effect.fn("TurnHelpers.atServedModel")(function* <
+  Resolved extends ResolvedTurnContext,
+>(params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly step: number
+  readonly resolved: Resolved
+  readonly last: Option.Option<ModelIdType>
+  readonly registry: ExtensionRegistryService
+}) {
+  const { resolved } = params
+  const unserved = yield* unservedSelection({
+    selected: resolved.modelId,
+    last: params.last,
+    defaultModel: resolved.defaultModelId,
+    driverRef: resolved.driverRef,
+    registry: params.registry,
+  })
+  const runs = (next: Resolved): Result.Result<Resolved, string> => Result.succeed(next)
+  if (Option.isNone(unserved)) return runs(resolved)
+  if (Result.isFailure(unserved.value)) return Result.fail(unserved.value.failure)
+  const { model, notice } = unserved.value.success
+  if (params.step === 1)
+    yield* publishEventOrDie(
+      ErrorOccurred.make({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        error: notice,
+        notice: true,
+      }),
+    )
+  return runs({
+    ...resolved,
+    modelId: model,
+    modelDriver: effectiveModelDriver(resolved.driverRef, model),
+  })
+})
 
 /** The sum of the calls' prices; none when one is unpriced or there was no call. */
 const routeCost = (calls: ReadonlyArray<RouteCall>): Option.Option<number> => {
@@ -6660,6 +6806,20 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // writes the transcript a hand switch writes.
       const extensionRegistry = yield* ExtensionRegistry
       const profile = extensionRegistry.getResolved()
+      const unrunnable = (error: string) =>
+        publishEventOrDie(
+          ErrorOccurred.make({ sessionId: scope.sessionId, branchId: scope.branchId, error }),
+        ).pipe(Effect.as(endStep(params.currentTurnAgent, { unanswered: true })))
+      const served = yield* atServedModel({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        step: params.step,
+        resolved,
+        last: knownSteps.model,
+        registry: extensionRegistry,
+      })
+      if (Result.isFailure(served)) return yield* unrunnable(served.failure)
+      resolved = served.success
       const virtual = servedVirtualModel(profile, resolved.modelId)
       const modelRegistry = yield* ModelRegistry
       // Read only where a warm check reaches it, after the model and lifetime.
@@ -6691,10 +6851,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         })
       let decided: DecidedEffort = Option.none()
       if (Option.isSome(virtual)) {
-        const unrunnable = (error: string) =>
-          publishEventOrDie(
-            ErrorOccurred.make({ sessionId: scope.sessionId, branchId: scope.branchId, error }),
-          ).pipe(Effect.as(endStep(params.currentTurnAgent, { unanswered: true })))
         if (Result.isFailure(virtual.value)) return yield* unrunnable(virtual.value.failure)
         const routedModel = virtual.value.success
         const route = yield* routeTurn({
@@ -7075,7 +7231,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
 
       return yield* Effect.gen(function* () {
-        yield* openTurnLane({ sessionId: scope.sessionId, messageId: state.message.id }).pipe(
+        yield* readKnownSteps.pipe(
+          Effect.flatMap((known) =>
+            openTurnLane({
+              sessionId: scope.sessionId,
+              messageId: state.message.id,
+              last: known.model,
+            }),
+          ),
           Effect.catch((error) =>
             Effect.logWarning("turn lane not opened").pipe(
               Effect.annotateLogs({ error: String(error) }),

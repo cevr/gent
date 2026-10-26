@@ -245,6 +245,16 @@
   cost lands on the event and the session's cost, and the turn's ledger
   charges it once per turn, a recovered turn too (`noteRoute`). The auth gate asks for the
   driver of a virtual model's default choice (`routeCredentialDriver`).
+  A selection nothing loaded serves (its router is gone, or its driver:
+  `ModelResolver.serves` reaches no registered driver and no catalog
+  provider) falls back, as the shed rule asks (`unservedSelection`,
+  `runtime/turn.ts`): the turn runs on the branch's last concrete model (its
+  last request's, which a route picked), else on the default model
+  (`SessionRoute.defaultModelId`, what an unset selection resolves to), the
+  first of them the profile serves, with an `ErrorOccurred` notice at the
+  turn's first step that names both; with neither, the turn fails and says
+  why. The turn's lane is opened on that model, and the auth gate asks for
+  the default's driver.
   The shipped router (`packages/extensions/src/router.ts`, `@gent/router`)
   reads `routers` from `~/.gent/config.json` and from a trusted project's
   `.gent/config.json` (by name over the user's) when the extensions load; a

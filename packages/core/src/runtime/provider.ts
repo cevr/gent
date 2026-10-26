@@ -3146,6 +3146,14 @@ interface ModelResolverService {
     registry: ExtensionRegistryService,
   ) => Effect.Effect<boolean>
   /**
+   * Whether `resolve` reaches a driver for `driverId` in the profile of
+   * `registry`: a registered one, or the generic driver of a catalog
+   * provider (`servesDriver`). False for a driver no loaded extension or
+   * catalog provider serves, such as the id of a router that is gone. A
+   * resolver that serves a scripted model serves every driver.
+   */
+  readonly serves: (driverId: string, registry: ExtensionRegistryService) => Effect.Effect<boolean>
+  /**
    * Whether the driver `request` dispatches through, in the profile of
    * `registry`, carries the effort change its hints name inside the
    * conversation (`ModelDriverContribution.carriesEffort`). False for a
@@ -3156,6 +3164,23 @@ interface ModelResolverService {
     registry: ExtensionRegistryService,
   ) => Effect.Effect<boolean>
 }
+
+/**
+ * `ModelResolver.serves` for the production resolver: a driver the profile
+ * of `registry` registers, else a catalog provider `resolve` builds the
+ * generic driver of (`genericCandidates`), as `resolveProviderModel` finds it.
+ */
+const servesDriver = Effect.fn("ModelResolver.servesDriver")(function* (
+  driverId: string,
+  registry: ExtensionRegistryService,
+  catalogSource: ModelCatalogSourceService,
+) {
+  const resolved = registry.getResolved()
+  if (resolved.modelDrivers.has(driverId)) return true
+  const config = yield* registry.providerConfig
+  const catalog = configuredCatalog(yield* catalogSource.read, config, resolved.apiClasses)
+  return genericCandidates(resolved, config, catalog).includes(driverId)
+})
 
 /**
  * `ModelResolver.carriesEffort` for any resolver: the registered driver the
@@ -3488,6 +3513,7 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
         return ModelResolver.of({
           resolve: () => Effect.succeed(model),
           signedIn: () => Effect.succeed(true),
+          serves: () => Effect.succeed(true),
           carriesEffort: (request, registry) =>
             driverCarriesEffort(request, registry, catalogSource),
         })
@@ -3516,6 +3542,7 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
             Effect.provideService(ModelCatalogSource, catalogSource),
             Effect.provideService(ExtensionRegistry, registry),
           ),
+        serves: (driverId, registry) => servesDriver(driverId, registry, catalogSource),
         carriesEffort: (request, registry) =>
           driverCarriesEffort(request, registry, Option.some(catalogSource)),
       })

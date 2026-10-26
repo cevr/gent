@@ -2933,6 +2933,7 @@ const resolver = (layer: Layer.Layer<LanguageModel.LanguageModel>): Layer.Layer<
             onSome: (check) => check(request).pipe(Effect.as(model)),
           }),
         signedIn: () => Effect.succeed(true),
+        serves: () => Effect.succeed(true),
         carriesEffort: (request, registry) => driverCarriesEffort(request, registry, catalogSource),
       })
     }),
@@ -2953,6 +2954,7 @@ const signInCheckedResolver = (
       const catalogSource = yield* ModelCatalogSource
       return ModelResolver.of({
         resolve: scripted.resolve,
+        serves: scripted.serves,
         carriesEffort: scripted.carriesEffort,
         signedIn: (driverId, registry) =>
           signInReady(driverId).pipe(

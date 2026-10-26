@@ -444,6 +444,7 @@ const makeSessionMutationsService: Effect.Effect<
   never,
   | CredentialPlacement
   | ModelRegistry
+  | ModelResolver
   | SqlClient.SqlClient
   | EventStore
   | SessionStorage
@@ -1487,6 +1488,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const permits = yield* Permits
     const placement = yield* CredentialPlacement
     const modelRegistry = yield* ModelRegistry
+    const modelResolver = yield* ModelResolver
     const sessionStorage = yield* SessionStorage
     const relationshipStorage = yield* RelationshipStorage
     const branchStorage = yield* BranchStorage
@@ -1908,16 +1910,17 @@ const RpcHandlers = GentRpcs.toLayer(
           const agents = [...registry.getResolved().agents.values()]
           // The driver a turn routes through: the agent's driver, else the
           // config override, else the model id's provider segment; for a
-          // virtual model, its default choice's.
+          // virtual model, its default choice's; for a selection nothing
+          // serves, the default model's the turn falls back to.
           const driverFor = (admission: Option.Option<SessionAdmission>) =>
             routeCredentialDriver(
               resolveSessionRoute({ agents, admission, config, session }),
-              registry.getResolved(),
-            )
+              registry,
+            ).pipe(Effect.provideService(ModelResolver, modelResolver))
           // The session's own agent, then an agent the caller asks about.
           const admissions = [Option.fromUndefinedOr(session.admission)]
           if (!Predicate.isUndefined(agentName)) admissions.push(Option.some({ agent: agentName }))
-          const driverIds = admissions.flatMap((admission) => Option.toArray(driverFor(admission)))
+          const driverIds = (yield* Effect.forEach(admissions, driverFor)).flatMap(Option.toArray)
           return yield* underProfile(
             profile,
             listAuthProviders(driverIds).pipe(
