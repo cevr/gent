@@ -4306,15 +4306,28 @@ const sunsetOn = (year: number, month: number, day: number, place: Sabbath): num
   return (transit + hourAngle / RADIAN / 360 - 2440587.5) * DAY_MS
 }
 
-/** Sunset at `place` on the local calendar day `offset` days after the one that holds `at`. */
-const sunsetAfter = (at: number, offset: number, place: Sabbath): number => {
+/** The calendar day that holds `at` in `place`'s zone, as a UTC midnight. */
+const localDay = (at: number, place: Sabbath): number => {
   const local = DateTime.toParts(
     DateTime.makeZonedUnsafe(at, { timeZone: DateTime.zoneMakeNamedUnsafe(place.timeZone) }),
   )
-  const day = DateTime.toParts(
-    DateTime.makeUnsafe(Date.UTC(local.year, local.month - 1, local.day + offset)),
-  )
-  return sunsetOn(day.year, day.month, day.day, place)
+  return Date.UTC(local.year, local.month - 1, local.day)
+}
+
+/**
+ * Sunset at `place` on the local calendar day `offset` days after the one
+ * that holds `at`. The equation counts days by UTC date, and in a zone far
+ * from its solar time a UTC date's sunset falls on the next or the previous
+ * local day: of the three around it, the one on the wanted local day wins.
+ */
+const sunsetAfter = (at: number, offset: number, place: Sabbath): number => {
+  const wanted = localDay(at, place) + offset * DAY_MS
+  const sunsetOnUtcDay = (day: number) => {
+    const parts = DateTime.toParts(DateTime.makeUnsafe(day))
+    return sunsetOn(parts.year, parts.month, parts.day, place)
+  }
+  const candidates = [wanted, wanted - DAY_MS, wanted + DAY_MS].map(sunsetOnUtcDay)
+  return candidates.find((sunset) => localDay(sunset, place) === wanted) ?? sunsetOnUtcDay(wanted)
 }
 
 /** A Sabbath's start and end, epoch ms. */
@@ -6695,7 +6708,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         }
         const queued = Option.fromUndefinedOr(waiting.get(request.key))
         if (Option.isSome(queued)) {
-          if (sameRoute(queued.value.request) && queued.value.pool === pool)
+          if (
+            sameRoute(queued.value.request) &&
+            queued.value.pool === pool &&
+            Option.isNone(sabbathAt(request.sabbath, now))
+          )
             return {
               grants: [],
               outcome: Result.succeed(

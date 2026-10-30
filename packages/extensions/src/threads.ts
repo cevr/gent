@@ -1797,7 +1797,9 @@ const awaitRoundLane = Effect.fn("Threads.awaitRoundLane")(function* (
     if (Result.isFailure(again)) return yield* refuseRound(open.value, again.failure)
     if (again.success._tag === "Admitted") {
       // Take the grant before the send; a run with no lane read has none to take.
-      yield* ctx.Accounts.awaitLane(message)
+      // A grant the Sabbath refused at its send ends the round.
+      const taken = yield* Effect.result(ctx.Accounts.awaitLane(message))
+      if (Result.isFailure(taken)) return yield* refuseRound(open.value, taken.failure)
       return yield* startQueuedRound(open.value)
     }
     granted = yield* Effect.result(ctx.Accounts.awaitLane(message))
@@ -1838,8 +1840,14 @@ const startRound = Effect.fn("Threads.startRound")(function* (
 ) {
   if (admission._tag === "Admitted") {
     // The send takes its grant first: it lapses no more until its turn opens.
+    // A Sabbath that started since the admission refuses it: the claimed
+    // round ends with the refusal, as one refused at admission would.
     const ctx = yield* ExtensionContext
-    yield* ctx.Accounts.awaitLane(roundMessageId(round.round))
+    const taken = yield* Effect.result(ctx.Accounts.awaitLane(roundMessageId(round.round)))
+    if (Result.isFailure(taken)) {
+      yield* refuseRound(round, taken.failure)
+      return Option.none<number>()
+    }
     yield* sendClaimedRound(round)
     return Option.none<number>()
   }

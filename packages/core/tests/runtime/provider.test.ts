@@ -5652,6 +5652,15 @@ describe("the Sabbath", () => {
     const inside = sabbathAround(Date.parse("2026-10-31T01:00:00Z"), KNOWLTON)
     expect(inside.start).toBe(friday.start)
   })
+
+  bunTest("starts on the place's own Friday in a zone far from its solar time", () => {
+    // Apia keeps UTC+13 at longitude -172: a UTC date's sunset is a local day off.
+    const apia: Sabbath = { latitude: -13.8, longitude: -171.8, timeZone: "Pacific/Apia" }
+    const window = sabbathAround(Date.parse("2026-10-28T12:00:00Z"), apia)
+    // Friday 2026-10-30 near 18:27 in Apia (UTC+13) is 05:27 UTC that day.
+    near(window.start, "2026-10-30T05:27:00Z", 5)
+    near(window.end, "2026-10-31T05:28:00Z", 5)
+  })
 })
 
 describe("account lanes", () => {
