@@ -374,6 +374,21 @@ const ToolNotify = Schema.Literals(["user", "starter"]).annotate({
  * when the interrupt that stops it is that place's), so a second delivery
  * goes where the first one went.
  */
+/**
+ * Why a round could not run before its retry time: `limit`, its account's
+ * usage limit or quota windows; `sabbath`, the owner's Sabbath.
+ */
+const RetryCause = Schema.Literals(["limit", "sabbath"])
+
+/** The retry cause of each lane refusal's reason. */
+const REFUSAL_CAUSE = { spent: "limit", sabbath: "sabbath" } as const
+
+/** When a round that could not run may run again, and why. */
+interface RoundRetry {
+  readonly at: number
+  readonly cause: typeof RetryCause.Type
+}
+
 const RoundRow = Schema.Struct({
   round: Schema.String,
   thread: Schema.String,
@@ -402,6 +417,7 @@ const RoundRow = Schema.Struct({
   delivered_at: Schema.NullOr(Schema.Finite),
   stop_notice_at: Schema.NullOr(Schema.Finite),
   retry_at: Schema.NullOr(Schema.Finite),
+  retry_cause: Schema.NullOr(RetryCause),
 })
 type RoundRow = typeof RoundRow.Type
 
@@ -418,8 +434,8 @@ interface RoundEnd {
   readonly streamFailed: boolean
   readonly unanswered: boolean
   readonly error: Option.Option<string>
-  /** When the usage limit the round's turn failed on resets (`TurnAfterInput.retryAt`). */
-  readonly retryAt: Option.Option<number>
+  /** When the round may run again, and why it may not before (`RoundRetry`). */
+  readonly retry: Option.Option<RoundRetry>
   readonly usage: Option.Option<typeof ChildUsage.Type>
   readonly endedAt: number
 }
@@ -633,8 +649,9 @@ const makeReconciledBranches = Effect.map(
  * The round table, in the server's database, kept at its own schema version.
  * `stop_notice_at` is when the stop notice of a round the starter's interrupt
  * stopped was written, until a turn of the starter reads it. `retry_at` is
- * when the usage limit a round's turn failed on resets: a sender that is not
- * a model turn (a machine) waits for it instead of sending again at once.
+ * when a round that could not run may run again, and `retry_cause` why
+ * (`RetryCause`): a sender that is not a model turn (a machine) waits for it
+ * instead of sending again at once.
  */
 const createThreadRounds = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -667,7 +684,8 @@ const createThreadRounds = Effect.gen(function* () {
         wake_branch_id TEXT,
         delivered_at INTEGER,
         stop_notice_at INTEGER,
-        retry_at INTEGER
+        retry_at INTEGER,
+        retry_cause TEXT
       )`,
       `CREATE INDEX thread_rounds_by_thread ON thread_rounds (thread, ended_at)`,
       `CREATE INDEX thread_rounds_open_at ON thread_rounds (session_id, branch_id) WHERE ended_at IS NULL`,
@@ -682,7 +700,7 @@ const createThreadRounds = Effect.gen(function* () {
 
 const ensureThreadRounds = ensureExtensionTables({
   owner: "@gent/threads",
-  version: 1,
+  version: 2,
   tables: ["thread_rounds"],
   create: createThreadRounds,
 }).pipe(Effect.mapError(storageError("Thread table setup failed")))
@@ -853,7 +871,8 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
                   stream_failed = ${flag(end.streamFailed)},
                   unanswered = ${flag(end.unanswered)},
                   error = ${Option.getOrNull(end.error)},
-                  retry_at = ${Option.getOrNull(end.retryAt)},
+                  retry_at = ${Option.getOrNull(Option.map(end.retry, (retry) => retry.at))},
+                  retry_cause = ${Option.getOrNull(Option.map(end.retry, (retry) => retry.cause))},
                   usage_json = ${Option.getOrNull(usage)},
                   stopped_at = CASE
                     WHEN ${completed} = 1 AND stop_notice_at IS NOT NULL THEN NULL
@@ -1631,7 +1650,7 @@ interface TurnOutcome {
   readonly streamFailed: boolean
   readonly unanswered: boolean
   readonly error: Option.Option<string>
-  readonly retryAt: Option.Option<number>
+  readonly retry: Option.Option<RoundRetry>
   readonly usage: Option.Option<typeof ChildUsage.Type>
 }
 
@@ -1682,7 +1701,7 @@ const onRoundTurnAfter = Effect.fn("Threads.turnAfter")(function* (input: TurnAf
     streamFailed: input.streamFailed,
     unanswered: input.unanswered,
     error,
-    retryAt: input.retryAt,
+    retry: Option.map(input.retryAt, (at) => ({ at, cause: "limit" })),
     // A round shows the turn's total, as its receipt does: a partial count
     // would read as the whole spend.
     usage: usageOf(
@@ -1700,7 +1719,7 @@ const stoppedOutcome: TurnOutcome = {
   streamFailed: false,
   unanswered: false,
   error: Option.none(),
-  retryAt: Option.none(),
+  retry: Option.none(),
   usage: Option.none(),
 }
 
@@ -1718,7 +1737,10 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
     streamFailed: receipt.streamFailed,
     unanswered: receipt.unanswered === true,
     error,
-    retryAt: Option.filter(retryAt, () => receipt.streamFailed),
+    retry: Option.map(
+      Option.filter(retryAt, () => receipt.streamFailed),
+      (at): RoundRetry => ({ at, cause: "limit" }),
+    ),
     usage: usageOf(receiptTotal(receipt)),
   }))
 })
@@ -1727,8 +1749,9 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
 
 /**
  * The windows refused a round's lane for good: its accounts carry no run
- * of its size before `retryAt`. The round ends as a turn failed at a usage
- * limit, with no turn run: a `starter` round wakes its starter with the
+ * of its size before `retryAt`, or the owner's Sabbath holds it until its
+ * end. The round ends as a turn failed at a usage limit, with no turn run,
+ * its cause the refusal's: a `starter` round wakes its starter with the
  * refusal, and a machine waits for the reset as for a worker that died there.
  */
 const refuseRound = Effect.fn("Threads.refuseRound")(function* (
@@ -1740,7 +1763,7 @@ const refuseRound = Effect.fn("Threads.refuseRound")(function* (
     streamFailed: true,
     unanswered: false,
     error: Option.some(refusal.message),
-    retryAt: Option.some(refusal.retryAt),
+    retry: Option.some({ at: refusal.retryAt, cause: REFUSAL_CAUSE[refusal.reason] }),
     usage: Option.none(),
   })
 })
@@ -1753,7 +1776,7 @@ const queueFullOutcome = (full: FollowUpQueueFull): TurnOutcome => ({
   error: Option.some(
     `The thread's follow-up queue was full (${full.max} waiting) when the round got its lane: the round never ran`,
   ),
-  retryAt: Option.none(),
+  retry: Option.none(),
   usage: Option.none(),
 })
 
@@ -2942,8 +2965,10 @@ const RoundView = Schema.Struct({
   /** A thread.stop, or the starter's interrupt, closed the round. */
   stopped: Schema.Boolean,
   error: Schema.optionalKey(Schema.String),
-  /** When the usage limit the round's turn failed on resets, in epoch milliseconds. */
+  /** When a round that could not run may run again, in epoch milliseconds. */
   retryAt: Schema.optionalKey(Schema.Finite),
+  /** The owner's Sabbath held it until `retryAt`; absent for a usage limit. */
+  sabbath: Schema.optionalKey(Schema.Boolean),
   usage: Schema.optionalKey(ChildUsage),
 })
 type RoundView = typeof RoundView.Type
@@ -2969,6 +2994,12 @@ const roundView = (round: RoundRow): RoundView => ({
   ...omitUndefined({
     error: Option.getOrUndefined(Option.fromNullishOr(round.error)),
     retryAt: Option.getOrUndefined(Option.fromNullishOr(round.retry_at)),
+    sabbath: Option.getOrUndefined(
+      Option.as(
+        Option.filter(Option.fromNullishOr(round.retry_cause), (cause) => cause === "sabbath"),
+        true,
+      ),
+    ),
     usage: Option.getOrUndefined(
       Option.flatMap(Option.fromNullishOr(round.usage_json), decodeUsage),
     ),

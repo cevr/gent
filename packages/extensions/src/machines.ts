@@ -70,6 +70,7 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
+  type LaneUnavailable,
   ModelId,
   omitUndefined,
   request,
@@ -399,14 +400,15 @@ const MachineStep = Schema.TaggedUnion({
   Interrupted: { state: StateName },
   /**
    * The pending round waits until `until`: the account's windows carried no
-   * run of it (`lane`, spent at its admission), or its worker died at a
-   * usage limit (`quota`). A pending integrate waits for a gate that is not
-   * clear (`integration`). No visit is spent.
+   * run of it (`lane`, spent at its admission), its worker died at a usage
+   * limit (`quota`), or the owner's Sabbath holds every run until its end
+   * (`sabbath`). A pending integrate waits for a gate that is not clear
+   * (`integration`). No visit is spent.
    */
   Waiting: {
     state: StateName,
     until: Schema.Finite,
-    reason: Schema.Literals(["lane", "quota", "integration"]),
+    reason: Schema.Literals(["lane", "quota", "sabbath", "integration"]),
   },
   Delivered: { askId: AskId },
   Answered: { askId: AskId, choice: Verdict, note: Schema.optionalKey(Schema.String) },
@@ -1929,7 +1931,7 @@ const waitOut = Effect.fn("Machines.waitOut")(function* (
 const waitForAccount = (
   run: Run,
   action: RoundAction,
-  wait: { readonly until: number; readonly reason: "lane" | "quota" },
+  wait: { readonly until: number; readonly reason: "lane" | "quota" | "sabbath" },
   lead: ReadonlyArray<MachineStep> = [],
 ) =>
   Effect.logInfo("machines.round.waiting").pipe(
@@ -1947,6 +1949,15 @@ const waitForAccount = (
       ),
     ),
   )
+
+/** The wait reason of each lane refusal's reason. */
+const LANE_WAIT_REASON = { spent: "lane", sabbath: "sabbath" } as const
+
+/** The wait a lane refusal sets: until its time, for the Sabbath or for spent windows. */
+const laneWait = (refused: LaneUnavailable) => ({
+  until: refused.retryAt,
+  reason: LANE_WAIT_REASON[refused.reason],
+})
 
 // ── integrate ───────────────────────────────────────────────────────────────
 
@@ -2341,9 +2352,7 @@ const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
     Effect.as(true),
     Effect.catchIf(isWaitRefusal, () => Effect.succeed(false)),
     Effect.catchTag("LaneUnavailable", (lane) =>
-      waitForAccount(recorded.run, recorded.action, { until: lane.retryAt, reason: "lane" }).pipe(
-        Effect.as(true),
-      ),
+      waitForAccount(recorded.run, recorded.action, laneWait(lane)).pipe(Effect.as(true)),
     ),
     Effect.mapError(threadFault),
   )
@@ -2389,7 +2398,7 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   const kept = Option.orElse(Option.fromUndefinedOr(action.thread), () => known)
   const tiered = yield* tierPick(run, action, state.thread, role, kept)
   if (Result.isFailure(tiered)) {
-    yield* waitForAccount(run, action, { until: tiered.failure, reason: "lane" })
+    yield* waitForAccount(run, action, laneWait(tiered.failure))
     return Option.none()
   }
   const pick = tiered.success
@@ -2688,8 +2697,8 @@ const tierOrder = Effect.fn("Machines.tierOrder")(function* (run: Run, role: Rol
  * The first of `models` whose lane is free now, admitted under the round's
  * send key, so the send takes the lane the pick saw free. With none free,
  * the first that is not spent: the key waits in that model's lane queue,
- * and the send finds its place. Fails with the earliest time any of them
- * can carry a run when all are spent. Each admission under the key gives
+ * and the send finds its place. Fails with the refusal that lifts first
+ * when all are refused (spent, or in the owner's Sabbath). Each admission under the key gives
  * the last one's lane or place up. A pick whose commit loses keeps its
  * lane until the hold lapses (2 minutes): another driver may send under
  * the same key, so none cancels it.
@@ -2714,19 +2723,31 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
       Effect.map(Result.succeed),
       Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(Result.fail(refused))),
     )
-  const retries: Array<number> = []
+  // The refusal that lifts first, of the models refused.
+  let soonest = Option.none<LaneUnavailable>()
   const waiting: Array<ModelId> = []
   for (const modelId of models) {
     const answer = yield* admit(modelId)
-    if (Result.isFailure(answer)) retries.push(answer.failure.retryAt)
-    else if (answer.success._tag === "Admitted") return Result.succeed(modelId)
+    if (Result.isFailure(answer)) {
+      const refused = answer.failure
+      if (!Option.exists(soonest, (earlier) => earlier.retryAt <= refused.retryAt))
+        soonest = Option.some(refused)
+    } else if (answer.success._tag === "Admitted") return Result.succeed(modelId)
     else waiting.push(modelId)
   }
   const first = Option.fromUndefinedOr(waiting[0])
-  if (Option.isNone(first)) return Result.fail(Math.min(...retries))
+  if (Option.isNone(first)) {
+    // Every model is refused: the round waits for the one that lifts first.
+    return Result.fail(
+      yield* Effect.fromOption(
+        soonest,
+        () => new MachineFault({ message: "A tier pick needs a model to try" }),
+      ),
+    )
+  }
   // The last try left the key on another model: it waits on the first again.
   const queued = yield* admit(first.value)
-  if (Result.isFailure(queued)) return Result.fail(queued.failure.retryAt)
+  if (Result.isFailure(queued)) return Result.fail(queued.failure)
   return Result.succeed(first.value)
 })
 
@@ -2736,8 +2757,8 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
  * it, so the role keeps its thread and cache while that model has a lane.
  * None for a role that names a `model` or no tier. With no model of the
  * tier free, the first that is not spent, whose queue the round waits in.
- * Fails with the time the first model of the tier can carry a run again
- * when every one is spent.
+ * Fails with the refusal of the model of the tier that can carry a run
+ * first when every one is refused.
  */
 const tierPick = Effect.fn("Machines.tierPick")(function* (
   run: Run,
@@ -2861,7 +2882,9 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
       attempt: action.attempt,
       fresh: true,
     })
-    yield* waitForAccount(run, rerun, { until: view.retryAt, reason: "quota" }, [
+    let reason: "quota" | "sabbath" = "quota"
+    if (view.sabbath === true) reason = "sabbath"
+    yield* waitForAccount(run, rerun, { until: view.retryAt, reason }, [
       MachineStep.cases.RoundEnded.make({
         state: name,
         round: roundId,

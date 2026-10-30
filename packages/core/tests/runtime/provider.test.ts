@@ -5677,6 +5677,14 @@ describe("the Sabbath", () => {
     expect(next.start).toBeGreaterThan(Date.parse("2027-06-11T20:00:00Z"))
   })
 
+  bunTest("names whole milliseconds, as the clock reads them", () => {
+    // An alarm set for a fractional sunset wakes a fraction early, reads the
+    // Sabbath not started, and sets itself again for the same time.
+    const window = sabbathAround(Date.parse("2026-10-30T14:30:00Z"), KNOWLTON)
+    expect(Number.isInteger(window.start)).toBe(true)
+    expect(Number.isInteger(window.end)).toBe(true)
+  })
+
   bunTest("starts on the place's own Friday in a zone far from its solar time", () => {
     // Apia keeps UTC+13 at longitude -172: a UTC date's sunset is a local day off.
     const apia: Sabbath = { latitude: -13.8, longitude: -171.8, timeZone: "Pacific/Apia" }

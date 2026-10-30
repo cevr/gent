@@ -19,6 +19,7 @@ import {
   Scope,
   Stream,
 } from "effect"
+import { TestClock } from "effect/testing"
 import { SqlClient } from "effect/sql"
 import { BunServices } from "@effect/platform-bun"
 import type * as Prompt from "effect/ai/Prompt"
@@ -44,6 +45,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import {
+  advanceUntil,
   collectTestContributions,
   ConfigService,
   createE2ELayer,
@@ -201,6 +203,7 @@ const decodeRoundRead = Schema.decodeEffect(
       unanswered: Schema.Boolean,
       error: Schema.optionalKey(Schema.String),
       retryAt: Schema.optionalKey(Schema.Finite),
+      sabbath: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 )
@@ -297,7 +300,11 @@ const accountsRig = (options: RigAccounts) =>
         configServiceLayer: Option.getOrUndefined(
           Option.map(Option.fromUndefinedOr(options.order), (order) =>
             ConfigService.Test(
-              new UserConfig({ model: TEST_MODEL_ID, providers: { anthropic: order } }),
+              new UserConfig({
+                model: TEST_MODEL_ID,
+                providers: { anthropic: order },
+                ...omitUndefined({ sabbath: options.sabbath }),
+              }),
             ),
           ),
         ),
@@ -553,6 +560,12 @@ interface RigAccounts {
   readonly quota?: (step: number) => ReadonlyArray<QuotaReading>
   /** The running-thread cap the owner's config names; default: the shipped one. */
   readonly maxRunning?: number
+  /** The owner's Sabbath, beside `order` in the user config. */
+  readonly sabbath?: {
+    readonly latitude: number
+    readonly longitude: number
+    readonly timeZone: string
+  }
   readonly extensions?: ReadonlyArray<(typeof e2ePreset.extensionInputs)[number]>
 }
 
@@ -1326,12 +1339,64 @@ describe("threads", () => {
               interrupted: false,
               retryAt: resetAt,
             })
+            expect(ended.sabbath).toBeUndefined()
             expect(ended.error).toContain(
               "No lane on anthropic: its quota windows carry no run before",
             )
             expect(yield* rig.threadRequests).toBe(1)
             yield* Deferred.succeed(rig.gate, true)
           }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a queued round the owner's Sabbath reaches ends with its end and the sabbath cause, and never runs",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            // On the equator in UTC the sun sets near 18:07 on Friday 1970-01-02.
+            yield* TestClock.setTime(Date.parse("1970-01-02T18:05:00Z"))
+            const now = yield* Clock.currentTimeMillis
+            // The pace counts only open hours: a reset 20 open hours on, past
+            // the Sabbath's 24.5, carries one lane as `oneLane` does.
+            const rig = yield* accountsRig({
+              ...metered,
+              quota: (step) =>
+                oneLane(now)(step).map((window) => ({
+                  ...window,
+                  resetAt: now + 44.5 * 3_600_000,
+                })),
+              sabbath: { latitude: 0, longitude: 0, timeZone: "UTC" },
+            })
+            yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            const queued = yield* rig.start(rig.starter, THREAD_TASK)
+            const round = queued.round?.round ?? ""
+            expect(queued.round?.queued).toBe(0)
+            // Each read is a new call: a tool call id names one call in the starter's history.
+            const read = Effect.suspend(() =>
+              Effect.flatMap(
+                rig.one(rig.starter, rig.op("thread.round", { round })),
+                decodeRoundRead,
+              ),
+            )
+            // At sunset the queue's alarm refuses it until the Sabbath's end.
+            const ended = yield* advanceUntil(read, (view) => view.status === "ended", {
+              label: "the queued round ended at sunset",
+              step: "1 minute",
+              timeoutMs: 10_000,
+            })
+            expect(ended).toMatchObject({
+              streamFailed: true,
+              interrupted: false,
+              sabbath: true,
+            })
+            expect(ended.retryAt).toBeGreaterThan(Date.parse("1970-01-03T18:15:00Z"))
+            expect(ended.retryAt).toBeLessThan(Date.parse("1970-01-03T18:50:00Z"))
+            expect(yield* rig.threadRequests).toBe(1)
+            yield* Deferred.succeed(rig.gate, true)
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
         ),
       15_000,
     )

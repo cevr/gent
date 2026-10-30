@@ -718,6 +718,40 @@ describe("a machine run across a clean restart", () => {
       }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
   )
 
+  it.live("a round the owner's Sabbath ended waits for the Sabbath's end as a sabbath wait", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const calls = yield* Ref.make<ReadonlyArray<string>>([])
+      const first = yield* runUntilHang(home, calls, "implement:1")
+      const end = (yield* Clock.currentTimeMillis) + HOUR
+      // As the Sabbath leaves the round when its grant is refused at sunset.
+      yield* home.sql(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`UPDATE thread_rounds
+            SET ended_at = ${yield* Clock.currentTimeMillis}, stream_failed = 1,
+                retry_at = ${end}, retry_cause = 'sabbath'
+            WHERE ended_at IS NULL`
+        }),
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const models = yield* makeModels(trackWorker)
+          yield* createRpcClient(home.layerFor(machineModels({ ...models, calls })))
+          const steps = yield* waitFor(
+            home.sql(stepsOf(first.run)),
+            (found) => waitsOf(found).length === 1,
+            20_000,
+            "the round waits for the Sabbath's end",
+          )
+          expect(waitsOf(steps)).toEqual([{ reason: "sabbath", until: end }])
+        }),
+      )
+      // The round the Sabbath ended did not run again before its end.
+      expect(yield* Ref.get(calls)).toEqual(["implement:1"])
+    }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
+  )
+
   it.live("a round admitted but not recorded is sent again as the same round", () =>
     Effect.gen(function* () {
       const home = yield* restartableHome
@@ -1924,6 +1958,54 @@ describe("a machine waits out its account", () => {
   )
 
   it.live(
+    "a round in the owner's Sabbath waits for its end as a sabbath wait, then runs with no visit spent",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        // On the equator in UTC the sun sets near 18:00: the Sabbath runs from
+        // Friday 1970-01-02 near 18:00 to Saturday near 18:30.
+        const restful = {
+          configServiceLayer: ConfigService.Test(
+            new UserConfig({
+              model: TEST_MODEL_ID,
+              providers: { anthropic: { authOrder: [work], extraUsage: true } },
+              sabbath: { latitude: 0, longitude: 0, timeZone: "UTC" },
+            }),
+          ),
+        }
+        yield* TestClock.setTime(Date.parse("1970-01-02T20:00:00Z"))
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models), restful))
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRunOn(client, owner, ONE_VISIT, "one-visit")
+        const steps = yield* waitFor(
+          home.sql(stepsOf(run)),
+          (found) => waitsOf(found).length === 1,
+          10_000,
+          "the round waits for the Sabbath's end",
+        )
+        const until = waitsOf(steps)[0]?.until ?? 0
+        expect(waitsOf(steps)).toEqual([{ reason: "sabbath", until }])
+        expect(until).toBeGreaterThan(Date.parse("1970-01-03T18:15:00Z"))
+        expect(until).toBeLessThan(Date.parse("1970-01-03T18:50:00Z"))
+        // A minute short of the end, nothing ran.
+        yield* TestClock.adjust(until - (yield* Clock.currentTimeMillis) - 60_000)
+        yield* settle
+        expect(yield* Ref.get(models.calls)).toEqual([])
+        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, {
+          label: "the round ran",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual(["work→done"])
+        expect(yield* home.sql(visitCounts(run))).toEqual({ work: 1, done: 1 })
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+
+  it.live(
     "a worker that dies at a usage limit waits for its reset, then runs fresh with its retry and visit unspent",
     () =>
       Effect.gen(function* () {
@@ -2679,6 +2761,58 @@ describe("a tier role's round", () => {
         const steps = yield* home.sql(stepsOf(run))
         expect(waitsOf(steps)).toEqual([{ reason: "lane", until: now + HOUR }])
         expect(roundsRan(steps)).toEqual([{ model: SONNET, priced: true }])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a tier round in the owner's Sabbath waits for its end as a sabbath wait, and starts nothing",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        // On the equator in UTC: the Sabbath runs from Friday near 18:00 to Saturday near 18:30.
+        const restful = {
+          configServiceLayer: ConfigService.Test(
+            new UserConfig({
+              model: TEST_MODEL_ID,
+              providers: { anthropic: { authOrder: [work], extraUsage: true } },
+              tiers: { strongest: [OPUS, SONNET] },
+              sabbath: { latitude: 0, longitude: 0, timeZone: "UTC" },
+            }),
+          ),
+          models: "catalog" as const,
+        }
+        yield* TestClock.setTime(Date.parse("1970-01-02T20:00:00Z"))
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models), restful))
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRunOn(client, owner, STRONG_AGAIN, "strong-again")
+        const steps = yield* waitFor(
+          home.sql(stepsOf(run)),
+          (found) => waitsOf(found).length === 1,
+          10_000,
+          "the round waits for the Sabbath's end",
+        )
+        const until = waitsOf(steps)[0]?.until ?? 0
+        // Every model of the tier is refused alike: the wait names the Sabbath.
+        expect(waitsOf(steps)).toEqual([{ reason: "sabbath", until }])
+        expect(until).toBeGreaterThan(Date.parse("1970-01-03T18:15:00Z"))
+        expect(until).toBeLessThan(Date.parse("1970-01-03T18:50:00Z"))
+        yield* settle
+        expect(yield* Ref.get(models.calls)).toEqual([])
+        // No thread session was made for a round the Sabbath holds.
+        expect((yield* client.session.list()).map((session) => session.id)).toEqual([
+          owner.sessionId,
+        ])
+        yield* TestClock.adjust(until - (yield* Clock.currentTimeMillis) - 60_000)
+        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, {
+          label: "the round ran",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
+        expect(roundsRan(yield* home.sql(stepsOf(run)))).toEqual([{ model: OPUS, priced: true }])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
   )

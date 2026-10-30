@@ -4286,6 +4286,9 @@ const RADIAN = Math.PI / 180
 /**
  * Sunset at `place` on the calendar day `year`-`month`-`day` (month one-based),
  * epoch ms: the sunrise equation, within a few minutes of published times.
+ * Whole milliseconds, as the clock reads: an alarm set for a fractional
+ * sunset wakes a fraction early, reads the Sabbath not started, and sets
+ * itself again for the same time.
  */
 const sunsetOn = (year: number, month: number, day: number, place: Sabbath): number => {
   const julian = Date.UTC(year, month - 1, day) / DAY_MS + 2440587.5
@@ -4303,7 +4306,7 @@ const sunsetOn = (year: number, month: number, day: number, place: Sabbath): num
     (Math.sin(-0.833 * RADIAN) - Math.sin(place.latitude * RADIAN) * Math.sin(declination)) /
       (Math.cos(place.latitude * RADIAN) * Math.cos(declination)),
   )
-  return (transit + hourAngle / RADIAN / 360 - 2440587.5) * DAY_MS
+  return Math.round((transit + hourAngle / RADIAN / 360 - 2440587.5) * DAY_MS)
 }
 
 /** The calendar day that holds `at` in `place`'s zone, as a UTC midnight. */
@@ -6189,6 +6192,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       capacity: 0,
       load: 0,
       retryAt: end,
+      reason: "sabbath",
     })
   /**
    * Why a run of `request` gets no lane now, under the lock: the runs that
@@ -6251,6 +6255,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             capacity,
             load,
             retryAt,
+            reason: "spent",
           })
         },
       ),

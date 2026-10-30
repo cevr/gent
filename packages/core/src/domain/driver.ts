@@ -843,7 +843,9 @@ export type ProviderLanes = typeof ProviderLanes.Type
  * of its size until one resets (or a refusal's hold ends), even with none
  * running. A run that waits only for a running one to end is queued, never
  * refused (`LaneAdmission`). `retryAt` is when the windows can carry it
- * again (epoch ms), never a promise of a lane.
+ * again (epoch ms), never a promise of a lane. `reason`: `spent`, the
+ * windows carry no run of its size; `sabbath`, no run starts in the
+ * owner's Sabbath, and `retryAt` is its end.
  */
 export class LaneUnavailable extends Schema.TaggedError<
   LaneUnavailable,
@@ -854,6 +856,7 @@ export class LaneUnavailable extends Schema.TaggedError<
   capacity: Schema.Int,
   load: Schema.Finite,
   retryAt: Schema.Finite,
+  reason: Schema.Literals(["spent", "sabbath"]),
 }) {}
 
 /**
