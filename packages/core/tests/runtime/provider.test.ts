@@ -5660,6 +5660,23 @@ describe("the Sabbath", () => {
     },
   )
 
+  bunTest("holds its 30 minutes past midnight after a late Saturday sunset", () => {
+    // Reykjavik keeps UTC; on Saturday 2027-06-05 the sun sets near 23:38,
+    // so the Sabbath ends near 00:08 on Sunday.
+    const reykjavik: Sabbath = {
+      latitude: 64.15,
+      longitude: -21.94,
+      timeZone: "Atlantic/Reykjavik",
+    }
+    const at = Date.parse("2027-06-06T00:05:00Z")
+    const window = sabbathAround(at, reykjavik)
+    expect(window.start).toBeLessThan(at)
+    expect(window.end).toBeGreaterThan(at)
+    // Past the end on Sunday, the next one is the coming Friday's.
+    const next = sabbathAround(window.end, reykjavik)
+    expect(next.start).toBeGreaterThan(Date.parse("2027-06-11T20:00:00Z"))
+  })
+
   bunTest("starts on the place's own Friday in a zone far from its solar time", () => {
     // Apia keeps UTC+13 at longitude -172: a UTC date's sunset is a local day off.
     const apia: Sabbath = { latitude: -13.8, longitude: -171.8, timeZone: "Pacific/Apia" }

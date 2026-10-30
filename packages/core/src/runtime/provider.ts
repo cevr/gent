@@ -4347,9 +4347,11 @@ export const sabbathAround = (at: number, place: Sabbath): SabbathWindow => {
   const { weekDay } = DateTime.toParts(
     DateTime.makeZonedUnsafe(at, { timeZone: DateTime.zoneMakeNamedUnsafe(place.timeZone) }),
   )
-  // This week's Friday: the coming one, or yesterday on a Saturday.
+  // This week's Friday: the coming one, yesterday on a Saturday, and the
+  // one before on a Sunday, where a late sunset's 30 minutes may still run.
   let toFriday = 5 - weekDay
   if (weekDay === 6) toFriday = -1
+  if (weekDay === 0) toFriday = -2
   const end = sunsetAfter(at, toFriday + 1, place) + SABBATH_AFTER_SUNSET_MS
   if (at < end) return { start: sunsetAfter(at, toFriday, place), end }
   // Past its end: the next one is a week on.
