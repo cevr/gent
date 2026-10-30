@@ -9,6 +9,7 @@ import {
   omitUndefined,
   request,
   resolveDataDir,
+  type RetryCause,
   tool,
   type TurnAfterInput,
   type WakeDueInput,
@@ -107,12 +108,19 @@ Do not complete the goal unless it is complete. Do not complete it because you a
 /** Shown with a goal the harness paused on its own. */
 export const GOAL_PAUSED_STREAM_FAILED = "the model stream failed"
 export const GOAL_PAUSED_USAGE_LIMIT = "the model's usage limit was reached"
+export const GOAL_PAUSED_SABBATH = "the owner's Sabbath began"
 export const GOAL_PAUSED_RESUME_MISSED =
   "the resume came over 10 minutes late; /goal resume continues"
 export const GOAL_PAUSED_RESUME_UNSET =
   "the model's usage limit was reached and no resume could be set; /goal resume continues"
 export const GOAL_PAUSED_UNQUEUED =
   "the next goal prompt could not be queued; /goal resume continues"
+
+/** The pause a turn's retry names: its usage limit, or the owner's Sabbath. */
+const PAUSED_FOR: Record<RetryCause, string> = {
+  limit: GOAL_PAUSED_USAGE_LIMIT,
+  sabbath: GOAL_PAUSED_SABBATH,
+}
 
 /** The goal resumes this long after its usage limit resets, as wake's auto-resume does. */
 const RESUME_MARGIN_MS = 30_000
@@ -445,7 +453,7 @@ const decideAfterTurn = (
         onSome: (retry): GoalState => ({
           ...charged,
           status: "paused",
-          pausedReason: GOAL_PAUSED_USAGE_LIMIT,
+          pausedReason: PAUSED_FOR[retry.cause],
           resumeAt: retry.at + RESUME_MARGIN_MS,
         }),
       }),
@@ -545,8 +553,12 @@ export const continueGoal = (input: TurnAfterInput) =>
     const goal = decision.value
     const annotations = { sessionId: String(input.sessionId), goalId: goal.goalId }
     if (Predicate.isNotUndefined(goal.resumeAt)) {
-      return yield* Effect.logInfo("goal.paused.usage-limit").pipe(
-        Effect.annotateLogs({ ...annotations, resumeAt: isoOf(goal.resumeAt) }),
+      return yield* Effect.logInfo("goal.paused.until-resume").pipe(
+        Effect.annotateLogs({
+          ...annotations,
+          reason: goal.pausedReason,
+          resumeAt: isoOf(goal.resumeAt),
+        }),
       )
     }
     if (goal.pausedReason !== GOAL_PAUSED_STREAM_FAILED) return

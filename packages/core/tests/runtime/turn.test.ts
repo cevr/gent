@@ -216,7 +216,12 @@ import {
   resolveExtensions,
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
-import { foldSessionMetrics, interjectionMessageId } from "../../src/domain/agent-loop"
+import {
+  foldSessionMetrics,
+  followUpMessageIdForSource,
+  interjectionMessageId,
+} from "../../src/domain/agent-loop"
+import { workspaceIdForCwd } from "../../src/server/workspace-rpc"
 import * as AiError from "effect/ai/AiError"
 import { Database } from "bun:sqlite"
 import { Decision, DecisionModel, type LanguageModel } from "effect/ai"
@@ -8347,6 +8352,102 @@ describe("virtual model routing", () => {
         expect(snapshot.metrics.routed).toMatchObject({ selected: AUTO_MODEL, model: LIGHT_MODEL })
         yield* controls.assertDone
       }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.live(
+    "a routed run its lane took before sunset asks no router when its turn opens in the Sabbath",
+    () =>
+      Effect.gen(function* () {
+        // On the equator in UTC the sun sets near 18:07 on Friday 1970-01-02.
+        yield* TestClock.setTime(Date.parse("1970-01-02T18:00:00Z"))
+        const routes = yield* Ref.make(0)
+        const taken = yield* Ref.make<ReadonlyArray<string>>([])
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        // A tool takes a lane for a follow-up of its own branch before sunset
+        // and queues it, then waits while the test moves past sunset: the
+        // follow-up's turn opens in the Sabbath on the lane it took.
+        const laneProbe = defineExtension({
+          id: "@test/sabbath-lane",
+          setup: Effect.gen(function* () {
+            yield* (yield* ExtensionHost).register(
+              "tool",
+              tool({
+                id: "queue_admitted",
+                description: "Take a lane for a follow-up, queue it, then wait",
+                params: Schema.Struct({}),
+                output: Schema.Struct({}),
+                execute: Effect.fn("QueueAdmitted.execute")(function* () {
+                  const ctx = yield* ExtensionContext
+                  const message = followUpMessageIdForSource({
+                    workspaceId: workspaceIdForCwd(ctx.cwd),
+                    sessionId: ctx.sessionId,
+                    branchId: ctx.branchId,
+                    sourceId: "after-sunset",
+                  })
+                  const answer = yield* ctx.Accounts.admit({ message, cwd: ctx.cwd })
+                  const held = yield* ctx.Accounts.awaitLane(message)
+                  yield* Ref.update(taken, (all) => [...all, `${answer._tag}:${held}`])
+                  yield* ctx.Session.send({
+                    delivery: "queue",
+                    content: "go on",
+                    sourceId: "after-sunset",
+                  })
+                  yield* Deferred.succeed(entered, void 0)
+                  yield* Deferred.await(release)
+                  return {}
+                }),
+              }),
+            )
+          }),
+        })
+        // A third request would exhaust the sequence.
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("queue_admitted", {}),
+          textStep("queued"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              choices: [{ model: TEST_MODEL_ID, reason: "any work" }],
+              route: () =>
+                Ref.update(routes, (count) => count + 1).pipe(
+                  Effect.as({ choice: 0, reason: "the only choice" }),
+                ),
+            }),
+            laneProbe,
+          ],
+          configServiceLayer: ConfigService.Test(
+            new UserConfig({
+              model: TEST_MODEL_ID,
+              providers: { anthropic: { authOrder: [CredentialSlot.make("work")] } },
+              sabbath: { latitude: 0, longitude: 0, timeZone: "UTC" },
+            }),
+          ),
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.message.send({ sessionId, branchId, content: "queue one" })
+        yield* Deferred.await(entered)
+        expect(yield* Ref.get(taken)).toEqual(["Admitted:true"])
+        yield* TestClock.setTime(Date.parse("1970-01-02T18:10:00Z"))
+        yield* Deferred.succeed(release, void 0)
+        const events = yield* afterTurns(2)
+        // The first turn's one route; the follow-up's turn stopped before any.
+        expect(yield* Ref.get(routes)).toBe(1)
+        const stopped = events.filter(Schema.is(ErrorOccurred)).at(-1)
+        expect(stopped?.retryCause).toBe("sabbath")
+        expect(stopped?.error).toContain("Sabbath")
+        // The unrouted step names no switch away from the model the first turn ran on.
+        const { messages } = yield* client.session.getSnapshot({ sessionId, branchId })
+        expect(
+          messages.filter((message) => message.metadata?.customType === "model-change"),
+        ).toEqual([])
+        yield* controls.assertDone
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("15 seconds")),
     20_000,
   )
 

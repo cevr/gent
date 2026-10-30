@@ -438,7 +438,7 @@ export const AgentEvent = Schema.TaggedUnion({
      * any other error.
      */
     retryAt: Schema.optional(Schema.Finite),
-    /** Why the step may run again only at `retryAt` (`RetryCause`); absent reads as `limit`. */
+    /** Why the step may run again only at `retryAt` (`RetryCause`): set whenever it is. */
     retryCause: Schema.optional(RetryCause),
   },
   ProviderRetrying: {

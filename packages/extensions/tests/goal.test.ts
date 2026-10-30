@@ -60,6 +60,7 @@ import {
   GOAL_PAUSED_RESUME_UNSET,
   GOAL_PAUSED_UNQUEUED,
   GOAL_PAUSED_STREAM_FAILED,
+  GOAL_PAUSED_SABBATH,
   GOAL_PAUSED_USAGE_LIMIT,
   goalContinuationSource,
   goalResumeDue,
@@ -914,6 +915,20 @@ describe("goal resume fire", () => {
       expect(goal?.pausedReason).toBe(GOAL_PAUSED_USAGE_LIMIT)
       expect(sends).toBe(0)
     }),
+  )
+
+  it.scopedLive(
+    "a turn the owner's Sabbath stopped pauses the goal for the Sabbath, not a usage limit",
+    () =>
+      Effect.gen(function* () {
+        const { goal, wakes } = yield* onBranch(
+          active,
+          2_000,
+          continueGoal({ ...limitedTurn, retry: Option.some({ at: 60_000, cause: "sabbath" }) }),
+        )
+        expect(wakes).toEqual([90_000])
+        expect(goal?.pausedReason).toBe(GOAL_PAUSED_SABBATH)
+      }),
   )
 
   it.scopedLive(

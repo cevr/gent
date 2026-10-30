@@ -34,7 +34,7 @@ interface TurnEnd {
   readonly error: Option.Option<string>
   /**
    * When the turn may run again, and why, as that error names them (its
-   * `retryAt` and `retryCause`; no cause reads as `limit`).
+   * `retryAt` and `retryCause`, written together).
    */
   readonly retry: Option.Option<TurnRetry>
 }
@@ -63,10 +63,11 @@ export const turnEnd = (target: TurnTarget) =>
             return {
               ...state,
               error: Option.some(event.error),
-              retry: Option.map(Option.fromUndefinedOr(event.retryAt), (at): TurnRetry => ({
-                at,
-                cause: event.retryCause ?? "limit",
-              })),
+              retry: Option.zipWith(
+                Option.fromUndefinedOr(event.retryAt),
+                Option.fromUndefinedOr(event.retryCause),
+                (at, cause): TurnRetry => ({ at, cause }),
+              ),
             }
           }
           if (event._tag !== "TurnCompleted") return state

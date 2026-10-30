@@ -7053,60 +7053,73 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         lastEffort: knownSteps.lastEffort,
         stepEfforts: knownSteps.stepEfforts,
       }
-      // One classifier call per user turn: where the virtual model's router
-      // serves the effort router too, its call picks the level as well.
-      const combinedEffort = (routedModel: ServedVirtualModel) =>
-        combinedEffortRoute({
-          resolved,
-          step: params.step,
-          messageId: params.state.message.id,
-          routedModel,
-          effortRouter: servedEffortRouter(profile),
-          log: effortLog,
-        })
-      let decided: DecidedEffort = Option.none()
-      if (Option.isSome(virtual)) {
-        if (Result.isFailure(virtual.value)) return yield* unrunnable(virtual.value.failure)
-        const routedModel = virtual.value.success
-        const route = yield* routeTurn({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          messageId: params.state.message.id,
-          step: params.step,
-          resolved,
-          served: routedModel,
-          log: {
-            current: knownSteps.model,
-            lastCallModel: knownSteps.lastCallModel,
-            lastCallAtMillis: knownSteps.lastCallAtMillis,
-            accountStands,
-            measure: knownSteps.measure,
-            routed: knownSteps.routed,
-          },
-          effort: combinedEffort(routedModel),
-        })
-        if (Option.isNone(route))
-          return yield* unrunnable(
-            `Model router "${resolved.modelId}": no choice names a model the catalog lists`,
-          )
-        if (!route.value.recorded) yield* publishEventOrDie(route.value.event)
-        // A recorded route is charged too: a process that recovers the turn
-        // starts a new ledger, and the route's classifier calls are still spent.
-        yield* scope.turnLedger.noteRoute(route.value.event)
-        resolved = applyTurnRoute(resolved, route.value.event)
-        decided = route.value.effort
+      // A virtual model runs on its router's pick, then `/effort auto` picks
+      // the level. Fails with the error that leaves the step unrunnable.
+      const atRoute = Effect.fn("AgentLoop.atRoute")(function* (current: ResolvedTurnContext) {
+        let next = current
+        let decided: DecidedEffort = Option.none()
+        if (Option.isSome(virtual)) {
+          if (Result.isFailure(virtual.value)) return Result.fail(virtual.value.failure)
+          const routedModel = virtual.value.success
+          const route = yield* routeTurn({
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            messageId: params.state.message.id,
+            step: params.step,
+            resolved: next,
+            served: routedModel,
+            log: {
+              current: knownSteps.model,
+              lastCallModel: knownSteps.lastCallModel,
+              lastCallAtMillis: knownSteps.lastCallAtMillis,
+              accountStands,
+              measure: knownSteps.measure,
+              routed: knownSteps.routed,
+            },
+            // One classifier call per user turn: where the virtual model's
+            // router serves the effort router too, its call picks the level.
+            effort: combinedEffortRoute({
+              resolved: next,
+              step: params.step,
+              messageId: params.state.message.id,
+              routedModel,
+              effortRouter: servedEffortRouter(profile),
+              log: effortLog,
+            }),
+          })
+          if (Option.isNone(route))
+            return Result.fail(
+              `Model router "${next.modelId}": no choice names a model the catalog lists`,
+            )
+          if (!route.value.recorded) yield* publishEventOrDie(route.value.event)
+          // A recorded route is charged too: a process that recovers the turn
+          // starts a new ledger, and the route's classifier calls are still spent.
+          yield* scope.turnLedger.noteRoute(route.value.event)
+          next = applyTurnRoute(next, route.value.event)
+          decided = route.value.effort
+        }
+        if (next.effortAuto)
+          next = yield* atAutoEffort({
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            messageId: params.state.message.id,
+            step: params.step,
+            resolved: next,
+            ledger: scope.turnLedger,
+            log: effortLog,
+            decided,
+          })
+        return Result.succeed(next)
+      })
+      // An admitted run the owner's Sabbath reached sends nothing: a route or
+      // an effort pick asks a classifier, so neither runs, and the step
+      // stops before its request (`stopInSabbath`).
+      const resting = Option.isSome(yield* placement.sabbathStop(scope.sessionId))
+      if (!resting) {
+        const routed = yield* atRoute(resolved)
+        if (Result.isFailure(routed)) return yield* unrunnable(routed.failure)
+        resolved = routed.success
       }
-      if (resolved.effortAuto)
-        resolved = yield* atAutoEffort({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          messageId: params.state.message.id,
-          step: params.step,
-          resolved,
-          ledger: scope.turnLedger,
-          log: effortLog,
-          decided,
-        })
       if (params.step > 1) {
         resolved = atTurnEffort(
           resolved,
@@ -7115,7 +7128,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ),
         )
       }
-      const previousModel = knownSteps.model
+      // An unrouted model in the Sabbath is no switch: the step writes nothing.
+      const previousModel = Option.filter(knownSteps.model, () => !resting)
       if (Option.isSome(previousModel) && previousModel.value !== resolved.modelId) {
         yield* appendBoundaryLine(
           modelChangeNotice({

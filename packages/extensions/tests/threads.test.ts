@@ -3823,7 +3823,7 @@ describe("a round's turn end read from its history", () => {
     )
   }
 
-  it.effect("names the Sabbath when the error does, and a limit when it names no cause", () =>
+  it.effect("names the cause its error names, the Sabbath or a usage limit", () =>
     Effect.gen(function* () {
       const stopped = yield* endAfter(
         AgentEvent.cases.ErrorOccurred.make({
@@ -3837,13 +3837,13 @@ describe("a round's turn end read from its history", () => {
       expect(Option.flatMap(stopped, (end) => end.retry)).toEqual(
         Option.some({ at: 2_000, cause: "sabbath" }),
       )
-      // An error stored before causes were named reads as a usage limit.
       const limited = yield* endAfter(
         AgentEvent.cases.ErrorOccurred.make({
           sessionId,
           branchId,
           error: "limit",
           retryAt: 3_000,
+          retryCause: "limit",
         }),
       )
       expect(Option.flatMap(limited, (end) => end.retry)).toEqual(
