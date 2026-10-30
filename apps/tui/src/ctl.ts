@@ -1336,7 +1336,9 @@ const lanes = Command.make(
   {
     connect: connectFlag,
     line: Flag.Boolean("line").pipe(
-      Flag.withDescription("Print the band's lanes rows as text, one per provider"),
+      Flag.withDescription(
+        "Print the band's lanes rows as text: the owner's Sabbath first while it holds, then one per provider",
+      ),
       Flag.withDefault(false),
     ),
   },

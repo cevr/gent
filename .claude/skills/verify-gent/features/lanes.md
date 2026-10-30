@@ -10,7 +10,7 @@ Under the status row, a band shows how many runs the accounts can carry now and 
 - `band-run`: `debug machine` starts the `soak` machine; `▸ soak check r1 <age>` shows until its 45 s command ends, then goes.
 - `band-narrow`: at 60 columns the full row fits; at 44 it drops the share and the band and keeps `1/1 free`.
 - `ctl-lanes`: `gent ctl lanes` prints `Lanes` with one provider record per line; `--line` prints the band's row text.
-- `band-sabbath`: in the owner's Sabbath the band's first row is `≡ sabbath · no run starts until <end>`, alone with no reading; at 44 columns `≡ sabbath until <end>`, at 26 `≡ sabbath`. The owner's own turn still answers. `gent ctl lanes` holds `sabbathEnd`, and `--line` prints the row.
+- `band-sabbath`: in the owner's Sabbath the band's first row is `≡ sabbath · no run starts until <end>`, alone with no reading; narrower, `≡ sabbath until <end>`, then `≡ sabbath`. The end reads `HH:MM` when it falls on today's local date, else with its date, so the width each form needs moves with it: with a dated end the row is `sabbath until` at 44 columns, with a clock only it is still the full row. The owner's own turn still answers. `gent ctl lanes` holds `sabbathEnd`, and `--line` prints the row.
 - `band-login-lost`: after the provider answers 401 to a sign-in's key, `≡ login! anthropic default refused · sign in with /auth` follows the provider's row, once however many turns it refuses; at 44 columns `≡ login! anthropic default refused`, at 28 `≡ login! anthropic default`.
 
 ## How to get to it (user POV)
@@ -55,6 +55,6 @@ Script `drives/lanes-sabbath.json` (the baseline run, 120x40). Before the drive,
 ## Gotchas
 
 - The ledger's readings must be recent: the server drops a reading older than 7 days, and the row says `unknown`. Write the ledger just before the launch.
-- The band reads on a turn's end, a reconnect and every 30 s. A ledger change on disk shows only after a server restart.
+- The band reads on a turn's end, a reconnect and every 30 s. A ledger change on disk shows only after a server restart, and the Sabbath row shows up to 30 s after sunset, while admission refuses at once.
 - A run belongs to the session that started it: a new `["gent"]` session shows the lanes but not another session's runs.
 - `gent ctl lanes` takes no `--cwd` or `--session`: the accounts are the server's.

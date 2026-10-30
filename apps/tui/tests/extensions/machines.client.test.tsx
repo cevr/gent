@@ -204,6 +204,16 @@ describe("the lanes band rows", () => {
     ).toEqual([])
   })
 
+  test("a Sabbath that ends today names a clock only, so its full row fits narrower", () => {
+    const end = Date.UTC(2026, 9, 21, 18, 9)
+    const at = (width: number) => laneRows({ providers: [], sabbathEnd: end }, NOW, width, utc)[0]
+    expect(at(120)).toEqual({ text: "sabbath · no run starts until 18:09", state: "none" })
+    expect(at(40)?.text).toBe("sabbath · no run starts until 18:09")
+    expect(at(30)?.text).toBe("sabbath until 18:09")
+    expect(at(19)?.text).toBe("sabbath until 18:09")
+    expect(at(18)?.text).toBe("sabbath")
+  })
+
   test("every lane held by a running run says how many run, not a clock", () => {
     const busy: LaneReport = {
       providers: measured.providers.map((lanes) => ({ ...lanes, load: 5 })),
