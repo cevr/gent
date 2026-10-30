@@ -436,17 +436,17 @@ const decideAfterTurn = (
   // names its reset is the exception: the goal resumes on its own after it.
   if (input.streamFailed) {
     return {
-      next: Option.match(input.retryAt, {
+      next: Option.match(input.retry, {
         onNone: (): GoalState => ({
           ...charged,
           status: "paused",
           pausedReason: GOAL_PAUSED_STREAM_FAILED,
         }),
-        onSome: (resetAt): GoalState => ({
+        onSome: (retry): GoalState => ({
           ...charged,
           status: "paused",
           pausedReason: GOAL_PAUSED_USAGE_LIMIT,
-          resumeAt: resetAt + RESUME_MARGIN_MS,
+          resumeAt: retry.at + RESUME_MARGIN_MS,
         }),
       }),
       report: true,

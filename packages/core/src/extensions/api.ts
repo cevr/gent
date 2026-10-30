@@ -64,6 +64,7 @@ export {
   LoadedArtifactIdentity,
   type ToolCallInput,
   type TurnAfterInput,
+  type TurnRetry,
   type TurnUsage,
 } from "../domain/extension.js"
 export {
@@ -160,7 +161,7 @@ export {
   assistantMessageIdForTurn,
   DEFAULT_SESSION_NAME,
 } from "../domain/message.js"
-export { type AgentEvent, unseenText } from "../domain/event.js"
+export { type AgentEvent, RetryCause, unseenText } from "../domain/event.js"
 export {
   isRuntimeUserMessage,
   isSpawnedSession,

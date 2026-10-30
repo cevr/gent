@@ -377,12 +377,12 @@ describe("agent turn response collectors", () => {
         branchId,
         activeStream,
         contextOverflow: false,
-        retryAt: Option.some(1_000),
+        retry: Option.some({ at: 1_000, cause: "limit" }),
       }).pipe(Effect.provide(layer))
 
       expect(collected.interrupted).toBe(true)
       expect(collected.streamFailed).toBe(false)
-      expect(collected.retryAt).toEqual(Option.none())
+      expect(collected.retry).toEqual(Option.none())
       expect(yield* Ref.get(events)).toEqual([])
     }),
   )
@@ -482,7 +482,7 @@ const collected = (
   streamFailed: false,
   contextOverflow: false,
   windowFull: false,
-  retryAt: Option.none(),
+  retry: Option.none(),
   ...flags,
 })
 

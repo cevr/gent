@@ -1148,7 +1148,7 @@ const wakeTurnHooks = (home: string) =>
             agentName: builtinAgent.name,
             interrupted: false,
             streamFailed: false,
-            retryAt: Option.none(),
+            retry: Option.none(),
             unanswered: false,
             readNotices: new Set(readNotices),
             usage: {
@@ -2756,7 +2756,7 @@ describe("auto-resume", () => {
             8_000,
             "the turn ended",
           )
-          expect(Option.isSome(ended?.retryAt ?? Option.none())).toBe(true)
+          expect(Option.isSome(ended?.retry ?? Option.none())).toBe(true)
           expect((yield* pendingOf(client, { sessionId, branchId })).entries).toEqual([])
         }).pipe(Effect.timeout("10 seconds")),
       ),
@@ -2790,7 +2790,7 @@ describe("auto-resume", () => {
             "the child's turn ended",
           )
           expect(ended?.sessionId).toBe(child.sessionId)
-          expect(Option.isSome(ended?.retryAt ?? Option.none())).toBe(true)
+          expect(Option.isSome(ended?.retry ?? Option.none())).toBe(true)
           expect((yield* pendingOf(client, child)).entries).toEqual([])
         }).pipe(Effect.timeout("10 seconds")),
       ),
@@ -3329,7 +3329,7 @@ describe("auto-resume", () => {
         agentName: builtinAgent.name,
         interrupted: false,
         streamFailed: true,
-        retryAt: Option.some(60_000),
+        retry: Option.some({ at: 60_000, cause: "limit" }),
         unanswered: false,
         usage: {
           known: {

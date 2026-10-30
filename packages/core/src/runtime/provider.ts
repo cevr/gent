@@ -3951,6 +3951,14 @@ interface CredentialPlacementService {
    * queue for good.
    */
   readonly awaitLane: (key: string) => Effect.Effect<boolean, LaneUnavailable>
+  /**
+   * The end of the Sabbath the session's run is in now, when its turn holds
+   * a lane a start was admitted to (a thread's round, a child's run): such a
+   * run goes on in no Sabbath, so its turn stops before its next request,
+   * until the end. None for any other turn: the owner's own turns answer as
+   * always.
+   */
+  readonly sabbathStop: (sessionId: SessionId) => Effect.Effect<Option.Option<number>>
   /** The session's turn opened on `provider`: it holds a lane until it ends, and the start admitted under `key` no longer does. */
   readonly openLane: (lane: OpenLane) => Effect.Effect<void>
   /**
@@ -5099,6 +5107,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly scope: ReadonlyArray<CredentialSlot>
       readonly model: Option.Option<ModelId>
       readonly starter: Option.Option<SessionId>
+      /** The admitted start's Sabbath: its turn stops at a step's start in one (`sabbathStop`). */
+      readonly sabbath: Option.Option<Sabbath>
       readonly openedAt: number
       readonly fuel: Option.Option<number>
     }
@@ -6752,6 +6762,17 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       return yield* Effect.fromResult(answer.outcome)
     }),
     awaitLane: (key: string) => awaitLane(key),
+    sabbathStop: Effect.fn("CredentialPlacement.sabbathStop")(function* (sessionId: SessionId) {
+      const now = yield* Clock.currentTimeMillis
+      return yield* locked(() =>
+        Option.map(
+          Option.flatMap(Option.fromUndefinedOr(running.get(sessionId)), (open) =>
+            sabbathAt(open.sabbath, now),
+          ),
+          (window) => window.end,
+        ),
+      )
+    }),
     openLane: Effect.fn("CredentialPlacement.openLane")(function* (lane: OpenLane) {
       const now = yield* Clock.currentTimeMillis
       const grants = yield* locked(() => {
@@ -6773,6 +6794,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           starter: Option.match(before, {
             onNone: () => Option.flatMap(admitted, (start) => start.starter),
             onSome: (open) => open.starter,
+          }),
+          sabbath: Option.match(before, {
+            onNone: () => Option.flatMap(admitted, (start) => start.sabbath),
+            onSome: (open) => open.sabbath,
           }),
           openedAt: Option.match(before, { onNone: () => now, onSome: (open) => open.openedAt }),
           fuel: Option.match(before, { onNone: () => Option.some(0), onSome: (open) => open.fuel }),

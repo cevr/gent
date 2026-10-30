@@ -35,6 +35,7 @@ import {
   FollowUpQueueFull,
   getToolId,
   LaneUnavailable,
+  MessageId,
   messagePartsDisplayText,
   type ModelPricing,
   omitUndefined,
@@ -58,13 +59,23 @@ import {
   runtimeHostContext,
   runToolWithCtx,
   TEST_MODEL_ID,
+  testLeafContext,
+  testToolContext,
   textDeltaPart,
   toolCallPart,
   UserConfig,
   waitFor,
 } from "@gent/core/test-utils"
-import { BranchId, type EventEnvelope, ModelId, SessionId, ToolCallId } from "@gent/core/protocol"
+import {
+  AgentEvent,
+  BranchId,
+  type EventEnvelope,
+  ModelId,
+  SessionId,
+  ToolCallId,
+} from "@gent/core/protocol"
 import { AgentsExtension } from "../src/agents.js"
+import { turnEnd } from "../src/child-turns.js"
 import { SESSION_TOOLS_EXTENSION_ID, SessionToolsExtension } from "../src/session-tools.js"
 import {
   THREAD_ROUND_END_TYPE,
@@ -3782,5 +3793,62 @@ describe("a thread round running when the server stopped", () => {
         }).pipe(Effect.timeout("40 seconds")),
       ),
     45_000,
+  )
+})
+
+describe("a round's turn end read from its history", () => {
+  const sessionId = SessionId.make("01a18d00-0000-7000-8000-000000000001")
+  const branchId = BranchId.make("01a18d00-0000-7000-8000-000000000002")
+  const messageId = MessageId.make("round-turn")
+  /** The turn's end as `turnEnd` reads it from a history of its error and receipt. */
+  const endAfter = (error: typeof AgentEvent.cases.ErrorOccurred.Type) => {
+    const stub = testToolContext().Session
+    const history: ReadonlyArray<AgentEvent> = [
+      error,
+      AgentEvent.cases.TurnCompleted.make({
+        sessionId,
+        branchId,
+        messageId,
+        durationMs: 10,
+        streamFailed: true,
+      }),
+    ]
+    return turnEnd({ sessionId, branchId, messageId }).pipe(
+      Effect.provideService(
+        ExtensionContext,
+        testLeafContext(
+          testToolContext({ Session: { ...stub, events: () => Stream.fromIterable(history) } }),
+        ),
+      ),
+    )
+  }
+
+  it.effect("names the Sabbath when the error does, and a limit when it names no cause", () =>
+    Effect.gen(function* () {
+      const stopped = yield* endAfter(
+        AgentEvent.cases.ErrorOccurred.make({
+          sessionId,
+          branchId,
+          error: "No run goes on in the owner's Sabbath",
+          retryAt: 2_000,
+          retryCause: "sabbath",
+        }),
+      )
+      expect(Option.flatMap(stopped, (end) => end.retry)).toEqual(
+        Option.some({ at: 2_000, cause: "sabbath" }),
+      )
+      // An error stored before causes were named reads as a usage limit.
+      const limited = yield* endAfter(
+        AgentEvent.cases.ErrorOccurred.make({
+          sessionId,
+          branchId,
+          error: "limit",
+          retryAt: 3_000,
+        }),
+      )
+      expect(Option.flatMap(limited, (end) => end.retry)).toEqual(
+        Option.some({ at: 3_000, cause: "limit" }),
+      )
+    }),
   )
 })

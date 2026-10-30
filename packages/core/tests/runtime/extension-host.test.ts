@@ -5170,7 +5170,7 @@ describe("runtime slots", () => {
               agentName: AgentName.make("primary"),
               interrupted: false,
               streamFailed: false,
-              retryAt: Option.none(),
+              retry: Option.none(),
               unanswered: false,
 
               messageId: MessageId.make("turn-message"),
@@ -5221,7 +5221,7 @@ describe("runtime slots", () => {
             agentName: AgentName.make("primary"),
             interrupted: false,
             streamFailed: false,
-            retryAt: Option.none(),
+            retry: Option.none(),
             unanswered: false,
 
             messageId: MessageId.make("turn-message"),
@@ -5275,7 +5275,7 @@ describe("runtime slots", () => {
             agentName: AgentName.make("primary"),
             interrupted: false,
             streamFailed: false,
-            retryAt: Option.none(),
+            retry: Option.none(),
             unanswered: false,
 
             messageId: MessageId.make("turn-message"),
@@ -6496,7 +6496,7 @@ const stubEvent: Omit<TurnAfterInput, "readNotices"> = {
   agentName: AgentName.make("primary"),
   interrupted: false,
   streamFailed: false,
-  retryAt: Option.none(),
+  retry: Option.none(),
   unanswered: false,
 
   messageId: MessageId.make("turn-message"),

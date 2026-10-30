@@ -80,6 +80,7 @@ import {
   omitUndefined,
   ReasoningEffort,
   RequestId,
+  RetryCause,
   SessionAccount,
   sessionAccount,
   type SessionReachError,
@@ -88,6 +89,7 @@ import {
   stepSessionMetrics,
   tool,
   type TurnAfterInput,
+  type TurnRetry,
   ensureExtensionTables,
 } from "@gent/core/extensions/api"
 import {
@@ -374,20 +376,8 @@ const ToolNotify = Schema.Literals(["user", "starter"]).annotate({
  * when the interrupt that stops it is that place's), so a second delivery
  * goes where the first one went.
  */
-/**
- * Why a round could not run before its retry time: `limit`, its account's
- * usage limit or quota windows; `sabbath`, the owner's Sabbath.
- */
-const RetryCause = Schema.Literals(["limit", "sabbath"])
-
 /** The retry cause of each lane refusal's reason. */
 const REFUSAL_CAUSE = { spent: "limit", sabbath: "sabbath" } as const
-
-/** When a round that could not run may run again, and why. */
-interface RoundRetry {
-  readonly at: number
-  readonly cause: typeof RetryCause.Type
-}
 
 const RoundRow = Schema.Struct({
   round: Schema.String,
@@ -434,8 +424,8 @@ interface RoundEnd {
   readonly streamFailed: boolean
   readonly unanswered: boolean
   readonly error: Option.Option<string>
-  /** When the round may run again, and why it may not before (`RoundRetry`). */
-  readonly retry: Option.Option<RoundRetry>
+  /** When the round may run again, and why it may not before (`TurnRetry`). */
+  readonly retry: Option.Option<TurnRetry>
   readonly usage: Option.Option<typeof ChildUsage.Type>
   readonly endedAt: number
 }
@@ -1650,7 +1640,7 @@ interface TurnOutcome {
   readonly streamFailed: boolean
   readonly unanswered: boolean
   readonly error: Option.Option<string>
-  readonly retry: Option.Option<RoundRetry>
+  readonly retry: Option.Option<TurnRetry>
   readonly usage: Option.Option<typeof ChildUsage.Type>
 }
 
@@ -1701,7 +1691,7 @@ const onRoundTurnAfter = Effect.fn("Threads.turnAfter")(function* (input: TurnAf
     streamFailed: input.streamFailed,
     unanswered: input.unanswered,
     error,
-    retry: Option.map(input.retryAt, (at) => ({ at, cause: "limit" })),
+    retry: input.retry,
     // A round shows the turn's total, as its receipt does: a partial count
     // would read as the whole spend.
     usage: usageOf(
@@ -1730,17 +1720,14 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
     branchId: BranchId.make(round.branch_id),
     messageId: MessageId.make(round.message_id),
   })
-  // The hook's `retryAt` is held in memory: a turn whose receipt came before
+  // The hook's `retry` is held in memory: a turn whose receipt came before
   // the hook ran reads it from the error the turn ended on.
-  return Option.map(end, ({ receipt, error, retryAt }): TurnOutcome => ({
+  return Option.map(end, ({ receipt, error, retry }): TurnOutcome => ({
     interrupted: receipt.interrupted === true,
     streamFailed: receipt.streamFailed,
     unanswered: receipt.unanswered === true,
     error,
-    retry: Option.map(
-      Option.filter(retryAt, () => receipt.streamFailed),
-      (at): RoundRetry => ({ at, cause: "limit" }),
-    ),
+    retry: Option.filter(retry, () => receipt.streamFailed),
     usage: usageOf(receiptTotal(receipt)),
   }))
 })

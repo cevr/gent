@@ -60,7 +60,7 @@ import {
   type ToolCallId,
 } from "./ids.js"
 import type { FollowUpQueueFull, SessionRuntimeMetrics } from "./agent-loop.js"
-import type { AgentEvent, EventStoreError } from "./event.js"
+import type { AgentEvent, EventStoreError, RetryCause } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
 import {
@@ -534,6 +534,12 @@ export interface TurnProjectionInput {
   readonly agent: AgentDefinition
 }
 
+/** When a stopped turn may run again (`at`, epoch ms), and why (`RetryCause`). */
+export interface TurnRetry {
+  readonly at: number
+  readonly cause: RetryCause
+}
+
 export interface TurnAfterInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -571,13 +577,14 @@ export interface TurnAfterInput {
    */
   readonly streamFailed: boolean
   /**
-   * When the usage limit the turn failed on resets, in epoch milliseconds:
-   * the same time as the turn's `ErrorOccurred.retryAt`, which the driver
-   * read past its retry cap (`RetryPolicy.retryAt`). Some only for a
-   * `streamFailed` turn that was not interrupted and whose last step failed
-   * so. It is held in memory, not stored.
+   * When the turn may run again, and why: a usage limit the driver read past
+   * its retry cap (`RetryPolicy.retryAt`), or the owner's Sabbath, which
+   * stopped a started run at a step's start. The time is the turn's
+   * `ErrorOccurred.retryAt`. Some only for a `streamFailed` turn that was
+   * not interrupted and whose last step failed so. It is held in memory,
+   * not stored.
    */
-  readonly retryAt: Option.Option<number>
+  readonly retry: Option.Option<TurnRetry>
   /** The turn spent its continuations and never answered. */
   readonly unanswered: boolean
   /** What the turn's model calls spent, and whether that is all of it. */

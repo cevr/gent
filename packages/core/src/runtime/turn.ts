@@ -93,6 +93,7 @@ import type {
   LaneRun,
   TurnNotice,
   TurnProjection,
+  TurnRetry,
 } from "../domain/extension.js"
 import {
   ApprovalService,
@@ -535,10 +536,11 @@ export interface CollectedTurnResponse {
    */
   readonly windowFull: boolean
   /**
-   * When the usage limit the step failed on resets (`limitResetAt`): the
-   * provider named a time past the driver's retry cap. None for any other step.
+   * When the step may run again, and why: the usage limit it failed on
+   * resets (`limitResetAt`, a time past the driver's retry cap), or the
+   * owner's Sabbath stopped it (`SabbathStop`). None for any other step.
    */
-  readonly retryAt: Option.Option<number>
+  readonly retry: Option.Option<TurnRetry>
 }
 
 const publishEventOrDie = (event: AgentEvent) =>
@@ -571,7 +573,7 @@ export const collectNormalizedResponse = (params: {
     streamFailed: params.streamFailed,
     contextOverflow: false,
     windowFull: false,
-    retryAt: Option.none(),
+    retry: Option.none(),
   }
 }
 
@@ -651,7 +653,7 @@ const reportStreamFailure = (
     branchId: BranchId
     modelId: ModelIdType
     reasoningLevel?: RunEffort
-    retryAt: Option.Option<number>
+    retry: Option.Option<TurnRetry>
     /** The credential the step's last request went out with. */
     credential?: CredentialReceipt
     /** The turn's model-call budget as the step ended; absent for a turn with none. */
@@ -681,7 +683,10 @@ const reportStreamFailure = (
       sessionId: params.sessionId,
       branchId: params.branchId,
       error: streamError.message,
-      ...omitUndefined({ retryAt: Option.getOrUndefined(params.retryAt) }),
+      ...omitUndefined({
+        retryAt: Option.getOrUndefined(Option.map(params.retry, (retry) => retry.at)),
+        retryCause: Option.getOrUndefined(Option.map(params.retry, (retry) => retry.cause)),
+      }),
     }
     yield* publishEventOrDie(
       Option.match(note, {
@@ -757,7 +762,7 @@ export const collectModelTurnResponse = (params: {
           yield* reportStreamFailure(
             {
               ...params,
-              retryAt: Option.none(),
+              retry: Option.none(),
               ...omitUndefined({
                 credential: Option.getOrUndefined(credential),
                 modelAttempts: Option.getOrUndefined(modelAttempts),
@@ -793,8 +798,8 @@ export const collectFailedModelTurnResponse = (params: {
   contextOverflow: boolean
   /** The provider refused as too long a window this turn already handed off. */
   refusedAgain?: boolean
-  /** When the usage limit the step failed on resets (`limitResetAt`). */
-  retryAt: Option.Option<number>
+  /** When the step may run again, and why (`CollectedTurnResponse.retry`). */
+  retry: Option.Option<TurnRetry>
   /** The credential the step's last request went out with. */
   credential?: CredentialReceipt
   /** The turn's model-call budget as the step ended; absent for a turn with none. */
@@ -805,7 +810,7 @@ export const collectFailedModelTurnResponse = (params: {
   Effect.gen(function* () {
     const interrupted = yield* wasInterrupted(params.activeStream)
     const contextOverflow = params.contextOverflow && !interrupted
-    const retryAt = Option.filter(params.retryAt, () => !interrupted)
+    const retry = Option.filter(params.retry, () => !interrupted)
     if (!interrupted) {
       let note = Option.none<StreamFailureNote>()
       if (contextOverflow) note = Option.some({ text: CONTEXT_OVERFLOW_RECOVERY, notice: true })
@@ -827,7 +832,7 @@ export const collectFailedModelTurnResponse = (params: {
         interrupted,
       }),
       contextOverflow,
-      retryAt,
+      retry,
     }
   })
 
@@ -906,10 +911,10 @@ interface TurnLedger {
   readonly noteJoined: (messageId: MessageId) => Effect.Effect<void>
   /** The steering messages this process saw a step of this turn join. */
   readonly joined: Effect.Effect<ReadonlySet<MessageId>>
-  /** A model step settled: `retryAt` is its usage limit's reset, none for any other end. */
-  readonly noteStepEnd: (retryAt: Option.Option<number>) => Effect.Effect<void>
-  /** The reset of the usage limit this turn's last step failed on. */
-  readonly retryAt: Effect.Effect<Option.Option<number>>
+  /** A model step settled: `retry` is when it may run again, none for any other end. */
+  readonly noteStepEnd: (retry: Option.Option<TurnRetry>) => Effect.Effect<void>
+  /** When this turn's last step may run again, and why. */
+  readonly retry: Effect.Effect<Option.Option<TurnRetry>>
   /**
    * The credentials of `provider`'s order (`slots`) this turn left. A request
    * goes out with the first slot of the order not in it, so a turn never
@@ -1046,7 +1051,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
   const metrics = yield* Ref.make(emptyTurnMetrics())
   const shown = yield* Ref.make<ReadonlyMap<ExtensionId, ReadonlySet<string>>>(new Map())
   const joined = yield* Ref.make<ReadonlySet<MessageId>>(new Set())
-  const lastRetryAt = yield* Ref.make(Option.none<number>())
+  const lastRetry = yield* Ref.make(Option.none<TurnRetry>())
   const cursors = yield* Ref.make<ReadonlyMap<string, CredentialCursor>>(new Map())
   const extraUsage = yield* Ref.make<ReadonlySet<string>>(new Set())
   return {
@@ -1059,7 +1064,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           if (!fresh) return Effect.void
           return Ref.set(shown, new Map()).pipe(
             Effect.andThen(Ref.set(joined, new Set())),
-            Effect.andThen(Ref.set(lastRetryAt, Option.none())),
+            Effect.andThen(Ref.set(lastRetry, Option.none())),
             Effect.andThen(Ref.set(cursors, new Map())),
             Effect.andThen(Ref.set(extraUsage, new Set())),
           )
@@ -1149,8 +1154,8 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
     shownNotices: Ref.get(shown),
     noteJoined: (messageId) => Ref.update(joined, (current) => new Set([...current, messageId])),
     joined: Ref.get(joined),
-    noteStepEnd: (retryAt) => Ref.set(lastRetryAt, retryAt),
-    retryAt: Ref.get(lastRetryAt),
+    noteStepEnd: (retry) => Ref.set(lastRetry, retry),
+    retry: Ref.get(lastRetry),
     passedCredentials: (provider, slots) =>
       Ref.modify(cursors, (current) => {
         const cursor = cursorOf(current, provider)
@@ -3620,6 +3625,27 @@ class QuotaWindowsFull extends Schema.TaggedError<
   retryAt: Schema.Finite,
 }) {}
 
+/**
+ * The owner's Sabbath started while a run a start was admitted to ran
+ * (`CredentialPlacement.sabbathStop`): the step stops before any request,
+ * and the turn ends naming the Sabbath's end.
+ */
+class SabbathStop extends Schema.TaggedError<SabbathStop, { readonly brand: unique symbol }>()(
+  "SabbathStop",
+  { message: Schema.String, retryAt: Schema.Finite },
+) {}
+
+/** Fails `SabbathStop` when the session's admitted run is in the owner's Sabbath now. */
+const stopInSabbath = Effect.fn("TurnHelpers.stopInSabbath")(function* (sessionId: SessionId) {
+  const placement = yield* CredentialPlacement
+  const rest = yield* placement.sabbathStop(sessionId)
+  if (Option.isNone(rest)) return
+  return yield* new SabbathStop({
+    message: `No run goes on in the owner's Sabbath: it ends ${DateTime.formatIso(DateTime.makeUnsafe(rest.value))}`,
+    retryAt: rest.value,
+  })
+})
+
 const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   messageId: MessageId
   step: number
@@ -3661,6 +3687,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // The server's credential placement: a spread run is placed again after a
   // window handoff and on a refusal, and a summary's price counts.
   const placement = yield* CredentialPlacement
+  yield* stopInSabbath(params.sessionId)
   const { resolved } = params
   const operations = yield* SessionOperationStorage
   const attemptLimit = Option.fromUndefinedOr(resolved.agent.maxModelAttempts)
@@ -4666,7 +4693,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
                   !params.finalStep &&
                   retryPolicy.contextOverflow(streamError.cause),
                 refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
-                retryAt: limitResetAt(retryPolicy, streamError, nowMs),
+                retry: Option.map(
+                  limitResetAt(retryPolicy, streamError, nowMs),
+                  (at): TurnRetry => ({ at, cause: "limit" }),
+                ),
               }),
           ),
         ),
@@ -5954,10 +5984,33 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                 modelId: params.resolved.modelId,
                 activeStream: params.activeStream,
                 contextOverflow: false,
-                retryAt: Option.some(full.retryAt),
+                retry: Option.some({ at: full.retryAt, cause: "limit" }),
                 publishReceipt,
               })
-              yield* scope.turnLedger.noteStepEnd(collected.retryAt)
+              yield* scope.turnLedger.noteStepEnd(collected.retry)
+              return Result.fail({ collected, outcome: classifyStep(collected) })
+            }),
+          // The owner's Sabbath started while the run ran: the step fails
+          // before any request, and the turn ends naming the Sabbath's end.
+          SabbathStop: (stop) =>
+            Effect.gen(function* () {
+              const collected = yield* collectFailedModelTurnResponse({
+                messageId: params.messageId,
+                step: params.step,
+                streamError: new ProviderError({
+                  message: stop.message,
+                  model: params.resolved.modelId,
+                  cause: stop,
+                }),
+                sessionId: scope.sessionId,
+                branchId: scope.branchId,
+                modelId: params.resolved.modelId,
+                activeStream: params.activeStream,
+                contextOverflow: false,
+                retry: Option.some({ at: stop.retryAt, cause: "sabbath" }),
+                publishReceipt,
+              })
+              yield* scope.turnLedger.noteStepEnd(collected.retry)
               return Result.fail({ collected, outcome: classifyStep(collected) })
             }),
         }),
@@ -6004,7 +6057,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           activeStream: params.activeStream,
         }),
       )
-      yield* scope.turnLedger.noteStepEnd(collected.retryAt)
+      yield* scope.turnLedger.noteStepEnd(collected.retry)
 
       const outcome = classifyStep(collected)
       // The step whose messages carry this response.
@@ -6348,8 +6401,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       let readNotices: ReadonlyMap<ExtensionId, ReadonlySet<string>> = new Map()
       if (answered) readNotices = yield* scope.turnLedger.shownNotices
       // Only a turn that failed on its own names the limit it stopped at.
-      let retryAt = Option.none<number>()
-      if (params.streamFailed && !params.turnInterrupted) retryAt = yield* scope.turnLedger.retryAt
+      let retry = Option.none<TurnRetry>()
+      if (params.streamFailed && !params.turnInterrupted) retry = yield* scope.turnLedger.retry
       yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter(
         {
           sessionId: scope.sessionId,
@@ -6361,7 +6414,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           agentName: params.agentName,
           interrupted: params.turnInterrupted,
           streamFailed: params.streamFailed,
-          retryAt,
+          retry,
           unanswered: params.unanswered,
           usage: {
             known: {

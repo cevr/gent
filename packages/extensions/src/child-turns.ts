@@ -14,6 +14,7 @@ import {
   type Message,
   type MessageId,
   type SessionId,
+  type TurnRetry,
   type TurnUsage,
 } from "@gent/core/extensions/api"
 
@@ -31,8 +32,11 @@ interface TurnEnd {
   readonly receipt: TurnCompleted
   /** The last `ErrorOccurred` after the previous receipt that is not a notice. */
   readonly error: Option.Option<string>
-  /** When the usage limit that error names resets (its `retryAt`), in epoch milliseconds. */
-  readonly retryAt: Option.Option<number>
+  /**
+   * When the turn may run again, and why, as that error names them (its
+   * `retryAt` and `retryCause`; no cause reads as `limit`).
+   */
+  readonly retry: Option.Option<TurnRetry>
 }
 
 /**
@@ -50,7 +54,7 @@ export const turnEnd = (target: TurnTarget) =>
       Stream.runFold(
         () => ({
           error: Option.none<string>(),
-          retryAt: Option.none<number>(),
+          retry: Option.none<TurnRetry>(),
           end: Option.none<TurnEnd>(),
         }),
         (state, event) => {
@@ -59,16 +63,19 @@ export const turnEnd = (target: TurnTarget) =>
             return {
               ...state,
               error: Option.some(event.error),
-              retryAt: Option.fromUndefinedOr(event.retryAt),
+              retry: Option.map(Option.fromUndefinedOr(event.retryAt), (at): TurnRetry => ({
+                at,
+                cause: event.retryCause ?? "limit",
+              })),
             }
           }
           if (event._tag !== "TurnCompleted") return state
           // Each receipt closes its turn: an error before it is not the next turn's.
-          const cleared = { error: Option.none<string>(), retryAt: Option.none<number>() }
+          const cleared = { error: Option.none<string>(), retry: Option.none<TurnRetry>() }
           if (event.messageId !== target.messageId) return { ...state, ...cleared }
           return {
             ...cleared,
-            end: Option.some({ receipt: event, error: state.error, retryAt: state.retryAt }),
+            end: Option.some({ receipt: event, error: state.error, retry: state.retry }),
           }
         },
       ),

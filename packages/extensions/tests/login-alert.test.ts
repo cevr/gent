@@ -96,7 +96,7 @@ const installed = (command: Option.Option<string>, lanes: Ref.Ref<LaneReport>) =
         agentName: builtinAgent.name,
         interrupted: false,
         streamFailed: true,
-        retryAt: Option.none(),
+        retry: Option.none(),
         unanswered: true,
         readNotices: new Set(),
         usage: {

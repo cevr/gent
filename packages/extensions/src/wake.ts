@@ -84,7 +84,7 @@ const ResumeAlarm = Schema.Struct({
   attempt: Schema.Finite,
   /** The user's `wake.autoResume.maxResumes` when the resume was armed. */
   maxResumes: Schema.Finite,
-  /** When the limit resets, in epoch milliseconds (`TurnAfterInput.retryAt`); the alarm is due a margin after it. */
+  /** When the limit resets, in epoch milliseconds (`TurnAfterInput.retry`); the alarm is due a margin after it. */
   resetAt: Schema.Finite,
   /** The message that opened the stopped turn. A newer step on the branch when the resume fires takes its place. */
   messageId: Schema.String,
@@ -883,7 +883,7 @@ const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEn
 // ── Auto-resume ──
 
 /**
- * A turn a usage limit stopped (`TurnAfterInput.retryAt`) gets one resume
+ * A turn a usage limit stopped (`TurnAfterInput.retry`) gets one resume
  * alarm, due `RESUME_MARGIN_MS` after the reset, when the user turned it on
  * in their own config:
  *
@@ -1020,8 +1020,8 @@ const capNotice = (wakeId: string, maxResumes: number, resetAt: number, firedAt:
  * same turn end plans the same entry.
  */
 const planResume = Effect.fn("Wake.planResume")(function* (input: TurnAfterInput) {
-  if (Option.isNone(input.retryAt)) return Option.none<WakeEntry>()
-  const resetAt = input.retryAt.value
+  if (Option.isNone(input.retry)) return Option.none<WakeEntry>()
+  const resetAt = input.retry.value.at
   const now = yield* Clock.currentTimeMillis
   if (resetAt - now > MAXIMUM_WAKE_DELAY_MS) return Option.none<WakeEntry>()
   const config = yield* readAutoResume()

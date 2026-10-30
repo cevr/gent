@@ -2384,7 +2384,7 @@ describe("a usage limit's reset time", () => {
       expect(retryAt).toBeGreaterThanOrEqual(before + fiveHours)
       expect(retryAt).toBeLessThanOrEqual(after + fiveHours)
       expect(ended?.streamFailed).toBe(true)
-      expect(ended?.retryAt).toEqual(Option.some(retryAt))
+      expect(ended?.retry).toEqual(Option.some({ at: retryAt, cause: "limit" }))
       // No retry inside the cap can clear a limit that resets in hours.
       expect(yield* Ref.get(calls)).toBe(1)
     }).pipe(Effect.timeout("8 seconds")),
@@ -2415,7 +2415,7 @@ describe("a usage limit's reset time", () => {
         "turnAfter fired",
       )
       expect(ended?.streamFailed).toBe(false)
-      expect(ended?.retryAt).toEqual(Option.none())
+      expect(ended?.retry).toEqual(Option.none())
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -2522,7 +2522,7 @@ describe("a usage limit's reset time", () => {
         // Turn A stops at the usage limit and names its reset.
         yield* submitAgentLoop(makeMessage(sessionId, branchId, "turn A"))
         const [first] = yield* hooksFired(1)
-        expect(Option.isSome(first?.retryAt ?? Option.none())).toBe(true)
+        expect(Option.isSome(first?.retry ?? Option.none())).toBe(true)
         // Turn B fails at the worker's agent read, before any model call.
         yield* Ref.set(armed, true)
         yield* submitAgentLoop(makeMessage(sessionId, branchId, "turn B"))
@@ -2530,7 +2530,7 @@ describe("a usage limit's reset time", () => {
         const second = all[1]
         expect(yield* Ref.get(calls)).toBe(1)
         expect(second?.streamFailed).toBe(true)
-        expect(second?.retryAt).toEqual(Option.none())
+        expect(second?.retry).toEqual(Option.none())
         const errors = (yield* Ref.get(eventsRef)).filter((event) => event._tag === "ErrorOccurred")
         expect(errors.map((event) => Predicate.isNotUndefined(event.retryAt))).toEqual([
           true,

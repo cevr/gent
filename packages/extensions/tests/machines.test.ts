@@ -111,9 +111,29 @@ interface RoundCall {
   readonly prompt: Prompt.Prompt
 }
 
+const STATE_HEADER = /^STATE (\S+) (\d+)$/m
+const UNIT_HEADER = /^Unit \S+, (\S+), visit (\d+)\.$/m
+
+/**
+ * The newest user text that is not a host status update: a new date's note
+ * may follow the round's own text.
+ */
+const roundTextOf = (prompt: Prompt.Prompt): string =>
+  prompt.content
+    .flatMap((message) => {
+      if (message.role !== "user") return []
+      return [
+        message.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n"),
+      ]
+    })
+    .findLast((text) => !text.startsWith("<host-context-update>")) ?? lastUserText(prompt)
+
 const roundCallOf = (prompt: Prompt.Prompt): RoundCall => {
-  const text = lastUserText(prompt)
-  const header = /^STATE (\S+) (\d+)$/m.exec(text) ?? /^Unit \S+, (\S+), visit (\d+)\.$/m.exec(text)
+  const text = roundTextOf(prompt)
+  const header = STATE_HEADER.exec(text) ?? UNIT_HEADER.exec(text)
   const mode = /^MODE (\S*)$/m.exec(text)
   return {
     state: header?.[1] ?? "unknown",
@@ -2054,6 +2074,78 @@ describe("a machine waits out its account", () => {
         expect(new Set(threads).size).toBe(3)
         expect(yield* Ref.get(models.calls)).toEqual(["judge:1", "judge:1", "judge:1"])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+
+  it.live(
+    "a worker running at sunset stops before its next request, waits for the Sabbath's end, then runs fresh with its visit unspent",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        // On the equator in UTC the sun sets near 18:07 on Friday 1970-01-02.
+        yield* TestClock.setTime(Date.parse("1970-01-02T18:00:00Z"))
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const first = yield* Ref.make(true)
+        // The first worker's first step waits while the test moves past
+        // sunset, then calls a tool; every later call answers. A new day's
+        // date note may follow a tool result, so a reply is read off the
+        // thread's tool results, not off the last message.
+        const models = yield* makeModels((round) =>
+          Effect.gen(function* () {
+            if (round.prompt.content.some((message) => message.role === "tool"))
+              return billed("replied")
+            if (yield* Ref.getAndSet(first, false)) {
+              yield* Deferred.succeed(entered, void 0)
+              yield* Deferred.await(release)
+              // A verdict: a worker that went on to its next step would end the run here.
+              return toolCalls([
+                { tool: "thread.reply", id: "reply-sunset", input: { value: { next: "pass" } } },
+              ])
+            }
+            return replyWith(round, { next: "pass" })
+          }),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(machineModels(models), {
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({
+                model: TEST_MODEL_ID,
+                providers: { anthropic: { authOrder: [work], extraUsage: true } },
+                sabbath: { latitude: 0, longitude: 0, timeZone: "UTC" },
+              }),
+            ),
+          }),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRunOn(client, owner, ONE_JUDGE, "one-judge")
+        yield* Deferred.await(entered)
+        yield* TestClock.setTime(Date.parse("1970-01-02T18:10:00Z"))
+        yield* Deferred.succeed(release, void 0)
+        const steps = yield* waitFor(
+          home.sql(stepsOf(run)),
+          (found) => waitsOf(found).length === 1,
+          10_000,
+          "the round waits for the Sabbath's end",
+        )
+        const until = waitsOf(steps)[0]?.until ?? 0
+        expect(waitsOf(steps)).toEqual([{ reason: "sabbath", until }])
+        expect(until).toBeGreaterThan(Date.parse("1970-01-03T18:15:00Z"))
+        expect(until).toBeLessThan(Date.parse("1970-01-03T18:50:00Z"))
+        // The stopped worker sent its one request; nothing ran in the Sabbath.
+        expect(yield* Ref.get(models.calls)).toEqual(["judge:1"])
+        yield* TestClock.adjust(until - (yield* Clock.currentTimeMillis) - 60_000)
+        yield* settle
+        expect(yield* Ref.get(models.calls)).toEqual(["judge:1"])
+        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length >= 2, {
+          label: "the rerun ran at the Sabbath's end",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual(["judge→done"])
+        expect(yield* home.sql(visitCounts(run))).toEqual({ judge: 1, done: 1 })
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
   )
 
   it.live(

@@ -59,6 +59,13 @@ export const ContextRenter = Schema.Struct({
 })
 export type ContextRenter = typeof ContextRenter.Type
 
+/**
+ * Why a stopped step may run again only at its retry time: `limit`, its
+ * account's usage limit or quota windows; `sabbath`, the owner's Sabbath.
+ */
+export const RetryCause = Schema.Literals(["limit", "sabbath"])
+export type RetryCause = typeof RetryCause.Type
+
 // ── agent event ─────────────────────────────────────────────────────────────
 
 // The discriminated union of every event the runtime emits.
@@ -431,6 +438,8 @@ export const AgentEvent = Schema.TaggedUnion({
      * any other error.
      */
     retryAt: Schema.optional(Schema.Finite),
+    /** Why the step may run again only at `retryAt` (`RetryCause`); absent reads as `limit`. */
+    retryCause: Schema.optional(RetryCause),
   },
   ProviderRetrying: {
     sessionId: SessionId,

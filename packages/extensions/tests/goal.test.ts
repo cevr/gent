@@ -891,7 +891,7 @@ describe("goal resume fire", () => {
     agentName: AgentName.make("main"),
     interrupted: false,
     streamFailed: true,
-    retryAt: Option.some(60_000),
+    retry: Option.some({ at: 60_000, cause: "limit" }),
     unanswered: true,
     usage: {
       known: {
@@ -934,7 +934,7 @@ describe("goal resume fire", () => {
   const answeredTurn: TurnAfterInput = {
     ...limitedTurn,
     streamFailed: false,
-    retryAt: Option.none(),
+    retry: Option.none(),
     unanswered: false,
   }
 

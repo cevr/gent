@@ -3706,7 +3706,7 @@ const failedTurn = (responder: Parameters<typeof fakeFetchLayer>[1]) =>
     return {
       requests: fetchState.captured.filter((request) => request.url.endsWith("/responses")).length,
       errorResets,
-      hookReset: ended[0]?.retryAt,
+      hookReset: Option.map(ended[0]?.retry ?? Option.none(), (retry) => retry.at),
     }
   })
 
