@@ -827,8 +827,15 @@ export const ProviderLanes = Schema.Struct({
   models: Schema.Array(LaneModel),
 })
 
-/** `accounts.lanes`: every provider gent read a quota window of or lost a login on. Labels and numbers only. */
-export const LaneReport = Schema.Struct({ providers: Schema.Array(ProviderLanes) })
+/**
+ * `accounts.lanes`: every provider gent read a quota window of or lost a
+ * login on. Labels and numbers only. `sabbathEnd`: the end of the owner's
+ * Sabbath while it holds every start (epoch ms); absent outside it.
+ */
+export const LaneReport = Schema.Struct({
+  providers: Schema.Array(ProviderLanes),
+  sabbathEnd: Schema.optional(Schema.Finite),
+})
 export type LaneReport = typeof LaneReport.Type
 export type LaneAccount = typeof LaneAccount.Type
 export type LaneWindow = typeof LaneWindow.Type

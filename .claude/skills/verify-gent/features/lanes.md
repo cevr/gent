@@ -10,6 +10,7 @@ Under the status row, a band shows how many runs the accounts can carry now and 
 - `band-run`: `debug machine` starts the `soak` machine; `▸ soak check r1 <age>` shows until its 45 s command ends, then goes.
 - `band-narrow`: at 60 columns the full row fits; at 44 it drops the share and the band and keeps `1/1 free`.
 - `ctl-lanes`: `gent ctl lanes` prints `Lanes` with one provider record per line; `--line` prints the band's row text.
+- `band-sabbath`: in the owner's Sabbath the band's first row is `≡ sabbath · no run starts until <end>`, alone with no reading; at 44 columns `≡ sabbath until <end>`, at 26 `≡ sabbath`. The owner's own turn still answers. `gent ctl lanes` holds `sabbathEnd`, and `--line` prints the row.
 - `band-login-lost`: after the provider answers 401 to a sign-in's key, `≡ login! anthropic default refused · sign in with /auth` follows the provider's row, once however many turns it refuses; at 44 columns `≡ login! anthropic default refused`, at 28 `≡ login! anthropic default`.
 
 ## How to get to it (user POV)
@@ -46,6 +47,8 @@ Script `drives/lanes-unknown.json` (the baseline run, 100x30):
 1. **Hidden.** `cap 76-no-band`: nothing under the status row. `sh gent ctl lanes --line` prints `lanes unknown`.
 2. **A run.** `send debug machine`, `keys enter`, `waitFor soak check r1`, `cap 77-unknown-with-run`: `≡ lanes unknown`, then `▸ soak check r1 0s`.
 3. **Narrow.** `resize 60 20`, `cap 78-unknown-narrow`.
+
+Script `drives/lanes-sabbath.json` (the baseline run, 120x40). Before the drive, add a `sabbath` to `$RUN/home/.gent/config.json` for a place where the Sabbath holds now (the server reads the file again when it changes): Friday after about 11:00 UTC, `{"latitude": 23.81, "longitude": 90.41, "timeZone": "Asia/Dhaka"}`; check with `gent ctl lanes --line` first. It waits for the Sabbath row, sends a turn that answers, and resizes to 60, 44 and 26 columns. Take the key out again and `gent ctl lanes --line` prints `lanes unknown`.
 
 `band-login-lost` needs a real driver: the scripted model replaces the provider, so its steps carry no credential. Launch a baseline run, then beside it start a local endpoint that answers every request with Anthropic's 401 body (`{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`) on `127.0.0.1`. Copy `$RUN/bin/gent` to `<b>/bin/gent` with its own `GENT_DATA_DIR` and `ANTHROPIC_BASE_URL` set to that endpoint, start `<b>/bin/gent server start --port 0` and record its PID, and copy `run.json` to `<b>/run.json` with `dir`, `work`, `gent`, `url`, `serverPid` and `env` changed. The run's seeded `test-key` then goes only to the local endpoint: no request leaves the machine. `gent -H hello` fails with `InvalidKey`; `verify:drive --dir <b>` waits for the `login!` row and resizes. Stop the server and the endpoint by their PIDs, then `verify:stop` the baseline run.
 

@@ -178,6 +178,32 @@ describe("the lanes band rows", () => {
     expect(at(10)?.text).toBe("0 free")
   })
 
+  test("the owner's Sabbath names its end first, at every width, and hides lanes unknown", () => {
+    const end = Date.UTC(2026, 9, 22, 18, 9)
+    const at = (report: LaneReport, width: number) =>
+      laneRows({ ...report, sabbathEnd: end }, NOW, width, utc)
+    expect(at(measured, 120)).toEqual([
+      { text: "sabbath · no run starts until 2026-10-22 18:09", state: "none" },
+      ...laneRows(measured, NOW, 120, utc),
+    ])
+    expect(at(measured, 30)[0]?.text).toBe("sabbath until 2026-10-22 18:09")
+    expect(at(measured, 20)[0]?.text).toBe("sabbath")
+    // No quota window read: the Sabbath row alone, and the band shows it.
+    expect(at({ providers: [] }, 120)).toEqual([
+      { text: "sabbath · no run starts until 2026-10-22 18:09", state: "none" },
+    ])
+    expect(
+      texts({ lanes: Option.some({ providers: [], sabbathEnd: end }), runs: [] }, 120),
+    ).toEqual(["≡ sabbath · no run starts until 2026-10-22 18:09"])
+    // An end that passed names nothing, and the band hides again.
+    expect(laneRows({ providers: [], sabbathEnd: NOW }, NOW, 120, utc)).toEqual([
+      { text: "lanes unknown", state: "unknown" },
+    ])
+    expect(
+      texts({ lanes: Option.some({ providers: [], sabbathEnd: NOW }), runs: [] }, 120),
+    ).toEqual([])
+  })
+
   test("every lane held by a running run says how many run, not a clock", () => {
     const busy: LaneReport = {
       providers: measured.providers.map((lanes) => ({ ...lanes, load: 5 })),

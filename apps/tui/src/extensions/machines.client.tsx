@@ -95,8 +95,9 @@ const runRow = (
 
 /**
  * The band: the lanes rows, then one row per active run, oldest first, up
- * to four and a count of the rest. Empty while gent read no quota window
- * and no run is active, so the band hides. `width` is the text's columns.
+ * to four and a count of the rest. Empty while gent read no quota window,
+ * the owner's Sabbath does not hold the lanes and no run is active, so the
+ * band hides. `width` is the text's columns.
  */
 export const bandRows = (
   data: BandData,
@@ -105,7 +106,12 @@ export const bandRows = (
   zone: DateTime.TimeZone = DateTime.zoneMakeLocal(),
 ): ReadonlyArray<BandRow> => {
   const active = data.runs.filter(isActive).toSorted((a, b) => a.createdAt - b.createdAt)
-  const measured = Option.exists(data.lanes, (report) => report.providers.length > 0)
+  const measured = Option.exists(
+    data.lanes,
+    (report) =>
+      report.providers.length > 0 ||
+      (Predicate.isNotUndefined(report.sabbathEnd) && report.sabbathEnd > now),
+  )
   if (!measured && active.length === 0) return []
   const report = Option.getOrElse(data.lanes, (): LaneReport => ({ providers: [] }))
   const lanes = laneRows(report, now, width, zone).map((row): BandRow => ({

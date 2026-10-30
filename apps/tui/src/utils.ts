@@ -614,11 +614,23 @@ interface LaneRow {
   readonly state: "free" | "none" | "unknown"
 }
 
+/** `sabbath · no run starts until 18:09`, as the width allows. */
+const sabbathRow = (end: number, now: number, width: number, zone: DateTime.TimeZone): LaneRow => {
+  const clock = formatClock(end, now, zone)
+  const candidates = [`sabbath · no run starts until ${clock}`, `sabbath until ${clock}`]
+  return {
+    text:
+      candidates.find((candidate) => textWidth(candidate) <= width) ?? truncate("sabbath", width),
+    state: "none",
+  }
+}
+
 /**
- * The lanes rows of the band and of `gent ctl lanes --line`: one row per
- * provider gent read a quota window of or lost a login on, `lanes unknown`
- * when there is none. Each provider's row is followed by a `login!` row per
- * account whose sign-in is lost.
+ * The lanes rows of the band and of `gent ctl lanes --line`: in the owner's
+ * Sabbath, a first row naming its end; one row per provider gent read a
+ * quota window of or lost a login on, `lanes unknown` when there is none
+ * (and no Sabbath row). Each provider's row is followed by a `login!` row
+ * per account whose sign-in is lost.
  */
 export const laneRows = (
   report: LaneReport,
@@ -626,7 +638,22 @@ export const laneRows = (
   width: number,
   zone: DateTime.TimeZone,
 ): ReadonlyArray<LaneRow> => {
+  const rest = Option.map(
+    Option.filter(Option.fromUndefinedOr(report.sabbathEnd), (end) => end > now),
+    (end) => sabbathRow(end, now, width, zone),
+  )
+  return [...Option.toArray(rest), ...providerRows(report, now, width, zone, Option.isSome(rest))]
+}
+
+const providerRows = (
+  report: LaneReport,
+  now: number,
+  width: number,
+  zone: DateTime.TimeZone,
+  resting: boolean,
+): ReadonlyArray<LaneRow> => {
   if (report.providers.length === 0) {
+    if (resting) return []
     return [{ text: truncate("lanes unknown", width), state: "unknown" }]
   }
   return report.providers.flatMap((lanes): ReadonlyArray<LaneRow> => {

@@ -1,0 +1,40 @@
+{
+  "command": ["gent"],
+  "cols": 120,
+  "rows": 40,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "ready · work", 30000],
+    ["waitFor", "≡ sabbath · no run starts until \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d", 40000],
+    ["settle"],
+    ["cap", "81-sabbath-band"],
+    ["expectNot", "lanes unknown"],
+    [
+      "sh",
+      "gent ctl lanes --line > \"$EVIDENCE/ctl-lanes-line.txt\" && gent ctl lanes > \"$EVIDENCE/ctl-lanes.json\""
+    ],
+    ["send", "hello in the rest"],
+    ["keys", "enter"],
+    ["waitFor", "gent debug response", 20000],
+    ["settle"],
+    ["cap", "82-own-turn-answers"],
+    ["expect", "≡ sabbath · no run starts until"],
+    ["resize", 60, 20],
+    ["settle"],
+    ["fits"],
+    ["cap", "83-sabbath-narrow"],
+    ["resize", 44, 20],
+    ["settle"],
+    ["expect", "≡ sabbath until \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d"],
+    ["fits"],
+    ["cap", "84-sabbath-narrower"],
+    ["resize", 26, 20],
+    ["settle"],
+    ["expect", "≡ sabbath\\b"],
+    ["cap", "85-sabbath-narrowest"],
+    ["resize", 120, 40],
+    ["settle"],
+    ["expect", "≡ sabbath · no run starts until"],
+    ["cap", "86-sabbath-wide-again"]
+  ]
+}

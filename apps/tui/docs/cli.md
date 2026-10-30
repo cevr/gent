@@ -107,7 +107,9 @@ into a `status` flag (`ctlProjection` in the client contribution): `status
 
 `lanes` names no session: the accounts are the server's. It prints `Lanes`,
 the `accounts.lanes` report, with one record per provider gent read a quota
-window of or saw a login lost on. `--line` prints the TUI band's lanes rows as text instead, one per
+window of or saw a login lost on, and `sabbathEnd` (epoch ms) while the
+owner's Sabbath holds every start. `--line` prints the TUI band's lanes rows as text instead: in the
+Sabbath first `sabbath · no run starts until <end>`, then one per
 provider: `lanes <provider> <free>/<capacity> free · <window> <fuel per
 percent>/% ±<band> · out <outside share>` for the window that carries the
 fewest runs, `lanes <provider> 0 free · retry 13:47` when a window is spent

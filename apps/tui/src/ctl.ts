@@ -35,6 +35,7 @@ import {
   SessionSnapshot,
   userMessageIdForRequest,
 } from "@gent/core/protocol"
+import { omitUndefined } from "@gent/core/extensions/api"
 import type { GentPlatform } from "@gent/core/host"
 import { Gent, serverLock, dataPaths } from "@gent/sdk"
 import {
@@ -412,9 +413,14 @@ export const CtlResult = Schema.TaggedUnion({
   },
   /**
    * `lanes`: the server's account lanes, one record per provider gent read a
-   * quota window of. No session names them.
+   * quota window of, and the end of the owner's Sabbath while it holds every
+   * start. No session names them.
    */
-  Lanes: { server: Schema.String, providers: Schema.Array(ProviderLanes) },
+  Lanes: {
+    server: Schema.String,
+    providers: Schema.Array(ProviderLanes),
+    sabbathEnd: Schema.optional(Schema.Finite),
+  },
 })
 export type CtlResult = typeof CtlResult.Type
 
@@ -1346,6 +1352,7 @@ const lanes = Command.make(
                 CtlResult.cases.Lanes.make({
                   server: connection.server,
                   providers: report.providers,
+                  ...omitUndefined({ sabbathEnd: report.sabbathEnd }),
                 }),
               ),
             ),

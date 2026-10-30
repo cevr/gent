@@ -7142,12 +7142,18 @@ describe("account lanes", () => {
       )
       expect(refused.retryAt).toBe(sabbath.end)
       expect(refused.message).toContain("in the Sabbath")
+      // The lanes name the end the Sabbath holds every start until.
+      const report = (rest: Option.Option<Sabbath>) =>
+        placement.lanes(() => Effect.succeedNone, rest)
+      expect((yield* report(Option.some(EQUATOR))).sabbathEnd).toBe(sabbath.end)
+      expect((yield* report(Option.none())).sabbathEnd).toBeUndefined()
       // With no Sabbath in the user file, the same start runs.
       expect(yield* askLane(placement, Option.none(), "no-sabbath")).toBe("admitted")
       yield* TestClock.setTime(sabbath.end)
       expect(
         yield* askLane(placement, Option.none(), "after", planModel, Option.some(EQUATOR)),
       ).toBe("admitted")
+      expect((yield* report(Option.some(EQUATOR))).sabbathEnd).toBeUndefined()
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
