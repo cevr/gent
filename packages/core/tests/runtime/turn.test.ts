@@ -3129,7 +3129,10 @@ describe("credential order", () => {
   /** Each account of the fallback provider the lanes name a lost login on, with its reason. */
   const lostLoginsOf = (placement: CredentialPlacement["Service"]) =>
     Effect.map(
-      placement.lanes(() => Effect.succeedSome([{ provider: fallbackProvider, slot: personal }])),
+      placement.lanes(
+        () => Effect.succeedSome([{ provider: fallbackProvider, slot: personal }]),
+        Option.none(),
+      ),
       (report) =>
         report.providers
           .filter((lanes) => lanes.provider === FALLBACK)
@@ -6697,8 +6700,9 @@ describe("credential order", () => {
           yield* runOn(root, "second")
           expect(root.sent).toEqual(["sk-a", "sk-a", "sk-a"])
           // A step, the summary and a step: three requests of the ten the window holds.
-          const report = yield* world.placement.lanes(() =>
-            Effect.succeedSome([{ provider: fallbackProvider, slot: a }]),
+          const report = yield* world.placement.lanes(
+            () => Effect.succeedSome([{ provider: fallbackProvider, slot: a }]),
+            Option.none(),
           )
           const window = report.providers
             .find((lanes) => lanes.provider === FALLBACK)

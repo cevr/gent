@@ -94,7 +94,12 @@ import {
   type VirtualModel,
 } from "../domain/driver.js"
 import { GentPlatform, resolveDataDir, writeFileAtomic } from "./gent-platform.js"
-import { type ProviderConfig, type ProviderConfigEntry, RuntimeEnvironment } from "./config.js"
+import {
+  type ProviderConfig,
+  type ProviderConfigEntry,
+  RuntimeEnvironment,
+  type Sabbath,
+} from "./config.js"
 import { DecisionModel, LanguageModel } from "effect/ai"
 import { ProviderError } from "../domain/errors.js"
 import * as AiError from "effect/ai/AiError"
@@ -3995,7 +4000,10 @@ interface CredentialPlacementService {
    * login, and the provider's
    * capacity over the accounts `scopeOf` names (its unpinned runs' accounts).
    */
-  readonly lanes: (scopeOf: LaneScopeOf) => Effect.Effect<LaneReport>
+  readonly lanes: (
+    scopeOf: LaneScopeOf,
+    sabbath: Option.Option<Sabbath>,
+  ) => Effect.Effect<LaneReport>
   /** Write the usage ledger now, when anything was recorded since the last write. */
   readonly flush: Effect.Effect<void>
 }
@@ -4021,6 +4029,8 @@ interface LaneRequest {
    * account's. None when its route names none: the account's alone count.
    */
   readonly model: Option.Option<ModelId>
+  /** The user file's Sabbath (`ConfigService.sabbath`): no run starts in it, and the pace skips it. */
+  readonly sabbath: Option.Option<Sabbath>
 }
 
 /** A turn that opened on a provider's accounts. */
@@ -4270,11 +4280,99 @@ const quotaHours = (window: LaneWindow, now: number, length: number): number => 
   return Math.max((window.resetAt - now) / 3_600_000, QUOTA_MIN_HORIZON_MS / 3_600_000)
 }
 
+const DAY_MS = 86_400_000
+const RADIAN = Math.PI / 180
+
+/**
+ * Sunset at `place` on the calendar day `year`-`month`-`day` (month one-based),
+ * epoch ms: the sunrise equation, within a few minutes of published times.
+ */
+const sunsetOn = (year: number, month: number, day: number, place: Sabbath): number => {
+  const julian = Date.UTC(year, month - 1, day) / DAY_MS + 2440587.5
+  const mean = Math.ceil(julian - 2451545 + 0.0008) - place.longitude / 360
+  const anomaly = (357.5291 + 0.98560028 * mean) % 360
+  const center =
+    1.9148 * Math.sin(anomaly * RADIAN) +
+    0.02 * Math.sin(2 * anomaly * RADIAN) +
+    0.0003 * Math.sin(3 * anomaly * RADIAN)
+  const longitude = (anomaly + center + 180 + 102.9372) % 360
+  const transit =
+    2451545 + mean + 0.0053 * Math.sin(anomaly * RADIAN) - 0.0069 * Math.sin(2 * longitude * RADIAN)
+  const declination = Math.asin(Math.sin(longitude * RADIAN) * Math.sin(23.4397 * RADIAN))
+  const hourAngle = Math.acos(
+    (Math.sin(-0.833 * RADIAN) - Math.sin(place.latitude * RADIAN) * Math.sin(declination)) /
+      (Math.cos(place.latitude * RADIAN) * Math.cos(declination)),
+  )
+  return (transit + hourAngle / RADIAN / 360 - 2440587.5) * DAY_MS
+}
+
+/** Sunset at `place` on the local calendar day `offset` days after the one that holds `at`. */
+const sunsetAfter = (at: number, offset: number, place: Sabbath): number => {
+  const local = DateTime.toParts(
+    DateTime.makeZonedUnsafe(at, { timeZone: DateTime.zoneMakeNamedUnsafe(place.timeZone) }),
+  )
+  const day = DateTime.toParts(
+    DateTime.makeUnsafe(Date.UTC(local.year, local.month - 1, local.day + offset)),
+  )
+  return sunsetOn(day.year, day.month, day.day, place)
+}
+
+/** A Sabbath's start and end, epoch ms. */
+interface SabbathWindow {
+  readonly start: number
+  readonly end: number
+}
+
+/**
+ * The Sabbath at `place` that holds `at` or comes next: from Friday's sunset
+ * to Saturday's, the days counted in the place's zone.
+ */
+export const sabbathAround = (at: number, place: Sabbath): SabbathWindow => {
+  const { weekDay } = DateTime.toParts(
+    DateTime.makeZonedUnsafe(at, { timeZone: DateTime.zoneMakeNamedUnsafe(place.timeZone) }),
+  )
+  // This week's Friday: the coming one, or yesterday on a Saturday.
+  let toFriday = 5 - weekDay
+  if (weekDay === 6) toFriday = -1
+  const end = sunsetAfter(at, toFriday + 1, place)
+  if (at < end) return { start: sunsetAfter(at, toFriday, place), end }
+  // Past Saturday's sunset: the next one is a week on.
+  return { start: sunsetAfter(at, toFriday + 7, place), end: sunsetAfter(at, toFriday + 8, place) }
+}
+
+/** The Sabbath `at` falls in, when the user file names one. */
+const sabbathAt = (sabbath: Option.Option<Sabbath>, at: number) =>
+  Option.filter(
+    Option.map(sabbath, (place) => sabbathAround(at, place)),
+    (window) => at >= window.start,
+  )
+
+/**
+ * The pace's hours from `now`: the plain hours outside every Sabbath, at
+ * least the shortest horizon a window paces over. With no Sabbath, plain.
+ */
+const openHours =
+  (sabbath: Option.Option<Sabbath>, now: number) =>
+  (hours: number): number => {
+    if (Option.isNone(sabbath)) return hours
+    const to = now + hours * 3_600_000
+    let closed = 0
+    let window = sabbathAround(now, sabbath.value)
+    while (window.start < to) {
+      closed += Math.max(0, Math.min(window.end, to) - Math.max(window.start, now))
+      window = sabbathAround(window.end, sabbath.value)
+    }
+    return Math.max(hours - closed / 3_600_000, QUOTA_MIN_HORIZON_MS / 3_600_000)
+  }
+
 /**
  * In-hand expiry floor and rolling seven-day supply, under each weekly
  * prefix ceiling: each spends its fuel evenly over the hours to its reset.
+ * Every hour counted is open (`openHours`): no run spends in a Sabbath, so
+ * the floor, the rolling supply and the weekly ceilings spread over the
+ * hours outside it.
  */
-const weeklyPoolPace = (weeks: ReadonlyArray<PoolWeek>) => {
+const weeklyPoolPace = (weeks: ReadonlyArray<PoolWeek>, open: (hours: number) => number) => {
   let expiring = 0
   let floor = 0
   let fuel = weeks.reduce((sum, week) => sum + week.remaining, 0)
@@ -4282,16 +4380,16 @@ const weeklyPoolPace = (weeks: ReadonlyArray<PoolWeek>) => {
   // Same-deadline refills cannot lower the ceiling after the first check;
   // the floor reaches its maximum after all their quota is counted.
   for (const week of [...weeks].sort((left, right) => left.hours - right.hours)) {
-    ceiling = Math.min(ceiling, fuel / week.hours)
+    ceiling = Math.min(ceiling, fuel / open(week.hours))
     expiring += week.remaining
-    floor = Math.max(floor, expiring / week.hours)
+    floor = Math.max(floor, expiring / open(week.hours))
     fuel += week.full - week.remaining
   }
   const rolling =
     weeks.reduce(
       (sum, week) => sum + week.remaining + (week.full * Math.max(0, 168 - week.hours)) / 168,
       0,
-    ) / 168
+    ) / open(168)
   return { sustainable: Math.max(floor, rolling), ceiling }
 }
 
@@ -5009,12 +5107,14 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * will run, none when its route named none; `starter` the session that
    * asked for it. `started`: its caller took
    * the grant to send its turn (`awaitLane`): it no longer lapses, and holds
-   * its lane until its turn opens or a free names it.
+   * its lane until its turn opens or a free names it. `sabbath` is its
+   * request's: a grant not yet sent when one starts is refused.
    */
   const reserved = new Map<
     string,
     {
       readonly provider: string
+      readonly sabbath: Option.Option<Sabbath>
       readonly scope: ReadonlyArray<CredentialSlot>
       readonly model: Option.Option<ModelId>
       readonly starter: Option.Option<SessionId>
@@ -5838,6 +5938,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     scope: ReadonlyArray<CredentialSlot>,
     model: Option.Option<ModelId>,
     now: number,
+    sabbath: Option.Option<Sabbath>,
   ): LaneSupply => {
     const fuelPerHour = fuelPerHourOf(provider)
     const counts = (name: WindowName) => meters(name, model)
@@ -5995,7 +6096,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         )
       )
         return Option.none()
-      const weekly = weeklyPoolPace(due)
+      const weekly = weeklyPoolPace(due, openHours(sabbath, now))
       const short = fiveHourPoolCeiling(due, now)
       if (Option.isNone(short)) return Option.none()
       // Other driver windows, a model's own among them, retain their current ceiling.
@@ -6059,6 +6160,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       )
     return Math.min(...ready)
   }
+  /** The refusal of a start in the Sabbath: it may start again at its end. */
+  const sabbathRefusal = (provider: string, end: number) =>
+    new LaneUnavailable({
+      message: `No run starts on ${provider} in the Sabbath: it ends ${DateTime.formatIso(DateTime.makeUnsafe(end))}`,
+      provider,
+      capacity: 0,
+      load: 0,
+      retryAt: end,
+    })
   /**
    * Why a run of `request` gets no lane now, under the lock: the runs that
    * hold one reach the capacity of the account's windows (`pool`, which
@@ -6067,6 +6177,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * none running. None when it fits.
    */
   const laneCheck = (request: Omit<LaneRequest, "key">, now: number): Option.Option<LaneBlock> => {
+    // No run starts in the Sabbath: it is refused until the end, as a spent pool.
+    const rest = sabbathAt(request.sabbath, now)
+    if (Option.isSome(rest))
+      return Option.some({
+        pool: true,
+        spent: Option.some(sabbathRefusal(request.provider, rest.value.end)),
+      })
     settle(request.provider, request.scope)
     const scope = request.scope.map((account) => account.slot)
     // The account's windows bound every run on it; a model's own bound
@@ -6074,7 +6191,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     const full = Arr.findFirst(
       [Option.none<ModelId>(), ...Option.toArray(request.model).map(Option.some)],
       (model) => {
-        const { lanes, supply } = providerLanes(request.provider, scope, model, now)
+        const { lanes, supply } = providerLanes(
+          request.provider,
+          scope,
+          model,
+          now,
+          request.sabbath,
+        )
         const load = laneLoad(request.provider, scope, model, lanes.models, request.asker, now)
         // The account's windows count the run at its share; a model's own, whole.
         const size = Option.match(model, {
@@ -6189,6 +6312,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     const admission = (lastAdmission += 1)
     reserved.set(key, {
       provider: request.provider,
+      sabbath: request.sabbath,
       scope: request.scope.map((account) => account.slot),
       model: request.model,
       starter: request.asker,
@@ -6265,9 +6389,14 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         if (waiting.size === 0) return Option.none<number>()
         // Expired readings and account holds name no next time.
         trim(now)
+        // A Sabbath's start refuses its waiters, with no run ending to serve them.
+        const sabbaths = Array.from(waiting.values(), (waiter) =>
+          Option.map(waiter.request.sabbath, (place) => sabbathAround(now, place).start),
+        ).flatMap(Option.toArray)
         const times = [
           ...Array.from(readings.values(), (reading) => reading.resetAt),
           ...held.values(),
+          ...sabbaths,
         ].filter((at) => at > now)
         return Option.liftPredicate(Math.min(...times), () => times.length > 0)
       })
@@ -6334,16 +6463,32 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         locked(() => {
           const held = reserved.get(key)
           if (Predicate.isNotUndefined(held) && reserving(held, now)) {
+            // A Sabbath that started since the grant refuses its send.
+            const rest = sabbathAt(held.sabbath, now)
+            if (Option.isSome(rest)) {
+              reserved.delete(key)
+              return {
+                holds: false,
+                refused: Option.some(sabbathRefusal(held.provider, rest.value.end)),
+                waiter: Option.none<Deferred.Deferred<void, LaneUnavailable>>(),
+              }
+            }
             // The caller takes the grant: it lapses no more.
             reserved.set(key, { ...held, started: true })
-            return { holds: true, waiter: Option.none<Deferred.Deferred<void, LaneUnavailable>>() }
+            return {
+              holds: true,
+              refused: Option.none<LaneUnavailable>(),
+              waiter: Option.none<Deferred.Deferred<void, LaneUnavailable>>(),
+            }
           }
           return {
             holds: false,
+            refused: Option.none<LaneUnavailable>(),
             waiter: Option.map(Option.fromUndefinedOr(waiting.get(key)), (found) => found.done),
           }
         }),
-        ({ holds, waiter }) => {
+        ({ holds, refused, waiter }) => {
+          if (Option.isSome(refused)) return Effect.fail(refused.value)
           if (holds) return Effect.succeed(true)
           return Option.match(waiter, {
             onNone: () => Effect.succeed(false),
@@ -6380,7 +6525,14 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         // A held account can report sustainable 0 with no reading. It is
         // not quota pace: an unread pool keeps the stage-0 ranking.
         // Accounts rank by their own paces.
-        const { lanes } = providerLanes(request.provider, open, Option.some(request.model), now)
+        // The order reads each account's own pace; a Sabbath moves no account ahead of another.
+        const { lanes } = providerLanes(
+          request.provider,
+          open,
+          Option.some(request.model),
+          now,
+          Option.none(),
+        )
         const accounts = lanes.accounts.filter((account) => account.windows.length > 0)
         // The report paces runs of the placed model; live sessions weigh
         // their own. Both read in mean runs, so a cheap run's pace and an
@@ -6537,7 +6689,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           Option.getOrUndefined(route.model) === Option.getOrUndefined(request.model)
         const held = Option.fromUndefinedOr(reserved.get(request.key))
         if (Option.isSome(held)) {
-          if (sameRoute(held.value))
+          if (sameRoute(held.value) && Option.isNone(sabbathAt(request.sabbath, now)))
             return { grants: [], outcome: Result.succeed(LaneAdmission.cases.Admitted.make({})) }
           reserved.delete(request.key)
         }
@@ -6715,7 +6867,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         if (spend.limits.length > 0) meter(spend, slot.value, priced, now)
       })
     }),
-    lanes: Effect.fn("CredentialPlacement.lanes")(function* (scopeOf: LaneScopeOf) {
+    lanes: Effect.fn("CredentialPlacement.lanes")(function* (
+      scopeOf: LaneScopeOf,
+      sabbath: Option.Option<Sabbath>,
+    ) {
       const now = yield* Clock.currentTimeMillis
       const providers = yield* locked(() => {
         trim(now)
@@ -6742,6 +6897,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               }),
               Option.none(),
               now,
+              sabbath,
             ).lanes
             return { ...lanes, accounts: withLostLogins(provider, lanes.accounts) }
           }),

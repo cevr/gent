@@ -67,6 +67,7 @@ import {
   listCatalogProviders,
   loginLoss,
   makeCredentialPlacement,
+  sabbathAround,
   placementLedgerFile,
   makeExtensionModels,
   rankPlacement,
@@ -111,7 +112,7 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { type ProviderConfig, RuntimeEnvironment } from "../../src/runtime/config"
+import { type ProviderConfig, RuntimeEnvironment, type Sabbath } from "../../src/runtime/config"
 import {
   defineExtension,
   ExtensionHost,
@@ -5625,6 +5626,34 @@ const laneOutcome = <R>(admission: Effect.Effect<LaneAdmission, LaneUnavailable,
     Effect.catchTag("LaneUnavailable", () => Effect.succeed("Spent" as const)),
   )
 
+const MINUTE = 60_000
+
+/** A place on the equator in UTC: the sun sets near 18:00 every day. */
+const EQUATOR: Sabbath = { latitude: 0, longitude: 0, timeZone: "UTC" }
+
+describe("the Sabbath", () => {
+  /** Knowlton, QC, the owner's place. */
+  const KNOWLTON: Sabbath = { latitude: 45.2167, longitude: -72.5167, timeZone: "America/Toronto" }
+  /** Within `minutes` of `iso`. */
+  const near = (at: number, iso: string, minutes = 4) =>
+    expect(Math.abs(at - Date.parse(iso))).toBeLessThan(minutes * MINUTE)
+
+  bunTest("runs from Friday's sunset to Saturday's, the days counted in the place's zone", () => {
+    // Friday 2026-10-30, 10:30 EDT: this evening's Sabbath, 17:41 EDT to Saturday 17:39 EDT.
+    const friday = sabbathAround(Date.parse("2026-10-30T14:30:00Z"), KNOWLTON)
+    near(friday.start, "2026-10-30T21:41:00Z")
+    near(friday.end, "2026-10-31T21:39:00Z")
+    // Saturday 21:00 EDT, 01:00 Sunday in UTC: past the place's Saturday
+    // sunset, so the next Sabbath is the coming Friday's, in EST.
+    const after = sabbathAround(Date.parse("2026-11-01T01:00:00Z"), KNOWLTON)
+    near(after.start, "2026-11-06T21:32:00Z")
+    near(after.end, "2026-11-07T21:31:00Z")
+    // Friday 21:00 EDT is Saturday 01:00 UTC: inside the place's Sabbath.
+    const inside = sabbathAround(Date.parse("2026-10-31T01:00:00Z"), KNOWLTON)
+    expect(inside.start).toBe(friday.start)
+  })
+})
+
 describe("account lanes", () => {
   const a = CredentialSlot.make("a")
   const b = CredentialSlot.make("b")
@@ -5688,8 +5717,8 @@ describe("account lanes", () => {
           limits,
         })
       }
-      const lanes = (scope: Scope) =>
-        Effect.map(placement.lanes(scopeOf(scope)), (report) => {
+      const lanes = (scope: Scope, sabbath: Option.Option<Sabbath> = Option.none()) =>
+        Effect.map(placement.lanes(scopeOf(scope), sabbath), (report) => {
           const found = report.providers.find((lanes) => lanes.provider === "plan")
           if (Predicate.isUndefined(found)) return Option.none()
           return Option.some(found)
@@ -5713,6 +5742,7 @@ describe("account lanes", () => {
             key,
             asker: Option.none(),
             model: Option.some(model),
+            sabbath: Option.none(),
           })
           .pipe(laneOutcome)
       /** Where a run of `session` and `model` goes over the pool `[a, b]`, in walk order. */
@@ -5801,6 +5831,29 @@ describe("account lanes", () => {
     }
     return { ...fixture, pool }
   })
+
+  it.effect("an account spends its week over the hours outside the Sabbath", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { read, spend, lanes } = fixture
+      const now = yield* Clock.currentTimeMillis
+      // Thursday 00:00 UTC; the week resets in 140 h, a Sabbath of about 24 h inside.
+      const resetAt = now + 140 * HOUR
+      yield* read(a, [
+        { window: "7d", utilization: 0.01, resetAt },
+        { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+      ])
+      yield* spend(a, Option.some(93))
+      yield* read(a, [
+        { window: "7d", utilization: 0.03, resetAt },
+        { window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR },
+      ])
+      // 902.1 M left: over 140 plain hours 6.44 M/h, floor(6.44 / 3.4) = 1;
+      // over ~116 open hours 7.78 M/h, floor(7.78 / 3.4) = 2.
+      expect((yield* lanes([a])).capacity).toBe(1)
+      expect((yield* lanes([a], Option.some(EQUATOR))).capacity).toBe(2)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
 
   it.effect("rolling weekly refills give the seven-account pool eight free lanes", () =>
     Effect.gen(function* () {
@@ -6306,7 +6359,7 @@ describe("account lanes", () => {
           Effect.succeedSome(Arr.make({ provider: ProviderId.make(provider), slot: a }))
         const free = (report: LaneReport) =>
           report.providers.map((lanes) => [lanes.provider, lanes.capacity] as const)
-        const both = free(yield* placement.lanes(scopes))
+        const both = free(yield* placement.lanes(scopes, Option.none()))
         expect(both.map(([provider]) => provider)).toEqual(["anthropic", "openai"])
         for (const [, capacity] of both) expect(capacity).toBeGreaterThan(0)
         const admit = (provider: string) =>
@@ -6317,6 +6370,7 @@ describe("account lanes", () => {
               key: `start-${provider}`,
               asker: Option.none(),
               model: Option.some(ModelId.make(`${provider}/model`)),
+              sabbath: Option.none(),
             })
             .pipe(laneOutcome)
         // ChatGPT's week is spent: only its runs are refused.
@@ -6400,7 +6454,7 @@ describe("account lanes", () => {
               })
             yield* quota(0.1)
             // A file with no burn reads the prior.
-            const before = (yield* placement.lanes(scopeOf([a]))).providers[0]
+            const before = (yield* placement.lanes(scopeOf([a]), Option.none())).providers[0]
             expect(before?.fuelPerHour).toBe(3_400_000)
             expect(before?.laneHours).toBe(0)
             // One lane runs 2 hours on $11: 2.2 M fuel, 1.1 M a lane-hour.
@@ -6421,7 +6475,7 @@ describe("account lanes", () => {
         const restarted = yield* Effect.scoped(
           Effect.gen(function* () {
             const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
-            return yield* placement.lanes(scopeOf([a]))
+            return yield* placement.lanes(scopeOf([a]), Option.none())
           }),
         )
         const window = restarted.providers[0]?.accounts[0]?.windows[0]
@@ -6510,7 +6564,7 @@ describe("account lanes", () => {
         // `gent auth` signed a new account in under a: the store stamps it anew.
         expect(yield* admit([replaced], "after")).toBe("admitted")
         // The old sign-in's reading went with it: no window of the provider is read now.
-        expect((yield* placement.lanes(scopeOf([replaced]))).providers).toEqual([])
+        expect((yield* placement.lanes(scopeOf([replaced]), Option.none())).providers).toEqual([])
         // The new sign-in reads its own window; then a response of a request the
         // old sign-in sent before the change lands late, and leaves that reading.
         yield* read(replaced, [{ window: "5h", utilization: 0.1, resetAt: now + HOUR }])
@@ -6814,6 +6868,7 @@ describe("account lanes", () => {
     asker: Option.Option<SessionId>,
     key: string,
     model = planModel,
+    sabbath: Option.Option<Sabbath> = Option.none(),
   ) =>
     placement
       .admitLane({
@@ -6822,6 +6877,7 @@ describe("account lanes", () => {
         key,
         asker,
         model: Option.some(model),
+        sabbath,
       })
       .pipe(laneOutcome)
 
@@ -7026,6 +7082,82 @@ describe("account lanes", () => {
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect("no run starts in the Sabbath; it starts again at the Sabbath's end", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      const sabbath = sabbathAround(0, EQUATOR)
+      yield* TestClock.setTime(sabbath.start + MINUTE)
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const refused = yield* Effect.flip(
+        placement.admitLane({
+          provider: "plan",
+          scope: [receiptOf(a)],
+          key: "in-sabbath",
+          asker: Option.none(),
+          model: Option.some(planModel),
+          sabbath: Option.some(EQUATOR),
+        }),
+      )
+      expect(refused.retryAt).toBe(sabbath.end)
+      expect(refused.message).toContain("in the Sabbath")
+      // With no Sabbath in the user file, the same start runs.
+      expect(yield* askLane(placement, Option.none(), "no-sabbath")).toBe("admitted")
+      yield* TestClock.setTime(sabbath.end)
+      expect(
+        yield* askLane(placement, Option.none(), "after", planModel, Option.some(EQUATOR)),
+      ).toBe("admitted")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("the Sabbath's start refuses a queued run, with no run ending to serve it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      const sabbath = sabbathAround(0, EQUATOR)
+      yield* TestClock.setTime(sabbath.start - 10 * MINUTE)
+      // The account's window carries two runs, held past the Sabbath's start.
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const ask = (key: string) =>
+        askLane(placement, Option.none(), key, planModel, Option.some(EQUATOR))
+      expect(yield* ask("fill-1")).toBe("admitted")
+      expect(yield* ask("fill-2")).toBe("admitted")
+      expect(yield* placement.awaitLane("fill-1")).toBe(true)
+      expect(yield* placement.awaitLane("fill-2")).toBe(true)
+      expect(yield* ask("waits")).toBe("queued")
+      const awaiting = yield* Effect.forkChild(Effect.flip(placement.awaitLane("waits")), {
+        startImmediately: true,
+      })
+      yield* TestClock.adjust("11 minutes")
+      const refused = yield* Fiber.join(awaiting)
+      expect(refused.retryAt).toBe(sabbath.end)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a grant not sent by the Sabbath's start is refused at its send", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      const sabbath = sabbathAround(0, EQUATOR)
+      // The windows' read takes a minute: the grant comes a minute before sunset.
+      yield* TestClock.setTime(sabbath.start - 2 * MINUTE)
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      expect(
+        yield* askLane(placement, Option.none(), "granted", planModel, Option.some(EQUATOR)),
+      ).toBe("admitted")
+      expect(
+        yield* askLane(placement, Option.none(), "again", planModel, Option.some(EQUATOR)),
+      ).toBe("admitted")
+      yield* TestClock.adjust("90 seconds")
+      const refused = yield* Effect.flip(placement.awaitLane("granted"))
+      expect(refused.retryAt).toBe(sabbath.end)
+      // A start admitted again under its key keeps no grant in the Sabbath.
+      expect(
+        yield* askLane(placement, Option.none(), "again", planModel, Option.some(EQUATOR)),
+      ).toBe("Spent")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("an account hold that ends while runs wait frees its lanes to the queue", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()
@@ -7205,7 +7337,7 @@ describe("account lanes", () => {
         yield* TestClock.adjust("1 hour")
         yield* spend(a, Option.none(), usage, runner, glm, limits)
         // Unknown spend is never zero: neither window reads.
-        expect((yield* placement.lanes(scopeOf([a]))).providers).toEqual([])
+        expect((yield* placement.lanes(scopeOf([a]), Option.none())).providers).toEqual([])
         // Six hours on, the unpriced hour has left the 5h window alone.
         yield* TestClock.adjust("6 hours")
         expect(windowsOfA(yield* lanes([a]))).toEqual([["5h", glm, 0, false]])
@@ -7588,7 +7720,7 @@ describe("account lanes", () => {
       expect((yield* Ref.get(file)).segments?.length).toBe(1)
       // Eight days on, nothing new was recorded; a read of the lanes trims.
       yield* TestClock.adjust("8 days")
-      expect((yield* placement.lanes(scopeOf([a]))).providers).toEqual([])
+      expect((yield* placement.lanes(scopeOf([a]), Option.none())).providers).toEqual([])
       yield* placement.flush
       const saved = yield* Ref.get(file)
       expect(saved.readings).toBeUndefined()
@@ -7798,7 +7930,7 @@ describe("account lanes", () => {
           expect(lostOf(yield* lanes([replaced]))).toEqual([])
           // A request the old sign-in sent before the change fails late.
           expect(yield* lose(placement, old)).toBe(false)
-          expect((yield* placement.lanes(scopeOf([replaced]))).providers).toEqual([])
+          expect((yield* placement.lanes(scopeOf([replaced]), Option.none())).providers).toEqual([])
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
 

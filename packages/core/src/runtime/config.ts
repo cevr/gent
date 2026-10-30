@@ -1,6 +1,7 @@
 import {
   Clock,
   Context,
+  DateTime,
   Effect,
   Equal,
   FileSystem,
@@ -165,6 +166,25 @@ const ModelTiersConfig = Schema.Struct({
   efficient: Schema.optional(Schema.Array(ModelId).check(Schema.isMinLength(1))),
 })
 
+/**
+ * The owner's Sabbath (`sabbath` in the user file): from sunset on Friday to
+ * sunset on Saturday at a place, its days counted in `timeZone` (an IANA
+ * name). No run starts on the pool then and the running ones stop; the
+ * owner's own turns answer as always. Each pool's pace spreads its weeks
+ * over the hours outside it. With no `sabbath`, every hour is open.
+ * `latitude` stays inside the polar circles, where the sun sets every day.
+ */
+export const Sabbath = Schema.Struct({
+  latitude: Schema.Finite.check(Schema.isBetween({ minimum: -66, maximum: 66 })),
+  longitude: Schema.Finite.check(Schema.isBetween({ minimum: -180, maximum: 180 })),
+  timeZone: Schema.String.check(
+    Schema.makeFilter((zone: string) => Option.isSome(DateTime.zoneMakeNamed(zone)), {
+      message: "is not a time zone",
+    }),
+  ),
+})
+export type Sabbath = typeof Sabbath.Type
+
 export class UserConfig extends Schema.Class<UserConfig, { readonly brand: unique symbol }>(
   "UserConfig",
 )({
@@ -215,6 +235,8 @@ export class UserConfig extends Schema.Class<UserConfig, { readonly brand: uniqu
   model: Schema.optional(ModelId),
   /** The owner's model tiers (`ModelTiersConfig`). A project list shadows the user's, list by list. */
   tiers: Schema.optional(ModelTiersConfig),
+  /** The owner's Sabbath (`Sabbath`). Only the user file's counts. */
+  sabbath: Schema.optional(Sabbath),
 }) {}
 
 /** The provider settings of a config: what the generic providers read. */
@@ -762,6 +784,8 @@ interface ConfigServiceService {
    * window (`providers.<owner>.extraUsage`). Only the user file counts.
    */
   readonly extraUsage: (owner: string) => Effect.Effect<boolean>
+  /** The user file's Sabbath (`Sabbath`); none keeps every hour open. */
+  readonly sabbath: Effect.Effect<Option.Option<Sabbath>>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
    *  The write starts from the user config on disk now, so a hand edit
    *  made while gent runs survives. Fails with
@@ -1090,11 +1114,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           )
         })
 
-      // `extraUsage` counts only in the user file: a project file that
-      // sets it is read without it, and says so.
+      // `extraUsage` and `sabbath` count only in the user file: a project
+      // file that sets them is read without them, and says so.
       const warnUserOnlyFields = (filePath: string, project: UserConfig) =>
         Effect.gen(function* () {
           const fields: Array<string> = []
+          if (Predicate.isNotUndefined(project.sabbath)) fields.push("sabbath")
           for (const [owner, entry] of Object.entries(project.providers ?? {}))
             if (Predicate.isNotUndefined(entry.extraUsage))
               fields.push(`providers.${owner}.extraUsage`)
@@ -1374,6 +1399,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           return user.providers?.[owner]?.extraUsage ?? false
         }),
 
+        sabbath: Effect.map(readUser, ({ user }) => Option.fromUndefinedOr(user.sabbath)),
+
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
           yield* mutateUserConfig((current) => ({
             updated: configUpdates.setDriverOverride(current, agent, driver),
@@ -1478,6 +1505,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               SynchronizedRef.get(userConfigRef),
               (user) => user.providers?.[owner]?.extraUsage ?? false,
             ),
+          sabbath: Effect.map(SynchronizedRef.get(userConfigRef), (user) =>
+            Option.fromUndefinedOr(user.sabbath),
+          ),
           setDriverOverride: (agent, driver) =>
             SynchronizedRef.update(userConfigRef, (current) =>
               configUpdates.setDriverOverride(current, agent, driver),
