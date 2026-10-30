@@ -7485,9 +7485,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* persistMessageReceived({ message: state.message })
         // The turn keeps the Sabbath of the admitted lane it opened on: a
         // restart opens it again on no grant, and it stops in that Sabbath.
+        // A restart must find it, so a failed write fails the turn.
         if (Option.isSome(laneSabbath) && Option.isNone(kept))
           yield* writeTurnRecord(state.message.id, () => ({ laneSabbath: laneSabbath.value }), {
-            onFailure: "log",
+            onFailure: "die",
             base: record,
           })
         yield* scope.inbox.settle(state.message.id)

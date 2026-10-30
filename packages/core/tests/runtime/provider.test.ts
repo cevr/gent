@@ -7211,6 +7211,49 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect(
+    "a turn's lane keeps its grant's Sabbath, else its open lane's, else the one it resumed with",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        const { placement } = fixture
+        const sabbath = sabbathAround(0, EQUATOR)
+        yield* TestClock.setTime(sabbath.start - 2 * MINUTE)
+        yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+        const elsewhere: Sabbath = { latitude: 10, longitude: 10, timeZone: "UTC" }
+        const open = (session: string, key: string, resumed: Option.Option<Sabbath>) =>
+          placement.openLane({
+            sessionId: SessionId.make(session),
+            key,
+            provider: "plan",
+            scope: [receiptOf(a)],
+            model: planModel,
+            resumed,
+          })
+        // A grant's Sabbath wins over a resumed one.
+        expect(
+          yield* askLane(placement, Option.none(), "granted", planModel, Option.some(EQUATOR)),
+        ).toBe("admitted")
+        expect(yield* open("worker", "granted", Option.some(elsewhere))).toEqual(
+          Option.some(EQUATOR),
+        )
+        // A turn that joins its session's open lane keeps that lane's.
+        expect(yield* open("worker", "joined", Option.some(elsewhere))).toEqual(
+          Option.some(EQUATOR),
+        )
+        // With no grant and no open lane, the resumed one holds; with none, none.
+        expect(yield* open("resumed", "after-restart", Option.some(EQUATOR))).toEqual(
+          Option.some(EQUATOR),
+        )
+        expect(yield* open("owner", "own-turn", Option.none())).toEqual(Option.none())
+        yield* TestClock.setTime(sabbath.start + MINUTE)
+        expect(yield* placement.sabbathStop(SessionId.make("resumed"))).toEqual(
+          Option.some(sabbath.end),
+        )
+        expect(yield* placement.sabbathStop(SessionId.make("owner"))).toEqual(Option.none())
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("an account hold that ends while runs wait frees its lanes to the queue", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()

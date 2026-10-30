@@ -2251,9 +2251,20 @@ export class TurnRecordStorage extends Context.Service<
           if (Predicate.isUndefined(row)) return emptyTurnRecord
           const decoded = yield* Schema.decodeEffect(TurnRecordRow)(row)
           const pendingToolCalls = yield* decodePending(decoded.pending_tool_calls_json)
+          // A mark that no longer decodes (a changed config schema) drops
+          // alone: the turn's position and parked calls still read.
           const laneSabbath = yield* Effect.transposeOption(
-            Option.map(Option.fromNullishOr(decoded.lane_sabbath_json), decodeLaneSabbath),
-          )
+            Option.map(Option.fromNullishOr(decoded.lane_sabbath_json), (json) =>
+              decodeLaneSabbath(json).pipe(
+                Effect.tapError((cause) =>
+                  Effect.logWarning("turn.lane-sabbath-unreadable").pipe(
+                    Effect.annotateLogs({ error: String(cause) }),
+                  ),
+                ),
+                Effect.option,
+              ),
+            ),
+          ).pipe(Effect.map(Option.flatten))
           return {
             step: decoded.step,
             continuations: decoded.continuations,
