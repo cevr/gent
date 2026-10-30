@@ -6505,6 +6505,7 @@ describe("account lanes", () => {
               provider: "plan",
               scope: [receiptOf(a)],
               model: planModel,
+              resumed: Option.none(),
             })
             yield* fuel(1)
             yield* quota(0.11)
@@ -6563,6 +6564,7 @@ describe("account lanes", () => {
               provider: "plan",
               scope: [receiptOf(a)],
               model: planModel,
+              resumed: Option.none(),
             })
             yield* spend(a, costUsd, usage, sessionId)
             yield* TestClock.adjust(Duration.hours(hours))
@@ -6800,6 +6802,7 @@ describe("account lanes", () => {
         provider: "plan",
         scope: [receiptOf(a)],
         model: glm,
+        resumed: Option.none(),
       })
       yield* placement.freeReservation("plan-start")
       expect(yield* admit([a], "glm-second", glm)).toBe("queued")
@@ -6844,6 +6847,7 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: big,
+          resumed: Option.none(),
         })
         expect((yield* lanes([a])).load).toBeCloseTo(2)
         expect(yield* admit([a], "big-2", big)).toBe("queued")
@@ -7033,6 +7037,7 @@ describe("account lanes", () => {
         provider: "plan",
         scope: [receiptOf(a)],
         model: planModel,
+        resumed: Option.none(),
       })
       expect(yield* askLane(placement, Option.none(), "fill")).toBe("admitted")
       expect(yield* askLane(placement, Option.none(), "head")).toBe("queued")
@@ -7061,6 +7066,7 @@ describe("account lanes", () => {
         provider: "plan",
         scope: [receiptOf(a)],
         model: planModel,
+        resumed: Option.none(),
       })
       // Its turn opened: the run holds the same lane.
       expect(yield* askLane(placement, Option.none(), "start-3")).toBe("queued")
@@ -7230,6 +7236,7 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a), receiptOf(b)],
           model: planModel,
+          resumed: Option.none(),
         })
       }
       expect(yield* admit([a, b], "waits")).toBe("queued")
@@ -7443,6 +7450,7 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: glm,
+          resumed: Option.none(),
         })
         yield* before.spend(a, Option.some(1), million, glmRun, glm, limits)
         // 99 points at 200,000 fuel each, over 5 hours of runs at a fifth of 3.4 M.
@@ -7462,6 +7470,7 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: planModel,
+          resumed: Option.none(),
         })
         yield* before.spend(a, Option.some(10), usage, planRun)
         yield* TestClock.adjust("1 hour")
@@ -7480,6 +7489,7 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: glm,
+          resumed: Option.none(),
         })
         const report = yield* after.lanes([a])
         expect(weightOf(report, glm)?.fitted).not.toBe(true)
@@ -7590,6 +7600,7 @@ describe("account lanes", () => {
         provider: "plan",
         scope: [receiptOf(a)],
         model: haiku,
+        resumed: Option.none(),
       })
       // No meter prices haiku and no lane burned: its fuel per hour is the mean run's.
       expect((yield* fixture.lanes([a])).load).toBeCloseTo(weight?.weight ?? Number.NaN)

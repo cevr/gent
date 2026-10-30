@@ -269,7 +269,7 @@ const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")
  * a stored shape bumps this, and a database at another version is wiped and
  * built again when it opens.
  */
-export const KERNEL_SCHEMA_VERSION = 4
+export const KERNEL_SCHEMA_VERSION = 5
 
 /** The schema owner the kernel's row names; an extension's row names its id. */
 export const KERNEL_SCHEMA_OWNER = "kernel"
@@ -573,6 +573,7 @@ const createKernelTables = Effect.gen(function* () {
       step INTEGER NOT NULL,
       continuations INTEGER NOT NULL,
       pending_tool_calls_json TEXT NOT NULL,
+      lane_sabbath_json TEXT,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (session_id, branch_id, message_id),
       FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,

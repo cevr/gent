@@ -2458,6 +2458,7 @@ describe("turn_records table", () => {
       expect(columns.map((column) => column.name).sort()).toEqual([
         "branch_id",
         "continuations",
+        "lane_sabbath_json",
         "message_id",
         "pending_tool_calls_json",
         "session_id",

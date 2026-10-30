@@ -67,6 +67,8 @@ import {
   SessionAdmission,
 } from "../domain/message.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
+import { Sabbath } from "../runtime/config.js"
+import { omitUndefined } from "../domain/guards.js"
 import { toolImageDigests } from "../runtime/tool-image.js"
 import {
   type AgentEvent,
@@ -2185,6 +2187,11 @@ export const TurnRecord = Schema.Struct({
   continuations: Schema.Natural,
   /** Tool calls the current step issued and has not settled. */
   pendingToolCalls: Schema.Array(PendingToolCall),
+  /**
+   * The owner's Sabbath of the admitted lane the turn opened on: a restart
+   * opens the turn on no grant, and it stops in that Sabbath all the same.
+   */
+  laneSabbath: Schema.optional(Sabbath),
 })
 export type TurnRecord = typeof TurnRecord.Type
 
@@ -2204,10 +2211,13 @@ const TurnRecordRow = Schema.Struct({
   step: Schema.Natural,
   continuations: Schema.Natural,
   pending_tool_calls_json: Schema.String,
+  lane_sabbath_json: Schema.NullOr(Schema.String),
 })
 
 const decodePending = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(PendingToolCall)))
 const encodePending = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(PendingToolCall)))
+const decodeLaneSabbath = Schema.decodeEffect(Schema.fromJsonString(Sabbath))
+const encodeLaneSabbath = Schema.encodeEffect(Schema.fromJsonString(Sabbath))
 interface TurnRecordStorageService {
   /** The turn's position, or the empty record when the turn has no row yet. */
   readonly get: (key: TurnRecordKey) => Effect.Effect<TurnRecord, StorageError>
@@ -2228,7 +2238,7 @@ export class TurnRecordStorage extends Context.Service<
         return yield* Effect.gen(function* () {
           const workspaceId = yield* CurrentWorkspaceId
           const rows = yield* sql<typeof TurnRecordRow.Type>`
-            SELECT t.step, t.continuations, t.pending_tool_calls_json
+            SELECT t.step, t.continuations, t.pending_tool_calls_json, t.lane_sabbath_json
             FROM turn_records t
             JOIN sessions s ON s.id = t.session_id
             WHERE t.session_id = ${key.sessionId}
@@ -2241,10 +2251,14 @@ export class TurnRecordStorage extends Context.Service<
           if (Predicate.isUndefined(row)) return emptyTurnRecord
           const decoded = yield* Schema.decodeEffect(TurnRecordRow)(row)
           const pendingToolCalls = yield* decodePending(decoded.pending_tool_calls_json)
+          const laneSabbath = yield* Effect.transposeOption(
+            Option.map(Option.fromNullishOr(decoded.lane_sabbath_json), decodeLaneSabbath),
+          )
           return {
             step: decoded.step,
             continuations: decoded.continuations,
             pendingToolCalls,
+            ...omitUndefined({ laneSabbath: Option.getOrUndefined(laneSabbath) }),
           } satisfies TurnRecord
         }).pipe(Effect.mapError(storageError("Failed to read the turn record")))
       })
@@ -2258,6 +2272,9 @@ export class TurnRecordStorage extends Context.Service<
           // fractional count fails here instead of being stored.
           yield* Schema.encodeEffect(TurnRecord)(record)
           const pendingJson = yield* encodePending(record.pendingToolCalls)
+          const laneSabbathJson = yield* Effect.transposeOption(
+            Option.map(Option.fromUndefinedOr(record.laneSabbath), encodeLaneSabbath),
+          )
           const updatedAt = (yield* DateTime.nowAsDate).getTime()
           yield* sql`
             INSERT INTO turn_records (
@@ -2267,6 +2284,7 @@ export class TurnRecordStorage extends Context.Service<
               step,
               continuations,
               pending_tool_calls_json,
+              lane_sabbath_json,
               updated_at
             ) VALUES (
               ${key.sessionId},
@@ -2275,12 +2293,14 @@ export class TurnRecordStorage extends Context.Service<
               ${record.step},
               ${record.continuations},
               ${pendingJson},
+              ${Option.getOrNull(laneSabbathJson)},
               ${updatedAt}
             )
             ON CONFLICT (session_id, branch_id, message_id) DO UPDATE SET
               step = excluded.step,
               continuations = excluded.continuations,
               pending_tool_calls_json = excluded.pending_tool_calls_json,
+              lane_sabbath_json = excluded.lane_sabbath_json,
               updated_at = excluded.updated_at
           `
         }).pipe(Effect.mapError(storageError("Failed to write the turn record")))

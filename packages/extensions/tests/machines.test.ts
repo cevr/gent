@@ -2152,6 +2152,63 @@ describe("a machine waits out its account", () => {
   )
 
   it.live(
+    "a worker turn a restart cut before sunset stops before its request when it resumes in the Sabbath",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        // On the equator in UTC the sun sets near 18:07 on Friday 1970-01-02.
+        yield* TestClock.setTime(Date.parse("1970-01-02T18:00:00Z"))
+        const config = ConfigService.Test(
+          new UserConfig({
+            model: TEST_MODEL_ID,
+            providers: { anthropic: { authOrder: [work], extraUsage: true } },
+            sabbath: { latitude: 0, longitude: 0, timeZone: "UTC" },
+          }),
+        )
+        const calls = yield* Ref.make<ReadonlyArray<string>>([])
+        // The first root: the worker's turn, on its admitted lane, hangs in
+        // its first request until the root stops.
+        const run = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const entered = yield* Deferred.make<void>()
+            const models = yield* makeModels(() =>
+              Deferred.succeed(entered, void 0).pipe(Effect.andThen(Effect.never)),
+            )
+            const { client } = yield* createRpcClient(
+              home.layerFor(machineModels({ ...models, calls }), { configServiceLayer: config }),
+            )
+            const owner = ownerOf(yield* client.session.create({}))
+            const started = yield* startRunOn(client, owner, ONE_JUDGE, "one-judge")
+            yield* Deferred.await(entered)
+            return started
+          }),
+        )
+        yield* TestClock.setTime(Date.parse("1970-01-02T18:10:00Z"))
+        // The second root resumes the cut turn in the Sabbath, on no grant.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const models = yield* makeModels((round) =>
+              Effect.succeed(replyWith(round, { next: "pass" })),
+            )
+            yield* createRpcClient(
+              home.layerFor(machineModels({ ...models, calls }), { configServiceLayer: config }),
+            )
+            const steps = yield* waitFor(
+              home.sql(stepsOf(run)),
+              (found) => waitsOf(found).length === 1,
+              20_000,
+              "the round waits for the Sabbath's end",
+            )
+            expect(waitsOf(steps).map((wait) => wait.reason)).toEqual(["sabbath"])
+          }),
+        )
+        // The cut request ran once; the resumed turn sent none in the Sabbath.
+        expect(yield* Ref.get(calls)).toEqual(["judge:1"])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("60 seconds")),
+    65_000,
+  )
+
+  it.live(
     "a worker whose step fills its only account stops before its next request and waits for the window's reset",
     () =>
       Effect.gen(function* () {

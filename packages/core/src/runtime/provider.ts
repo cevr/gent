@@ -3959,8 +3959,13 @@ interface CredentialPlacementService {
    * always.
    */
   readonly sabbathStop: (sessionId: SessionId) => Effect.Effect<Option.Option<number>>
-  /** The session's turn opened on `provider`: it holds a lane until it ends, and the start admitted under `key` no longer does. */
-  readonly openLane: (lane: OpenLane) => Effect.Effect<void>
+  /**
+   * The session's turn opened on `provider`: it holds a lane until it ends,
+   * and the start admitted under `key` no longer does. Answers the Sabbath
+   * its lane keeps (`sabbathStop`): its grant's, its session's open lane's,
+   * or the one it resumed with.
+   */
+  readonly openLane: (lane: OpenLane) => Effect.Effect<Option.Option<Sabbath>>
   /**
    * The start admitted or queued under `key` opens no turn of its own: its
    * message joined a turn that holds its session's lane already, its
@@ -4049,6 +4054,12 @@ interface OpenLane {
   readonly scope: LaneScope
   /** The model its turns run: it counts against that model's own windows too. */
   readonly model: ModelId
+  /**
+   * The Sabbath of the admitted lane this turn opened on before a restart,
+   * as its turn record keeps it: it holds again when no grant and no open
+   * lane of the session name one.
+   */
+  readonly resumed: Option.Option<Sabbath>
 }
 
 /** The quota windows one response named, on the account its request went out on. */
@@ -6775,7 +6786,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }),
     openLane: Effect.fn("CredentialPlacement.openLane")(function* (lane: OpenLane) {
       const now = yield* Clock.currentTimeMillis
-      const grants = yield* locked(() => {
+      const opened = yield* locked(() => {
         const admitted = Option.fromUndefinedOr(reserved.get(lane.key))
         reserved.delete(lane.key)
         // A turn that opens with no grant (a restart, a joined message) runs:
@@ -6787,6 +6798,14 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           Option.fromUndefinedOr(running.get(lane.sessionId)),
           (open) => open.provider === lane.provider,
         )
+        const sabbath = Option.match(before, {
+          onNone: () =>
+            Option.orElse(
+              Option.flatMap(admitted, (start) => start.sabbath),
+              () => lane.resumed,
+            ),
+          onSome: (open) => open.sabbath,
+        })
         running.set(lane.sessionId, {
           provider: lane.provider,
           scope: lane.scope.map((account) => account.slot),
@@ -6795,17 +6814,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             onNone: () => Option.flatMap(admitted, (start) => start.starter),
             onSome: (open) => open.starter,
           }),
-          sabbath: Option.match(before, {
-            onNone: () => Option.flatMap(admitted, (start) => start.sabbath),
-            onSome: (open) => open.sabbath,
-          }),
+          sabbath,
           openedAt: Option.match(before, { onNone: () => now, onSome: (open) => open.openedAt }),
           fuel: Option.match(before, { onNone: () => Option.some(0), onSome: (open) => open.fuel }),
         })
         // A grant that joined its session's open lane frees one.
-        return serve(now)
+        return { sabbath, grants: serve(now) }
       })
-      yield* afterServe(grants)
+      yield* afterServe(opened.grants)
+      return opened.sabbath
     }),
     freeReservation: Effect.fn("CredentialPlacement.freeReservation")(function* (key: string) {
       const now = yield* Clock.currentTimeMillis
