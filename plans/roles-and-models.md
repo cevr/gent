@@ -123,8 +123,9 @@ questions are decided below.
 
 ## Commits (planned)
 
-1. core: `Model.family` from the catalog, family resolution with the tie rule,
-   `roles` in config with project shadowing; `tiers` removed. Tests.
+1. core: `Model.family` from the catalog (done first, alone, before the
+   Sabbath of 2026-10-30), family resolution with the tie rule, `roles` in
+   config with project shadowing; `tiers` removed. Tests.
 2. machines: the tagged `ThreadRole`, per-visit role choice, the keep rule on
    model and effort, `against` by maker with its start check and its `decide`
    fault, the pick and its waits. Tests.

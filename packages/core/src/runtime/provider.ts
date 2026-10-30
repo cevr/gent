@@ -1859,6 +1859,7 @@ const parseCatalogModel = (models: JsonRecord, id: string): Option.Option<Catalo
         cost: Option.getOrUndefined(cost),
         limit: Option.getOrUndefined(field(raw, "limit", CatalogLimit)),
         releaseDate: Option.getOrUndefined(field(raw, "release_date", Schema.String)),
+        family: Option.getOrUndefined(field(raw, "family", Schema.String)),
         toolCall: Option.getOrUndefined(field(raw, "tool_call", Schema.Boolean)),
         reasoning: Option.getOrUndefined(field(raw, "reasoning", Schema.Boolean)),
         temperature: Option.getOrUndefined(field(raw, "temperature", Schema.Boolean)),

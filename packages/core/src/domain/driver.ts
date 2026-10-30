@@ -945,6 +945,7 @@ export const CatalogModel = Schema.Struct({
   cost: Schema.optional(CatalogCost),
   limit: Schema.optional(CatalogLimit),
   releaseDate: Schema.optional(Schema.String),
+  family: Schema.optional(Schema.String),
   /** False for embedding, image and other models the agent loop cannot drive. */
   toolCall: Schema.optional(Schema.Boolean),
   reasoning: Schema.optional(Schema.Boolean),
@@ -1043,6 +1044,7 @@ export const modelFromCatalog = (
         })),
       ),
       releaseDate: entry.releaseDate,
+      family: entry.family,
       reasoning: entry.reasoning,
       imageInput: entry.imageInput,
       imageLimit: apiClass.imageLimit,

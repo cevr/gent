@@ -126,6 +126,11 @@ export class Model extends Schema.Class<Model, { readonly brand: unique symbol }
   pricing: Schema.optional(ModelPricing),
   /** When the driver released the model; an ISO-8601 prefix: `2026-02-17` or `2025-04`. */
   releaseDate: Schema.optional(Schema.String),
+  /**
+   * The model family the catalog declares (`claude-opus`, `gpt-luna`); its
+   * first `-` segment names the maker. Absent when the catalog does not say.
+   */
+  family: Schema.optional(Schema.String),
   /** Whether the model reasons, as the catalog says; absent when it does not say. */
   reasoning: Schema.optional(Schema.Boolean),
   /**

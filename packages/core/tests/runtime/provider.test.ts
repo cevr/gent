@@ -3907,6 +3907,7 @@ describe("models.dev catalog source", () => {
                 cost: { input: 1.25, output: 10, cache_read: 0.125 },
                 limit: { context: 400_000, input: 272_000, output: 128_000 },
                 release_date: "2026-07-24",
+                family: "gpt-sol",
                 tool_call: true,
                 reasoning: true,
                 temperature: false,
@@ -3922,7 +3923,13 @@ describe("models.dev catalog source", () => {
               },
               "text-only": { name: "Text only", modalities: { input: ["text"] } },
               // An odd field drops itself, never the model.
-              odd: { name: 42, limit: "big", tool_call: "yes", modalities: { input: "image" } },
+              odd: {
+                name: 42,
+                limit: "big",
+                family: 7,
+                tool_call: "yes",
+                modalities: { input: "image" },
+              },
               "not-an-object": 7,
             },
           },
@@ -3940,6 +3947,7 @@ describe("models.dev catalog source", () => {
           cost: { input: 1.25, output: 10, cacheRead: 0.125 },
           limit: { context: 400_000, input: 272_000, output: 128_000 },
           releaseDate: "2026-07-24",
+          family: "gpt-sol",
           toolCall: true,
           reasoning: true,
           temperature: false,
@@ -3961,6 +3969,10 @@ describe("models.dev catalog source", () => {
       expect(
         models.map((entry) => Option.fromUndefinedOr(modelFromCatalog("openai", entry).imageInput)),
       ).toEqual([Option.some(true), Option.some(false), Option.none(), Option.none()])
+      // The model keeps the family the catalog declares; absent when it does not say.
+      expect(
+        models.map((entry) => Option.fromUndefinedOr(modelFromCatalog("openai", entry).family)),
+      ).toEqual([Option.some("gpt-sol"), Option.none(), Option.none(), Option.none()])
       expect(catalog.providerIds).toEqual(["openai"])
       expect(Option.isNone(catalog.provider("absent"))).toBe(true)
     }),
