@@ -5638,20 +5638,27 @@ describe("the Sabbath", () => {
   const near = (at: number, iso: string, minutes = 4) =>
     expect(Math.abs(at - Date.parse(iso))).toBeLessThan(minutes * MINUTE)
 
-  bunTest("runs from Friday's sunset to Saturday's, the days counted in the place's zone", () => {
-    // Friday 2026-10-30, 10:30 EDT: this evening's Sabbath, 17:41 EDT to Saturday 17:39 EDT.
-    const friday = sabbathAround(Date.parse("2026-10-30T14:30:00Z"), KNOWLTON)
-    near(friday.start, "2026-10-30T21:41:00Z")
-    near(friday.end, "2026-10-31T21:39:00Z")
-    // Saturday 21:00 EDT, 01:00 Sunday in UTC: past the place's Saturday
-    // sunset, so the next Sabbath is the coming Friday's, in EST.
-    const after = sabbathAround(Date.parse("2026-11-01T01:00:00Z"), KNOWLTON)
-    near(after.start, "2026-11-06T21:32:00Z")
-    near(after.end, "2026-11-07T21:31:00Z")
-    // Friday 21:00 EDT is Saturday 01:00 UTC: inside the place's Sabbath.
-    const inside = sabbathAround(Date.parse("2026-10-31T01:00:00Z"), KNOWLTON)
-    expect(inside.start).toBe(friday.start)
-  })
+  bunTest(
+    "runs from Friday's sunset to 30 minutes after Saturday's, the days counted in the place's zone",
+    () => {
+      // Friday 2026-10-30, 10:30 EDT: this evening's Sabbath, 17:41 EDT to
+      // Saturday 18:09 EDT (sunset 17:39, and 30 minutes).
+      const friday = sabbathAround(Date.parse("2026-10-30T14:30:00Z"), KNOWLTON)
+      near(friday.start, "2026-10-30T21:41:00Z")
+      near(friday.end, "2026-10-31T22:09:00Z")
+      // Saturday 17:50 EDT: past the sunset, still inside the 30 minutes.
+      const late = sabbathAround(Date.parse("2026-10-31T21:50:00Z"), KNOWLTON)
+      expect(late).toEqual(friday)
+      // Saturday 21:00 EDT, 01:00 Sunday in UTC: past the end, so the next
+      // Sabbath is the coming Friday's, in EST.
+      const after = sabbathAround(Date.parse("2026-11-01T01:00:00Z"), KNOWLTON)
+      near(after.start, "2026-11-06T21:32:00Z")
+      near(after.end, "2026-11-07T22:01:00Z")
+      // Friday 21:00 EDT is Saturday 01:00 UTC: inside the place's Sabbath.
+      const inside = sabbathAround(Date.parse("2026-10-31T01:00:00Z"), KNOWLTON)
+      expect(inside.start).toBe(friday.start)
+    },
+  )
 
   bunTest("starts on the place's own Friday in a zone far from its solar time", () => {
     // Apia keeps UTC+13 at longitude -172: a UTC date's sunset is a local day off.
@@ -5659,7 +5666,7 @@ describe("the Sabbath", () => {
     const window = sabbathAround(Date.parse("2026-10-28T12:00:00Z"), apia)
     // Friday 2026-10-30 near 18:27 in Apia (UTC+13) is 05:27 UTC that day.
     near(window.start, "2026-10-30T05:27:00Z", 5)
-    near(window.end, "2026-10-31T05:28:00Z", 5)
+    near(window.end, "2026-10-31T05:58:00Z", 5)
   })
 })
 

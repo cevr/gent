@@ -4330,6 +4330,9 @@ const sunsetAfter = (at: number, offset: number, place: Sabbath): number => {
   return candidates.find((sunset) => localDay(sunset, place) === wanted) ?? sunsetOnUtcDay(wanted)
 }
 
+/** Runs start again this long after Saturday's sunset (owner, 2026-10-30). */
+const SABBATH_AFTER_SUNSET_MS = 30 * 60_000
+
 /** A Sabbath's start and end, epoch ms. */
 interface SabbathWindow {
   readonly start: number
@@ -4338,7 +4341,7 @@ interface SabbathWindow {
 
 /**
  * The Sabbath at `place` that holds `at` or comes next: from Friday's sunset
- * to Saturday's, the days counted in the place's zone.
+ * to 30 minutes after Saturday's, the days counted in the place's zone.
  */
 export const sabbathAround = (at: number, place: Sabbath): SabbathWindow => {
   const { weekDay } = DateTime.toParts(
@@ -4347,10 +4350,13 @@ export const sabbathAround = (at: number, place: Sabbath): SabbathWindow => {
   // This week's Friday: the coming one, or yesterday on a Saturday.
   let toFriday = 5 - weekDay
   if (weekDay === 6) toFriday = -1
-  const end = sunsetAfter(at, toFriday + 1, place)
+  const end = sunsetAfter(at, toFriday + 1, place) + SABBATH_AFTER_SUNSET_MS
   if (at < end) return { start: sunsetAfter(at, toFriday, place), end }
-  // Past Saturday's sunset: the next one is a week on.
-  return { start: sunsetAfter(at, toFriday + 7, place), end: sunsetAfter(at, toFriday + 8, place) }
+  // Past its end: the next one is a week on.
+  return {
+    start: sunsetAfter(at, toFriday + 7, place),
+    end: sunsetAfter(at, toFriday + 8, place) + SABBATH_AFTER_SUNSET_MS,
+  }
 }
 
 /** The Sabbath `at` falls in, when the user file names one. */

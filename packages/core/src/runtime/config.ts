@@ -168,7 +168,7 @@ const ModelTiersConfig = Schema.Struct({
 
 /**
  * The owner's Sabbath (`sabbath` in the user file): from sunset on Friday to
- * sunset on Saturday at a place, its days counted in `timeZone` (an IANA
+ * 30 minutes after sunset on Saturday at a place, its days counted in `timeZone` (an IANA
  * name). No run starts on the pool then and the running ones stop; the
  * owner's own turns answer as always. Each pool's pace spreads its weeks
  * over the hours outside it. With no `sabbath`, every hour is open.
