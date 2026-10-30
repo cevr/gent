@@ -744,12 +744,14 @@ describe("a machine run across a clean restart", () => {
       const calls = yield* Ref.make<ReadonlyArray<string>>([])
       const first = yield* runUntilHang(home, calls, "implement:1")
       const end = (yield* Clock.currentTimeMillis) + HOUR
-      // As the Sabbath leaves the round when its grant is refused at sunset.
+      // As the Sabbath leaves a round whose turn it stopped at sunset, its
+      // end recorded before a restart.
       yield* home.sql(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
           yield* sql`UPDATE thread_rounds
             SET ended_at = ${yield* Clock.currentTimeMillis}, stream_failed = 1,
+                error = 'No run goes on in the owner''s Sabbath',
                 retry_at = ${end}, retry_cause = 'sabbath'
             WHERE ended_at IS NULL`
         }),
@@ -2023,6 +2025,7 @@ describe("a machine waits out its account", () => {
         expect(moves(yield* home.sql(stepsOf(run)))).toEqual(["work→done"])
         expect(yield* home.sql(visitCounts(run))).toEqual({ work: 1, done: 1 })
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
   )
 
   it.live(
@@ -2904,6 +2907,8 @@ describe("a tier role's round", () => {
           step: "5 seconds",
           timeoutMs: 10_000,
         })
+        // The round's end is in the steps once its ask is.
+        yield* askAt(client, owner, 1)
         expect(roundsRan(yield* home.sql(stepsOf(run)))).toEqual([{ model: OPUS, priced: true }])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
