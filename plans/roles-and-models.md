@@ -36,8 +36,10 @@ questions are decided below.
 - `PendingAction.Round.model` records the model each round's thread ran.
 - The owner's `~/.gent/config.json` has no `tiers`; its keys are `permissions`
   and `sabbath`.
-- models.dev gives a `family` on every model of every provider: `claude-opus`,
-  `gpt-sol`, `gpt-luna`. One provider serves more than one maker: `opencode`
+- models.dev gives a `family` on most models (`claude-opus`, `gpt-sol`,
+  `gpt-luna`); 443 of 8,930 models have none on 2026-10-30, some opencode
+  models among them. OpenAI also declares `o`, `o-mini`, `o-pro` and
+  `text-embedding`. One provider serves more than one maker: `opencode`
   serves `claude-opus-5-5`, `gpt-6-sol` and `gpt-6-luna`. The gent parser
   (`parseCatalogModel`, provider.ts:1839-1879) skips the field.
 - A catalog `Model` has `releaseDate` (`domain/agent.ts:128`, ordered at
@@ -62,8 +64,9 @@ questions are decided below.
 
 1. **The catalog declares the family.** `parseCatalogModel` reads models.dev
    `family` into `Model.family`. A model with no family matches no family
-   choice; a pinned model still runs it. The maker of a family is its first
-   `-` segment (`claude-opus` → `claude`, `gpt-luna` → `gpt`). This is the one
+   choice; a pinned model still runs it. A config patch
+   (`providers.<id>.models.<m>.family`) goes through the same parse, so it can
+   name a family the catalog leaves out. This is the one
    family rule: gamut's `FAMILIES` moves onto it, and the Anthropic driver's
    regex stays only for its effort table, which keys on the id it serves.
 2. **Resolution.** A choice `{ provider, family, effort }` resolves to the
@@ -92,7 +95,8 @@ questions are decided below.
    both match the pick; otherwise the round opens a new thread. The pick tries
    the kept thread's model first, as `strongest` does, to keep the cache.
 6. **Other maker.** A thread role may name `against: <role>`. Its pick drops
-   every choice whose maker is the maker of the model recorded on the round
+   every choice whose maker (open question below) is the maker of the model
+   recorded on the round
    under review (`PendingAction.Round.model` of that role's last round). A
    machine whose `against` role resolves to fewer than two makers fails at
    start. At run time an empty set (a catalog that lost a family) is a fault
@@ -121,11 +125,22 @@ questions are decided below.
   only (composition over flags, no config language to grow).
 - Projects: a role shadows by name, whole.
 
+## Open question (decide before commit 2)
+
+- A family's maker. The first `-` segment fails for OpenAI's `o`, `o-mini`
+  and `o-pro`: `against` would take o3 as another maker than `gpt-sol`.
+  Candidates: the first-party models.dev provider that lists the family
+  (`anthropic`, `openai`, `google`; an aggregator such as `opencode` is not
+  one), or a maker field on the family where the catalog gives one. A table
+  of prefixes in core is the last resort.
+
 ## Commits (planned)
 
 1. core: `Model.family` from the catalog (done first, alone, before the
    Sabbath of 2026-10-30), family resolution with the tie rule, `roles` in
-   config with project shadowing; `tiers` removed. Tests.
+   config with project shadowing; `tiers` removed. Tests: resolution reads
+   the models `listModelCatalog` lists (not `modelFromCatalog` alone), and the
+   test catalog fixture (`test-utils/harness.ts`) gains families.
 2. machines: the tagged `ThreadRole`, per-visit role choice, the keep rule on
    model and effort, `against` by maker with its start check and its `decide`
    fault, the pick and its waits. Tests.
