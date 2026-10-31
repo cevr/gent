@@ -51,6 +51,7 @@ import { fileURLToPath } from "node:url"
 import { homedir, tmpdir } from "node:os"
 import { Cause, Config, Duration, Effect, Exit, Option, Schema } from "effect"
 import { resolveDataDir } from "@gent/core/host"
+import { newestCatalogRelease } from "@gent/core/test-utils"
 import { HostConfig, type HostClient, type HostScreen, hostCall } from "@gent/e2e/pty-host"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -88,47 +89,18 @@ interface Preset {
 const slot = (modelId: string, reasoningEffort: string): Slot => ({ modelId, reasoningEffort })
 
 /**
- * The model families a preset names instead of a release. `up` resolves each
- * to the family's newest release in the models.dev catalog, so a preset never
- * pins a release that a newer one replaced. `version` captures the release
- * number, whose Anthropic minor part has at most two digits; a dated snapshot
- * (`claude-opus-4-5-20251101`, `claude-sonnet-4-20250514`) and a variant
- * (`gpt-6-sol-pro`) do not match.
+ * The model families a preset names instead of a release: the driver and
+ * the catalog family (models.dev `family`) of each. `up` resolves each to
+ * the family's newest release in the catalog by core's one family rule
+ * (`newestCatalogRelease`), so a preset never pins a release a newer one
+ * replaced.
  */
-const FAMILIES: Record<
-  string,
-  { readonly provider: string; readonly family: string; readonly pattern: RegExp }
-> = {
-  "openai/sol": {
-    provider: "openai",
-    family: "gpt-sol",
-    pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-sol$/,
-  },
-  "openai/luna": {
-    provider: "openai",
-    family: "gpt-luna",
-    pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-luna$/,
-  },
-  "anthropic/opus": {
-    provider: "anthropic",
-    family: "claude-opus",
-    pattern: /^claude-opus-(?<version>\d+(?:-\d{1,2})?)$/,
-  },
-  "anthropic/sonnet": {
-    provider: "anthropic",
-    family: "claude-sonnet",
-    pattern: /^claude-sonnet-(?<version>\d+(?:-\d{1,2})?)$/,
-  },
-  "anthropic/fable": {
-    provider: "anthropic",
-    family: "claude-fable",
-    pattern: /^claude-fable-(?<version>\d+(?:-\d{1,2})?)$/,
-  },
-  "anthropic/haiku": {
-    provider: "anthropic",
-    family: "claude-haiku",
-    pattern: /^claude-haiku-(?<version>\d+(?:-\d{1,2})?)$/,
-  },
+const FAMILIES: Record<string, { readonly provider: string; readonly family: string }> = {
+  "openai/sol": { provider: "openai", family: "gpt-sol" },
+  "openai/luna": { provider: "openai", family: "gpt-luna" },
+  "anthropic/opus": { provider: "anthropic", family: "claude-opus" },
+  "anthropic/fable": { provider: "anthropic", family: "claude-fable" },
+  "anthropic/haiku": { provider: "anthropic", family: "claude-haiku" },
 }
 
 export const PRESETS: Record<string, Preset> = {
@@ -142,24 +114,14 @@ export const PRESETS: Record<string, Preset> = {
     worker: slot("openai/luna", "max"),
     reviewer: slot("openai/sol", "high"),
   },
-  "opus-sonnet": {
-    orchestrator: slot("anthropic/opus", "medium"),
-    worker: slot("anthropic/sonnet", "high"),
-    reviewer: slot("anthropic/opus", "high"),
-  },
   "fable-opus": {
     orchestrator: slot("anthropic/fable", "medium"),
     worker: slot("anthropic/opus", "high"),
     reviewer: slot("anthropic/fable", "high"),
   },
-  "sonnet-sonnet": {
-    orchestrator: slot("anthropic/sonnet", "medium"),
-    worker: slot("anthropic/sonnet", "max"),
-    reviewer: slot("anthropic/sonnet", "high"),
-  },
   mixed: {
     orchestrator: slot("openai/sol", "medium"),
-    worker: slot("anthropic/sonnet", "max"),
+    worker: slot("openai/luna", "max"),
     reviewer: slot("anthropic/opus", "high"),
   },
   "opus-luna": {
@@ -175,49 +137,18 @@ export const PRESETS: Record<string, Preset> = {
   },
 }
 
-/** A release number as integers: `5.6` and `5-6` both read `[5, 6]`. */
-const versionParts = (version: string): ReadonlyArray<number> =>
-  version.split(/[.-]/).map((part) => Number(part))
-
-const newerVersion = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): boolean => {
-  for (let index = 0; index < Math.max(a.length, b.length); index++) {
-    const left = a[index] ?? 0
-    const right = b[index] ?? 0
-    if (left !== right) return left > right
-  }
-  return false
-}
-
-/** The newest release of a family among one provider's model ids (`gpt-6-sol`, not `openai/gpt-6-sol`). */
-export const newestInFamily = (
-  family: string,
-  modelIds: ReadonlyArray<string>,
-): string | undefined => {
-  const entry = FAMILIES[family]
-  if (entry === undefined) return undefined
-  let best: { readonly id: string; readonly parts: ReadonlyArray<number> } | undefined
-  for (const id of modelIds) {
-    const version = entry.pattern.exec(id)?.groups?.["version"]
-    if (version === undefined) continue
-    const parts = versionParts(version)
-    if (best === undefined || newerVersion(parts, best.parts)) best = { id, parts }
-  }
-  return best === undefined ? undefined : `${entry.provider}/${best.id}`
-}
-
 /**
- * The preset with each family resolved to its newest release. `catalog` maps
- * a provider id to its model ids. A family with no release in the catalog
- * stops the run: a guessed id would fail inside the TUI instead.
+ * The preset with each family resolved to its newest release. `catalog` is
+ * the raw models.dev body. A family with no release in the catalog stops
+ * the run: a guessed id would fail inside the TUI instead.
  */
-export const resolvePreset = (
-  preset: Preset,
-  catalog: Readonly<Record<string, ReadonlyArray<string>>>,
-): Preset => {
+export const resolvePreset = (preset: Preset, catalog: ModelsDevCatalog): Preset => {
   const resolveSlot = (role: Slot): Slot => {
     const entry = FAMILIES[role.modelId]
     if (entry === undefined) return role
-    const newest = newestInFamily(role.modelId, catalog[entry.provider] ?? [])
+    const newest = Option.getOrUndefined(
+      newestCatalogRelease(catalog, entry.provider, entry.family),
+    )
     if (newest === undefined) {
       throw new Error(`no ${role.modelId} release in the models.dev catalog`)
     }
@@ -235,24 +166,19 @@ export const resolvePreset = (
 }
 
 const MODELS_DEV_URL = "https://models.dev/api.json"
-const ModelsDevPayload = Schema.fromJsonString(
-  Schema.Record(
-    Schema.String,
-    Schema.Struct({ models: Schema.Record(Schema.String, Schema.Unknown) }),
-  ),
+/** A models.dev body: provider → its models, each model's fields as models.dev writes them. */
+const ModelsDevCatalog = Schema.Record(
+  Schema.String,
+  Schema.Struct({ models: Schema.Record(Schema.String, Schema.Unknown) }),
 )
+type ModelsDevCatalog = typeof ModelsDevCatalog.Type
 /**
- * The models.dev catalog as provider → model ids. Offline, read the chat
- * snapshot gent stores in its database, through a scratch copy of it and
- * its WAL. The selected database is never opened or changed here.
+ * The models.dev catalog. Offline, read the chat snapshot gent stores in
+ * its database, through a scratch copy of it and its WAL. The selected
+ * database is never opened or changed here.
  */
-const loadCatalog = async (): Promise<Record<string, ReadonlyArray<string>>> => {
-  const decode = (body: string): Record<string, ReadonlyArray<string>> => {
-    const payload = Schema.decodeSync(ModelsDevPayload)(body)
-    return Object.fromEntries(
-      Object.entries(payload).map(([provider, entry]) => [provider, Object.keys(entry.models)]),
-    )
-  }
+const loadCatalog = async (): Promise<ModelsDevCatalog> => {
+  const decode = Schema.decodeSync(Schema.fromJsonString(ModelsDevCatalog))
   try {
     // curl, as the script shells out to git and bun: it builds no Effect layer.
     return decode(await $`curl -sf -m 15 ${MODELS_DEV_URL}`.quiet().text())
@@ -267,7 +193,7 @@ const loadCatalog = async (): Promise<Record<string, ReadonlyArray<string>>> => 
         await $`/bin/cp ${dbPath + "-wal"} ${copy + "-wal"}`.quiet()
       }
       const db = new Database(copy, { readonly: true })
-      let catalog: Record<string, ReadonlyArray<string>>
+      let catalog: ModelsDevCatalog
       try {
         const row = Schema.decodeUnknownSync(Schema.Struct({ body: Schema.String }))(
           db.query("SELECT body FROM model_catalog_snapshots WHERE source = 'api.json'").get(),

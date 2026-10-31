@@ -78,6 +78,7 @@ export { ApprovalService } from "../runtime/extension-host.js"
 export { BunGentPlatformLive, BunProviderLockLive } from "../runtime/gent-platform-bun.js"
 export { GentBuild } from "../runtime/gent-platform.js"
 export { ConfigService, RuntimeEnvironment, UserConfig } from "../runtime/config.js"
+export { newestCatalogRelease } from "../runtime/provider.js"
 export { toolCallReceipts } from "../domain/message.js"
 export { SqliteStorage } from "../storage/storage.js"
 // The in-memory event store a branch-tool test runs its tool runner over.

@@ -1,6 +1,6 @@
 # Roles and models (queue row 38)
 
-Status: design, not built. Written 2026-10-30 before the Sabbath and revised
+Status: built (commits 1 to 3, 2026-10-30 and 31). Written 2026-10-30 before the Sabbath and revised
 the same day after one review (a Claude agent; Codex was pace-held). The open
 questions are decided below.
 
@@ -179,4 +179,11 @@ questions are decided below.
 3. shipped machines (the planner reply's `path` and `interactive`, the light
    implementor's `codemod`) and docs move to roles; gamut `FAMILIES` onto the
    resolver; Sonnet out of the gamut presets, the router example, threads.md
-   and docs/extensions.md; the owner's config.
+   and docs/extensions.md; the owner's config. Done 2026-10-31: the shipped-machine
+   and docs parts landed in 2a and 2b; gamut resolves each family with
+   core's `newestCatalogRelease` (exported from `@gent/core/test-utils`, the entry test support reads: the raw
+   models.dev body, `newestOfFamily`), its version regexes gone; Sonnet left
+   the gamut presets (`opus-sonnet` and `sonnet-sonnet` gone, `mixed` works
+   on Luna), the router example and the docs; the owner's
+   `~/.gent/config.json` has the seven roles of item 8, which decode as
+   `UserConfig`.

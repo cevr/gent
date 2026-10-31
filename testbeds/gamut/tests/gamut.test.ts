@@ -37,7 +37,6 @@ import {
   waitStep,
   sendAwaitsTurn,
   latestEventId,
-  newestInFamily,
   openTurnSessions,
   resolvePreset,
   encodeState,
@@ -58,55 +57,50 @@ import {
   type GamutState,
 } from "../gamut"
 
+/** A models.dev release of `family` on `date`. */
+const release = (family: string, date: string) => ({ family, release_date: date })
+
 /** A models.dev slice: older releases, dated snapshots and variants beside the newest. */
 const catalog = {
-  anthropic: [
-    "claude-opus-4-5-20251101",
-    "claude-opus-4-8",
-    "claude-opus-5",
-    "claude-opus-5-5",
-    "claude-sonnet-4-6",
-    "claude-sonnet-5",
-    "claude-fable-5",
-    "claude-fable-5-1",
-    "claude-haiku-4-5-20251001",
-    "claude-haiku-4-5",
-    // The newest release's snapshot before its undated entry: only the anchored pattern skips it.
-    "claude-haiku-5-5-20261022",
-    "claude-haiku-5-5",
-  ],
-  openai: ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-luna-pro", "gpt-5.6-sol", "gpt-6-sol"],
+  anthropic: {
+    models: {
+      "claude-opus-4-5-20251101": release("claude-opus", "2025-11-24"),
+      "claude-opus-4-8": release("claude-opus", "2026-04-02"),
+      "claude-opus-5-5": release("claude-opus", "2026-09-30"),
+      "claude-opus-5": release("claude-opus", "2026-06-18"),
+      "claude-fable-5": release("claude-fable", "2026-05-20"),
+      "claude-fable-5-1": release("claude-fable", "2026-08-12"),
+      "claude-haiku-4-5": release("claude-haiku", "2025-10-01"),
+      // The newest release's dated snapshot, listed first on the same day: the undated id wins.
+      "claude-haiku-5-5-20261022": release("claude-haiku", "2026-10-22"),
+      "claude-haiku-5-5": release("claude-haiku", "2026-10-22"),
+    },
+  },
+  openai: {
+    models: {
+      "gpt-5.6-luna": release("gpt-luna", "2026-03-10"),
+      "gpt-6-luna": release("gpt-luna", "2026-08-01"),
+      "gpt-6-luna-pro": release("gpt-luna-pro", "2026-08-20"),
+      "gpt-5.6-sol": release("gpt-sol", "2026-03-10"),
+      "gpt-6-sol": release("gpt-sol", "2026-08-01"),
+    },
+  },
 }
 
 const preset = resolvePreset(PRESETS["opus-luna"]!, catalog)
 
 describe("gamut model families", () => {
-  test("a family resolves to its newest release, not a snapshot or a variant", () => {
-    expect(newestInFamily("anthropic/opus", catalog.anthropic)).toBe("anthropic/claude-opus-5-5")
-    expect(newestInFamily("anthropic/sonnet", catalog.anthropic)).toBe("anthropic/claude-sonnet-5")
-    expect(newestInFamily("anthropic/fable", catalog.anthropic)).toBe("anthropic/claude-fable-5-1")
-    expect(newestInFamily("anthropic/haiku", catalog.anthropic)).toBe("anthropic/claude-haiku-5-5")
-    expect(newestInFamily("openai/sol", catalog.openai)).toBe("openai/gpt-6-sol")
-    expect(newestInFamily("openai/luna", catalog.openai)).toBe("openai/gpt-6-luna")
-  })
-
-  test("a release number compares as numbers: 5.10 is newer than 5.9", () => {
-    expect(newestInFamily("openai/sol", ["gpt-5.9-sol", "gpt-5.10-sol"])).toBe(
-      "openai/gpt-5.10-sol",
-    )
-  })
-
-  test("a dated snapshot of a two-part release is no minor version", () => {
-    expect(
-      newestInFamily("anthropic/sonnet", ["claude-sonnet-4-5", "claude-sonnet-4-20250514"]),
-    ).toBe("anthropic/claude-sonnet-4-5")
-    expect(
-      newestInFamily("anthropic/opus", [
-        "claude-opus-6",
-        "claude-opus-6-1",
-        "claude-opus-6-20270101",
-      ]),
-    ).toBe("anthropic/claude-opus-6-1")
+  test("a family resolves to its newest release by date, not a snapshot or a variant", () => {
+    const newest = (family: string) => {
+      const slot = { modelId: family, reasoningEffort: "high" }
+      return resolvePreset({ orchestrator: slot, worker: slot, reviewer: slot }, catalog).worker
+        .modelId
+    }
+    expect(newest("anthropic/opus")).toBe("anthropic/claude-opus-5-5")
+    expect(newest("anthropic/fable")).toBe("anthropic/claude-fable-5-1")
+    expect(newest("anthropic/haiku")).toBe("anthropic/claude-haiku-5-5")
+    expect(newest("openai/sol")).toBe("openai/gpt-6-sol")
+    expect(newest("openai/luna")).toBe("openai/gpt-6-luna")
   })
 
   test("every preset resolves each role to a catalog model and an effort", () => {
@@ -116,6 +110,14 @@ describe("gamut model families", () => {
         expect(role.modelId, name).toMatch(/^(anthropic\/claude|openai\/gpt)-/)
         expect(role.reasoningEffort, name).not.toBe("")
         expect(role.family?.family, name).toMatch(/^(claude|gpt)-[a-z]+$/)
+      }
+    }
+  })
+
+  test("no preset names Sonnet: Luna replaced it", () => {
+    for (const [name, named] of Object.entries(PRESETS)) {
+      for (const role of [named.orchestrator, named.worker, named.reviewer]) {
+        expect(role.modelId, name).not.toContain("sonnet")
       }
     }
   })
@@ -1148,10 +1150,10 @@ const liveRun = (gent: string) =>
       Schema.fromJsonString(
         Schema.Record(
           Schema.String,
-          Schema.Struct({ models: Schema.Record(Schema.String, Schema.Struct({})) }),
+          Schema.Struct({ models: Schema.Record(Schema.String, Schema.Unknown) }),
         ),
       ),
-    )({ openai: { models: { "gpt-6.1-sol": {} } } })
+    )({ openai: { models: { "gpt-6.1-sol": release("gpt-sol", "2026-10-01") } } })
     yield* fs.writeFileString(body, catalogBody)
     // Shell scripts: a `#!/usr/bin/env bun` one would run the stand-in `bun`.
     const tools = { curl: `#!/bin/sh\ncat '${body}'\n`, bun: "#!/bin/sh\nexit 0\n" }
@@ -1293,14 +1295,7 @@ describe("gamut CLI offline catalog", () => {
         Schema.Struct({ models: Schema.Record(Schema.String, Schema.Unknown) }),
       ),
     ),
-  )(
-    Object.fromEntries(
-      Object.entries(catalog).map(([provider, ids]) => [
-        provider,
-        { models: Object.fromEntries(ids.map((id) => [id, {}])) },
-      ]),
-    ),
-  )
+  )(catalog)
   for (const scenario of [
     {
       name: "the configured chat snapshot resolves presets offline, including its WAL",

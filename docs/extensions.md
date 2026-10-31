@@ -995,7 +995,7 @@ import { Effect } from "effect"
 const painter = AgentDefinition.make({
   name: AgentName.make("painter"),
   description: "Paints one scene: reads its cues, edits the scene file, looks",
-  model: ModelId.make("anthropic/claude-sonnet-4-6"),
+  model: ModelId.make("openai/gpt-6-luna"),
   tools: ["film.*", "!film.check", "read", "edit", "write"],
   paths: [
     { path: "apps/animations/src/films", access: "write" },
@@ -1020,11 +1020,11 @@ The same agent in `.gent/config.json` (project) or `~/.gent/config.json`
   "agents": {
     "painter": {
       "description": "Paints one scene: reads its cues, edits the scene file, looks",
-      "model": "anthropic/claude-sonnet-4-6",
+      "model": "openai/gpt-6-luna",
       "tools": ["film.*", "!film.check", "read", "edit", "write"],
       "paths": ["apps/animations/src/films", { "path": ".claude/skills/film", "access": "read" }]
     },
-    "delegate": { "model": "anthropic/claude-sonnet-4-6" }
+    "delegate": { "model": "openai/gpt-6-luna" }
   }
 }
 ```
@@ -1351,7 +1351,7 @@ const byLength: ModelRouterContribution = {
       fallback: 0,
       choices: [
         { model: ModelId.make("anthropic/claude-haiku-4-5"), reason: "short requests" },
-        { model: ModelId.make("anthropic/claude-sonnet-5"), effort: "high", reason: "long ones" },
+        { model: ModelId.make("openai/gpt-6-luna"), effort: "high", reason: "long ones" },
       ],
     },
   ],

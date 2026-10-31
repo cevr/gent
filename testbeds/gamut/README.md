@@ -43,8 +43,8 @@ the owner's Anthropic accounts on.
 
 The orchestrate reviewer runs against the implementor's maker, and each
 preset role lists one family, so `machine.start` refuses an orchestrate run
-unless the preset's reviewer and worker come from different makers. Today
-only `opus-luna` does.
+unless the preset's reviewer and worker come from different makers:
+`mixed` and `opus-luna` do.
 
 The TUI takes from the caller only its terminal basics (`PATH`, `SHELL`,
 `USER`, `LOGNAME`, `TMPDIR`, `LANG`) and the proxy variables
@@ -57,15 +57,17 @@ before `up` to send the run's Anthropic requests through the TeamClaude
 account pool rather than the owner's own account.
 
 Each preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
-`anthropic/sonnet`, `anthropic/fable`, `anthropic/haiku`), not releases. `up` and `list` resolve
-each family to its newest release in the models.dev catalog. Offline, they
+`anthropic/fable`, `anthropic/haiku`), not releases. `up` and `list` resolve
+each family to its newest release in the models.dev catalog, by its
+models.dev `family` and release date, with core's rule
+(`newestCatalogRelease`). Offline, they
 use the chat catalog body (`source = api.json`) in `model_catalog_snapshots`
 from `$GENT_DATA_DIR/data.db`, or the OS home directory's `.gent/data.db` when
 `GENT_DATA_DIR` is unset. The driver copies the database and its WAL into a
 fresh scratch directory, opens only that copy read-only, validates the body,
 and removes the copy after reading. It reads no auth files. If there is no
 valid chat snapshot, the original fetch error is reported. A new Sol, Luna,
-Opus, Sonnet or Fable release needs no edit here.
+Opus, Fable or Haiku release needs no edit here.
 
 `up` copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
 repo, installs it, writes the preset into `work/.gent/config.json` (agents `main` and

@@ -36,6 +36,7 @@ import {
   Model,
   ModelId,
   type ModelPricing,
+  newestOfFamily,
   parseModelId,
   ProviderId,
 } from "../domain/agent.js"
@@ -1899,6 +1900,35 @@ const parseCatalogProvider = (body: JsonRecord, id: string): Option.Option<Catal
       ),
     } satisfies CatalogProvider
   })
+
+/**
+ * The newest release of catalog `family` that `provider` lists in a raw
+ * models.dev body (`newestOfFamily`: by release date, an undated id over its
+ * dated snapshot), as its gent id; none when the body lists none. For a
+ * driver that pins a family before any profile resolves one, as gamut does.
+ */
+export const newestCatalogRelease = (
+  body: JsonRecord,
+  provider: string,
+  family: string,
+): Option.Option<ModelId> =>
+  parseCatalogProvider(body, provider).pipe(
+    Option.flatMap((parsed) =>
+      newestOfFamily(
+        parsed.models.map((model) =>
+          Model.make({
+            id: ModelId.make(`${provider}/${model.id}`),
+            name: model.name,
+            provider: ProviderId.make(provider),
+            ...omitUndefined({ family: model.family, releaseDate: model.releaseDate }),
+          }),
+        ),
+        provider,
+        family,
+      ),
+    ),
+    Option.map((model) => model.id),
+  )
 
 /** One parsed source: the raw providers, decoded one at a time on first read. */
 interface ParsedCatalogSource {

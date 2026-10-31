@@ -36,7 +36,7 @@ import {
  *     "auto": {
  *       "label": "Auto",
  *       "choices": [
- *         { "model": "anthropic/claude-sonnet-5-5", "reason": "quick questions and small edits", "default": true },
+ *         { "model": "openai/gpt-6-luna", "reason": "quick questions and small edits", "default": true },
  *         { "model": "anthropic/claude-opus-5-5", "reason": "difficult work: design, debugging, long changes" }
  *       ]
  *     }

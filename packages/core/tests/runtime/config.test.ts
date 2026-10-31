@@ -2083,7 +2083,7 @@ describe("agents from config over RPC", () => {
         agent: Option.some(painter),
         step: {
           ...textStep("done"),
-          assertRequest: (request) => expect(request.model).toBe("anthropic/claude-sonnet-4-6"),
+          assertRequest: (request) => expect(request.model).toBe("openai/gpt-6-luna"),
           assertOptions: (options) => expect(advertised(options)).toEqual(["film__look", "read"]),
         },
       })
