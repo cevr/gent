@@ -2546,18 +2546,44 @@ const bootGated = (
     return yield* Ref.get(most)
   })
 
-// ── model tiers ─────────────────────────────────────────────────────────────
+// ── model roles ─────────────────────────────────────────────────────────────
 
-const OPUS = ModelId.make("anthropic/claude-opus-5")
+// The newest model of each family the catalog fixture lists.
+const OPUS = ModelId.make("anthropic/claude-opus-5-5")
 const HAIKU = ModelId.make("anthropic/claude-haiku-4-5")
-const SONNET = TEST_MODEL_ID
+const SONNET = ModelId.make("anthropic/claude-sonnet-5-5")
+const SOL = ModelId.make("openai/gpt-6.1-sol")
 
-/** The `work` account, with the owner's tiers, over the catalog's models and prices unless `models` names others. */
+/** The catalog family of one of the models above. */
+const familyOf = (model: ModelId) => {
+  const name = model.slice(model.indexOf("/") + 1)
+  if (name.startsWith("gpt-")) return `gpt-${name.slice(name.lastIndexOf("-") + 1)}`
+  return name.split("-").slice(0, 2).join("-")
+}
+
+/** A config role choice: the newest model of `model`'s family on its provider. */
+const choiceOf = (model: ModelId) => ({
+  provider: model.slice(0, model.indexOf("/")),
+  family: familyOf(model),
+  effort: "high" as const,
+})
+
+/**
+ * Config roles from model lists: `strongest` in its order, `efficient` by
+ * cost per accepted unit, and any other role in its order.
+ */
+const rolesOf = (lists: Readonly<Record<string, ReadonlyArray<ModelId>>>) =>
+  Object.fromEntries(
+    Object.entries(lists).flatMap(([role, list]) => {
+      const models = list.map(choiceOf)
+      if (role === "efficient") return [[role, { models, rank: "cheapest" as const }]]
+      return [[role, { models }]]
+    }),
+  )
+
+/** The `work` account, with the owner's roles, over the catalog's models and prices unless `models` names others. */
 const tieredAccount = (
-  tiers: {
-    strongest?: ReadonlyArray<ModelId>
-    efficient?: ReadonlyArray<ModelId>
-  },
+  lists: Parameters<typeof rolesOf>[0],
   models: ReadonlyArray<Model> | "catalog" = "catalog",
 ) => ({
   configServiceLayer: ConfigService.Test(
@@ -2565,7 +2591,7 @@ const tieredAccount = (
       model: TEST_MODEL_ID,
       // As `oneAccount`: the owner's turn goes on past the readings it reports.
       providers: { anthropic: { authOrder: [work], extraUsage: true } },
-      tiers,
+      roles: rolesOf(lists),
     }),
   ),
   models,
@@ -2577,6 +2603,7 @@ const anthropicModel = (id: ModelId, pricing: { input: number; output: number })
     id,
     name: id,
     provider: ProviderId.make("anthropic"),
+    family: familyOf(id),
     contextLength: 200_000,
     pricing,
   })
@@ -2593,7 +2620,7 @@ const modelSpentUntil = (model: ModelId, resetAt: number): QuotaReading => ({
 /** One strongest round, then an ask: `again` runs the role's next round. */
 const STRONG_AGAIN = {
   name: "strong-again",
-  threads: { worker: { tier: "strongest" } },
+  threads: { worker: { role: "strongest" } },
   start: "work",
   states: {
     work: { kind: "thread", thread: "worker", say: "STATE work {{visit}}", next: "gate" },
@@ -2605,7 +2632,7 @@ const STRONG_AGAIN = {
 /** Three efficient rounds, each on a thread of its own. */
 const EFFICIENT_THRICE = {
   name: "efficient-thrice",
-  threads: { worker: { tier: "efficient" } },
+  threads: { worker: { role: "efficient" } },
   start: "work",
   states: {
     work: {
@@ -2737,7 +2764,7 @@ const seedEndedRuns = (source: string, runs: ReadonlyArray<EndedRun>) =>
 /** One efficient round, then the end. */
 const EFFICIENT_ONCE = {
   name: "efficient-once",
-  threads: { worker: { tier: "efficient" } },
+  threads: { worker: { role: "efficient" } },
   start: "work",
   states: {
     work: { kind: "thread", thread: "worker", say: "STATE work {{visit}}", next: "done" },
@@ -2813,7 +2840,94 @@ const askAt = (client: Client, owner: SessionKey, count: number) =>
       decodeAsk(ofType(snapshot.messages, MACHINE_ASK_TYPE)[count - 1]?.metadata?.details),
   )
 
-describe("a tier role's round", () => {
+describe("a config role's round", () => {
+  it.live("a definition whose roles conflict is refused, each reason named", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(twoAsksWorker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const definition = {
+        name: "role-conflicts",
+        threads: {
+          pinned: { model: OPUS, role: "planner" },
+          tuned: { effort: "high", role: "planner" },
+          lost: { role: "reviewer", against: "nobody" },
+          plain: {},
+          bare: { role: "reviewer", against: "plain" },
+          self: { role: "reviewer", against: "self" },
+          loose: { against: "pinned" },
+        },
+        start: "work",
+        states: {
+          work: { kind: "thread", thread: "pinned", say: "go", next: "done" },
+          done: { kind: "final" },
+        },
+      }
+      const [refused] = yield* call(client, owner, [
+        ["machine.define", "define-role-conflicts", { definition }],
+      ])
+      expect(refused?.failed).toBe(true)
+      const text = encodeJson(refused?.result)
+      expect(text).toContain("pinned: names a model and a role")
+      expect(text).toContain("tuned: names an effort and a role")
+      expect(text).toContain("lost: is against no thread role nobody")
+      expect(text).toContain("bare: is against plain, which names no role")
+      expect(text).toContain("self: is against itself")
+      expect(text).toContain("loose: names against with no role")
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live(
+    "a start fails when a role is not in the config, or one against another lists one maker",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(
+            machineModels(models),
+            tieredAccount({ maker: [HAIKU], judge: [OPUS, SONNET] }),
+          ),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const pair = (name: string, judge: string) => ({
+          name,
+          threads: { maker: { role: "maker" }, judge: { role: judge, against: "maker" } },
+          start: "make",
+          states: {
+            make: { kind: "thread", thread: "maker", say: "make", next: "judge" },
+            judge: { kind: "thread", thread: "judge", say: "judge", next: "done" },
+            done: { kind: "final" },
+          },
+        })
+        const startOf = (definition: ReturnType<typeof pair>) =>
+          Effect.gen(function* () {
+            const [defined] = yield* call(client, owner, [
+              ["machine.define", `define-${definition.name}`, { definition }],
+            ])
+            expect(defined?.failed).toBe(false)
+            const [started] = yield* call(client, owner, [
+              ["machine.start", `start-${definition.name}`, { machine: definition.name }],
+            ])
+            expect(started?.failed).toBe(true)
+            return encodeJson(started?.result)
+          })
+        expect(yield* startOf(pair("unnamed", "missing"))).toContain(
+          "judge runs the role missing, which config roles does not name",
+        )
+        expect(yield* startOf(pair("one-maker", "judge"))).toContain(
+          "judge is against maker, so its role judge needs listed models of two makers; it has anthropic",
+        )
+        const runs = yield* home.sql(
+          Effect.flatMap(SqlClient.SqlClient, (sql) => sql`SELECT run FROM machine_runs`),
+        )
+        expect(runs).toEqual([])
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
   it.live(
     "runs the first strongest model with a lane, keeps its thread while that model has one, and moves when it has none",
     () =>
@@ -2859,6 +2973,12 @@ describe("a tier role's round", () => {
         expect(t1).toBe(t2)
         expect(t3).not.toBe(t1)
         expect(waitsOf(steps)).toEqual([])
+        // Each thread runs at its choice's effort.
+        for (const thread of [t1, t3]) {
+          if (Predicate.isUndefined(thread)) continue
+          const view = yield* client.session.get({ sessionId: SessionId.make(thread) })
+          expect(view?.reasoningLevel).toBe("high")
+        }
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
   )
@@ -2931,7 +3051,7 @@ describe("a tier role's round", () => {
             new UserConfig({
               model: TEST_MODEL_ID,
               providers: { anthropic: { authOrder: [work], extraUsage: true } },
-              tiers: { strongest: [OPUS, SONNET] },
+              roles: rolesOf({ strongest: [OPUS, SONNET] }),
               sabbath: { latitude: 0, longitude: 0, timeZone: "UTC" },
             }),
           ),
@@ -3018,6 +3138,11 @@ describe("a tier role's round", () => {
             tieredAccount({ efficient: [HAIKU, SONNET] }, [
               anthropicModel(HAIKU, { input: 0, output: 0 }),
               anthropicModel(SONNET, { input: 3, output: 15 }),
+              // The owner's model, of no family a role names.
+              Model.make({
+                ...anthropicModel(TEST_MODEL_ID, { input: 3, output: 15 }),
+                family: "owner",
+              }),
             ]),
           ),
         )
@@ -4345,8 +4470,18 @@ const unitWorker =
     return Effect.succeed(replyWith(round, { next, file: `${round.state}-${round.visit}.md` }))
   }
 
-/** The orchestrate machine's tiers, each its own model: a round's model names its tier. */
-const unitTiers = () => tieredAccount({ strongest: [OPUS], efficient: [HAIKU] })
+/**
+ * The orchestrate machine's config roles: a round's model names its role.
+ * The reviewer is against the implementor, so it runs Sol, not Opus.
+ */
+const unitTiers = () =>
+  tieredAccount({
+    planner: [OPUS],
+    implementor: [HAIKU],
+    codemod: [SONNET],
+    reviewer: [OPUS, SOL],
+    verifier: [HAIKU],
+  })
 
 /** Answers the owner's `count`-th ask with `choice`, and returns that ask. */
 const answerAsk = (
@@ -4408,7 +4543,7 @@ const fileExists = (file: string) =>
 
 describe("the shipped orchestrate machine", () => {
   it.live(
-    "plans, implements, reviews and verifies a unit, each role on its tier, then decides",
+    "plans, implements, reviews and verifies a unit, each role on its config role, then decides",
     () =>
       Effect.gen(function* () {
         const { home, models, client, owner, run, dir } = yield* unitRun({})
@@ -4430,8 +4565,8 @@ describe("the shipped orchestrate machine", () => {
           "verify→decide",
           "decide→dropped",
         ])
-        // Planning and review on the strongest tier, implementing and verifying on the efficient one.
-        expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS, HAIKU, OPUS, HAIKU])
+        // The reviewer leaves Opus, the implementor's maker's, for Sol.
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS, HAIKU, SOL, HAIKU])
         expect(yield* Ref.get(models.calls)).toEqual([
           "plan:1",
           "implement:1",
@@ -4480,13 +4615,16 @@ describe("the shipped orchestrate machine", () => {
         const decide = yield* answerAsk(client, owner, 1, "drop")
         expect(decide.state).toBe("decide")
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
-        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+        const steps = yield* home.sql(stepsOf(run))
+        expect(moves(steps)).toEqual([
           "implement→review",
           "review→fix",
           "fix→decide",
           "decide→dropped",
         ])
         expect(yield* Ref.get(models.calls)).toEqual(["implement:1", "review:1", "fix:1"])
+        // The light implementor runs the codemod role; the reviewer leaves its maker.
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([SONNET, SOL, SONNET])
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )

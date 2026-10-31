@@ -156,18 +156,6 @@ const ProviderConfigEntry = Schema.Struct({
 export type ProviderConfigEntry = typeof ProviderConfigEntry.Type
 
 /**
- * The owner's two ordered model lists, beside the account order: a machine
- * role of the `strongest` tier (plan, review) runs the first of its list with
- * a free lane; one of the `efficient` tier (implement, verify) runs the one
- * whose recent runs cost least per accepted unit. Intelligence is not
- * scored: the lists are the owner's.
- */
-const ModelTiersConfig = Schema.Struct({
-  strongest: Schema.optional(Schema.Array(ModelId).check(Schema.isMinLength(1))),
-  efficient: Schema.optional(Schema.Array(ModelId).check(Schema.isMinLength(1))),
-})
-
-/**
  * One choice of a model role: the newest model `provider` lists of the
  * catalog `family` (`claude-opus`, `gpt-luna`), at `effort`. `provider` is
  * the driver id a model id starts with (`cloudflare`, not its catalog's
@@ -257,8 +245,6 @@ export class UserConfig extends Schema.Class<UserConfig, { readonly brand: uniqu
    * shadows the user's.
    */
   model: Schema.optional(ModelId),
-  /** The owner's model tiers (`ModelTiersConfig`). A project list shadows the user's, list by list. */
-  tiers: Schema.optional(ModelTiersConfig),
   /**
    * The owner's model roles by name (`ModelRoleConfig`): a machine names a
    * role, never a model. A project role replaces the user's role of that
@@ -539,15 +525,6 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
       ...(project.disabledProviders ?? []),
     ]),
     model: project.model ?? user.model,
-    tiers: Option.getOrUndefined(
-      Option.liftPredicate(
-        omitUndefined({
-          strongest: project.tiers?.strongest ?? user.tiers?.strongest,
-          efficient: project.tiers?.efficient ?? user.tiers?.efficient,
-        }),
-        (tiers) => Object.keys(tiers).length > 0,
-      ),
-    ),
     roles: nonEmptyRecord({ ...user.roles, ...project.roles }),
   })
 

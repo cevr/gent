@@ -78,12 +78,10 @@ describe("user configuration", () => {
       ).toBe(true)
     }),
   )
-  it.live("rejects an empty model tier list; an absent one is fine", () =>
+  it.live("a file that still sets the retired model tiers loads", () =>
     Effect.sync(() => {
       const decode = Schema.decodeUnknownOption(UserConfig)
-      expect(Option.isNone(decode({ tiers: { strongest: [] } }))).toBe(true)
-      expect(Option.isNone(decode({ tiers: { efficient: [] } }))).toBe(true)
-      expect(Option.isSome(decode({ tiers: {} }))).toBe(true)
+      expect(Option.isSome(decode({ tiers: { strongest: [] } }))).toBe(true)
       expect(Option.isSome(decode({ tiers: { efficient: ["a/work"] } }))).toBe(true)
     }),
   )
@@ -1825,42 +1823,6 @@ describe("user configuration", () => {
           const b = yield* cfg.get(projectB)
           expectDriverOverride(a, "primary", "projectA-driver")
           expectDriverOverride(b, "primary", "projectB-driver")
-        }).pipe(Effect.provide(live))
-      }).pipe(Effect.provide(BunServices.layer)),
-    )
-
-    it.scopedLive("a project's model tier list shadows the user's, list by list", () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const home = yield* fs.makeTempDirectoryScoped()
-        const project = yield* fs.makeTempDirectoryScoped()
-        const plain = yield* fs.makeTempDirectoryScoped()
-        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
-        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
-        yield* fs.writeFileString(
-          userConfigPath,
-          encodeJson({ tiers: { strongest: ["a/plan", "b/plan"], efficient: ["a/work"] } }),
-        )
-        yield* fs.makeDirectory(path.join(project, ".gent"), { recursive: true })
-        yield* fs.writeFileString(
-          path.join(project, ".gent", "config.json"),
-          encodeJson({ tiers: { efficient: ["c/work", "a/work"] } }),
-        )
-        const live = ConfigService.Live.pipe(
-          Layer.provide(RuntimeEnvironment.Live({ cwd: plain, home })),
-          Layer.provide(BunServices.layer),
-        )
-        yield* Effect.gen(function* () {
-          const cfg = yield* ConfigService
-          expect((yield* cfg.get(project)).tiers).toEqual({
-            strongest: [ModelId.make("a/plan"), ModelId.make("b/plan")],
-            efficient: [ModelId.make("c/work"), ModelId.make("a/work")],
-          })
-          expect((yield* cfg.get(plain)).tiers).toEqual({
-            strongest: [ModelId.make("a/plan"), ModelId.make("b/plan")],
-            efficient: [ModelId.make("a/work")],
-          })
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )

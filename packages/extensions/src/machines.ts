@@ -73,6 +73,7 @@ import {
   type LaneUnavailable,
   ModelId,
   omitUndefined,
+  type ReasoningEffort,
   request,
   resolveDataDir,
   SessionId,
@@ -136,22 +137,19 @@ const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const Template = Schema.String.check(Schema.isMaxLength(16_000))
 
 /**
- * A role's model tier, read from config `tiers`: `strongest` takes the first
- * model of its list with a free lane, `efficient` the one of its list whose
- * recent runs cost least per accepted unit (`efficientOrder`). With no
- * model free, the round waits; it never runs the other tier.
- */
-const Tier = Schema.Literals(["strongest", "efficient"])
-type Tier = typeof Tier.Type
-
-/**
  * One role: a thread's spec, as `thread.start` takes it. Default agent:
- * `worker`, which keeps the session cache. A `model` wins over a `tier`.
+ * `worker`, which keeps the session cache. Its model is a pinned `model`
+ * (with an optional `effort`), or a config `role` (`Accounts.role`), whose
+ * choices name each model and effort: a role names no `model` or `effort`.
+ * With neither, the agent's model runs. `against` names another thread
+ * role: this role never runs a model of the maker whose model that role's
+ * thread runs.
  */
 const ThreadRole = Schema.Struct({
   agent: StartParams.fields.agent,
   model: StartParams.fields.model,
-  tier: Schema.optionalKey(Tier),
+  role: Schema.optionalKey(Schema.String),
+  against: Schema.optionalKey(RoleName),
   effort: StartParams.fields.effort,
   account: StartParams.fields.account,
   instructions: Schema.optionalKey(Template),
@@ -226,7 +224,7 @@ const FinalState = Schema.Struct({
   /** The line the owner's wake carries; default "<machine> finished in <state>". */
   say: Schema.optionalKey(Template),
   /**
-   * Whether the run's work is accepted here, as a unit the efficient tier's
+   * Whether the run's work is accepted here, as a unit a cheapest role's
    * rank and a model's quality count; default true. A final state that
    * drops the work, or sends it back for a rewrite, says false.
    */
@@ -653,8 +651,34 @@ const exhaustedCycleProblems = (
 }
 
 /**
+ * A thread role's model: a config `role` names its own models and efforts,
+ * so it takes no `model` or `effort`; `against` names another role of the
+ * definition that runs a config role.
+ */
+const roleProblems = (definition: MachineDefinition): ReadonlyArray<string> =>
+  Object.entries(definition.threads).flatMap(([name, role]) => {
+    const problems: Array<string> = []
+    if (Predicate.isNotUndefined(role.role)) {
+      if (Predicate.isNotUndefined(role.model)) problems.push(`${name}: names a model and a role`)
+      if (Predicate.isNotUndefined(role.effort))
+        problems.push(`${name}: names an effort and a role`)
+    }
+    if (Predicate.isNotUndefined(role.against)) {
+      const other = definition.threads[role.against]
+      if (Predicate.isUndefined(role.role)) problems.push(`${name}: names against with no role`)
+      if (role.against === name) problems.push(`${name}: is against itself`)
+      else if (!Object.hasOwn(definition.threads, role.against))
+        problems.push(`${name}: is against no thread role ${role.against}`)
+      else if (Predicate.isUndefined(other?.role))
+        problems.push(`${name}: is against ${role.against}, which names no role`)
+    }
+    return problems
+  })
+
+/**
  * Every problem of a definition the schema admits, at once: the graph's
- * names, edges, reachability, templates, and cycles of `exhausted` edges.
+ * names, edges, reachability, templates, roles, and cycles of `exhausted`
+ * edges.
  */
 const definitionProblems = (definition: MachineDefinition): ReadonlyArray<string> => {
   const names = new Set<string>(Object.keys(definition.states))
@@ -669,6 +693,7 @@ const definitionProblems = (definition: MachineDefinition): ReadonlyArray<string
   return [
     ...reserved,
     ...perState,
+    ...roleProblems(definition),
     ...reachProblems(definition, names),
     ...exhaustedCycleProblems(definition, names),
   ]
@@ -926,7 +951,7 @@ const createMachineTables = Effect.gen(function* () {
         step_json TEXT NOT NULL,
         PRIMARY KEY (run, seq)
       )`,
-      // A tier pick reads one machine's newest ended runs: the runs by
+      // A cheapest role's pick reads one machine's newest ended runs: the runs by
       // machine, their steps by run.
       `CREATE INDEX machine_runs_machine ON machine_runs (machine)`,
       `CREATE INDEX machine_steps_state ON machine_steps (run, state)`,
@@ -2010,6 +2035,42 @@ const checkRemotes = Effect.fn("Machines.checkRemotes")(function* (
   }
 })
 
+/**
+ * Each config role the definition's thread roles run is named in the config
+ * of `cwd` and lists a model; a role `against` another lists models of two
+ * makers, so a pick can always leave the other role's maker out. A run
+ * fails here at its start, not at a round that could never run.
+ */
+const checkRoles = Effect.fn("Machines.checkRoles")(function* (
+  definition: MachineDefinition,
+  cwd: string,
+) {
+  const ctx = yield* ExtensionContext
+  for (const [name, role] of Object.entries(definition.threads)) {
+    if (Predicate.isUndefined(role.role)) continue
+    const resolved = yield* ctx.Accounts.role(cwd, role.role).pipe(
+      Effect.mapError((error) => new MachineError({ message: error.message })),
+    )
+    if (Option.isNone(resolved)) {
+      return yield* new MachineError({
+        message: `${name} runs the role ${role.role}, which config roles does not name`,
+      })
+    }
+    if (resolved.value.choices.length === 0) {
+      return yield* new MachineError({
+        message: `${name} runs the role ${role.role}, whose families no listed model has`,
+      })
+    }
+    if (Predicate.isUndefined(role.against)) continue
+    const makers = new Set(resolved.value.choices.flatMap((choice) => Option.toArray(choice.maker)))
+    if (makers.size < 2) {
+      return yield* new MachineError({
+        message: `${name} is against ${role.against}, so its role ${role.role} needs listed models of two makers; it has ${[...makers].join(", ") || "none of a known maker"}`,
+      })
+    }
+  }
+})
+
 /** The red generation the state's last visit saved: the next push repairs it. */
 const repairOf = (context: RunContext, name: StateName): Option.Option<number> =>
   decodeGateOutcome(context.last[name]).pipe(
@@ -2322,7 +2383,7 @@ const threadStateOf = Effect.fn("Machines.threadStateOf")(function* (run: Run, n
  * round with no free lane is queued by the send and starts when its grant
  * comes; the driver waits for its end as for any open round. An account
  * whose windows are spent (`LaneUnavailable`: a model the round names, or
- * a tier pick that was spent by the send) makes the round wait until the
+ * a role pick that was spent by the send) makes the round wait until the
  * time it names, as the same round.
  */
 const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
@@ -2377,9 +2438,9 @@ const ownThread = (state: ThreadState, action: RoundAction) =>
  * Starts the round's thread (a fresh one is the round's own, a role's is the
  * run's, kept across visits) and commits it with the round's id and the
  * thread's model: the run and the round as committed, or none when another
- * writer moved the row first. A tier role's round runs the model its tier
- * picks: on the role's thread while that thread's model is the pick, else
- * on a new thread that becomes the role's. With every model of the tier
+ * writer moved the row first. A config role's round runs the model and effort
+ * its role picks: on the role's thread while that thread's model is the
+ * pick, else on a new thread that becomes the role's. With every choice
  * spent, the round waits for the earliest reset, and none is returned.
  */
 const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
@@ -2396,20 +2457,21 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
     () => !fresh,
   ).pipe(Option.flatten)
   const kept = Option.orElse(Option.fromUndefinedOr(action.thread), () => known)
-  const tiered = yield* tierPick(run, action, state.thread, role, kept)
-  if (Result.isFailure(tiered)) {
-    yield* waitForAccount(run, action, laneWait(tiered.failure))
+  const picked = yield* rolePick(run, action, state.thread, role, kept)
+  if (Result.isFailure(picked)) {
+    yield* waitForAccount(run, action, laneWait(picked.failure))
     return Option.none()
   }
-  const pick = tiered.success
+  const pick = picked.success
   const model = Option.getOrUndefined(Option.map(pick, (chosen) => chosen.model)) ?? role.model
+  const effort = Option.getOrUndefined(Option.map(pick, (chosen) => chosen.effort)) ?? role.effort
   const spec: Omit<ThreadStartInput, "key" | "name"> = {
     agent: role.agent ?? WORKER_AGENT,
     cwd: run.cwd,
     notify: "none",
     ...omitUndefined({
       model,
-      effort: role.effort,
+      effort,
       account: role.account,
       instructions: role.instructions,
       tools: role.tools,
@@ -2459,7 +2521,7 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   return Option.map(committed, (next) => ({ run: next, action: recorded, thread, round }))
 })
 
-// ── model tiers ─────────────────────────────────────────────────────────────
+// ── model roles ─────────────────────────────────────────────────────────────
 
 /** The ended runs of a machine the efficient rank reads, newest first. */
 const RANK_RUNS = 40
@@ -2611,7 +2673,7 @@ const unitCost = (tally: UnitTally): number => {
 }
 
 /**
- * The efficient tier's models in the order `role`'s round tries them, read
+ * A cheapest role's models in the order `role`'s round tries them, read
  * from the machine's ended runs (newest first) and nothing stored: a run's
  * spend is every round of it, each role's, at its model's quota weight
  * (`weightOf`); a run whose final state accepts its work is one unit. Each
@@ -2668,21 +2730,76 @@ const efficientOrder = (
 }
 
 /**
- * The models of a tier, in the order `role`'s round tries them:
- * `strongest` in the list's order; `efficient` by `efficientOrder` over the
- * machine's ended runs, here being the run's project and its input's
- * `domain`. A weight is the provider's fitted one (`accounts.lanes`), 1
- * until fitted.
+ * The maker of the model the thread of role `against` runs in `run`; none
+ * while that role has no thread. Fails when the catalog names no maker for
+ * that model: no choice could be shown to be another maker's.
  */
-const tierOrder = Effect.fn("Machines.tierOrder")(function* (run: Run, role: RoleName, tier: Tier) {
+const againstMaker = Effect.fn("Machines.againstMaker")(function* (run: Run, against: RoleName) {
+  const thread = Option.fromUndefinedOr(run.roles[against])
+  if (Option.isNone(thread)) return Option.none<string>()
+  const threads = yield* threadsOf
   const ctx = yield* ExtensionContext
-  const listed = (yield* ctx.Accounts.tiers(run.cwd))[tier]
-  if (listed.length === 0) {
+  const model = yield* threads.model(thread.value).pipe(Effect.mapError(threadFault))
+  if (Option.isNone(model)) return Option.none<string>()
+  const maker = yield* ctx.Accounts.maker(run.cwd, model.value).pipe(
+    Effect.mapError((error) => new MachineFault({ message: error.message })),
+  )
+  if (Option.isSome(maker)) return maker
+  return yield* new MachineFault({
+    message: `The catalog names no maker of ${model.value}, which ${against} runs: no model can be shown to be another maker's`,
+  })
+})
+
+/**
+ * The choices of thread role `name`'s config role, in the order its round
+ * tries them: the role's own order, or with `rank: "cheapest"` by
+ * `efficientOrder` over the machine's ended runs, here being the run's
+ * project and its input's `domain` (a weight is the provider's fitted one,
+ * `accounts.lanes`, 1 until fitted). Of a role `against` another, a choice
+ * of that role's maker or of no known maker drops. Fails when the config
+ * names no such role, or no choice is left: a wait would never end.
+ */
+const roleOrder = Effect.fn("Machines.roleOrder")(function* (
+  run: Run,
+  name: RoleName,
+  configRole: string,
+  against: Option.Option<RoleName>,
+) {
+  const ctx = yield* ExtensionContext
+  const resolved = yield* ctx.Accounts.role(run.cwd, configRole).pipe(
+    Effect.mapError((error) => new MachineFault({ message: error.message })),
+  )
+  if (Option.isNone(resolved)) {
     return yield* new MachineFault({
-      message: `A ${tier} role needs config tiers.${tier} to name a model`,
+      message: `${name} runs the role ${configRole}, which config roles does not name`,
     })
   }
-  if (tier === "strongest") return listed
+  const maker = yield* Option.match(against, {
+    onNone: () => Effect.succeedNone,
+    onSome: (other) => againstMaker(run, other),
+  })
+  const choices = resolved.value.choices.filter(
+    (choice) =>
+      Option.isNone(maker) || Option.exists(choice.maker, (each) => !Option.contains(maker, each)),
+  )
+  if (choices.length === 0) {
+    const unresolved = resolved.value.unresolved.map(
+      (choice) => `${choice.provider} ${choice.family}`,
+    )
+    const reasons = [
+      ...Option.toArray(Option.map(maker, (each) => `none of another maker than ${each}`)),
+      ...Option.toArray(
+        Option.map(
+          Option.liftPredicate(unresolved, (list) => list.length > 0),
+          (list) => `no listed model of ${list.join(", ")}`,
+        ),
+      ),
+    ]
+    return yield* new MachineFault({
+      message: `${name} has no model to run in the role ${configRole}: ${reasons.join("; ") || "no choice"}`,
+    })
+  }
+  if (Option.isNone(resolved.value.rank)) return choices
   const store = yield* MachineStore
   const runs = rankedRuns(yield* store.endedRunsOf(run.machine, RANK_RUNS))
   const report = yield* ctx.Accounts.lanes
@@ -2690,7 +2807,16 @@ const tierOrder = Effect.fn("Machines.tierOrder")(function* (run: Run, role: Rol
     report.providers.flatMap((lanes) => lanes.models).map((entry) => [entry.model, entry.weight]),
   )
   const here = { project: yield* ctx.Accounts.project(run.cwd), domain: domainOf(run.input) }
-  return efficientOrder(listed, runs, here, role, (model) => weights.get(model) ?? 1)
+  const ranked = efficientOrder(
+    choices.map((choice) => choice.model),
+    runs,
+    here,
+    name,
+    (model) => weights.get(model) ?? 1,
+  )
+  return ranked.flatMap((model) =>
+    Option.toArray(Option.fromUndefinedOr(choices.find((choice) => choice.model === model))),
+  )
 })
 
 /**
@@ -2741,7 +2867,7 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
     return Result.fail(
       yield* Effect.fromOption(
         soonest,
-        () => new MachineFault({ message: "A tier pick needs a model to try" }),
+        () => new MachineFault({ message: "A role pick needs a model to try" }),
       ),
     )
   }
@@ -2752,37 +2878,49 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
 })
 
 /**
- * The model a tier role's round runs, and whether it keeps `kept`, the
- * role's thread: that thread's model is tried first while the tier lists
- * it, so the role keeps its thread and cache while that model has a lane.
- * None for a role that names a `model` or no tier. With no model of the
- * tier free, the first that is not spent, whose queue the round waits in.
- * Fails with the refusal of the model of the tier that can carry a run
- * first when every one is refused.
+ * The model and effort a config role's round runs, and whether it keeps
+ * `kept`, the role's thread: that thread's model is tried first while the
+ * role's choices hold it, so the role keeps its thread and cache while that
+ * model has a lane. None for a role that names no config role. With no
+ * choice free, the first that is not spent, whose queue the round waits in.
+ * Fails with the refusal of the choice that can carry a run first when
+ * every one is refused.
  */
-const tierPick = Effect.fn("Machines.tierPick")(function* (
+const rolePick = Effect.fn("Machines.rolePick")(function* (
   run: Run,
   action: RoundAction,
   name: RoleName,
   role: ThreadRole,
   kept: Option.Option<SessionId>,
 ) {
-  if (Predicate.isNotUndefined(role.model) || Predicate.isUndefined(role.tier)) {
-    return Result.succeed(Option.none<{ readonly model: ModelId; readonly keep: boolean }>())
+  if (Predicate.isUndefined(role.role)) {
+    return Result.succeed(
+      Option.none<{
+        readonly model: ModelId
+        readonly effort: ReasoningEffort
+        readonly keep: boolean
+      }>(),
+    )
   }
   const threads = yield* threadsOf
-  const order = yield* tierOrder(run, name, role.tier)
+  const order = yield* roleOrder(run, name, role.role, Option.fromUndefinedOr(role.against))
+  const models = order.map((choice) => choice.model)
   const keptModel = yield* Option.match(kept, {
     onNone: () => Effect.succeedNone,
     onSome: (thread) => threads.model(thread).pipe(Effect.mapError(threadFault)),
   })
-  const first = Option.filter(keptModel, (model) => order.includes(model))
+  const first = Option.filter(keptModel, (model) => models.includes(model))
   const tried = [
     ...Option.toArray(first),
-    ...order.filter((model) => !Option.contains(first, model)),
+    ...models.filter((model) => !Option.contains(first, model)),
   ]
   const free = yield* freeModel(run, action, role, tried)
-  return Result.map(free, (model) => Option.some({ model, keep: Option.contains(first, model) }))
+  return Result.map(free, (model) =>
+    Option.map(
+      Option.fromUndefinedOr(order.find((choice) => choice.model === model)),
+      (choice) => ({ model, effort: choice.effort, keep: Option.contains(first, model) }),
+    ),
+  )
 })
 
 /**
@@ -3720,6 +3858,7 @@ const MachineStartTool = tool({
     if (Option.isSome(existing)) return { run: runId, state: existing.value.state }
     const cwd = path.resolve(ctx.cwd, params.cwd ?? ".")
     yield* checkRemotes(definition, cwd)
+    yield* checkRoles(definition, cwd)
     const host = { sessionId: ctx.sessionId, branchId: ctx.branchId }
     const input = params.input ?? {}
     const run: RunRecord = {

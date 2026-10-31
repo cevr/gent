@@ -117,8 +117,9 @@ const decideAsk = (latest: string) => ({
  * decide `changes`) on a new implementor, `fix` follows a failed round
  * (review `changes`, verify `fail`, decide `fix`) and its third entry (the third failed
  * round) goes to decide, `resume` follows a blocked answer, a red gate or a
- * red push and counts nothing. Planning and review take the strongest tier,
- * implementing and verifying the efficient one. Ceremony scales with the
+ * red push and counts nothing. Each thread role runs the config role of its
+ * name (`roles` in the config: `planner`, `implementor`, `reviewer`,
+ * `verifier`), and the reviewer never runs the implementor's maker. Ceremony scales with the
  * unit's risk: the spec's `Path` is `standard` or `deep` (`light` units run
  * `ORCHESTRATE_LIGHT_MACHINE`), a review of a `standard` unit replies
  * `proven` and skips the verifier, and from round 3 a test-strength finding
@@ -133,7 +134,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
   name: "orchestrate",
   threads: {
     planner: {
-      tier: "strongest",
+      role: "planner",
       instructions: [
         WORKER_RULES,
         BLOCKED_RULE,
@@ -141,7 +142,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       ].join("\n"),
     },
     implementor: {
-      tier: "efficient",
+      role: "implementor",
       instructions: [
         WORKER_RULES,
         BLOCKED_RULE,
@@ -149,14 +150,15 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       ].join("\n"),
     },
     reviewer: {
-      tier: "strongest",
+      role: "reviewer",
+      against: "implementor",
       instructions: [
         WORKER_RULES,
         "You are the reviewer: read-only on the deliverables, you write only into the unit dir. Read the spec, the request, the diff from its base to its head, and the earlier rounds' findings. Attack the change: look for reasons it is wrong, not reasons it is fine. A round is the N of the request's round-N-request.md. From round 2, check every line of the fix report against the code, then review the diff from the last findings' head to the new head, with the callers, invariants and tests the new commits can reach; leave the rest of the earlier diff to the earlier rounds. From round 3, a finding about test strength alone (a generator narrower than its rule, a mutant that survives, an oracle that excuses) goes under Test strength, never Major: only a product failure (an input or state → a wrong result a user meets) blocks. Write round-N-findings.md: first line Verdict: ACCEPTED, PROVEN, CHANGES REQUIRED or STUCK; then Blockers, Major, Minor and Optional, and from round 3 Test strength, each with an id, file:line, a concrete failure and the expected repair; a new trigger of an earlier finding says repeat of rN <id>. A remaining Blocker or Major is changes; only Minor or Optional is accepted, or proven when the spec's Path is not deep and the request's gate log exit line and acceptance check result show green at its head, so no verifier runs; stuck is for a unit no further round can help, or a review you could not finish, never accepted. Verdict: accepted, proven, changes or stuck.",
       ].join("\n"),
     },
     verifier: {
-      tier: "efficient",
+      role: "verifier",
       instructions: [
         WORKER_RULES,
         "You are the verifier: you prove the unit works, in a clean checkout of the request's head (git worktree add --detach <unit dir>/verify-N-checkout <head>), with the project's packages installed there first, since a new worktree has none. Run the spec's acceptance check exactly as written, plus the focused tests of the changed files, and keep the evidence under <unit dir>/verify-N-evidence/. Write round-N-verify.md: first line Verdict: PASS, FAIL or STUCK; then each check with its command, the expected and the observed result, and the evidence path. A check that could not run, or ran with no clear result, is stuck, never pass. Remove the checkout at the end. Verdict: pass, fail or stuck.",
@@ -258,10 +260,15 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
  * behavior): the orchestrator writes the spec, so the run starts at
  * `implement`, and a fix after a failed round goes to decide without a
  * second review. A replan still takes the full path through the planner.
+ * The implementor runs the config role `codemod`.
  */
 export const ORCHESTRATE_LIGHT_MACHINE: MachineDefinitionJson = {
   ...ORCHESTRATE_MACHINE,
   name: "orchestrate-light",
+  threads: {
+    ...ORCHESTRATE_MACHINE.threads,
+    implementor: { ...ORCHESTRATE_MACHINE.threads["implementor"], role: "codemod" },
+  },
   start: "implement",
   states: {
     ...ORCHESTRATE_MACHINE.states,

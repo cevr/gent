@@ -148,9 +148,16 @@ questions are decided below.
    commit 2, with its reader. Tests: resolution reads
    the models `listModelCatalog` lists (not `modelFromCatalog` alone), and the
    test catalog fixture (`test-utils/harness.ts`) gains families.
-2. machines: the tagged `ThreadRole`, per-visit role choice, the keep rule on
-   model and effort, `against` by maker with its start check and its `decide`
-   fault, the pick and its waits. Tests.
+2. machines, in two parts. 2a (done 2026-10-31): `ThreadRole.role` and
+   `against`, with a definition check in place of a tagged union (a role
+   names no `model` or `effort`; a JSON machine file keeps its shape); the
+   pick over a role's choices at each choice's effort; `against` by maker;
+   the start check; a pick left with no choice fails the run
+   (`MachineFault`: the owner is told) rather than going to `decide`; the
+   shipped machines run the roles `planner`, `implementor` (`codemod` in
+   the light machine), `reviewer` against `implementor`, and `verifier`;
+   `tiers` gone (a file that still sets it loads, the key ignored). 2b:
+   the per-visit role choice and the keep rule on model and effort.
 3. shipped machines (the planner reply's `path` and `interactive`, the light
    implementor's `codemod`) and docs move to roles; gamut `FAMILIES` onto the
    resolver; Sonnet out of the gamut presets, the router example, threads.md

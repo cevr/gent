@@ -305,8 +305,8 @@
     the next state. A dead worker or no verdict runs the round once more on
     a new thread, then asks `no-verdict`; a round stopped from outside asks
     `interrupted`. A round with no free lane is queued by its send and the
-    driver waits for its end as for any open round; a tier pick admits each
-    model of the tier under the send key and, with none free, leaves the key
+    driver waits for its end as for any open round; a role pick admits each
+    choice of the role under the send key and, with none free, leaves the key
     in the queue of the first that is not spent. A round the account
     refuses as spent (`LaneUnavailable`, at start or send) or whose worker
     died at a usage limit (the round's `retryAt`,
@@ -320,14 +320,14 @@
     server start gives a waiting round no crash-debt ticket, even past its
     deadline. The driver removes `notBefore` only after taking a permit and
     committing the resumed dispatch.
-  - A role names a `model`, or a `tier`: `strongest` or `efficient`, each a
-    list of models in config `tiers` (`Accounts.tiers`; a project list
-    shadows the user's). A role with neither runs the agent's model; `model`
-    wins over `tier`. A tier role's round runs the first model of its order
-    whose lane `Threads.admitSend` admits under the round's send key, so the
-    send takes the lane the pick saw free: `strongest` in the list's order;
-    `efficient` by spend per accepted unit (`efficientOrder`), read at pick
-    time from the machine's newest 40 ended runs and nothing stored. A run's
+  - A role names a pinned `model` (and `effort`) or a config `role`
+    ([models.md](models.md)), not both; with neither, the agent's model. A
+    role `against` another skips that role's maker and unknown makers.
+    `machine.start` refuses a role the config lacks, or one against another
+    with one maker; a pick left with no choice fails the run. A round runs
+    the first choice whose lane `Threads.admitSend` admits under its send
+    key, at its effort: in the role's order, or with `rank: "cheapest"` by
+    spend per accepted unit (`efficientOrder`), read at pick time from the machine's newest 40 ended runs and nothing stored. A run's
     spend is every round of it, each role's, at its model's fitted quota
     weight (`accounts.lanes`); a round with no price counts its tokens at
     the fuel reference prices, and a run with a round that kept neither is
@@ -344,10 +344,9 @@
     lowest score, one with no unit last. When the role's last 9 runs in
     the first model's scope ran it alone, the runner-up goes first, so the
     rank measures again. Deleting the function leaves the list's order. The role's
-    thread is tried first while its model is in the tier, so the role keeps
-    its thread and cache; another pick starts a new thread that becomes the
-    role's. With no model of the tier free, the round waits (`lane`) until
-    the first frees; another tier is never a fallback. Every `RoundEnded`
+    thread is tried first while the role lists its model, so the role keeps its thread and cache; another pick starts a new thread that
+    becomes the role's. With no choice free, the round waits (`lane`) until
+    the first frees; another role is never a fallback. Every `RoundEnded`
     step keeps the role, the thread's model, and the turn's `costUsd` and
     tokens; `Finished` keeps whether its state accepts. Quality is
     shown, not picked on: `machine.status` and `MachinesRpc.Quality` (by a

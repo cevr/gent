@@ -1437,15 +1437,6 @@ export interface LaneRun {
   readonly modelId?: ModelId
 }
 
-/**
- * The owner's model tiers (config `tiers`), each in the owner's order; a
- * list the config does not name is empty.
- */
-interface ModelTiers {
-  readonly strongest: ReadonlyArray<ModelId>
-  readonly efficient: ReadonlyArray<ModelId>
-}
-
 /** One resolved choice of a model role: the model it runs now, its effort, and its maker. */
 interface ModelRoleChoice {
   readonly model: ModelId
@@ -1496,8 +1487,6 @@ export interface ExtensionAccountsService {
    * good: its windows carry no run of its size.
    */
   readonly awaitLane: (message: MessageId) => Effect.Effect<boolean, LaneUnavailable>
-  /** The owner's model tiers as the config of `cwd` names them. */
-  readonly tiers: (cwd: string) => Effect.Effect<ModelTiers>
   /**
    * The model role `name` as the config of `cwd` names it, resolved over the
    * models that cwd's profile lists. None when the config names no such role.

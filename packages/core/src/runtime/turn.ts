@@ -1951,10 +1951,6 @@ export const makeExtensionAccounts = Effect.gen(function* () {
         sabbath: yield* configService.sabbath,
       })
     }),
-    tiers: Effect.fn("ExtensionAccounts.tiers")(function* (cwd: string) {
-      const { tiers } = yield* configService.get(cwd)
-      return { strongest: tiers?.strongest ?? [], efficient: tiers?.efficient ?? [] }
-    }),
     role: Effect.fn("ExtensionAccounts.role")(function* (cwd: string, name: string) {
       const { roles } = yield* configService.get(cwd)
       // Own keys only: `constructor` names no role.
