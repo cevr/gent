@@ -321,19 +321,19 @@
     committing the resumed dispatch.
   - A role names a pinned `model` (and `effort`) or a config `role`
     ([models.md](models.md)), not both; with neither, the agent's model. A
-    thread state's `switches` run another config role while a slot
-    (`plan.reply.path`) reads `is`, through visit `visits`. A role `against`
+    thread state's first switch that holds (a slot like
+    `plan.reply.path` reads `is`, through visit `visits`) runs another config role. A role `against`
     another skips the maker of that role's last round and unknown makers.
-    `machine.start` refuses a role the config lacks, or one against another
+    `machine.start` refuses a role (a switch's too) the config lacks, or one against another
     with one maker; a pick left with no choice fails the run. A round runs
     the first choice whose lane `Threads.admitSend` admits under its send
     key, at its effort: in the role's order, or with `rank: "cheapest"` by
-    spend per accepted unit (`efficientOrder`), read at pick time from the machine's newest 40 ended runs, nothing stored. A run's
+    spend per accepted unit (`efficientOrder`), read at pick time from the machine's newest 40 ended runs. A run's
     spend is every round of it, each role's, at its model's fitted quota
     weight (`accounts.lanes`); a round with no price counts its tokens at
     the fuel reference prices, and a run with a round that kept neither is
     not measured. A run whose final state accepts its work (`accepts`,
-    default true) is one unit. Each model that ran rounds of the role in a
+    default true) is one unit. Each model that ran rounds of the config role (`RoundEnded.configRole`) in a
     run takes the run's spend and unit at its share of those rounds; a run
     weighs half as much as one 10 runs newer. A model is scored in the
     narrowest scope it has runs in: the run's project (`Accounts.project`,
@@ -345,7 +345,7 @@
     lowest score, one with no unit last. When the role's last 9 runs in
     the first model's scope ran it alone, the runner-up goes first to be
     measured again. Deleting the function leaves the list's order. The role's
-    thread is tried first while a choice names its model and effort, to keep its cache; another pick starts a thread that
+    thread is tried first while a choice names its model and effort, to keep its cache; another pick, a switch's too, starts a thread that
     becomes the role's. With no choice free, the round waits (`lane`) until
     the first frees; another role is never a fallback. Every `RoundEnded`
     step keeps the role, the thread's model, and the turn's `costUsd` and

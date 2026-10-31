@@ -164,6 +164,25 @@ describe("gamut preset config", () => {
     }
   })
 
+  test("a preset whose reviewer and worker differ in maker gives its reviewers both", () => {
+    const providers = (name: string) => {
+      const config = Schema.decodeSync(Schema.fromJsonString(UserConfig))(
+        presetConfigJson(resolvePreset(PRESETS[name]!, catalog)),
+      )
+      return ["reviewer", "deep-reviewer"].map((role) =>
+        (config.roles?.[role]?.models ?? []).map((model) => model.provider),
+      )
+    }
+    for (const name of ["mixed", "opus-luna"]) {
+      expect(providers(name), name).toEqual([
+        ["anthropic", "openai"],
+        ["anthropic", "openai"],
+      ])
+    }
+    // One family: one choice, so machine.start refuses it.
+    expect(providers("haiku")).toEqual([["anthropic"], ["anthropic"]])
+  })
+
   test("an unresolved slot names no family, so it writes no config", () => {
     expect(() => presetConfigJson(PRESETS["haiku"]!)).toThrow("names no model family")
   })
@@ -215,6 +234,11 @@ describe("gamut preset config", () => {
           "provider": "anthropic",
           "family": "claude-opus",
           "effort": "high"
+        },
+        {
+          "provider": "openai",
+          "family": "gpt-luna",
+          "effort": "max"
         }
       ]
     },
@@ -224,6 +248,11 @@ describe("gamut preset config", () => {
           "provider": "anthropic",
           "family": "claude-opus",
           "effort": "high"
+        },
+        {
+          "provider": "openai",
+          "family": "gpt-luna",
+          "effort": "max"
         }
       ]
     },

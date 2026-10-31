@@ -218,27 +218,31 @@ const loadCatalog = async (): Promise<ModelsDevCatalog> => {
 /**
  * `.gent/config.json` for a resolved preset: the orchestrator as agent
  * `main`, the worker as agent `delegate`, and the model roles the shipped
- * orchestrate machines name: the reviewer slot as `planner`, `reviewer`,
- * `deep-reviewer` and `live-verifier`, the worker slot as `implementor`,
- * `codemod` and `verifier`. A project role
- * shadows the owner's of its name, so a run never reaches a model outside its
- * preset. The reviewer runs against the implementor's maker, so a preset
- * whose reviewer and worker share a maker cannot start an orchestrate run.
+ * orchestrate machines name: the reviewer slot as `planner` and
+ * `live-verifier`, the worker slot as `implementor`, `codemod` and
+ * `verifier`, and both, reviewer first, as `reviewer` and `deep-reviewer`.
+ * A project role shadows the owner's of its name, so a run never reaches a
+ * model outside its preset. The reviewers run against the implementor's
+ * maker, so a preset whose reviewer and worker share a maker cannot start
+ * an orchestrate run.
  */
 export const presetConfigJson = (preset: Preset): string => {
-  const reviewer = roleEntry(preset.reviewer)
+  // The reviewers run against the implementor: the worker's family is their
+  // second choice, so a role of two makers starts and leaves the worker's.
+  const reviewer = roleEntry(preset.reviewer, preset.worker)
+  const lead = roleEntry(preset.reviewer)
   const worker = roleEntry(preset.worker)
   return `${JSON.stringify(
     {
       agents: { main: agentEntry(preset.orchestrator), delegate: agentEntry(preset.worker) },
       roles: {
-        planner: reviewer,
+        planner: lead,
         implementor: worker,
         codemod: worker,
         reviewer,
         "deep-reviewer": reviewer,
         verifier: worker,
-        "live-verifier": reviewer,
+        "live-verifier": lead,
       },
     },
     null,
@@ -246,10 +250,16 @@ export const presetConfigJson = (preset: Preset): string => {
   )}\n`
 }
 
-/** A resolved family slot as a config role of one choice. */
-const roleEntry = (slot: Slot) => {
-  if (slot.family === undefined) throw new Error(`${slot.modelId} names no model family`)
-  return { models: [{ ...slot.family, effort: slot.reasoningEffort }] }
+/** Resolved family slots as a config role, in order, each family once. */
+const roleEntry = (...slots: ReadonlyArray<Slot>) => {
+  const models: Array<{ provider: string; family: string; effort: string }> = []
+  for (const slot of slots) {
+    if (slot.family === undefined) throw new Error(`${slot.modelId} names no model family`)
+    const { provider, family } = slot.family
+    if (models.some((model) => model.family === family && model.provider === provider)) continue
+    models.push({ provider, family, effort: slot.reasoningEffort })
+  }
+  return { models }
 }
 
 /** A slot as a config `agents` entry: its model and effort. */

@@ -174,8 +174,14 @@ questions are decided below.
    `path` and `interactive`, so review visit 1 of a deep unit runs
    `deep-reviewer` and an interactive unit's verify runs `live-verifier`;
    the keep rule reads the thread's effort (`Threads.effort`), so a thread
-   at another effort is not kept. The light machine has no planner round,
-   so its units never switch.
+   at another effort is not kept. Review of a149b36c6, fixed: a round
+   records its config role (`RoundEnded.configRole`) and the cheapest rank
+   counts only that role's rounds; the planner's round message names the
+   exact reply values; gamut's reviewers list the worker's family second,
+   so `mixed` and `opus-luna` start; the light machine reaches the planner
+   by a `blocked` replan, so it switches too; visits count per run, so a
+   replan after the first review gets no deep review (kept: a rewrite
+   starts a new run). The quality report still groups by thread role.
 3. shipped machines (the planner reply's `path` and `interactive`, the light
    implementor's `codemod`) and docs move to roles; gamut `FAMILIES` onto the
    resolver; Sonnet out of the gamut presets, the router example, threads.md

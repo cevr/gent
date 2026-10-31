@@ -297,7 +297,8 @@ const PendingAction = Schema.TaggedUnion({
    * then, holding nothing. The marker stays after its deadline until a
    * permit is acquired and the dispatch commits. `fresh`: the round runs on
    * a new thread, as a usage limit's rerun does. `model`: the model the
-   * thread's session runs, read when it is admitted.
+   * thread's session runs, read when it is admitted. `configRole`: the
+   * config role the round ran, a state's switch or its thread role's own.
    */
   Round: {
     state: StateName,
@@ -307,6 +308,7 @@ const PendingAction = Schema.TaggedUnion({
     thread: Schema.optionalKey(SessionId),
     round: Schema.optionalKey(Schema.String),
     model: Schema.optionalKey(ModelId),
+    configRole: Schema.optionalKey(Schema.String),
     notBefore: Schema.optionalKey(Schema.Finite),
     fresh: Schema.optionalKey(Schema.Boolean),
   },
@@ -401,6 +403,8 @@ const MachineStep = Schema.TaggedUnion({
     verdict: Schema.optionalKey(Verdict),
     dead: Schema.Boolean,
     role: Schema.optionalKey(RoleName),
+    /** The config role the round ran; absent on a step from before switches: the thread role's own. */
+    configRole: Schema.optionalKey(Schema.String),
     model: Schema.optionalKey(ModelId),
     costUsd: Schema.optionalKey(Schema.Finite),
     tokens: Schema.optionalKey(RoundTokens),
@@ -2645,7 +2649,7 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
     ...action,
     thread,
     round,
-    ...omitUndefined({ model: Option.getOrUndefined(ran) }),
+    ...omitUndefined({ model: Option.getOrUndefined(ran), configRole: role.role }),
   })
   // A retry's or a rerun's thread is the round's own; a fresh state's
   // replaces the role's thread.
@@ -2742,11 +2746,23 @@ const addTally = (scope: Map<ModelId, UnitTally>, model: ModelId, spend: number,
   scope.set(model, tally)
 }
 
-/** How many rounds of `role` each model ran in `run`. */
-const roleRounds = (run: RankedRun, role: RoleName): ReadonlyMap<ModelId, number> => {
+/**
+ * What the rank counts: the rounds thread role `thread` ran in config role
+ * `config`. A round from before switches names no config role: it ran
+ * `own`, the thread role's own.
+ */
+interface RankKey {
+  readonly thread: RoleName
+  readonly config: string
+  readonly own: string
+}
+
+/** How many rounds of `key` each model ran in `run`. */
+const roleRounds = (run: RankedRun, key: RankKey): ReadonlyMap<ModelId, number> => {
   const byModel = new Map<ModelId, number>()
   for (const round of run.rounds) {
-    if (round.role !== role || Predicate.isUndefined(round.model)) continue
+    if (round.role !== key.thread || Predicate.isUndefined(round.model)) continue
+    if ((round.configRole ?? key.own) !== key.config) continue
     byModel.set(round.model, (byModel.get(round.model) ?? 0) + 1)
   }
   return byModel
@@ -2777,12 +2793,12 @@ interface RankScope {
 const unitScopes = (
   runs: ReadonlyArray<RankedRun>,
   here: { readonly project: string; readonly domain: Option.Option<string> },
-  role: RoleName,
+  key: RankKey,
   weightOf: (model: ModelId) => number,
 ): ReadonlyArray<RankScope> => {
   const scopes: ReadonlyArray<RankScope> = [0, 1, 2].map(() => ({ tallies: new Map(), ran: [] }))
   for (const [index, run] of runs.entries()) {
-    const byModel = roleRounds(run, role)
+    const byModel = roleRounds(run, key)
     if (byModel.size === 0) continue
     const inProject = Option.contains(run.project, here.project)
     const inDomain =
@@ -2829,10 +2845,10 @@ const efficientOrder = (
   listed: ReadonlyArray<ModelId>,
   runs: ReadonlyArray<RankedRun>,
   here: { readonly project: string; readonly domain: Option.Option<string> },
-  role: RoleName,
+  key: RankKey,
   weightOf: (model: ModelId) => number,
 ): ReadonlyArray<ModelId> => {
-  const scopes = unitScopes(runs, here, role, weightOf)
+  const scopes = unitScopes(runs, here, key, weightOf)
   const scoredIn = (model: ModelId) =>
     Option.firstSomeOf(
       scopes.map((scope) =>
@@ -2903,6 +2919,8 @@ const roleOrder = Effect.fn("Machines.roleOrder")(function* (
   name: RoleName,
   configRole: string,
   against: Option.Option<RoleName>,
+  /** The thread role's own config role, which a round from before switches ran. */
+  own: string,
 ) {
   const ctx = yield* ExtensionContext
   const resolved = yield* ctx.Accounts.role(run.cwd, configRole).pipe(
@@ -2950,7 +2968,7 @@ const roleOrder = Effect.fn("Machines.roleOrder")(function* (
     choices.map((choice) => choice.model),
     runs,
     here,
-    name,
+    { thread: name, config: configRole, own },
     (model) => weights.get(model) ?? 1,
   )
   return ranked.flatMap((model) =>
@@ -3047,7 +3065,8 @@ const rolePick = Effect.fn("Machines.rolePick")(function* (
     )
   }
   const threads = yield* threadsOf
-  const order = yield* roleOrder(run, name, role.role, Option.fromUndefinedOr(role.against))
+  const own = (yield* definitionOf(run)).threads[name]?.role ?? role.role
+  const order = yield* roleOrder(run, name, role.role, Option.fromUndefinedOr(role.against), own)
   const models = order.map((choice) => choice.model)
   const keptRun = yield* Option.match(kept, {
     onNone: () => Effect.succeedNone,
@@ -3106,6 +3125,7 @@ const roundBill = (
   )
   return omitUndefined({
     role,
+    configRole: action.configRole,
     model: action.model,
     costUsd: Option.getOrUndefined(costUsd),
     tokens: Option.getOrUndefined(tokens),

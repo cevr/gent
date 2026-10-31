@@ -360,6 +360,7 @@ const StepView = Schema.Struct({
   model: Schema.optionalKey(Schema.String),
   costUsd: Schema.optionalKey(Schema.Finite),
   role: Schema.optionalKey(Schema.String),
+  configRole: Schema.optionalKey(Schema.String),
   tokens: Schema.optionalKey(
     Schema.Struct({
       input: Schema.Finite,
@@ -2683,6 +2684,7 @@ const SeededRound = Schema.TaggedStruct("RoundEnded", {
   model: Schema.String,
   verdict: Schema.optionalKey(Schema.String),
   role: Schema.optionalKey(Schema.String),
+  configRole: Schema.optionalKey(Schema.String),
   costUsd: Schema.optionalKey(Schema.Finite),
   tokens: Schema.optionalKey(SeededTokens),
 })
@@ -2730,6 +2732,7 @@ const copyRun = (run: string, copy: string) =>
 interface EndedRun {
   readonly rounds: ReadonlyArray<{
     readonly role: string
+    readonly configRole?: string
     readonly model: ModelId
     readonly costUsd?: number
     readonly tokens?: typeof SeededTokens.Type
@@ -3188,7 +3191,11 @@ describe("a config role's round", () => {
         const { client } = yield* createRpcClient(
           home.layerFor(
             machineModels(models),
-            tieredAccount({ steady: [OPUS], quick: [{ model: OPUS, effort: "low" }] }),
+            tieredAccount({
+              steady: [OPUS],
+              quick: [{ model: OPUS, effort: "low" }],
+              other: [HAIKU],
+            }),
           ),
         )
         const owner = ownerOf(yield* client.session.create({}))
@@ -3204,7 +3211,11 @@ describe("a config role's round", () => {
               next: "work",
               maxVisits: 3,
               exhausted: "done",
-              switches: [{ role: "quick", when: "visit", is: "2" }],
+              // Both hold on visit 2: the first wins.
+              switches: [
+                { role: "quick", when: "visit", is: "2" },
+                { role: "other", when: "visit", is: "2" },
+              ],
             },
             done: { kind: "final" },
           },
@@ -3429,6 +3440,23 @@ describe("a config role's round", () => {
           [cached, { rounds: [{ role: "worker", model: OPUS, costUsd: 0.4 }] }],
         )
         expect(cheaper).toEqual([OPUS])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "ranks a role on its own config role's rounds, not a switch's on the same thread role",
+    () =>
+      Effect.gen(function* () {
+        const picks = yield* rankedPick(
+          [OPUS, HAIKU],
+          [
+            { rounds: [{ role: "worker", configRole: "efficient", model: OPUS, costUsd: 1 }] },
+            // Haiku ran only in another config role: its dear run says nothing of this one.
+            { rounds: [{ role: "worker", configRole: "deep", model: HAIKU, costUsd: 5 }] },
+          ],
+        )
+        expect(picks).toEqual([HAIKU])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
   )
@@ -4838,7 +4866,7 @@ describe("the shipped orchestrate machine", () => {
     "a deep unit's first review runs the deep reviewer, and an interactive unit's check the live verifier",
     () =>
       Effect.gen(function* () {
-        const { home, client, owner, run } = yield* unitRun(
+        const { home, models, client, owner, run } = yield* unitRun(
           { "review:1": "changes" },
           { extras: { "plan:1": { path: "deep", interactive: true } } },
         )
@@ -4856,6 +4884,10 @@ describe("the shipped orchestrate machine", () => {
           "verify→decide",
           "decide→dropped",
         ])
+        // The planner is told the exact values a switch reads.
+        expect(new Map(yield* Ref.get(models.texts)).get("plan:1")).toContain(
+          'path ("deep" or "standard") and interactive (true or false)',
+        )
         // Review 1 runs deep-reviewer, against the implementor (Luna, not Opus);
         // review 2 the reviewer (Sol); verify the live verifier (Opus).
         expect(roundsRan(steps).map((round) => round.model)).toEqual([
@@ -4865,6 +4897,17 @@ describe("the shipped orchestrate machine", () => {
           HAIKU,
           SOL,
           OPUS,
+        ])
+        // Each round keeps the config role it ran, which the cheapest rank reads.
+        expect(
+          steps.filter((step) => step._tag === "RoundEnded").map((step) => step.configRole),
+        ).toEqual([
+          "planner",
+          "implementor",
+          "deep-reviewer",
+          "implementor",
+          "reviewer",
+          "live-verifier",
         ])
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,

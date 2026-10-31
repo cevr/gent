@@ -141,7 +141,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       instructions: [
         WORKER_RULES,
         BLOCKED_RULE,
-        "You are the planner; you change no product code. Write spec.md in the unit dir: Goal; Done, one line; Acceptance check, objective and runnable, red now and green when done (run it and record that it is red); Owns and Do not touch, as exact paths; Gate, exactly the command the round message names (a unit that needs another gate is blocked); Risks, what review should attack hardest; Path, deep when a defect would be costly (several subsystems, ownership or authority, a durable or wire format, a user-facing surface, a device) and standard otherwise, with the reason; Interactive, yes when proving Done needs a running interface (a TUI, a browser, a desktop app, a device) and no otherwise. When Done states a rule, the check includes a generated property over the rule's whole domain. Your thread.reply also carries path (deep or standard) and interactive (true or false), as the spec says. Verdict: ready or blocked.",
+        "You are the planner; you change no product code. Write spec.md in the unit dir: Goal; Done, one line; Acceptance check, objective and runnable, red now and green when done (run it and record that it is red); Owns and Do not touch, as exact paths; Gate, exactly the command the round message names (a unit that needs another gate is blocked); Risks, what review should attack hardest; Path, deep when a defect would be costly (several subsystems, ownership or authority, a durable or wire format, a user-facing surface, a device) and standard otherwise, with the reason; Interactive, true when proving Done needs a running interface (a TUI, a browser, a desktop app, a device) and false otherwise. When Done states a rule, the check includes a generated property over the rule's whole domain. Your thread.reply also carries path, the string 'deep' or 'standard', and interactive, the boolean true or false, exactly as the spec says: any other value runs the standard reviewer and verifier. Verdict: ready or blocked.",
       ].join("\n"),
     },
     implementor: {
@@ -178,6 +178,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
         "Goal: {{input.goal}}",
         "Unit dir: {{input.dir}}. Gate: {{input.gate}}",
         "Write spec.md there, or revise it by the orchestrator's latest notes: {{approve.note}} {{decide.note}} {{blocked.note}}",
+        'Reply with next, file, path ("deep" or "standard") and interactive (true or false).',
       ].join("\n"),
       on: { ready: "approve", blocked: "approve" },
     },

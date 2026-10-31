@@ -41,10 +41,11 @@ at `max`, through an explicit child override. Other presets are explicit
 model comparisons. The `haiku` preset is the only one a live check may spend
 the owner's Anthropic accounts on.
 
-The orchestrate reviewer runs against the implementor's maker, and each
-preset role lists one family, so `machine.start` refuses an orchestrate run
-unless the preset's reviewer and worker come from different makers:
-`mixed` and `opus-luna` do.
+The orchestrate reviewers run against the implementor's maker and need
+choices of two makers, so they list the reviewer's family, then the
+worker's. `machine.start` refuses an orchestrate run unless the preset's
+reviewer and worker come from different makers: `mixed` and `opus-luna`
+do.
 
 The TUI takes from the caller only its terminal basics (`PATH`, `SHELL`,
 `USER`, `LOGNAME`, `TMPDIR`, `LANG`) and the proxy variables
@@ -72,8 +73,9 @@ Opus, Fable or Haiku release needs no edit here.
 `up` copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
 repo, installs it, writes the preset into `work/.gent/config.json` (agents `main` and
 `delegate`, and the model `roles` the shipped orchestrate machines name: the
-reviewer as `planner`, `reviewer`, `deep-reviewer` and `live-verifier`, the
-worker as `implementor`, `codemod` and `verifier`, each its family at its effort, which shadow the owner's roles
+reviewer as `planner` and `live-verifier`, the worker as `implementor`,
+`codemod` and `verifier`, and both, reviewer first, as `reviewer` and
+`deep-reviewer`, each its family at its effort, which shadow the owner's roles
 of those names) and the roster block in `work/AGENTS.md`, runs the root build of **this** checkout
 (turbo: the `gent-cell` worker, then the `gent` binary beside it in
 `apps/tui/`, under `bin/`), and
