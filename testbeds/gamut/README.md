@@ -35,11 +35,16 @@ remote, and a merge state fails with `No such remote 'origin'`. The owner's
 throwaway private repository for this is `cevr/gamut-ledgerline`; each run
 replaces its history.
 
-The `sol` preset and fixture use `openai/gpt-6.1-sol` at `high` for ordinary
+The `sol` preset uses the newest `openai/sol` release at `high` for ordinary
 work and review. Only repetitive mechanical tasks use `openai/gpt-6-luna`
 at `max`, through an explicit child override. Other presets are explicit
 model comparisons. The `haiku` preset is the only one a live check may spend
 the owner's Anthropic accounts on.
+
+The orchestrate reviewer runs against the implementor's maker, and each
+preset role lists one family, so `machine.start` refuses an orchestrate run
+unless the preset's reviewer and worker come from different makers. Today
+only `opus-luna` does.
 
 The TUI takes from the caller only its terminal basics (`PATH`, `SHELL`,
 `USER`, `LOGNAME`, `TMPDIR`, `LANG`) and the proxy variables
@@ -51,7 +56,7 @@ reaches a process argument. Run
 before `up` to send the run's Anthropic requests through the TeamClaude
 account pool rather than the owner's own account.
 
-A comparison preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
+Each preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
 `anthropic/sonnet`, `anthropic/fable`, `anthropic/haiku`), not releases. `up` and `list` resolve
 each family to its newest release in the models.dev catalog. Offline, they
 use the chat catalog body (`source = api.json`) in `model_catalog_snapshots`
@@ -64,8 +69,10 @@ Opus, Sonnet or Fable release needs no edit here.
 
 `up` copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
 repo, installs it, writes the preset into `work/.gent/config.json` (agents `main` and
-`delegate`, and machine `tiers`: the reviewer as `strongest`, the worker as
-`efficient`, which shadow the owner's tiers) and the roster block in `work/AGENTS.md`, runs the root build of **this** checkout
+`delegate`, and the model `roles` the shipped orchestrate machines name: the
+reviewer as `planner` and `reviewer`, the worker as `implementor`, `codemod`
+and `verifier`, each its family at its effort, which shadow the owner's roles
+of those names) and the roster block in `work/AGENTS.md`, runs the root build of **this** checkout
 (turbo: the `gent-cell` worker, then the `gent` binary beside it in
 `apps/tui/`, under `bin/`), and
 launches it on its own terminal host. The run is recorded in

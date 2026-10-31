@@ -5,6 +5,7 @@ import {
   BunGentPlatformLive,
   makeTempDirectoryScoped,
   testSqliteStorage,
+  UserConfig,
 } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import { runProcess } from "@gent/core/extensions/api"
@@ -114,6 +115,7 @@ describe("gamut model families", () => {
       for (const role of [resolved.orchestrator, resolved.worker, resolved.reviewer]) {
         expect(role.modelId, name).toMatch(/^(anthropic\/claude|openai\/gpt)-/)
         expect(role.reasoningEffort, name).not.toBe("")
+        expect(role.family?.family, name).toMatch(/^(claude|gpt)-[a-z]+$/)
       }
     }
   })
@@ -134,12 +136,35 @@ describe("gamut preset config", () => {
         Schema.Struct({ agents: Schema.Struct({ main: role, delegate: role }) }),
       ),
     )(presetConfigJson(ordinary))
-    expect(config.agents.main).toEqual({ model: "openai/gpt-6.1-sol", reasoningEffort: "high" })
+    expect(config.agents.main).toEqual({ model: "openai/gpt-6-sol", reasoningEffort: "high" })
     expect(config.agents.delegate).toEqual(config.agents.main)
-    expect(ordinary.reviewer).toEqual({ modelId: "openai/gpt-6.1-sol", reasoningEffort: "high" })
+    expect(ordinary.reviewer).toEqual({
+      modelId: "openai/gpt-6-sol",
+      reasoningEffort: "high",
+      family: { provider: "openai", family: "gpt-sol" },
+    })
+  })
+
+  test("every preset writes a config gent reads, with each role the shipped machines name", () => {
+    for (const [name, named] of Object.entries(PRESETS)) {
+      const config = Schema.decodeSync(Schema.fromJsonString(UserConfig))(
+        presetConfigJson(resolvePreset(named, catalog)),
+      )
+      expect(Object.keys(config.roles ?? {}).sort(), name).toEqual([
+        "codemod",
+        "implementor",
+        "planner",
+        "reviewer",
+        "verifier",
+      ])
+    }
+  })
+
+  test("an unresolved slot names no family, so it writes no config", () => {
+    expect(() => presetConfigJson(PRESETS["haiku"]!)).toThrow("names no model family")
   })
   // The exact bytes matter: this is the file gent reads from the work dir.
-  test("pins the orchestrator as agent main, the worker as agent delegate, and the machine tiers to the preset", () => {
+  test("pins the orchestrator as agent main, the worker as agent delegate, and the model roles to the preset", () => {
     expect(presetConfigJson(preset)).toBe(
       `{
   "agents": {
@@ -152,13 +177,52 @@ describe("gamut preset config", () => {
       "reasoningEffort": "max"
     }
   },
-  "tiers": {
-    "strongest": [
-      "anthropic/claude-opus-5-5"
-    ],
-    "efficient": [
-      "openai/gpt-6-luna"
-    ]
+  "roles": {
+    "planner": {
+      "models": [
+        {
+          "provider": "anthropic",
+          "family": "claude-opus",
+          "effort": "high"
+        }
+      ]
+    },
+    "implementor": {
+      "models": [
+        {
+          "provider": "openai",
+          "family": "gpt-luna",
+          "effort": "max"
+        }
+      ]
+    },
+    "codemod": {
+      "models": [
+        {
+          "provider": "openai",
+          "family": "gpt-luna",
+          "effort": "max"
+        }
+      ]
+    },
+    "reviewer": {
+      "models": [
+        {
+          "provider": "anthropic",
+          "family": "claude-opus",
+          "effort": "high"
+        }
+      ]
+    },
+    "verifier": {
+      "models": [
+        {
+          "provider": "openai",
+          "family": "gpt-luna",
+          "effort": "max"
+        }
+      ]
+    }
   }
 }
 `,

@@ -156,8 +156,18 @@ questions are decided below.
    (`MachineFault`: the owner is told) rather than going to `decide`; the
    shipped machines run the roles `planner`, `implementor` (`codemod` in
    the light machine), `reviewer` against `implementor`, and `verifier`;
-   `tiers` gone (a file that still sets it loads, the key ignored). 2b:
-   the per-visit role choice and the keep rule on model and effort.
+   `tiers` gone (a file that still sets it loads, the key ignored). Review
+   of e34d0a006, fixed: `against` reads the model of the other role's newest
+   round (`MachineStore.lastRoundModel`), not its thread's, so a retry or a
+   rerun on another model counts; a thread role that names `tier` is refused
+   at define and faults a stored run; the start check also refuses a role
+   that resolves one model twice and an `against` target of no known maker;
+   gamut writes `roles`, so only a preset whose reviewer and worker differ
+   in maker (`opus-luna`) can start an orchestrate run. Known limits: a pick
+   left with no choice faults the run, it does not ask the owner; before the
+   other role's first round, `against` drops nothing; the stored-run `tier`
+   fault has no test. 2b: the per-visit role choice and the keep rule on
+   model and effort (a kept thread runs at the effort it started with).
 3. shipped machines (the planner reply's `path` and `interactive`, the light
    implementor's `codemod`) and docs move to roles; gamut `FAMILIES` onto the
    resolver; Sonnet out of the gamut presets, the router example, threads.md

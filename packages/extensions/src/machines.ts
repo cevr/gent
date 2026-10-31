@@ -150,6 +150,8 @@ const ThreadRole = Schema.Struct({
   model: StartParams.fields.model,
   role: Schema.optionalKey(Schema.String),
   against: Schema.optionalKey(RoleName),
+  /** Read only to refuse it: config roles replaced the model tiers. */
+  tier: Schema.optionalKey(Schema.Json),
   effort: StartParams.fields.effort,
   account: StartParams.fields.account,
   instructions: Schema.optionalKey(Template),
@@ -658,6 +660,8 @@ const exhaustedCycleProblems = (
 const roleProblems = (definition: MachineDefinition): ReadonlyArray<string> =>
   Object.entries(definition.threads).flatMap(([name, role]) => {
     const problems: Array<string> = []
+    if (Predicate.isNotUndefined(role.tier))
+      problems.push(`${name}: names a tier; config roles replaced tiers, so name a role`)
     if (Predicate.isNotUndefined(role.role)) {
       if (Predicate.isNotUndefined(role.model)) problems.push(`${name}: names a model and a role`)
       if (Predicate.isNotUndefined(role.effort))
@@ -1015,6 +1019,15 @@ interface MachineStoreService {
     ReadonlyArray<{ readonly seq: number; readonly at: number; readonly step: MachineStep }>,
     MachineStorageError
   >
+  /**
+   * The model the newest round of `role` in `run` ran, as its `RoundEnded`
+   * step keeps it: the round under review, whichever thread (a retry's, a
+   * rerun's) ran it.
+   */
+  readonly lastRoundModel: (
+    run: RunId,
+    role: RoleName,
+  ) => Effect.Effect<Option.Option<ModelId>, MachineStorageError>
   /** The `Answered` step of one ask, once it was answered. */
   readonly answered: (
     run: RunId,
@@ -1262,6 +1275,23 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
               .toReversed()
           },
           Effect.mapError(storageError("Failed to read machine steps")),
+        ),
+        lastRoundModel: Effect.fn("MachineStore.lastRoundModel")(
+          function* (run, role) {
+            const rows = yield* sql`SELECT seq, at, step_json FROM machine_steps
+              WHERE run = ${run}
+                AND json_extract(step_json, '$._tag') = 'RoundEnded'
+                AND json_extract(step_json, '$.role') = ${role}
+                AND json_extract(step_json, '$.model') IS NOT NULL
+              ORDER BY seq DESC LIMIT 1`
+            const decoded = yield* decodeStepRows(rows)
+            return Option.flatMap(Option.fromUndefinedOr(decoded[0]), (row) => {
+              const step = row.step_json
+              if (step._tag !== "RoundEnded") return Option.none()
+              return Option.fromUndefinedOr(step.model)
+            })
+          },
+          Effect.mapError(storageError("Failed to read a role's last round")),
         ),
         answered: Effect.fn("MachineStore.answered")(
           function* (run, askId) {
@@ -2037,7 +2067,8 @@ const checkRemotes = Effect.fn("Machines.checkRemotes")(function* (
 
 /**
  * Each config role the definition's thread roles run is named in the config
- * of `cwd` and lists a model; a role `against` another lists models of two
+ * of `cwd` and lists a model, each once; a role `against` another lists
+ * models of two makers, and the role it is against only models of known
  * makers, so a pick can always leave the other role's maker out. A run
  * fails here at its start, not at a round that could never run.
  */
@@ -2061,11 +2092,35 @@ const checkRoles = Effect.fn("Machines.checkRoles")(function* (
         message: `${name} runs the role ${role.role}, whose families no listed model has`,
       })
     }
+    const models = resolved.value.choices.map((choice) => choice.model)
+    const twice = models.filter((model, index) => models.indexOf(model) !== index)
+    if (twice.length > 0) {
+      return yield* new MachineError({
+        message: `${name} runs the role ${role.role}, which resolves to ${twice.join(", ")} twice: only the first choice of a model runs`,
+      })
+    }
     if (Predicate.isUndefined(role.against)) continue
     const makers = new Set(resolved.value.choices.flatMap((choice) => Option.toArray(choice.maker)))
     if (makers.size < 2) {
       return yield* new MachineError({
         message: `${name} is against ${role.against}, so its role ${role.role} needs listed models of two makers; it has ${[...makers].join(", ") || "none of a known maker"}`,
+      })
+    }
+    // The role it is against must run models of known makers, or its first
+    // round would end with no maker to leave out.
+    const target = Option.fromUndefinedOr(definition.threads[role.against]?.role)
+    if (Option.isNone(target)) continue
+    const theirs = yield* ctx.Accounts.role(cwd, target.value).pipe(
+      Effect.mapError((error) => new MachineError({ message: error.message })),
+    )
+    const unknown = Option.match(theirs, {
+      onNone: () => [],
+      onSome: (found) =>
+        found.choices.filter((choice) => Option.isNone(choice.maker)).map((choice) => choice.model),
+    })
+    if (unknown.length > 0) {
+      return yield* new MachineError({
+        message: `${name} is against ${role.against}, whose role ${target.value} runs ${unknown.join(", ")}, of no maker the catalog names`,
       })
     }
   }
@@ -2730,16 +2785,18 @@ const efficientOrder = (
 }
 
 /**
- * The maker of the model the thread of role `against` runs in `run`; none
- * while that role has no thread. Fails when the catalog names no maker for
- * that model: no choice could be shown to be another maker's.
+ * The maker of the model the newest round of role `against` ran in
+ * `run` (`lastRoundModel`): the round under review, on whichever thread it
+ * ran. None while that role has run no round, so a graph that reviews
+ * before it implements leaves nothing out. Fails when the catalog names no
+ * maker for that model: no choice could be shown to be another maker's.
  */
 const againstMaker = Effect.fn("Machines.againstMaker")(function* (run: Run, against: RoleName) {
-  const thread = Option.fromUndefinedOr(run.roles[against])
-  if (Option.isNone(thread)) return Option.none<string>()
-  const threads = yield* threadsOf
+  const store = yield* MachineStore
   const ctx = yield* ExtensionContext
-  const model = yield* threads.model(thread.value).pipe(Effect.mapError(threadFault))
+  const model = yield* store
+    .lastRoundModel(run.run, against)
+    .pipe(Effect.mapError((error) => new MachineFault({ message: error.message })))
   if (Option.isNone(model)) return Option.none<string>()
   const maker = yield* ctx.Accounts.maker(run.cwd, model.value).pipe(
     Effect.mapError((error) => new MachineFault({ message: error.message })),
@@ -2893,6 +2950,11 @@ const rolePick = Effect.fn("Machines.rolePick")(function* (
   role: ThreadRole,
   kept: Option.Option<SessionId>,
 ) {
+  if (Predicate.isNotUndefined(role.tier)) {
+    return yield* new MachineFault({
+      message: `${name} names a tier, which config roles replaced: start the run again from a definition that names a role`,
+    })
+  }
   if (Predicate.isUndefined(role.role)) {
     return Result.succeed(
       Option.none<{

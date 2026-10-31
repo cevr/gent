@@ -60,10 +60,15 @@ const BINARY = join(CHECKOUT, "apps/tui/bin/gent")
 
 // ── Presets ─────────────────────────────────────────────────────────────
 
-/** One model choice: which model, at which reasoning effort. */
+/**
+ * One model choice: which model, at which reasoning effort. A resolved family
+ * slot also keeps its catalog family (`claude-opus`) and the driver that
+ * serves it, the shape of a config role choice.
+ */
 interface Slot {
   readonly modelId: string
   readonly reasoningEffort: string
+  readonly family?: { readonly provider: string; readonly family: string }
 }
 
 /**
@@ -90,32 +95,47 @@ const slot = (modelId: string, reasoningEffort: string): Slot => ({ modelId, rea
  * (`claude-opus-4-5-20251101`, `claude-sonnet-4-20250514`) and a variant
  * (`gpt-6-sol-pro`) do not match.
  */
-const FAMILIES: Record<string, { readonly provider: string; readonly pattern: RegExp }> = {
-  "openai/sol": { provider: "openai", pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-sol$/ },
-  "openai/luna": { provider: "openai", pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-luna$/ },
+const FAMILIES: Record<
+  string,
+  { readonly provider: string; readonly family: string; readonly pattern: RegExp }
+> = {
+  "openai/sol": {
+    provider: "openai",
+    family: "gpt-sol",
+    pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-sol$/,
+  },
+  "openai/luna": {
+    provider: "openai",
+    family: "gpt-luna",
+    pattern: /^gpt-(?<version>\d+(?:\.\d+)*)-luna$/,
+  },
   "anthropic/opus": {
     provider: "anthropic",
+    family: "claude-opus",
     pattern: /^claude-opus-(?<version>\d+(?:-\d{1,2})?)$/,
   },
   "anthropic/sonnet": {
     provider: "anthropic",
+    family: "claude-sonnet",
     pattern: /^claude-sonnet-(?<version>\d+(?:-\d{1,2})?)$/,
   },
   "anthropic/fable": {
     provider: "anthropic",
+    family: "claude-fable",
     pattern: /^claude-fable-(?<version>\d+(?:-\d{1,2})?)$/,
   },
   "anthropic/haiku": {
     provider: "anthropic",
+    family: "claude-haiku",
     pattern: /^claude-haiku-(?<version>\d+(?:-\d{1,2})?)$/,
   },
 }
 
 export const PRESETS: Record<string, Preset> = {
   sol: {
-    orchestrator: slot("openai/gpt-6.1-sol", "high"),
-    worker: slot("openai/gpt-6.1-sol", "high"),
-    reviewer: slot("openai/gpt-6.1-sol", "high"),
+    orchestrator: slot("openai/sol", "high"),
+    worker: slot("openai/sol", "high"),
+    reviewer: slot("openai/sol", "high"),
   },
   "sol-luna": {
     orchestrator: slot("openai/sol", "medium"),
@@ -201,7 +221,11 @@ export const resolvePreset = (
     if (newest === undefined) {
       throw new Error(`no ${role.modelId} release in the models.dev catalog`)
     }
-    return { ...role, modelId: newest }
+    return {
+      ...role,
+      modelId: newest,
+      family: { provider: entry.provider, family: entry.family },
+    }
   }
   return {
     orchestrator: resolveSlot(preset.orchestrator),
@@ -266,20 +290,38 @@ const loadCatalog = async (): Promise<Record<string, ReadonlyArray<string>>> => 
 // ── Pure transforms ─────────────────────────────────────────────────────
 
 /**
- * `.gent/config.json` for a preset: the orchestrator as agent `main`, the
- * worker as agent `delegate`. The machine tiers name the reviewer as
- * `strongest` and the worker as `efficient`; a project list shadows the
- * owner's, so a run never reaches a model outside its preset.
+ * `.gent/config.json` for a resolved preset: the orchestrator as agent
+ * `main`, the worker as agent `delegate`, and the model roles the shipped
+ * orchestrate machines name: the reviewer slot as `planner` and `reviewer`,
+ * the worker slot as `implementor`, `codemod` and `verifier`. A project role
+ * shadows the owner's of its name, so a run never reaches a model outside its
+ * preset. The reviewer runs against the implementor's maker, so a preset
+ * whose reviewer and worker share a maker cannot start an orchestrate run.
  */
-export const presetConfigJson = (preset: Preset): string =>
-  `${JSON.stringify(
+export const presetConfigJson = (preset: Preset): string => {
+  const reviewer = roleEntry(preset.reviewer)
+  const worker = roleEntry(preset.worker)
+  return `${JSON.stringify(
     {
       agents: { main: agentEntry(preset.orchestrator), delegate: agentEntry(preset.worker) },
-      tiers: { strongest: [preset.reviewer.modelId], efficient: [preset.worker.modelId] },
+      roles: {
+        planner: reviewer,
+        implementor: worker,
+        codemod: worker,
+        reviewer,
+        verifier: worker,
+      },
     },
     null,
     2,
   )}\n`
+}
+
+/** A resolved family slot as a config role of one choice. */
+const roleEntry = (slot: Slot) => {
+  if (slot.family === undefined) throw new Error(`${slot.modelId} names no model family`)
+  return { models: [{ ...slot.family, effort: slot.reasoningEffort }] }
+}
 
 /** A slot as a config `agents` entry: its model and effort. */
 const agentEntry = (slot: Slot) => ({ model: slot.modelId, reasoningEffort: slot.reasoningEffort })

@@ -2840,6 +2840,57 @@ const askAt = (client: Client, owner: SessionKey, count: number) =>
       decodeAsk(ofType(snapshot.messages, MACHINE_ASK_TYPE)[count - 1]?.metadata?.details),
   )
 
+/** A model of no maker the catalog names: no canonical id, alone in its family. */
+const MYSTERY = ModelId.make("anthropic/claude-mystery-1")
+
+/** Opus and Sol with their makers, the mystery model, and the owner's model. */
+const MAKERS = [
+  Model.make({ ...anthropicModel(OPUS, { input: 5, output: 25 }), maker: "anthropic" }),
+  Model.make({
+    id: SOL,
+    name: SOL,
+    provider: ProviderId.make("openai"),
+    family: familyOf(SOL),
+    maker: "openai",
+    contextLength: 200_000,
+    pricing: { input: 2, output: 8 },
+  }),
+  anthropicModel(MYSTERY, { input: 1, output: 5 }),
+  Model.make({ ...anthropicModel(TEST_MODEL_ID, { input: 3, output: 15 }), family: "owner" }),
+]
+
+/** A `maker` round, then a round of config role `judge` against it. */
+const makerJudge = (name: string, judge = "judge") => ({
+  name,
+  threads: { maker: { role: "maker" }, judge: { role: judge, against: "maker" } },
+  start: "make",
+  states: {
+    make: { kind: "thread", thread: "maker", say: "make", next: "judge" },
+    judge: { kind: "thread", thread: "judge", say: "judge", next: "done" },
+    done: { kind: "final" },
+  },
+})
+
+/** Defines `definition`, then starts it: the start's failure text. */
+const refusedStart = (
+  client: Client,
+  owner: SessionKey,
+  definition: ReturnType<typeof makerJudge>,
+) =>
+  Effect.gen(function* () {
+    const [defined] = yield* call(client, owner, [
+      ["machine.define", `define-${definition.name}`, { definition }],
+    ])
+    expect(defined?.failed).toBe(false)
+    const [started] = yield* call(client, owner, [
+      ["machine.start", `start-${definition.name}`, { machine: definition.name }],
+    ])
+    expect(started?.failed).toBe(true)
+    return encodeJson(started?.result)
+  })
+
+const runIds = Effect.flatMap(SqlClient.SqlClient, (sql) => sql`SELECT run FROM machine_runs`)
+
 describe("a config role's round", () => {
   it.live("a definition whose roles conflict is refused, each reason named", () =>
     Effect.gen(function* () {
@@ -2857,6 +2908,7 @@ describe("a config role's round", () => {
           bare: { role: "reviewer", against: "plain" },
           self: { role: "reviewer", against: "self" },
           loose: { against: "pinned" },
+          tiered: { tier: "strongest" },
         },
         start: "work",
         states: {
@@ -2875,6 +2927,7 @@ describe("a config role's round", () => {
       expect(text).toContain("bare: is against plain, which names no role")
       expect(text).toContain("self: is against itself")
       expect(text).toContain("loose: names against with no role")
+      expect(text).toContain("tiered: names a tier; config roles replaced tiers, so name a role")
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 
@@ -2893,39 +2946,125 @@ describe("a config role's round", () => {
           ),
         )
         const owner = ownerOf(yield* client.session.create({}))
-        const pair = (name: string, judge: string) => ({
-          name,
-          threads: { maker: { role: "maker" }, judge: { role: judge, against: "maker" } },
-          start: "make",
-          states: {
-            make: { kind: "thread", thread: "maker", say: "make", next: "judge" },
-            judge: { kind: "thread", thread: "judge", say: "judge", next: "done" },
-            done: { kind: "final" },
-          },
-        })
-        const startOf = (definition: ReturnType<typeof pair>) =>
-          Effect.gen(function* () {
-            const [defined] = yield* call(client, owner, [
-              ["machine.define", `define-${definition.name}`, { definition }],
-            ])
-            expect(defined?.failed).toBe(false)
-            const [started] = yield* call(client, owner, [
-              ["machine.start", `start-${definition.name}`, { machine: definition.name }],
-            ])
-            expect(started?.failed).toBe(true)
-            return encodeJson(started?.result)
-          })
-        expect(yield* startOf(pair("unnamed", "missing"))).toContain(
+        expect(yield* refusedStart(client, owner, makerJudge("unnamed", "missing"))).toContain(
           "judge runs the role missing, which config roles does not name",
         )
-        expect(yield* startOf(pair("one-maker", "judge"))).toContain(
+        expect(yield* refusedStart(client, owner, makerJudge("one-maker"))).toContain(
           "judge is against maker, so its role judge needs listed models of two makers; it has anthropic",
         )
-        const runs = yield* home.sql(
-          Effect.flatMap(SqlClient.SqlClient, (sql) => sql`SELECT run FROM machine_runs`),
-        )
-        expect(runs).toEqual([])
+        expect(yield* home.sql(runIds)).toEqual([])
       }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live(
+    "a start fails when a role resolves one model twice, or is against a role of no known maker",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(
+            machineModels(models),
+            tieredAccount({ maker: [MYSTERY], judge: [OPUS, SOL], twice: [OPUS, OPUS] }, MAKERS),
+          ),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        expect(yield* refusedStart(client, owner, makerJudge("doubled", "twice"))).toContain(
+          `judge runs the role twice, which resolves to ${OPUS} twice`,
+        )
+        expect(yield* refusedStart(client, owner, makerJudge("unknown-maker"))).toContain(
+          `judge is against maker, whose role maker runs ${MYSTERY}, of no maker the catalog names`,
+        )
+        expect(yield* home.sql(runIds)).toEqual([])
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live("a role against another runs no choice of no known maker", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels((round) =>
+        Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+      )
+      const { client } = yield* createRpcClient(
+        home.layerFor(
+          machineModels(models),
+          tieredAccount({ maker: [OPUS], judge: [MYSTERY, OPUS, SOL] }, MAKERS),
+        ),
+      )
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRunOn(client, owner, makerJudge("mystery-judge"), "mystery-judge")
+      yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+      // The judge leaves Opus, the maker's, and the model no maker is known for.
+      const steps = yield* home.sql(stepsOf(run))
+      expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS, SOL])
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("20 seconds")),
+  )
+
+  it.live(
+    "a role against another leaves the maker of that role's last round, run on a rerun's thread",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+        const makes = yield* Ref.make(0)
+        const models = yield* makeModels(
+          (round) =>
+            Effect.gen(function* () {
+              if (round.state !== "make") return billed(`${round.state} ${round.visit} done`)
+              const count = yield* Ref.updateAndGet(makes, (value) => value + 1)
+              // The first maker, on Opus, dies at a usage limit.
+              if (count === 1) return usageLimited()
+              return billed("made")
+            }),
+          quotaOwner(readings),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(
+            machineModels(models),
+            tieredAccount({ maker: [OPUS, SOL], judge: [SOL, OPUS] }),
+          ),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const definition = {
+          name: "maker-judge",
+          threads: { maker: { role: "maker" }, judge: { role: "judge", against: "maker" } },
+          start: "make",
+          states: {
+            make: { kind: "thread", thread: "maker", say: "STATE make {{visit}}", next: "gate" },
+            gate: { kind: "ask", ask: "Judge?", on: { go: "judge", end: "done" } },
+            judge: { kind: "thread", thread: "judge", say: "STATE judge {{visit}}", next: "done" },
+            done: { kind: "final" },
+          },
+        }
+        const run = yield* startRunOn(client, owner, definition, "maker-judge")
+        const steps = yield* waitFor(
+          home.sql(stepsOf(run)),
+          (found) => waitsOf(found).length === 1,
+          10_000,
+          "the maker waits for the limit's reset",
+        )
+        const until = waitsOf(steps)[0]?.until ?? 0
+        // Opus stays spent past the reset: the rerun runs Sol, on a thread of its own.
+        yield* Ref.set(readings, [modelSpentUntil(OPUS, until + HOUR)])
+        yield* callOn(client, owner, [["machine.list", "list-spent", {}]])
+        yield* advanceUntil(Ref.get(makes), (count) => count >= 2, {
+          label: "the maker's rerun ran",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
+        const ask = yield* askAt(client, owner, 1)
+        // Opus frees; the judge leaves Sol, the maker of the round it judges.
+        yield* TestClock.adjust(HOUR + 60_000)
+        yield* callOn(client, owner, [
+          ["machine.answer", "judge-go", { run, askId: ask.askId, choice: "go" }],
+        ])
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        const ended = yield* home.sql(stepsOf(run))
+        expect(roundsRan(ended).map((round) => round.model)).toEqual([OPUS, SOL, OPUS])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
   )
 
   it.live(
