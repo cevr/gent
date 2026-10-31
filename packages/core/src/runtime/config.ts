@@ -169,7 +169,9 @@ const ModelTiersConfig = Schema.Struct({
 
 /**
  * One choice of a model role: the newest model `provider` lists of the
- * catalog `family` (`claude-opus`, `gpt-luna`), at `effort`. A family names
+ * catalog `family` (`claude-opus`, `gpt-luna`), at `effort`. `provider` is
+ * the driver id a model id starts with (`cloudflare`, not its catalog's
+ * `cloudflare-workers-ai`). A family names
  * no release, so a new one takes over when the catalog lists it.
  */
 const ModelRoleChoice = Schema.Struct({

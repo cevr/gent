@@ -388,6 +388,14 @@ describe("model families", () => {
     expect(newest("anthropic", "claude-opus")).toEqual(Option.some("anthropic/claude-opus-4-5"))
     expect(newest("opencode", "claude-opus")).toEqual(Option.some("opencode/claude-opus-5"))
     expect(newest("anthropic", "gpt-sol")).toEqual(Option.none())
+    // A snapshot dated with dashes loses the tie too.
+    const dashed = [
+      model("openai/gpt-6-sol-2026-09-22", { family: "gpt-sol", releaseDate: "2026-09-22" }),
+      model("openai/gpt-6-sol", { family: "gpt-sol", releaseDate: "2026-09-22" }),
+    ]
+    expect(
+      Option.map(newestOfFamily(dashed, "openai", "gpt-sol"), (found) => String(found.id)),
+    ).toEqual(Option.some("openai/gpt-6-sol"))
   })
 
   test("a model's maker is its own, else its family's, else unknown", () => {
@@ -408,5 +416,16 @@ describe("model families", () => {
     expect(maker(2)).toEqual(Option.some("openai"))
     expect(maker(5)).toEqual(Option.none())
     expect(maker(6)).toEqual(Option.none())
+  })
+
+  test("a family two makers name gives the one most of its models name; a model's own wins", () => {
+    const models = [
+      model("a/llama-1", { family: "llama", maker: "meta" }),
+      model("b/llama-2", { family: "llama", maker: "meta" }),
+      model("c/llama-tune", { family: "llama", maker: "tuner" }),
+      model("d/llama-old", { family: "llama" }),
+    ]
+    expect(makerOf(models, models[3]!)).toEqual(Option.some("meta"))
+    expect(makerOf(models, models[2]!)).toEqual(Option.some("tuner"))
   })
 })

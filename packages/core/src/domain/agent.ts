@@ -266,8 +266,8 @@ export const byReleaseDateDesc = (models: readonly Model[]): readonly Model[] =>
     return 1
   })
 
-/** A dated snapshot's id ends in its date: `claude-opus-4-5-20251101`. */
-const DATED_SNAPSHOT = /-\d{8}$/
+/** A dated snapshot's id ends in its date: `-20251101` or `-2025-11-01`. */
+const DATED_SNAPSHOT = /-(\d{8}|\d{4}-\d{2}-\d{2})$/
 
 /**
  * The newest chat model `provider` lists whose catalog family is `family`,

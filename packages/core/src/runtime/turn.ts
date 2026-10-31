@@ -1916,14 +1916,16 @@ export const makeExtensionAccounts = Effect.gen(function* () {
         )
       }),
     )
-  /** The models the profile of `cwd` lists, newest release first. */
-  const listedModels = (cwd: string, operation: string) =>
+  /** `read` of the model registry, under the profile of `cwd`. */
+  const inProfile = <A>(
+    cwd: string,
+    operation: string,
+    read: Effect.Effect<A, ProviderAuthError, ExtensionRegistry>,
+  ) =>
     Effect.scoped(
       Effect.gen(function* () {
         const { registryService } = yield* profiles.resolve(cwd)
-        return yield* modelRegistry.list.pipe(
-          Effect.provideService(ExtensionRegistry, registryService),
-        )
+        return yield* read.pipe(Effect.provideService(ExtensionRegistry, registryService))
       }),
     ).pipe(
       Effect.mapError(
@@ -1955,9 +1957,13 @@ export const makeExtensionAccounts = Effect.gen(function* () {
     }),
     role: Effect.fn("ExtensionAccounts.role")(function* (cwd: string, name: string) {
       const { roles } = yield* configService.get(cwd)
-      const role = Option.fromUndefinedOr(roles?.[name])
+      // Own keys only: `constructor` names no role.
+      const role = Option.fromUndefinedOr(roles).pipe(
+        Option.filter((all) => Object.hasOwn(all, name)),
+        Option.flatMap((all) => Option.fromUndefinedOr(all[name])),
+      )
       if (Option.isNone(role)) return Option.none<ModelRole>()
-      const models = yield* listedModels(cwd, "role")
+      const models = yield* inProfile(cwd, "role", modelRegistry.list)
       const choices: Array<ModelRole["choices"][number]> = []
       const unresolved: Array<ModelRole["unresolved"][number]> = []
       for (const choice of role.value.models) {
@@ -1975,11 +1981,10 @@ export const makeExtensionAccounts = Effect.gen(function* () {
       return Option.some({ choices, unresolved, rank: Option.fromUndefinedOr(role.value.rank) })
     }),
     maker: Effect.fn("ExtensionAccounts.maker")(function* (cwd: string, model: ModelIdType) {
-      const models = yield* listedModels(cwd, "maker")
-      return Option.flatMap(
-        Option.fromUndefinedOr(models.find((each) => each.id === model)),
-        (found) => makerOf(models, found),
-      )
+      // An alias reads the model it stands for, as its dispatch does.
+      const found = yield* inProfile(cwd, "maker", modelRegistry.get(model))
+      const models = yield* inProfile(cwd, "maker", modelRegistry.list)
+      return Option.flatMap(found, (current) => makerOf(models, current))
     }),
     project: (cwd) => configService.project(cwd),
     awaitLane: (message) => placement.awaitLane(message),

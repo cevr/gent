@@ -2903,9 +2903,13 @@ describe("chat aliases", () => {
 
 describe("model roles", () => {
   /** A driver that lists the catalog's models of its own provider. */
-  const catalogDriver = (id: string): ModelDriverContribution => ({
+  const catalogDriver = (
+    id: string,
+    aliases: Readonly<Record<string, string>> = {},
+  ): ModelDriverContribution => ({
     id,
     name: id,
+    aliases,
     listModels: (catalog) =>
       Effect.succeed(
         Option.match(catalog.provider(id), {
@@ -2923,7 +2927,10 @@ describe("model roles", () => {
         id: "@test/roles",
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
-          yield* host.register("modelDriver", catalogDriver("anthropic"))
+          yield* host.register(
+            "modelDriver",
+            catalogDriver("anthropic", { "claude-old": "claude-opus-4-5-20251101" }),
+          )
           yield* host.register("modelDriver", catalogDriver("openai"))
           yield* host.register(
             "tool",
@@ -2941,7 +2948,12 @@ describe("model roles", () => {
                   ModelId.make("anthropic/claude-opus-4-5-20251101"),
                 )
                 const unlisted = yield* ctx.Accounts.maker(ctx.cwd, ModelId.make("anthropic/none"))
-                yield* Ref.set(answers, [role, absent, dated, unlisted])
+                const alias = yield* ctx.Accounts.maker(
+                  ctx.cwd,
+                  ModelId.make("anthropic/claude-old"),
+                )
+                const inherited = yield* ctx.Accounts.role(ctx.cwd, "constructor")
+                yield* Ref.set(answers, [role, absent, dated, unlisted, alias, inherited])
                 return {}
               }),
             }),
@@ -2967,6 +2979,7 @@ describe("model roles", () => {
                   { provider: "anthropic", family: "claude-opus", effort: "max" },
                   { provider: "anthropic", family: "claude-nothing", effort: "low" },
                 ],
+                rank: "cheapest",
               },
             },
           }),
@@ -2981,7 +2994,7 @@ describe("model roles", () => {
       yield* client.message.send({ sessionId, branchId, content: "roles" })
       yield* Fiber.join(turn)
       yield* controls.assertDone
-      const [role, absent, dated, unlisted] = yield* Ref.get(answers)
+      const [role, absent, dated, unlisted, alias, inherited] = yield* Ref.get(answers)
       expect(role).toEqual(
         Option.some({
           choices: [
@@ -2989,13 +3002,17 @@ describe("model roles", () => {
             { model: "anthropic/claude-opus-5-5", effort: "max", maker: Option.some("anthropic") },
           ],
           unresolved: [{ provider: "anthropic", family: "claude-nothing" }],
-          rank: Option.none(),
+          rank: Option.some("cheapest"),
         }),
       )
       expect(absent).toEqual(Option.none())
       // A dated snapshot names no maker; its family's other models do.
       expect(dated).toEqual(Option.some("anthropic"))
       expect(unlisted).toEqual(Option.none())
+      // An alias reads the model it stands for.
+      expect(alias).toEqual(Option.some("anthropic"))
+      // Only the config's own keys name a role.
+      expect(inherited).toEqual(Option.none())
     }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
   )
 })
@@ -4090,6 +4107,16 @@ describe("models.dev catalog source", () => {
       ).toEqual([Option.some("openai"), Option.none(), Option.none(), Option.none()])
       expect(catalog.providerIds).toEqual(["openai"])
       expect(Option.isNone(catalog.provider("absent"))).toBe(true)
+    }),
+  )
+
+  it.effect("a model's maker is its canonical id's first segment, when the id has one", () =>
+    Effect.sync(() => {
+      const maker = (canonicalId: string) =>
+        Option.fromUndefinedOr(modelFromCatalog("x", { id: "m", name: "m", canonicalId }).maker)
+      expect(maker("lab/model")).toEqual(Option.some("lab"))
+      expect(maker("no-slash")).toEqual(Option.none())
+      expect(maker("/model")).toEqual(Option.none())
     }),
   )
 

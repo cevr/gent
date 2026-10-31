@@ -134,7 +134,10 @@ questions are decided below.
   a maker, `o`, `o-mini` and `o-pro` among them (`openai`); a model with
   neither has no maker, and an `against` pick drops it, since it cannot be
   shown to be another maker. The first-segment rule of the family name is
-  gone.
+  gone. Known limit (review of 3e96214c3): the fallback reads the models
+  the profile lists, not the whole catalog, so with few providers signed in
+  a family whose listed models carry no canonical id has no maker; the
+  113-of-150 count is the whole catalog's.
 
 ## Commits (planned)
 
