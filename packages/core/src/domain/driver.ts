@@ -810,8 +810,9 @@ export const ProviderLanes = Schema.Struct({
    */
   capacity: Schema.optionalKey(Schema.Int),
   /**
-   * The runs that hold a lane on the scope's accounts now: turns open on
-   * them, and starts admitted whose turn has not opened yet. Each counts at
+   * The runs that hold a lane on the scope's accounts now: turns a start
+   * was admitted to, and starts admitted whose turn has not opened yet; the
+   * owner's own turns are no load. Each counts at
    * its model's share of a mean run (its fuel per hour at its quota weight),
    * so a cheap model's run holds part of a lane.
    */

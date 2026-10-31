@@ -9578,7 +9578,7 @@ describe("a virtual model no router serves", () => {
   )
 
   it.scopedLive(
-    "the auth gate and the turn's lane take the model the branch last ran on, not the default",
+    "the auth gate takes the model the branch last ran on, not the default",
     () =>
       Effect.gen(function* () {
         const dbPath = `${yield* makeTempDirectoryScoped("gent-router-gone-")}/gent.db`
@@ -9588,12 +9588,12 @@ describe("a virtual model no router serves", () => {
           ids: ["served", "other"],
         })
         const resetAt = 1_800_000_000_000
-        const { layer, controls } = yield* LanguageModelLayers.sequence([
+        const { layer } = yield* LanguageModelLayers.sequence([
           {
             ...textStep("on other"),
             quota: [{ window: "5h", utilization: 0.25, resetAt, rejected: false }],
           },
-          { ...textStep("still on other"), gated: true },
+          textStep("still on other"),
         ])
         const { client } = yield* processOn(dbPath, layer, [
           driversOnly(layer, ["served", "other"]),
@@ -9608,15 +9608,7 @@ describe("a virtual model no router serves", () => {
         const afterTurns = yield* recordBranchEvents(client, run)
         yield* client.message.send({ ...run, content: "second" })
         yield* afterTurns(2)
-        const loadOn = (provider: string) =>
-          Effect.map(client.accounts.lanes(), ({ providers: lanes }) =>
-            lanes.filter((each) => each.provider === provider).map((each) => each.load),
-          )
-        expect(yield* loadOn("other")).toEqual([0])
         yield* client.message.send({ ...run, content: "third" })
-        yield* controls.waitForCall(1)
-        expect(yield* loadOn("other")).toEqual([1])
-        yield* controls.emitAll(1)
         expect(stepModels(yield* afterTurns(3))).toEqual([OTHER_STRONG, OTHER_STRONG, OTHER_STRONG])
       }).pipe(Effect.timeout("20 seconds")),
     25_000,

@@ -27,7 +27,7 @@ import {
   Struct,
 } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
-import { ModelCatalogSnapshotStorage } from "../storage/storage.js"
+import { ModelCatalogSnapshotStorage, type TurnLane } from "../storage/storage.js"
 import { type ExtensionModelsService, ExtensionServiceError } from "../domain/extension.js"
 import {
   AgentName,
@@ -3993,11 +3993,12 @@ interface CredentialPlacementService {
   readonly sabbathStop: (sessionId: SessionId) => Effect.Effect<Option.Option<number>>
   /**
    * The session's turn opened on `provider`: it holds a lane until it ends,
-   * and the start admitted under `key` no longer does. Answers the Sabbath
-   * its lane keeps (`sabbathStop`): its grant's, its session's open lane's,
-   * or the one it resumed with.
+   * and the start admitted under `key` no longer does. Answers the admitted
+   * lane it opened on, with the Sabbath it keeps (`sabbathStop`): its
+   * grant's, its session's open lane's, or the one it resumed with; none
+   * for a turn no start admitted, the owner's own, which no admission counts.
    */
-  readonly openLane: (lane: OpenLane) => Effect.Effect<Option.Option<Sabbath>>
+  readonly openLane: (lane: OpenLane) => Effect.Effect<Option.Option<TurnLane>>
   /**
    * The start admitted or queued under `key` opens no turn of its own: its
    * message joined a turn that holds its session's lane already, its
@@ -4087,11 +4088,11 @@ interface OpenLane {
   /** The model its turns run: it counts against that model's own windows too. */
   readonly model: ModelId
   /**
-   * The Sabbath of the admitted lane this turn opened on before a restart,
-   * as its turn record keeps it: it holds again when no grant and no open
-   * lane of the session name one.
+   * The admitted lane this turn opened on before a restart, as its turn
+   * record keeps it: the turn counts as an admitted run again, and its
+   * Sabbath holds when no grant and no open lane of the session name one.
    */
-  readonly resumed: Option.Option<Sabbath>
+  readonly resumed: Option.Option<TurnLane>
 }
 
 /** The quota windows one response named, on the account its request went out on. */
@@ -5152,6 +5153,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly starter: Option.Option<SessionId>
       /** The admitted start's Sabbath: its turn stops at a step's start in one (`sabbathStop`). */
       readonly sabbath: Option.Option<Sabbath>
+      /**
+       * A start was admitted to it (a grant opened it, or it resumed an
+       * admitted turn): only such a run is load. The owner's own turn
+       * spends what the readings show, and never takes a run's place.
+       */
+      readonly admitted: boolean
       readonly openedAt: number
       readonly fuel: Option.Option<number>
     }
@@ -5239,7 +5246,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   ) => {
     let load = 0
     for (const [sessionId, held] of running)
-      if (held.provider === provider && !Option.contains(asker, sessionId) && counts(held))
+      if (
+        held.admitted &&
+        held.provider === provider &&
+        !Option.contains(asker, sessionId) &&
+        counts(held)
+      )
         load += size(held.model)
     for (const held of reserved.values())
       if (held.provider === provider && reserving(held, now) && counts(held))
@@ -6248,6 +6260,27 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       reason: "sabbath",
     })
   /**
+   * Whether `request` starts alone: no admitted run holds a lane on an
+   * account of its scope (the asker's own turn left out), and an account of
+   * the scope can serve its model now, held by no refusal and no rejected
+   * window. Such a start is admitted whatever the pace says; a scope whose
+   * every account is held is spent.
+   */
+  const loneStart = (
+    request: Omit<LaneRequest, "key">,
+    scope: ReadonlyArray<CredentialSlot>,
+    now: number,
+  ) =>
+    laneLoad(request.provider, scope, Option.none(), [], request.asker, now) === 0 &&
+    scope.some(
+      (slot) =>
+        !held.has(placementKey(request.provider, slot)) &&
+        !Option.exists(request.model, (model) =>
+          held.has(placementKey(request.provider, slot, model)),
+        ) &&
+        !quotaHeld(request.provider, slot, request.model, now),
+    )
+  /**
    * Why a run of `request` gets no lane now, under the lock: the runs that
    * hold one reach the capacity of the account's windows (`pool`, which
    * every run of the pool shares) or of the model's own; `spent` is the
@@ -6264,6 +6297,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       })
     settle(request.provider, request.scope)
     const scope = request.scope.map((account) => account.slot)
+    // The lone start: with no admitted run on the pool, one goes whatever
+    // the pace, while an account can serve its model now. The pace limits
+    // how many run at once, never whether one runs.
+    if (loneStart(request, scope, now)) return Option.none()
     // The account's windows bound every run on it; a model's own bound
     // only that model's runs, so each counts its own load.
     const full = Arr.findFirst(
@@ -6834,9 +6871,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           onNone: () =>
             Option.orElse(
               Option.flatMap(admitted, (start) => start.sabbath),
-              () => lane.resumed,
+              () =>
+                Option.flatMap(lane.resumed, (resumed) => Option.fromUndefinedOr(resumed.sabbath)),
             ),
           onSome: (open) => open.sabbath,
+        })
+        const isRun = Option.match(before, {
+          onNone: () => Option.isSome(admitted) || Option.isSome(lane.resumed),
+          // A grant that joins the owner's open turn makes it a run.
+          onSome: (open) => open.admitted || Option.isSome(admitted),
         })
         running.set(lane.sessionId, {
           provider: lane.provider,
@@ -6847,14 +6890,19 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             onSome: (open) => open.starter,
           }),
           sabbath,
+          admitted: isRun,
           openedAt: Option.match(before, { onNone: () => now, onSome: (open) => open.openedAt }),
           fuel: Option.match(before, { onNone: () => Option.some(0), onSome: (open) => open.fuel }),
         })
         // A grant that joined its session's open lane frees one.
-        return { sabbath, grants: serve(now) }
+        const turnLane = Option.liftPredicate(
+          { ...omitUndefined({ sabbath: Option.getOrUndefined(sabbath) }) },
+          () => isRun,
+        )
+        return { turnLane, grants: serve(now) }
       })
       yield* afterServe(opened.grants)
-      return opened.sabbath
+      return opened.turnLane
     }),
     freeReservation: Effect.fn("CredentialPlacement.freeReservation")(function* (key: string) {
       const now = yield* Clock.currentTimeMillis

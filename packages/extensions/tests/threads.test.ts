@@ -1246,31 +1246,17 @@ describe("threads", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis
-            // Ten hours to the reset: 89 points carry 2.6 runs, two lanes.
-            const rig = yield* accountsRig({
-              ...metered,
-              quota: (step) => [
-                {
-                  window: "7d",
-                  utilization: Option.getOrElse(
-                    Option.liftPredicate(0.1, () => step === 1),
-                    () => 0.11,
-                  ),
-                  resetAt: now + 10 * 3_600_000,
-                  rejected: false,
-                },
-              ],
-            })
+            const rig = yield* accountsRig({ ...metered, quota: oneLane(now) })
             const running = yield* rig.start(rig.starter, THREAD_TASK)
             yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
             const [made] = yield* rig.act(rig.starter, [rig.op("thread.start", { name: "idle" })])
             if (Predicate.isUndefined(made) || !made.ok) return yield* Effect.die("no idle thread")
             const idle = yield* decodeStarted(made.output)
             const idlePlace = { sessionId: idle.sessionId, branchId: idle.branchId }
-            // The user keeps the idle thread busy: its own turn takes the second lane.
+            // The user keeps the idle thread busy; the user's own turn is no load.
             yield* rig.client.message.send({ ...idlePlace, content: `${THREAD_TASK} hold` })
             yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "the user's turn")
-            yield* loadIs(rig, 2, "two turns hold both lanes")
+            yield* loadIs(rig, 1, "the running round holds the one lane")
             const sent = yield* Effect.flatMap(
               rig.one(
                 rig.starter,
@@ -1308,7 +1294,7 @@ describe("threads", () => {
               4_000,
               "the round's end woke the starter",
             )
-            yield* loadIs(rig, 1, "the refused round holds no lane")
+            yield* loadIs(rig, 0, "the refused round holds no lane")
             yield* Deferred.succeed(rig.gate, true)
           }).pipe(Effect.timeout("12 seconds")),
         ),

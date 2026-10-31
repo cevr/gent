@@ -2180,6 +2180,15 @@ export const PendingToolCall = Schema.Struct({
 })
 export type PendingToolCall = typeof PendingToolCall.Type
 
+/**
+ * The admitted lane a turn opened on, as its record keeps it, with the
+ * owner's Sabbath of that lane. A restart opens the turn on no grant: it
+ * counts as an admitted run all the same, and stops in that Sabbath. A turn
+ * no start admitted (the owner's own) keeps none.
+ */
+export const TurnLane = Schema.Struct({ sabbath: Schema.optional(Sabbath) })
+export type TurnLane = typeof TurnLane.Type
+
 export const TurnRecord = Schema.Struct({
   /** The last step whose assistant and tool messages committed. 0 before step 1. */
   step: Schema.Natural,
@@ -2187,11 +2196,8 @@ export const TurnRecord = Schema.Struct({
   continuations: Schema.Natural,
   /** Tool calls the current step issued and has not settled. */
   pendingToolCalls: Schema.Array(PendingToolCall),
-  /**
-   * The owner's Sabbath of the admitted lane the turn opened on: a restart
-   * opens the turn on no grant, and it stops in that Sabbath all the same.
-   */
-  laneSabbath: Schema.optional(Sabbath),
+  /** The admitted lane the turn opened on; absent on a turn no start admitted (`TurnLane`). */
+  lane: Schema.optional(TurnLane),
 })
 export type TurnRecord = typeof TurnRecord.Type
 
@@ -2211,13 +2217,13 @@ const TurnRecordRow = Schema.Struct({
   step: Schema.Natural,
   continuations: Schema.Natural,
   pending_tool_calls_json: Schema.String,
-  lane_sabbath_json: Schema.NullOr(Schema.String),
+  lane_json: Schema.NullOr(Schema.String),
 })
 
 const decodePending = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(PendingToolCall)))
 const encodePending = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(PendingToolCall)))
-const decodeLaneSabbath = Schema.decodeEffect(Schema.fromJsonString(Sabbath))
-const encodeLaneSabbath = Schema.encodeEffect(Schema.fromJsonString(Sabbath))
+const decodeTurnLane = Schema.decodeEffect(Schema.fromJsonString(TurnLane))
+const encodeTurnLane = Schema.encodeEffect(Schema.fromJsonString(TurnLane))
 interface TurnRecordStorageService {
   /** The turn's position, or the empty record when the turn has no row yet. */
   readonly get: (key: TurnRecordKey) => Effect.Effect<TurnRecord, StorageError>
@@ -2238,7 +2244,7 @@ export class TurnRecordStorage extends Context.Service<
         return yield* Effect.gen(function* () {
           const workspaceId = yield* CurrentWorkspaceId
           const rows = yield* sql<typeof TurnRecordRow.Type>`
-            SELECT t.step, t.continuations, t.pending_tool_calls_json, t.lane_sabbath_json
+            SELECT t.step, t.continuations, t.pending_tool_calls_json, t.lane_json
             FROM turn_records t
             JOIN sessions s ON s.id = t.session_id
             WHERE t.session_id = ${key.sessionId}
@@ -2253,11 +2259,11 @@ export class TurnRecordStorage extends Context.Service<
           const pendingToolCalls = yield* decodePending(decoded.pending_tool_calls_json)
           // A mark that no longer decodes (a changed config schema) drops
           // alone: the turn's position and parked calls still read.
-          const laneSabbath = yield* Effect.transposeOption(
-            Option.map(Option.fromNullishOr(decoded.lane_sabbath_json), (json) =>
-              decodeLaneSabbath(json).pipe(
+          const lane = yield* Effect.transposeOption(
+            Option.map(Option.fromNullishOr(decoded.lane_json), (json) =>
+              decodeTurnLane(json).pipe(
                 Effect.tapError((cause) =>
-                  Effect.logWarning("turn.lane-sabbath-unreadable").pipe(
+                  Effect.logWarning("turn.lane-unreadable").pipe(
                     Effect.annotateLogs({ error: String(cause) }),
                   ),
                 ),
@@ -2269,7 +2275,7 @@ export class TurnRecordStorage extends Context.Service<
             step: decoded.step,
             continuations: decoded.continuations,
             pendingToolCalls,
-            ...omitUndefined({ laneSabbath: Option.getOrUndefined(laneSabbath) }),
+            ...omitUndefined({ lane: Option.getOrUndefined(lane) }),
           } satisfies TurnRecord
         }).pipe(Effect.mapError(storageError("Failed to read the turn record")))
       })
@@ -2283,8 +2289,8 @@ export class TurnRecordStorage extends Context.Service<
           // fractional count fails here instead of being stored.
           yield* Schema.encodeEffect(TurnRecord)(record)
           const pendingJson = yield* encodePending(record.pendingToolCalls)
-          const laneSabbathJson = yield* Effect.transposeOption(
-            Option.map(Option.fromUndefinedOr(record.laneSabbath), encodeLaneSabbath),
+          const laneJson = yield* Effect.transposeOption(
+            Option.map(Option.fromUndefinedOr(record.lane), encodeTurnLane),
           )
           const updatedAt = (yield* DateTime.nowAsDate).getTime()
           yield* sql`
@@ -2295,7 +2301,7 @@ export class TurnRecordStorage extends Context.Service<
               step,
               continuations,
               pending_tool_calls_json,
-              lane_sabbath_json,
+              lane_json,
               updated_at
             ) VALUES (
               ${key.sessionId},
@@ -2304,14 +2310,14 @@ export class TurnRecordStorage extends Context.Service<
               ${record.step},
               ${record.continuations},
               ${pendingJson},
-              ${Option.getOrNull(laneSabbathJson)},
+              ${Option.getOrNull(laneJson)},
               ${updatedAt}
             )
             ON CONFLICT (session_id, branch_id, message_id) DO UPDATE SET
               step = excluded.step,
               continuations = excluded.continuations,
               pending_tool_calls_json = excluded.pending_tool_calls_json,
-              lane_sabbath_json = excluded.lane_sabbath_json,
+              lane_json = excluded.lane_json,
               updated_at = excluded.updated_at
           `
         }).pipe(Effect.mapError(storageError("Failed to write the turn record")))

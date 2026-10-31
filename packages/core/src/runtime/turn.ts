@@ -166,6 +166,7 @@ import {
   SessionStorage,
   type StorageTransaction,
   ToolCallBindingStorage,
+  type TurnLane,
   type TurnRecord,
   TurnRecordStorage,
 } from "../storage/storage.js"
@@ -186,7 +187,7 @@ import {
   type TurnInterruption,
   type TurnStop,
 } from "./tools.js"
-import { ConfigService, RuntimeEnvironment, type Sabbath, type UserConfig } from "./config.js"
+import { ConfigService, RuntimeEnvironment, type UserConfig } from "./config.js"
 import { type AgentLoopError, asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
   credentialLane,
@@ -1838,18 +1839,18 @@ const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* <E, R>(run: {
  * A turn of `sessionId` runs: its admission becomes the session's running
  * lane, counted against the account until the turn's end is heard. A lane
  * that does not read leaves the turn uncounted; it never fails the turn.
- * Answers the Sabbath its lane keeps, for the turn record (`laneSabbath`).
+ * Answers the admitted lane it opened on, for the turn record (`lane`).
  */
 const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
   readonly sessionId: SessionId
   readonly messageId: MessageId
   /** The selection history of the turn's branch (`sessionLane`). */
   readonly own: SelectionHistory
-  /** The Sabbath the turn record kept from before a restart (`OpenLane.resumed`). */
-  readonly resumed: Option.Option<Sabbath>
+  /** The admitted lane the turn record kept from before a restart (`OpenLane.resumed`). */
+  readonly resumed: Option.Option<TurnLane>
 }) {
   const session = yield* (yield* SessionStorage).getSession(params.sessionId)
-  if (Predicate.isUndefined(session)) return Option.none<Sabbath>()
+  if (Predicate.isUndefined(session)) return Option.none<TurnLane>()
   const lane = yield* sessionLane({
     cwd: Option.fromUndefinedOr(session.cwd),
     admission: Option.fromUndefinedOr(session.admission),
@@ -1857,7 +1858,7 @@ const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
     provenanceOf: (selected) =>
       selectionProvenance({ sessionId: params.sessionId, own: params.own }, selected),
   })
-  if (Option.isNone(lane)) return Option.none<Sabbath>()
+  if (Option.isNone(lane)) return Option.none<TurnLane>()
   return yield* (yield* CredentialPlacement).openLane({
     sessionId: params.sessionId,
     key: params.messageId,
@@ -7518,8 +7519,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       return yield* Effect.gen(function* () {
         const record = yield* readTurnRecord(state.message.id)
-        const kept = Option.fromUndefinedOr(record.laneSabbath)
-        const laneSabbath = yield* readKnownSteps.pipe(
+        const kept = Option.fromUndefinedOr(record.lane)
+        const lane = yield* readKnownSteps.pipe(
           Effect.flatMap((known) =>
             openTurnLane({
               sessionId: scope.sessionId,
@@ -7531,16 +7532,16 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           Effect.catch((error) =>
             Effect.logWarning("turn lane not opened").pipe(
               Effect.annotateLogs({ error: String(error) }),
-              Effect.as(Option.none<Sabbath>()),
+              Effect.as(Option.none<TurnLane>()),
             ),
           ),
         )
         yield* persistMessageReceived({ message: state.message })
-        // The turn keeps the Sabbath of the admitted lane it opened on: a
-        // restart opens it again on no grant, and it stops in that Sabbath.
+        // The turn keeps the admitted lane it opened on: a restart opens it
+        // again on no grant, and it counts as a run and stops in its Sabbath.
         // A restart must find it, so a failed write fails the turn.
-        if (Option.isSome(laneSabbath) && Option.isNone(kept))
-          yield* writeTurnRecord(state.message.id, () => ({ laneSabbath: laneSabbath.value }), {
+        if (Option.isSome(lane) && Option.isNone(kept))
+          yield* writeTurnRecord(state.message.id, () => ({ lane: lane.value }), {
             onFailure: "die",
             base: record,
           })

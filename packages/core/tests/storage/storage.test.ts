@@ -2436,27 +2436,32 @@ describe("TurnRecordStorage", () => {
     }).pipe(Effect.provide(storageLayer)),
   )
 
-  it.live("keeps the lane's Sabbath, and a mark that no longer decodes drops alone", () =>
-    Effect.gen(function* () {
-      const key = yield* makeFixtureTurnRecord("lane-sabbath")
-      const storage = yield* TurnRecordStorage
-      const sql = yield* SqlClient.SqlClient
-      const record = {
-        step: 2,
-        continuations: 1,
-        pendingToolCalls: [{ id: "call-1", name: "@test/tool" }],
-        laneSabbath: { latitude: 0, longitude: 0, timeZone: "UTC" },
-      }
-      yield* storage.put(key, record)
-      expect(yield* storage.get(key)).toEqual(record)
-      // As a mark written before the config's Sabbath schema changed.
-      yield* sql`UPDATE turn_records SET lane_sabbath_json = '{"latitude":99}' WHERE message_id = ${key.messageId}`
-      expect(yield* storage.get(key)).toEqual({
-        step: 2,
-        continuations: 1,
-        pendingToolCalls: [{ id: "call-1", name: "@test/tool" }],
-      })
-    }).pipe(Effect.provide(storageLayer)),
+  it.live(
+    "keeps the admitted lane and its Sabbath, and a mark that no longer decodes drops alone",
+    () =>
+      Effect.gen(function* () {
+        const key = yield* makeFixtureTurnRecord("lane-sabbath")
+        const storage = yield* TurnRecordStorage
+        const sql = yield* SqlClient.SqlClient
+        const record = {
+          step: 2,
+          continuations: 1,
+          pendingToolCalls: [{ id: "call-1", name: "@test/tool" }],
+          lane: { sabbath: { latitude: 0, longitude: 0, timeZone: "UTC" } },
+        }
+        yield* storage.put(key, record)
+        expect(yield* storage.get(key)).toEqual(record)
+        // An admitted lane with no Sabbath is still a mark: the turn is a run.
+        yield* storage.put(key, { ...record, lane: {} })
+        expect(yield* storage.get(key)).toEqual({ ...record, lane: {} })
+        // As a mark written before the config's Sabbath schema changed.
+        yield* sql`UPDATE turn_records SET lane_json = '{"sabbath":{"latitude":99}}' WHERE message_id = ${key.messageId}`
+        expect(yield* storage.get(key)).toEqual({
+          step: 2,
+          continuations: 1,
+          pendingToolCalls: [{ id: "call-1", name: "@test/tool" }],
+        })
+      }).pipe(Effect.provide(storageLayer)),
   )
 
   it.live("drops the record when its turn message is deleted", () =>
@@ -2481,7 +2486,7 @@ describe("turn_records table", () => {
       expect(columns.map((column) => column.name).sort()).toEqual([
         "branch_id",
         "continuations",
-        "lane_sabbath_json",
+        "lane_json",
         "message_id",
         "pending_tool_calls_json",
         "session_id",

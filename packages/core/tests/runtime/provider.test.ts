@@ -6361,9 +6361,9 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
-  it.effect("a first 5h reading past 90% refuses a start before any rate is known", () =>
+  it.effect("a first 5h reading past 90% carries only a lone start before any rate is known", () =>
     Effect.gen(function* () {
-      const { read, lanes, windowOf, admit } = yield* accounts()
+      const { placement, read, lanes, windowOf, admit } = yield* accounts()
       yield* TestClock.adjust("1 hour")
       const resetAt = (yield* Clock.currentTimeMillis) + 2 * HOUR
       // The weekly window has room, at a pace no rate tells yet.
@@ -6376,7 +6376,13 @@ describe("account lanes", () => {
       const stopped = yield* lanes([a])
       expect(stopped.accounts[0]?.sustainable).toBe(0)
       expect(stopped.capacity).toBe(0)
-      expect(yield* admit([a], "past-margin")).toBe("Spent")
+      // Nothing runs, and a can serve: the pace limits how many run, not whether one does.
+      expect(yield* admit([a], "past-margin")).toBe("admitted")
+      expect(yield* admit([a], "past-margin-second")).toBe("Spent")
+      yield* placement.freeReservation("past-margin")
+      // A rejected window holds a: with no account to serve, the lone start is spent too.
+      yield* read(a, [{ window: "5h", utilization: 1, resetAt, rejected: true }, week])
+      expect(yield* admit([a], "past-margin-held")).toBe("Spent")
       // Below the share with no rate, the pace stays unknown and admits.
       yield* read(a, [{ window: "5h", utilization: 0.5, resetAt }, week])
       expect((yield* windowOf([a], a, "5h")).sustainable).toBeUndefined()
@@ -6964,6 +6970,49 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect("the owner's open turns are not load: a start goes beside them", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement, admit, lanes } = fixture
+      yield* TestClock.adjust("1 hour")
+      // Two hours to the reset at the prior burn: the account's window carries 2 runs.
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const ownerTurn = (session: string) =>
+        placement.openLane({
+          sessionId: SessionId.make(session),
+          key: `${session}-turn`,
+          provider: "plan",
+          scope: [receiptOf(a)],
+          model: planModel,
+          resumed: Option.none(),
+        })
+      // Two turns no start admitted: they would fill both lanes as load.
+      expect(yield* ownerTurn("owner-1")).toEqual(Option.none())
+      expect(yield* ownerTurn("owner-2")).toEqual(Option.none())
+      expect((yield* lanes([a])).load).toBe(0)
+      expect(yield* admit([a], "worker-1")).toBe("admitted")
+      expect(yield* admit([a], "worker-2")).toBe("admitted")
+      expect(yield* admit([a], "worker-3")).toBe("queued")
+      yield* placement.freeReservation("worker-1")
+      yield* placement.freeReservation("worker-2")
+      // The waiting start took a freed lane.
+      expect((yield* lanes([a])).load).toBe(1)
+      // A start admitted into an owner's open turn makes that turn a run.
+      expect(yield* admit([a], "joined")).toBe("admitted")
+      expect(
+        yield* placement.openLane({
+          sessionId: SessionId.make("owner-1"),
+          key: "joined",
+          provider: "plan",
+          scope: [receiptOf(a)],
+          model: planModel,
+          resumed: Option.none(),
+        }),
+      ).toEqual(Option.some({}))
+      expect((yield* lanes([a])).load).toBe(2)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect(
     "the account's window counts each run at its model's price: a cheap run holds part of a lane",
     () =>
@@ -7376,14 +7425,16 @@ describe("account lanes", () => {
         yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
         const elsewhere: Sabbath = { latitude: 10, longitude: 10, timeZone: "UTC" }
         const open = (session: string, key: string, resumed: Option.Option<Sabbath>) =>
-          placement.openLane({
-            sessionId: SessionId.make(session),
-            key,
-            provider: "plan",
-            scope: [receiptOf(a)],
-            model: planModel,
-            resumed,
-          })
+          placement
+            .openLane({
+              sessionId: SessionId.make(session),
+              key,
+              provider: "plan",
+              scope: [receiptOf(a)],
+              model: planModel,
+              resumed: Option.map(resumed, (kept) => ({ sabbath: kept })),
+            })
+            .pipe(Effect.map(Option.flatMap((lane) => Option.fromUndefinedOr(lane.sabbath))))
         // A grant's Sabbath wins over a resumed one.
         expect(
           yield* askLane(placement, Option.none(), "granted", planModel, Option.some(EQUATOR)),
@@ -7678,15 +7729,16 @@ describe("account lanes", () => {
         expect((yield* Ref.get(file)).modelBurn?.length).toBe(1)
         const after = yield* accounts(store)
         expect(fiveHour(yield* after.lanes([a]))).toBeCloseTo(measured, 6)
-        // A glm turn holds its measured 100,000 fuel a lane-hour of the
-        // account's mean run, not the 680,000 its price gives.
+        // An admitted glm run (resumed, so no grant) holds its measured
+        // 100,000 fuel a lane-hour of the account's mean run, not the 680,000
+        // its price gives.
         yield* after.placement.openLane({
           sessionId: SessionId.make("glm-next"),
           key: "glm-next",
           provider: "plan",
           scope: [receiptOf(a)],
           model: glm,
-          resumed: Option.none(),
+          resumed: Option.some({}),
         })
         const report = yield* after.lanes([a])
         expect(weightOf(report, glm)?.fitted).not.toBe(true)
@@ -7790,14 +7842,15 @@ describe("account lanes", () => {
       const weight = weightOf(yield* fixture.lanes([a]), haiku)
       expect(weight?.fitted).toBe(true)
       expect(weight?.weight).not.toBeCloseTo(1)
-      // An open turn of haiku: the load counts it whatever room the week has.
+      // An admitted run of haiku (resumed, so no grant): the load counts it
+      // whatever room the week has.
       yield* fixture.placement.openLane({
         sessionId: SessionId.make("haiku-turn"),
         key: "haiku-start",
         provider: "plan",
         scope: [receiptOf(a)],
         model: haiku,
-        resumed: Option.none(),
+        resumed: Option.some({}),
       })
       // No meter prices haiku and no lane burned: its fuel per hour is the mean run's.
       expect((yield* fixture.lanes([a])).load).toBeCloseTo(weight?.weight ?? Number.NaN)
