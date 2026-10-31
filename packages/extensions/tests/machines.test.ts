@@ -2553,6 +2553,7 @@ const OPUS = ModelId.make("anthropic/claude-opus-5-5")
 const HAIKU = ModelId.make("anthropic/claude-haiku-4-5")
 const SONNET = ModelId.make("anthropic/claude-sonnet-5-5")
 const SOL = ModelId.make("openai/gpt-6.1-sol")
+const LUNA = ModelId.make("openai/gpt-6-luna")
 
 /** The catalog family of one of the models above. */
 const familyOf = (model: ModelId) => {
@@ -2561,18 +2562,26 @@ const familyOf = (model: ModelId) => {
   return name.split("-").slice(0, 2).join("-")
 }
 
-/** A config role choice: the newest model of `model`'s family on its provider. */
-const choiceOf = (model: ModelId) => ({
-  provider: model.slice(0, model.indexOf("/")),
-  family: familyOf(model),
-  effort: "high" as const,
-})
+/** A role entry: a model at high effort, or a model and its effort. */
+type RoleEntry = ModelId | { readonly model: ModelId; readonly effort: "low" | "high" }
+
+/** A role entry as a model and its effort. */
+const entryOf = (entry: RoleEntry): Exclude<RoleEntry, ModelId> => {
+  if (Predicate.isString(entry)) return { model: entry, effort: "high" }
+  return entry
+}
+
+/** A config role choice: the newest model of the entry's family on its provider. */
+const choiceOf = (entry: RoleEntry) => {
+  const { model, effort } = entryOf(entry)
+  return { provider: model.slice(0, model.indexOf("/")), family: familyOf(model), effort }
+}
 
 /**
  * Config roles from model lists: `strongest` in its order, `efficient` by
  * cost per accepted unit, and any other role in its order.
  */
-const rolesOf = (lists: Readonly<Record<string, ReadonlyArray<ModelId>>>) =>
+const rolesOf = (lists: Readonly<Record<string, ReadonlyArray<RoleEntry>>>) =>
   Object.fromEntries(
     Object.entries(lists).flatMap(([role, list]) => {
       const models = list.map(choiceOf)
@@ -2859,23 +2868,44 @@ const MAKERS = [
   Model.make({ ...anthropicModel(TEST_MODEL_ID, { input: 3, output: 15 }), family: "owner" }),
 ]
 
-/** A `maker` round, then a round of config role `judge` against it. */
-const makerJudge = (name: string, judge = "judge") => ({
-  name,
-  threads: { maker: { role: "maker" }, judge: { role: judge, against: "maker" } },
-  start: "make",
-  states: {
-    make: { kind: "thread", thread: "maker", say: "make", next: "judge" },
-    judge: { kind: "thread", thread: "judge", say: "judge", next: "done" },
-    done: { kind: "final" },
-  },
-})
+/**
+ * A `maker` round, then a round of config role `judge` against it; with
+ * `switched`, state `state` switches to that config role on its first visit.
+ */
+const makerJudge = (name: string, judge = "judge", state?: "make" | "judge", switched?: string) => {
+  const switches = (of: string) => {
+    if (of !== state || Predicate.isUndefined(switched)) return []
+    return [{ role: switched, when: "visit", is: "1" }]
+  }
+  return {
+    name,
+    threads: { maker: { role: "maker" }, judge: { role: judge, against: "maker" } },
+    start: "make",
+    states: {
+      make: {
+        kind: "thread",
+        thread: "maker",
+        say: "make",
+        next: "judge",
+        switches: switches("make"),
+      },
+      judge: {
+        kind: "thread",
+        thread: "judge",
+        say: "judge",
+        next: "done",
+        switches: switches("judge"),
+      },
+      done: { kind: "final" },
+    },
+  }
+}
 
 /** Defines `definition`, then starts it: the start's failure text. */
 const refusedStart = (
   client: Client,
   owner: SessionKey,
-  definition: ReturnType<typeof makerJudge>,
+  definition: { readonly name: string } & Schema.Json,
 ) =>
   Effect.gen(function* () {
     const [defined] = yield* call(client, owner, [
@@ -2912,7 +2942,14 @@ describe("a config role's round", () => {
         },
         start: "work",
         states: {
-          work: { kind: "thread", thread: "pinned", say: "go", next: "done" },
+          work: { kind: "thread", thread: "pinned", say: "go", next: "plainly" },
+          plainly: {
+            kind: "thread",
+            thread: "plain",
+            say: "go",
+            next: "done",
+            switches: [{ role: "planner", when: "nowhere.reply.path", is: "deep" }],
+          },
           done: { kind: "final" },
         },
       }
@@ -2928,6 +2965,8 @@ describe("a config role's round", () => {
       expect(text).toContain("self: is against itself")
       expect(text).toContain("loose: names against with no role")
       expect(text).toContain("tiered: names a tier; config roles replaced tiers, so name a role")
+      expect(text).toContain("plainly: switches the role of plain, which names no role")
+      expect(text).toContain("plainly: a switch's when nowhere.reply.path names no state")
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 
@@ -2952,6 +2991,9 @@ describe("a config role's round", () => {
         expect(yield* refusedStart(client, owner, makerJudge("one-maker"))).toContain(
           "judge is against maker, so its role judge needs listed models of two makers; it has anthropic",
         )
+        expect(
+          yield* refusedStart(client, owner, makerJudge("switched", "judge", "make", "absent")),
+        ).toContain("maker runs the role absent, which config roles does not name")
         expect(yield* home.sql(runIds)).toEqual([])
       }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
@@ -2967,7 +3009,10 @@ describe("a config role's round", () => {
         const { client } = yield* createRpcClient(
           home.layerFor(
             machineModels(models),
-            tieredAccount({ maker: [MYSTERY], judge: [OPUS, SOL], twice: [OPUS, OPUS] }, MAKERS),
+            tieredAccount(
+              { maker: [MYSTERY], known: [OPUS], judge: [OPUS, SOL], twice: [OPUS, OPUS] },
+              MAKERS,
+            ),
           ),
         )
         const owner = ownerOf(yield* client.session.create({}))
@@ -2975,6 +3020,16 @@ describe("a config role's round", () => {
           `judge runs the role twice, which resolves to ${OPUS} twice`,
         )
         expect(yield* refusedStart(client, owner, makerJudge("unknown-maker"))).toContain(
+          `judge is against maker, whose role maker runs ${MYSTERY}, of no maker the catalog names`,
+        )
+        // The maker's own role is known; the switch of its state is not.
+        const switched = makerJudge("unknown-switch", "judge", "make", "maker")
+        expect(
+          yield* refusedStart(client, owner, {
+            ...switched,
+            threads: { ...switched.threads, maker: { role: "known" } },
+          }),
+        ).toContain(
           `judge is against maker, whose role maker runs ${MYSTERY}, of no maker the catalog names`,
         )
         expect(yield* home.sql(runIds)).toEqual([])
@@ -3120,6 +3175,55 @@ describe("a config role's round", () => {
         }
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
+  )
+
+  it.live(
+    "a state's switch runs another role on the visit it names, and a thread at another effort is not kept",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(
+            machineModels(models),
+            tieredAccount({ steady: [OPUS], quick: [{ model: OPUS, effort: "low" }] }),
+          ),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const definition = {
+          name: "effort-switch",
+          threads: { worker: { role: "steady" } },
+          start: "work",
+          states: {
+            work: {
+              kind: "thread",
+              thread: "worker",
+              say: "STATE work {{visit}}",
+              next: "work",
+              maxVisits: 3,
+              exhausted: "done",
+              switches: [{ role: "quick", when: "visit", is: "2" }],
+            },
+            done: { kind: "final" },
+          },
+        }
+        const run = yield* startRunOn(client, owner, definition, "effort-switch")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS, OPUS, OPUS])
+        // Opus at high, then at low on a new thread, then at high on a new one again.
+        const threads = roundThreads(steps)
+        expect(new Set(threads).size).toBe(3)
+        const efforts: Array<string> = []
+        for (const thread of threads) {
+          if (Predicate.isUndefined(thread)) continue
+          const view = yield* client.session.get({ sessionId: SessionId.make(thread) })
+          efforts.push(view?.reasoningLevel ?? "none")
+        }
+        expect(efforts).toEqual(["high", "low", "high"])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("20 seconds")),
   )
 
   it.live(
@@ -4602,11 +4706,15 @@ const UNIT_VERDICTS = new Map([
 
 /** Each round replies the verdict `verdicts` names for its `state:visit`, else its state's happy one, with a file of its own. */
 const unitWorker =
-  (verdicts: Readonly<Record<string, string>>) =>
+  (
+    verdicts: Readonly<Record<string, string>>,
+    extras: Readonly<Record<string, Readonly<Record<string, Schema.Json>>>> = {},
+  ) =>
   (round: RoundCall): Effect.Effect<WorkerStream> => {
-    const next =
-      verdicts[`${round.state}:${round.visit}`] ?? UNIT_VERDICTS.get(round.state) ?? "unknown"
-    return Effect.succeed(replyWith(round, { next, file: `${round.state}-${round.visit}.md` }))
+    const at = `${round.state}:${round.visit}`
+    const next = verdicts[at] ?? UNIT_VERDICTS.get(round.state) ?? "unknown"
+    const file = `${round.state}-${round.visit}.md`
+    return Effect.succeed(replyWith(round, { ...extras[at], next, file }))
   }
 
 /**
@@ -4619,7 +4727,9 @@ const unitTiers = () =>
     implementor: [HAIKU],
     codemod: [SONNET],
     reviewer: [OPUS, SOL],
+    "deep-reviewer": [OPUS, LUNA],
     verifier: [HAIKU],
+    "live-verifier": [OPUS],
   })
 
 /** Answers the owner's `count`-th ask with `choice`, and returns that ask. */
@@ -4650,6 +4760,8 @@ const unitRun = (
     readonly gate?: string
     readonly mergeGate?: string
     readonly definition?: MachineDefinitionJson
+    /** Reply fields beside the verdict, by `state:visit`. */
+    readonly extras?: Readonly<Record<string, Readonly<Record<string, Schema.Json>>>>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -4658,7 +4770,7 @@ const unitRun = (
     yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(dir)).pipe(
       Effect.provide(BunServices.layer),
     )
-    const models = yield* makeModels(unitWorker(verdicts))
+    const models = yield* makeModels(unitWorker(verdicts, options.extras))
     // The merge pushes, so machine.start checks its remote; the unit's gate spawns for real.
     const github = yield* fakeGitHub()
     const processes = Layer.provide(github.layerOverReal, BunServices.layer)
@@ -4718,6 +4830,42 @@ describe("the shipped orchestrate machine", () => {
           expect(texts.get(round)).toContain(`Spec: ${dir}/spec.md`)
           expect(texts.get(round)).toContain("the newest round-N-request.md")
         }
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a deep unit's first review runs the deep reviewer, and an interactive unit's check the live verifier",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run } = yield* unitRun(
+          { "review:1": "changes" },
+          { extras: { "plan:1": { path: "deep", interactive: true } } },
+        )
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "drop")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(moves(steps)).toEqual([
+          "plan→approve",
+          "approve→implement",
+          "implement→review",
+          "review→fix",
+          "fix→review",
+          "review→verify",
+          "verify→decide",
+          "decide→dropped",
+        ])
+        // Review 1 runs deep-reviewer, against the implementor (Luna, not Opus);
+        // review 2 the reviewer (Sol); verify the live verifier (Opus).
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([
+          OPUS,
+          HAIKU,
+          LUNA,
+          HAIKU,
+          SOL,
+          OPUS,
+        ])
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )

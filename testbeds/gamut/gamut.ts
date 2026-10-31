@@ -292,8 +292,9 @@ const loadCatalog = async (): Promise<Record<string, ReadonlyArray<string>>> => 
 /**
  * `.gent/config.json` for a resolved preset: the orchestrator as agent
  * `main`, the worker as agent `delegate`, and the model roles the shipped
- * orchestrate machines name: the reviewer slot as `planner` and `reviewer`,
- * the worker slot as `implementor`, `codemod` and `verifier`. A project role
+ * orchestrate machines name: the reviewer slot as `planner`, `reviewer`,
+ * `deep-reviewer` and `live-verifier`, the worker slot as `implementor`,
+ * `codemod` and `verifier`. A project role
  * shadows the owner's of its name, so a run never reaches a model outside its
  * preset. The reviewer runs against the implementor's maker, so a preset
  * whose reviewer and worker share a maker cannot start an orchestrate run.
@@ -309,7 +310,9 @@ export const presetConfigJson = (preset: Preset): string => {
         implementor: worker,
         codemod: worker,
         reviewer,
+        "deep-reviewer": reviewer,
         verifier: worker,
+        "live-verifier": reviewer,
       },
     },
     null,

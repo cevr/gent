@@ -3158,6 +3158,14 @@ const makeThreads = (rounds: ThreadRoundsService) => {
         const ctx = yield* ExtensionContext
         return yield* ctx.Session.getModel(found.current.id)
       }),
+    /** The effort the thread's current session runs at; none when it names none (`/effort auto`). */
+    effort: (thread: string) =>
+      Effect.gen(function* () {
+        const found = yield* ownThread(thread)
+        const ctx = yield* ExtensionContext
+        const session = yield* ctx.Session.getSession(found.current.id)
+        return Option.fromUndefinedOr(session?.reasoningLevel)
+      }),
     /**
      * The round a send under `key` admits, known before the send: a sender
      * records it first, so a crash or a stop after the admission finds the

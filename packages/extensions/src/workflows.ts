@@ -119,7 +119,10 @@ const decideAsk = (latest: string) => ({
  * round) goes to decide, `resume` follows a blocked answer, a red gate or a
  * red push and counts nothing. Each thread role runs the config role of its
  * name (`roles` in the config: `planner`, `implementor`, `reviewer`,
- * `verifier`), and the reviewer never runs the implementor's maker. Ceremony scales with the
+ * `verifier`), and the reviewer never runs the implementor's maker. The
+ * planner's reply names the unit's `path` and whether it is `interactive`:
+ * a deep unit's first review runs `deep-reviewer`, and an interactive unit's
+ * checks run `live-verifier`. Ceremony scales with the
  * unit's risk: the spec's `Path` is `standard` or `deep` (`light` units run
  * `ORCHESTRATE_LIGHT_MACHINE`), a review of a `standard` unit replies
  * `proven` and skips the verifier, and from round 3 a test-strength finding
@@ -138,7 +141,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       instructions: [
         WORKER_RULES,
         BLOCKED_RULE,
-        "You are the planner; you change no product code. Write spec.md in the unit dir: Goal; Done, one line; Acceptance check, objective and runnable, red now and green when done (run it and record that it is red); Owns and Do not touch, as exact paths; Gate, exactly the command the round message names (a unit that needs another gate is blocked); Risks, what review should attack hardest; Path, deep when a defect would be costly (several subsystems, ownership or authority, a durable or wire format, a user-facing surface, a device) and standard otherwise, with the reason. When Done states a rule, the check includes a generated property over the rule's whole domain. Verdict: ready or blocked.",
+        "You are the planner; you change no product code. Write spec.md in the unit dir: Goal; Done, one line; Acceptance check, objective and runnable, red now and green when done (run it and record that it is red); Owns and Do not touch, as exact paths; Gate, exactly the command the round message names (a unit that needs another gate is blocked); Risks, what review should attack hardest; Path, deep when a defect would be costly (several subsystems, ownership or authority, a durable or wire format, a user-facing surface, a device) and standard otherwise, with the reason; Interactive, yes when proving Done needs a running interface (a TUI, a browser, a desktop app, a device) and no otherwise. When Done states a rule, the check includes a generated property over the rule's whole domain. Your thread.reply also carries path (deep or standard) and interactive (true or false), as the spec says. Verdict: ready or blocked.",
       ].join("\n"),
     },
     implementor: {
@@ -201,6 +204,8 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       ].join("\n"),
       on: { accepted: "verify", proven: "decide", changes: "fix", stuck: "decide" },
       fresh: true,
+      // A deep unit's first review runs the deep reviewer's models and efforts.
+      switches: [{ role: "deep-reviewer", when: "plan.reply.path", is: "deep", visits: 1 }],
     },
     verify: {
       kind: "thread",
@@ -212,6 +217,8 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       ].join("\n"),
       on: { pass: "decide", fail: "fix", stuck: "decide" },
       fresh: true,
+      // An interactive unit's check runs the live verifier's models and efforts.
+      switches: [{ role: "live-verifier", when: "plan.reply.interactive", is: true }],
     },
     decide: decideAsk(
       "review {{review.reply.next}} {{review.reply.file}}, verify {{verify.reply.next}} {{verify.reply.file}} (none after proven).",

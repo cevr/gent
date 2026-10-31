@@ -152,7 +152,9 @@ describe("gamut preset config", () => {
       )
       expect(Object.keys(config.roles ?? {}).sort(), name).toEqual([
         "codemod",
+        "deep-reviewer",
         "implementor",
+        "live-verifier",
         "planner",
         "reviewer",
         "verifier",
@@ -214,12 +216,30 @@ describe("gamut preset config", () => {
         }
       ]
     },
+    "deep-reviewer": {
+      "models": [
+        {
+          "provider": "anthropic",
+          "family": "claude-opus",
+          "effort": "high"
+        }
+      ]
+    },
     "verifier": {
       "models": [
         {
           "provider": "openai",
           "family": "gpt-luna",
           "effort": "max"
+        }
+      ]
+    },
+    "live-verifier": {
+      "models": [
+        {
+          "provider": "anthropic",
+          "family": "claude-opus",
+          "effort": "high"
         }
       ]
     }

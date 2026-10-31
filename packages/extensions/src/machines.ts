@@ -165,10 +165,24 @@ const VisitCap = {
   exhausted: Schema.optionalKey(StateName),
 }
 
+/**
+ * A config role a thread state runs in place of its thread role's: when the
+ * slot `when` (a template ref, `plan.reply.path`) reads `is`, through visit
+ * `visits` (every visit when absent).
+ */
+const RoleSwitch = Schema.Struct({
+  role: Schema.String,
+  when: Schema.String,
+  is: Schema.Json,
+  visits: Schema.optionalKey(PositiveInt),
+})
+
 const ThreadState = Schema.Struct({
   kind: Schema.Literal("thread"),
   thread: RoleName,
   say: Template,
+  /** The first switch that holds names the round's config role; `against` stays the thread role's. */
+  switches: Schema.optionalKey(Schema.Array(RoleSwitch)),
   /** Unconditional: the round's text is saved, and the run moves on. */
   next: Schema.optionalKey(StateName),
   /** By verdict: the round must `thread.reply` a value whose `next` is one of these keys. */
@@ -680,6 +694,28 @@ const roleProblems = (definition: MachineDefinition): ReadonlyArray<string> =>
   })
 
 /**
+ * A state's role switches: its thread role runs a config role, and each
+ * switch's `when` reads a state or the input.
+ */
+const switchProblems = (
+  definition: MachineDefinition,
+  names: ReadonlySet<string>,
+): ReadonlyArray<string> =>
+  Object.entries(definition.states).flatMap(([name, state]) => {
+    if (state.kind !== "thread") return []
+    const switches = state.switches ?? []
+    if (switches.length === 0) return []
+    const problems: Array<string> = []
+    if (Predicate.isUndefined(definition.threads[state.thread]?.role))
+      problems.push(`${name}: switches the role of ${state.thread}, which names no role`)
+    for (const each of switches) {
+      if (!slotResolves(names, each.when.split(".")))
+        problems.push(`${name}: a switch's when ${each.when} names no state`)
+    }
+    return problems
+  })
+
+/**
  * Every problem of a definition the schema admits, at once: the graph's
  * names, edges, reachability, templates, roles, and cycles of `exhausted`
  * edges.
@@ -698,6 +734,7 @@ const definitionProblems = (definition: MachineDefinition): ReadonlyArray<string
     ...reserved,
     ...perState,
     ...roleProblems(definition),
+    ...switchProblems(definition, names),
     ...reachProblems(definition, names),
     ...exhaustedCycleProblems(definition, names),
   ]
@@ -2065,54 +2102,81 @@ const checkRemotes = Effect.fn("Machines.checkRemotes")(function* (
   }
 })
 
+/** The config roles thread role `name` may run: its own, then each state's switches. */
+const configRolesOf = (definition: MachineDefinition, name: RoleName): ReadonlyArray<string> => {
+  const own = Option.toArray(Option.fromUndefinedOr(definition.threads[name]?.role))
+  if (own.length === 0) return []
+  const switched = Object.values(definition.states).flatMap((state) => {
+    if (state.kind !== "thread" || state.thread !== name) return []
+    return (state.switches ?? []).map((each) => each.role)
+  })
+  return [...new Set([...own, ...switched])]
+}
+
 /**
- * Each config role the definition's thread roles run is named in the config
- * of `cwd` and lists a model, each once; a role `against` another lists
- * models of two makers, and the role it is against only models of known
- * makers, so a pick can always leave the other role's maker out. A run
- * fails here at its start, not at a round that could never run.
+ * Each config role the definition's thread roles run (a state's switches
+ * among them) is named in the config of `cwd` and lists a model, each once;
+ * a role `against` another lists models of two makers, and each role the
+ * other may run only models of known makers, so a pick can always leave the
+ * other role's maker out. A run fails here at its start, not at a round
+ * that could never run.
  */
 const checkRoles = Effect.fn("Machines.checkRoles")(function* (
   definition: MachineDefinition,
   cwd: string,
 ) {
-  const ctx = yield* ExtensionContext
-  for (const [name, role] of Object.entries(definition.threads)) {
-    if (Predicate.isUndefined(role.role)) continue
-    const resolved = yield* ctx.Accounts.role(cwd, role.role).pipe(
+  for (const [name, thread] of Object.entries(definition.threads)) {
+    for (const role of configRolesOf(definition, RoleName.make(name))) {
+      yield* checkRole(definition, cwd, name, thread, role)
+    }
+  }
+})
+
+/** The config role of `cwd` named `role`, a machine error when config fails. */
+const resolveRole = (cwd: string, role: string) =>
+  Effect.flatMap(ExtensionContext, (ctx) =>
+    ctx.Accounts.role(cwd, role).pipe(
       Effect.mapError((error) => new MachineError({ message: error.message })),
-    )
-    if (Option.isNone(resolved)) {
-      return yield* new MachineError({
-        message: `${name} runs the role ${role.role}, which config roles does not name`,
-      })
-    }
-    if (resolved.value.choices.length === 0) {
-      return yield* new MachineError({
-        message: `${name} runs the role ${role.role}, whose families no listed model has`,
-      })
-    }
-    const models = resolved.value.choices.map((choice) => choice.model)
-    const twice = models.filter((model, index) => models.indexOf(model) !== index)
-    if (twice.length > 0) {
-      return yield* new MachineError({
-        message: `${name} runs the role ${role.role}, which resolves to ${twice.join(", ")} twice: only the first choice of a model runs`,
-      })
-    }
-    if (Predicate.isUndefined(role.against)) continue
-    const makers = new Set(resolved.value.choices.flatMap((choice) => Option.toArray(choice.maker)))
-    if (makers.size < 2) {
-      return yield* new MachineError({
-        message: `${name} is against ${role.against}, so its role ${role.role} needs listed models of two makers; it has ${[...makers].join(", ") || "none of a known maker"}`,
-      })
-    }
-    // The role it is against must run models of known makers, or its first
-    // round would end with no maker to leave out.
-    const target = Option.fromUndefinedOr(definition.threads[role.against]?.role)
-    if (Option.isNone(target)) continue
-    const theirs = yield* ctx.Accounts.role(cwd, target.value).pipe(
-      Effect.mapError((error) => new MachineError({ message: error.message })),
-    )
+    ),
+  )
+
+/** One config role `role` thread role `name` may run, as `checkRoles` reads it. */
+const checkRole = Effect.fn("Machines.checkRole")(function* (
+  definition: MachineDefinition,
+  cwd: string,
+  name: string,
+  thread: ThreadRole,
+  role: string,
+) {
+  const resolved = yield* resolveRole(cwd, role)
+  if (Option.isNone(resolved)) {
+    return yield* new MachineError({
+      message: `${name} runs the role ${role}, which config roles does not name`,
+    })
+  }
+  if (resolved.value.choices.length === 0) {
+    return yield* new MachineError({
+      message: `${name} runs the role ${role}, whose families no listed model has`,
+    })
+  }
+  const models = resolved.value.choices.map((choice) => choice.model)
+  const twice = models.filter((model, index) => models.indexOf(model) !== index)
+  if (twice.length > 0) {
+    return yield* new MachineError({
+      message: `${name} runs the role ${role}, which resolves to ${twice.join(", ")} twice: only the first choice of a model runs`,
+    })
+  }
+  if (Predicate.isUndefined(thread.against)) return
+  const makers = new Set(resolved.value.choices.flatMap((choice) => Option.toArray(choice.maker)))
+  if (makers.size < 2) {
+    return yield* new MachineError({
+      message: `${name} is against ${thread.against}, so its role ${role} needs listed models of two makers; it has ${[...makers].join(", ") || "none of a known maker"}`,
+    })
+  }
+  // Each role the other may run must name models of known makers, or
+  // its round would end with no maker to leave out.
+  for (const target of configRolesOf(definition, thread.against)) {
+    const theirs = yield* resolveRole(cwd, target)
     const unknown = Option.match(theirs, {
       onNone: () => [],
       onSome: (found) =>
@@ -2120,7 +2184,7 @@ const checkRoles = Effect.fn("Machines.checkRoles")(function* (
     })
     if (unknown.length > 0) {
       return yield* new MachineError({
-        message: `${name} is against ${role.against}, whose role ${target.value} runs ${unknown.join(", ")}, of no maker the catalog names`,
+        message: `${name} is against ${thread.against}, whose role ${target} runs ${unknown.join(", ")}, of no maker the catalog names`,
       })
     }
   }
@@ -2478,6 +2542,20 @@ const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
   if (!admitted) yield* awaitSignal(signals, { ends: true, within: REFUSED_SEND_WAIT })
 })
 
+/**
+ * The thread role a round of `state` runs: its first switch that holds names
+ * the config role in place of the thread role's own.
+ */
+const switchedRole = (role: ThreadRole, state: ThreadState, scope: TemplateScope): ThreadRole => {
+  const holds = (state.switches ?? []).find(
+    (each) =>
+      (Predicate.isUndefined(each.visits) || scope.visit <= each.visits) &&
+      Option.contains(slotValue(scope, each.when.split(".")), jsonText(each.is)),
+  )
+  if (Predicate.isUndefined(holds)) return role
+  return { ...role, role: holds.role }
+}
+
 /** The thread and round a pending round already names. */
 const roundTarget = (action: RoundAction) =>
   Option.all({
@@ -2505,7 +2583,11 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
 ) {
   const threads = yield* threadsOf
   const definition = yield* definitionOf(run)
-  const role = definition.threads[state.thread] ?? {}
+  const role = switchedRole(
+    definition.threads[state.thread] ?? {},
+    state,
+    templateScope(run, action.visit),
+  )
   const fresh = ownThread(state, action)
   const known = Option.liftPredicate(
     Option.fromUndefinedOr(run.roles[state.thread]),
@@ -2936,9 +3018,9 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
 
 /**
  * The model and effort a config role's round runs, and whether it keeps
- * `kept`, the role's thread: that thread's model is tried first while the
- * role's choices hold it, so the role keeps its thread and cache while that
- * model has a lane. None for a role that names no config role. With no
+ * `kept`, the role's thread: that thread's model is tried first while a
+ * choice of the role names it at the thread's effort, so the role keeps its
+ * thread and cache while that model has a lane. None for a role that names no config role. With no
  * choice free, the first that is not spent, whose queue the round waits in.
  * Fails with the refusal of the choice that can carry a run first when
  * every one is refused.
@@ -2967,11 +3049,22 @@ const rolePick = Effect.fn("Machines.rolePick")(function* (
   const threads = yield* threadsOf
   const order = yield* roleOrder(run, name, role.role, Option.fromUndefinedOr(role.against))
   const models = order.map((choice) => choice.model)
-  const keptModel = yield* Option.match(kept, {
+  const keptRun = yield* Option.match(kept, {
     onNone: () => Effect.succeedNone,
-    onSome: (thread) => threads.model(thread).pipe(Effect.mapError(threadFault)),
+    onSome: (thread) =>
+      Effect.all({ model: threads.model(thread), effort: threads.effort(thread) }).pipe(
+        Effect.map(({ model, effort }) => Option.map(model, (found) => ({ model: found, effort }))),
+        Effect.mapError(threadFault),
+      ),
   })
-  const first = Option.filter(keptModel, (model) => models.includes(model))
+  // The kept thread runs on only at a choice's model and effort both.
+  const first = Option.flatMap(keptRun, (ran) =>
+    Option.fromUndefinedOr(
+      order.find(
+        (choice) => choice.model === ran.model && Option.contains(ran.effort, choice.effort),
+      )?.model,
+    ),
+  )
   const tried = [
     ...Option.toArray(first),
     ...models.filter((model) => !Option.contains(first, model)),

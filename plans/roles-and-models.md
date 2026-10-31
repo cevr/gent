@@ -166,8 +166,16 @@ questions are decided below.
    in maker (`opus-luna`) can start an orchestrate run. Known limits: a pick
    left with no choice faults the run, it does not ask the owner; before the
    other role's first round, `against` drops nothing; the stored-run `tier`
-   fault has no test. 2b: the per-visit role choice and the keep rule on
-   model and effort (a kept thread runs at the effort it started with).
+   fault has no test. 2b (done 2026-10-31): a thread state's `switches`
+   (`{ role, when, is, visits? }`, `when` a template ref such as
+   `plan.reply.path`, read as text) run another config role while they
+   hold, and keep the thread role's `against`; the start check covers each
+   switch's role, and an `against` target's switches; the planner replies
+   `path` and `interactive`, so review visit 1 of a deep unit runs
+   `deep-reviewer` and an interactive unit's verify runs `live-verifier`;
+   the keep rule reads the thread's effort (`Threads.effort`), so a thread
+   at another effort is not kept. The light machine has no planner round,
+   so its units never switch.
 3. shipped machines (the planner reply's `path` and `interactive`, the light
    implementor's `codemod`) and docs move to roles; gamut `FAMILIES` onto the
    resolver; Sonnet out of the gamut presets, the router example, threads.md

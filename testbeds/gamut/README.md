@@ -70,8 +70,8 @@ Opus, Sonnet or Fable release needs no edit here.
 `up` copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
 repo, installs it, writes the preset into `work/.gent/config.json` (agents `main` and
 `delegate`, and the model `roles` the shipped orchestrate machines name: the
-reviewer as `planner` and `reviewer`, the worker as `implementor`, `codemod`
-and `verifier`, each its family at its effort, which shadow the owner's roles
+reviewer as `planner`, `reviewer`, `deep-reviewer` and `live-verifier`, the
+worker as `implementor`, `codemod` and `verifier`, each its family at its effort, which shadow the owner's roles
 of those names) and the roster block in `work/AGENTS.md`, runs the root build of **this** checkout
 (turbo: the `gent-cell` worker, then the `gent` binary beside it in
 `apps/tui/`, under `bin/`), and
