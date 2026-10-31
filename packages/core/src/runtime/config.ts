@@ -26,6 +26,7 @@ import {
   ModelId,
   DriverOverridesFromConfig,
   isRetiredDriverRef,
+  ReasoningEffort,
 } from "../domain/agent.js"
 import type { CredentialSlot } from "../domain/ids.js"
 import { CredentialOrder } from "../domain/driver.js"
@@ -167,6 +168,27 @@ const ModelTiersConfig = Schema.Struct({
 })
 
 /**
+ * One choice of a model role: the newest model `provider` lists of the
+ * catalog `family` (`claude-opus`, `gpt-luna`), at `effort`. A family names
+ * no release, so a new one takes over when the catalog lists it.
+ */
+const ModelRoleChoice = Schema.Struct({
+  provider: Schema.String,
+  family: Schema.String,
+  effort: ReasoningEffort,
+})
+
+/**
+ * A model role (config `roles`): its choices in the order a round tries
+ * them. `rank: "cheapest"` orders them by the cost per accepted unit of the
+ * machine's recent runs instead.
+ */
+const ModelRoleConfig = Schema.Struct({
+  models: Schema.Array(ModelRoleChoice).check(Schema.isMinLength(1)),
+  rank: Schema.optional(Schema.Literal("cheapest")),
+})
+
+/**
  * The owner's Sabbath (`sabbath` in the user file): from sunset on Friday to
  * 30 minutes after sunset on Saturday at a place, its days counted in `timeZone` (an IANA
  * name). No run starts on the pool then and the running ones stop; the
@@ -235,6 +257,12 @@ export class UserConfig extends Schema.Class<UserConfig, { readonly brand: uniqu
   model: Schema.optional(ModelId),
   /** The owner's model tiers (`ModelTiersConfig`). A project list shadows the user's, list by list. */
   tiers: Schema.optional(ModelTiersConfig),
+  /**
+   * The owner's model roles by name (`ModelRoleConfig`): a machine names a
+   * role, never a model. A project role replaces the user's role of that
+   * name whole; choices never merge.
+   */
+  roles: Schema.optional(Schema.Record(Schema.String, ModelRoleConfig)),
   /** The owner's Sabbath (`Sabbath`). Only the user file's counts. */
   sabbath: Schema.optional(Sabbath),
 }) {}
@@ -490,7 +518,7 @@ const mergeAgentEntries = (
  *   - disabledProviders: concatenated, user first.
  *   - agents: by name, a project entry replaces the fields it names in the
  *     user entry (`mergeAgentPatches`).
- *   - driverOverrides, providers: object spread; project entries shadow user
+ *   - driverOverrides, providers, roles: object spread; project entries shadow user
  *     entries key-by-key. Idempotent set/clear is the load-bearing property —
  *     `Record<agent, DriverRef>` (vs `Array`) means `driver.set` / `clear`
  *     map directly to `record[name] = ref` / `delete record[name]`.
@@ -518,6 +546,7 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
         (tiers) => Object.keys(tiers).length > 0,
       ),
     ),
+    roles: nonEmptyRecord({ ...user.roles, ...project.roles }),
   })
 
 /** A config file as JSON, with every key, known to `UserConfig` or not. */

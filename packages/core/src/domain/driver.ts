@@ -946,6 +946,8 @@ export const CatalogModel = Schema.Struct({
   limit: Schema.optional(CatalogLimit),
   releaseDate: Schema.optional(Schema.String),
   family: Schema.optional(Schema.String),
+  /** The model's id across providers, its maker's id first (`<maker>/<model>`). */
+  canonicalId: Schema.optional(Schema.String),
   /** False for embedding, image and other models the agent loop cannot drive. */
   toolCall: Schema.optional(Schema.Boolean),
   reasoning: Schema.optional(Schema.Boolean),
@@ -1012,6 +1014,14 @@ export type CatalogPlan = Pick<
   "efforts" | "imageLimit" | "imageCost" | "imagePartOptions" | "hostContextUpdateOptions"
 >
 
+/** The maker a canonical id names: its first segment; none without one. */
+const makerOfCanonicalId = (canonicalId: Option.Option<string>): Option.Option<string> =>
+  Option.flatMap(canonicalId, (id) => {
+    const slash = id.indexOf("/")
+    if (slash <= 0) return Option.none()
+    return Option.some(id.slice(0, slash))
+  })
+
 /**
  * A catalog model as gent's `Model`, under `providerId` (a driver id, which
  * may differ from the catalog provider's). A decision model is a classifier.
@@ -1045,6 +1055,7 @@ export const modelFromCatalog = (
       ),
       releaseDate: entry.releaseDate,
       family: entry.family,
+      maker: Option.getOrUndefined(makerOfCanonicalId(Option.fromUndefinedOr(entry.canonicalId))),
       reasoning: entry.reasoning,
       imageInput: entry.imageInput,
       imageLimit: apiClass.imageLimit,

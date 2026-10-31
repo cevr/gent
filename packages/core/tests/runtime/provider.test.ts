@@ -87,6 +87,7 @@ import {
   retryReason,
   textStep,
   toolCallPart,
+  toolCallStep,
 } from "../../src/runtime/provider"
 import { BunProviderLockLive } from "../../src/runtime/gent-platform-bun"
 import { BunServices } from "@effect/platform-bun"
@@ -112,9 +113,16 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { type ProviderConfig, RuntimeEnvironment, type Sabbath } from "../../src/runtime/config"
+import {
+  ConfigService,
+  type ProviderConfig,
+  RuntimeEnvironment,
+  type Sabbath,
+  UserConfig,
+} from "../../src/runtime/config"
 import {
   defineExtension,
+  ExtensionContext,
   ExtensionHost,
   tool,
   type ToolCapability,
@@ -129,6 +137,7 @@ import {
   modelCatalogFixture,
   type ModelCatalogFixtureRequest,
   resolvedRotationLock,
+  TEST_MODEL_ID,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
 import { ModelCatalogSnapshotStorage } from "../../src/storage/storage"
@@ -2892,6 +2901,105 @@ describe("chat aliases", () => {
   )
 })
 
+describe("model roles", () => {
+  /** A driver that lists the catalog's models of its own provider. */
+  const catalogDriver = (id: string): ModelDriverContribution => ({
+    id,
+    name: id,
+    listModels: (catalog) =>
+      Effect.succeed(
+        Option.match(catalog.provider(id), {
+          onNone: () => [],
+          onSome: (provider) => provider.models.map((entry) => modelFromCatalog(id, entry)),
+        }),
+      ),
+    resolveModel: () => Effect.succeed(stubModel),
+  })
+
+  it.live("a config role resolves each family to the newest model the profile lists", () =>
+    Effect.gen(function* () {
+      const answers = yield* Ref.make<ReadonlyArray<unknown>>([])
+      const probe = defineExtension({
+        id: "@test/roles",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register("modelDriver", catalogDriver("anthropic"))
+          yield* host.register("modelDriver", catalogDriver("openai"))
+          yield* host.register(
+            "tool",
+            tool({
+              id: "read_roles",
+              description: "Read the config roles",
+              params: Schema.Struct({}),
+              output: Schema.Struct({}),
+              execute: Effect.fn("ReadRoles.execute")(function* () {
+                const ctx = yield* ExtensionContext
+                const role = yield* ctx.Accounts.role(ctx.cwd, "reviewer")
+                const absent = yield* ctx.Accounts.role(ctx.cwd, "verifier")
+                const dated = yield* ctx.Accounts.maker(
+                  ctx.cwd,
+                  ModelId.make("anthropic/claude-opus-4-5-20251101"),
+                )
+                const unlisted = yield* ctx.Accounts.maker(ctx.cwd, ModelId.make("anthropic/none"))
+                yield* Ref.set(answers, [role, absent, dated, unlisted])
+                return {}
+              }),
+            }),
+          )
+        }),
+      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        toolCallStep("read_roles", {}),
+        textStep("done"),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        providerLayer,
+        agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: TEST_MODEL_ID })],
+        extensionInputs: [probe],
+        models: "catalog",
+        configServiceLayer: ConfigService.Test(
+          new UserConfig({
+            model: TEST_MODEL_ID,
+            roles: {
+              reviewer: {
+                models: [
+                  { provider: "openai", family: "gpt-sol", effort: "medium" },
+                  { provider: "anthropic", family: "claude-opus", effort: "max" },
+                  { provider: "anthropic", family: "claude-nothing", effort: "low" },
+                ],
+              },
+            },
+          }),
+        ),
+      })
+      const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map(({ event }) => event),
+        Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ sessionId, branchId, content: "roles" })
+      yield* Fiber.join(turn)
+      yield* controls.assertDone
+      const [role, absent, dated, unlisted] = yield* Ref.get(answers)
+      expect(role).toEqual(
+        Option.some({
+          choices: [
+            { model: "openai/gpt-6.1-sol", effort: "medium", maker: Option.some("openai") },
+            { model: "anthropic/claude-opus-5-5", effort: "max", maker: Option.some("anthropic") },
+          ],
+          unresolved: [{ provider: "anthropic", family: "claude-nothing" }],
+          rank: Option.none(),
+        }),
+      )
+      expect(absent).toEqual(Option.none())
+      // A dated snapshot names no maker; its family's other models do.
+      expect(dated).toEqual(Option.some("anthropic"))
+      expect(unlisted).toEqual(Option.none())
+    }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+  )
+})
+
 describe("shared sign-in", () => {
   const rows = (stored: Record<string, AuthInfo>, required: ReadonlyArray<string>) =>
     listAuthProviders(required).pipe(
@@ -3908,6 +4016,7 @@ describe("models.dev catalog source", () => {
                 limit: { context: 400_000, input: 272_000, output: 128_000 },
                 release_date: "2026-07-24",
                 family: "gpt-sol",
+                canonical_model_id: "openai/gpt-6.1-sol",
                 tool_call: true,
                 reasoning: true,
                 temperature: false,
@@ -3927,6 +4036,7 @@ describe("models.dev catalog source", () => {
                 name: 42,
                 limit: "big",
                 family: 7,
+                canonical_model_id: 9,
                 tool_call: "yes",
                 modalities: { input: "image" },
               },
@@ -3948,6 +4058,7 @@ describe("models.dev catalog source", () => {
           limit: { context: 400_000, input: 272_000, output: 128_000 },
           releaseDate: "2026-07-24",
           family: "gpt-sol",
+          canonicalId: "openai/gpt-6.1-sol",
           toolCall: true,
           reasoning: true,
           temperature: false,
@@ -3973,6 +4084,10 @@ describe("models.dev catalog source", () => {
       expect(
         models.map((entry) => Option.fromUndefinedOr(modelFromCatalog("openai", entry).family)),
       ).toEqual([Option.some("gpt-sol"), Option.none(), Option.none(), Option.none()])
+      // The maker is the canonical id's first segment, whichever provider lists it.
+      expect(
+        models.map((entry) => Option.fromUndefinedOr(modelFromCatalog("opencode", entry).maker)),
+      ).toEqual([Option.some("openai"), Option.none(), Option.none(), Option.none()])
       expect(catalog.providerIds).toEqual(["openai"])
       expect(Option.isNone(catalog.provider("absent"))).toBe(true)
     }),

@@ -23,6 +23,8 @@ import {
   ProviderId,
   type ReasoningEffort,
   noModelError,
+  makerOf,
+  newestOfFamily,
 } from "../domain/agent.js"
 import {
   AGENT_PROMPT_PRIORITY,
@@ -86,14 +88,16 @@ import {
   Semaphore,
   Stream,
 } from "effect"
-import type {
-  ExtensionAccountsService,
-  ExtensionHostContext,
-  ExtensionModelsService,
-  LaneRun,
-  TurnNotice,
-  TurnProjection,
-  TurnRetry,
+import {
+  ExtensionServiceError,
+  type ExtensionAccountsService,
+  type ExtensionHostContext,
+  type ExtensionModelsService,
+  type LaneRun,
+  type ModelRole,
+  type TurnNotice,
+  type TurnProjection,
+  type TurnRetry,
 } from "../domain/extension.js"
 import {
   ApprovalService,
@@ -1912,6 +1916,26 @@ export const makeExtensionAccounts = Effect.gen(function* () {
         )
       }),
     )
+  /** The models the profile of `cwd` lists, newest release first. */
+  const listedModels = (cwd: string, operation: string) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { registryService } = yield* profiles.resolve(cwd)
+        return yield* modelRegistry.list.pipe(
+          Effect.provideService(ExtensionRegistry, registryService),
+        )
+      }),
+    ).pipe(
+      Effect.mapError(
+        (error) =>
+          new ExtensionServiceError({
+            service: "ExtensionAccounts",
+            operation,
+            message: error.message,
+            cause: error,
+          }),
+      ),
+    )
   return (asker: SessionId): ExtensionAccountsService => ({
     admit: Effect.fn("ExtensionAccounts.admit")(function* (run: LaneRun) {
       const lane = yield* runLane(run)
@@ -1928,6 +1952,34 @@ export const makeExtensionAccounts = Effect.gen(function* () {
     tiers: Effect.fn("ExtensionAccounts.tiers")(function* (cwd: string) {
       const { tiers } = yield* configService.get(cwd)
       return { strongest: tiers?.strongest ?? [], efficient: tiers?.efficient ?? [] }
+    }),
+    role: Effect.fn("ExtensionAccounts.role")(function* (cwd: string, name: string) {
+      const { roles } = yield* configService.get(cwd)
+      const role = Option.fromUndefinedOr(roles?.[name])
+      if (Option.isNone(role)) return Option.none<ModelRole>()
+      const models = yield* listedModels(cwd, "role")
+      const choices: Array<ModelRole["choices"][number]> = []
+      const unresolved: Array<ModelRole["unresolved"][number]> = []
+      for (const choice of role.value.models) {
+        const newest = newestOfFamily(models, choice.provider, choice.family)
+        if (Option.isNone(newest)) {
+          unresolved.push({ provider: choice.provider, family: choice.family })
+          continue
+        }
+        choices.push({
+          model: newest.value.id,
+          effort: choice.effort,
+          maker: makerOf(models, newest.value),
+        })
+      }
+      return Option.some({ choices, unresolved, rank: Option.fromUndefinedOr(role.value.rank) })
+    }),
+    maker: Effect.fn("ExtensionAccounts.maker")(function* (cwd: string, model: ModelIdType) {
+      const models = yield* listedModels(cwd, "maker")
+      return Option.flatMap(
+        Option.fromUndefinedOr(models.find((each) => each.id === model)),
+        (found) => makerOf(models, found),
+      )
     }),
     project: (cwd) => configService.project(cwd),
     awaitLane: (message) => placement.awaitLane(message),

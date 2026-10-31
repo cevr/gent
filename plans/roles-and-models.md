@@ -95,7 +95,7 @@ questions are decided below.
    both match the pick; otherwise the round opens a new thread. The pick tries
    the kept thread's model first, as `strongest` does, to keep the cache.
 6. **Other maker.** A thread role may name `against: <role>`. Its pick drops
-   every choice whose maker (open question below) is the maker of the model
+   every choice whose maker (`makerOf`, decided below) is the maker of the model
    recorded on the round
    under review (`PendingAction.Round.model` of that role's last round). A
    machine whose `against` role resolves to fewer than two makers fails at
@@ -125,20 +125,24 @@ questions are decided below.
   only (composition over flags, no config language to grow).
 - Projects: a role shadows by name, whole.
 
-## Open question (decide before commit 2)
-
-- A family's maker. The first `-` segment fails for OpenAI's `o`, `o-mini`
-  and `o-pro`: `against` would take o3 as another maker than `gpt-sol`.
-  Candidates: the first-party models.dev provider that lists the family
-  (`anthropic`, `openai`, `google`; an aggregator such as `opencode` is not
-  one), or a maker field on the family where the catalog gives one. A table
-  of prefixes in core is the last resort.
+- Maker (decided 2026-10-31): the catalog names it. models.dev's
+  `canonical_model_id` starts with the lab (`openai/gpt-6-sol`,
+  `anthropic/claude-opus-5-5`, `zhipuai/glm-5.3`) on whichever provider
+  lists the model, so `Model.maker` is its first segment. A model with none
+  (a dated snapshot, o3) takes the maker most models of its family name
+  (`makerOf`). Measured on the 2026-10-30 catalog: 113 of 150 families get
+  a maker, `o`, `o-mini` and `o-pro` among them (`openai`); a model with
+  neither has no maker, and an `against` pick drops it, since it cannot be
+  shown to be another maker. The first-segment rule of the family name is
+  gone.
 
 ## Commits (planned)
 
 1. core: `Model.family` from the catalog (done first, alone, before the
-   Sabbath of 2026-10-30), family resolution with the tie rule, `roles` in
-   config with project shadowing; `tiers` removed. Tests: resolution reads
+   Sabbath of 2026-10-30); then `Model.maker`, family resolution with the
+   tie rule, `roles` in config with project shadowing, and
+   `Accounts.role` and `Accounts.maker` (done 2026-10-31). `tiers` goes in
+   commit 2, with its reader. Tests: resolution reads
    the models `listModelCatalog` lists (not `modelFromCatalog` alone), and the
    test catalog fixture (`test-utils/harness.ts`) gains families.
 2. machines: the tagged `ThreadRole`, per-visit role choice, the keep rule on

@@ -131,6 +131,12 @@ export class Model extends Schema.Class<Model, { readonly brand: unique symbol }
    * first `-` segment names the maker. Absent when the catalog does not say.
    */
   family: Schema.optional(Schema.String),
+  /**
+   * The lab that made the model, as the catalog's canonical id names it
+   * (`<maker>/<model>`), whichever provider serves it. Absent
+   * when the catalog does not say: `makerOf` then reads the model's family.
+   */
+  maker: Schema.optional(Schema.String),
   /** Whether the model reasons, as the catalog says; absent when it does not say. */
   reasoning: Schema.optional(Schema.Boolean),
   /**
@@ -259,6 +265,63 @@ export const byReleaseDateDesc = (models: readonly Model[]): readonly Model[] =>
     if (l > r) return -1
     return 1
   })
+
+/** A dated snapshot's id ends in its date: `claude-opus-4-5-20251101`. */
+const DATED_SNAPSHOT = /-\d{8}$/
+
+/**
+ * The newest chat model `provider` lists whose catalog family is `family`,
+ * by release date. Of two released the same day, the one whose id names no
+ * date wins over its dated snapshot. None when the provider lists none.
+ */
+export const newestOfFamily = (
+  models: ReadonlyArray<Model>,
+  provider: string,
+  family: string,
+): Option.Option<Model> => {
+  const ordered = byReleaseDateDesc(
+    models.filter(
+      (model) =>
+        model.provider === provider && model.family === family && Predicate.isUndefined(model.kind),
+    ),
+  )
+  const newest = Option.fromUndefinedOr(ordered[0])
+  return Option.map(
+    newest,
+    (first) =>
+      ordered.find(
+        (model) => model.releaseDate === first.releaseDate && !DATED_SNAPSHOT.test(model.id),
+      ) ?? first,
+  )
+}
+
+/**
+ * The lab that made `model`: the maker the catalog names for it, else the
+ * maker most models of its family in `models` name (a dated snapshot or an
+ * old release may carry no canonical id). None when neither says: a check
+ * that needs another maker cannot count it as one.
+ */
+export const makerOf = (models: ReadonlyArray<Model>, model: Model): Option.Option<string> => {
+  const own = Option.fromUndefinedOr(model.maker)
+  if (Option.isSome(own)) return own
+  const family = Option.fromUndefinedOr(model.family)
+  if (Option.isNone(family)) return Option.none()
+  const counts = new Map<string, number>()
+  for (const each of models) {
+    const maker = Option.fromUndefinedOr(each.maker)
+    if (Option.isNone(maker) || each.family !== family.value) continue
+    counts.set(maker.value, (counts.get(maker.value) ?? 0) + 1)
+  }
+  let best = Option.none<string>()
+  let most = 0
+  for (const [maker, count] of counts) {
+    if (count > most) {
+      best = Option.some(maker)
+      most = count
+    }
+  }
+  return best
+}
 
 // Calculate cost from token usage
 

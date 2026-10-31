@@ -1860,6 +1860,7 @@ const parseCatalogModel = (models: JsonRecord, id: string): Option.Option<Catalo
         limit: Option.getOrUndefined(field(raw, "limit", CatalogLimit)),
         releaseDate: Option.getOrUndefined(field(raw, "release_date", Schema.String)),
         family: Option.getOrUndefined(field(raw, "family", Schema.String)),
+        canonicalId: Option.getOrUndefined(field(raw, "canonical_model_id", Schema.String)),
         toolCall: Option.getOrUndefined(field(raw, "tool_call", Schema.Boolean)),
         reasoning: Option.getOrUndefined(field(raw, "reasoning", Schema.Boolean)),
         temperature: Option.getOrUndefined(field(raw, "temperature", Schema.Boolean)),
@@ -7905,6 +7906,11 @@ interface ModelRegistryService {
     credential?: CredentialReceipt,
   ) => Effect.Effect<Option.Option<Model>, ProviderAuthError, ExtensionRegistry>
   /**
+   * Every model the calling turn's profile serves (`ExtensionRegistry`),
+   * newest release first, as `models.list` lists them.
+   */
+  readonly list: Effect.Effect<ReadonlyArray<Model>, ProviderAuthError, ExtensionRegistry>
+  /**
    * `credential` with the moment its stored credential was signed in
    * (`AuthInfo.signedInAt`), read through the drivers of `registry`, the
    * calling turn's profile: what tells a new sign-in on the slot from the one
@@ -7939,6 +7945,12 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
                 return Option.fromUndefinedOr(models.find((model) => model.id === current))
               }),
             ),
+          list: servedModelCatalog().pipe(
+            Effect.provideService(Auth, authStore),
+            Effect.provideService(ModelCatalogRecord, catalogRecord),
+            Effect.provideService(ModelCatalogSource, catalogSource),
+            Effect.map(({ models }) => models),
+          ),
           stamp: (credential, registry) => stampCredential(authStore, credential, registry),
         })
       }),
@@ -7967,6 +7979,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
               Option.some(madeUpModel(modelId, SCRIPTED_MODEL_CONTEXT_LIMIT_TOKENS, Option.none())),
             ),
           ),
+        list: catalog.list,
         stamp: catalog.stamp,
       })
     }),
@@ -7989,6 +8002,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
           if (models.length > 0) return Effect.succeedNone
           return Effect.succeedSome(madeUpModel(modelId, TEST_MODEL_CONTEXT_LIMIT_TOKENS, pricing))
         },
+        list: Effect.succeed(byReleaseDateDesc(models)),
         stamp: (credential) => Effect.succeed(credential),
       }),
     )

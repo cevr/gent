@@ -9,7 +9,10 @@ import {
   calculateCost,
   DriverRef,
   effectiveModelDriver,
+  makerOf,
+  Model,
   ModelId,
+  newestOfFamily,
   noRunBound,
   parseModelId,
   ProviderId,
@@ -348,5 +351,62 @@ describe("step cost", () => {
     expect(cacheWriteRate(byLifetime, Option.some(3_600_000))).toBe(4)
     expect(cacheWriteRate(byLifetime, Option.none())).toBe(4)
     expect(cacheWriteRate({ input: 2, output: 10 }, Option.some(300_000))).toBe(2)
+  })
+})
+
+describe("model families", () => {
+  const model = (
+    id: string,
+    fields: { family?: string; maker?: string; releaseDate?: string; kind?: "classifier" },
+  ) =>
+    Model.make({
+      id: ModelId.make(id),
+      name: id,
+      provider: ProviderId.make(id.slice(0, id.indexOf("/"))),
+      ...fields,
+    })
+
+  test("a family resolves to the newest model its provider lists, the undated id on a tie", () => {
+    const models = [
+      model("anthropic/claude-opus-4-5-20251101", {
+        family: "claude-opus",
+        releaseDate: "2025-11-24",
+      }),
+      model("anthropic/claude-opus-4-5", { family: "claude-opus", releaseDate: "2025-11-24" }),
+      model("anthropic/claude-opus-4-1", { family: "claude-opus", releaseDate: "2025-08-05" }),
+      model("opencode/claude-opus-5", { family: "claude-opus", releaseDate: "2026-07-24" }),
+      model("anthropic/claude-opus-judge", {
+        family: "claude-opus",
+        releaseDate: "2026-09-01",
+        kind: "classifier",
+      }),
+      model("anthropic/claude-sonnet-5", { family: "claude-sonnet", releaseDate: "2026-06-29" }),
+    ]
+    const newest = (provider: string, family: string) =>
+      Option.map(newestOfFamily(models, provider, family), (found) => String(found.id))
+    // Another provider's newer release and a classifier do not count.
+    expect(newest("anthropic", "claude-opus")).toEqual(Option.some("anthropic/claude-opus-4-5"))
+    expect(newest("opencode", "claude-opus")).toEqual(Option.some("opencode/claude-opus-5"))
+    expect(newest("anthropic", "gpt-sol")).toEqual(Option.none())
+  })
+
+  test("a model's maker is its own, else its family's, else unknown", () => {
+    const models = [
+      model("openai/gpt-6-sol", { family: "gpt-sol", maker: "openai" }),
+      model("opencode/gpt-6-sol", { family: "gpt-sol", maker: "openai" }),
+      model("openai/o3", { family: "o" }),
+      model("openai/o4-mini", { family: "o", maker: "openai" }),
+      model("opencode/claude-opus-5", { family: "claude-opus", maker: "anthropic" }),
+      model("opencode/big-pickle", { family: "big-pickle" }),
+      model("opencode/unnamed", {}),
+    ]
+    const maker = (index: number) => makerOf(models, models[index] ?? models[0]!)
+    // One provider serves two makers: the maker follows the model, not the provider.
+    expect(maker(1)).toEqual(Option.some("openai"))
+    expect(maker(4)).toEqual(Option.some("anthropic"))
+    // o3 names no maker; its family's other model does.
+    expect(maker(2)).toEqual(Option.some("openai"))
+    expect(maker(5)).toEqual(Option.none())
+    expect(maker(6)).toEqual(Option.none())
   })
 })

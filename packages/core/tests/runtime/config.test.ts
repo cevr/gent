@@ -87,6 +87,28 @@ describe("user configuration", () => {
       expect(Option.isSome(decode({ tiers: { efficient: ["a/work"] } }))).toBe(true)
     }),
   )
+  it.live("a model role needs a choice, each with a provider, a family and an effort", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownOption(UserConfig)
+      const choice = { provider: "openai", family: "gpt-luna", effort: "max" }
+      expect(Option.isSome(decode({ roles: { codemod: { models: [choice] } } }))).toBe(true)
+      expect(
+        Option.isSome(decode({ roles: { codemod: { models: [choice], rank: "cheapest" } } })),
+      ).toBe(true)
+      expect(Option.isNone(decode({ roles: { codemod: { models: [] } } }))).toBe(true)
+      expect(
+        Option.isNone(decode({ roles: { codemod: { models: [{ ...choice, effort: "huge" }] } } })),
+      ).toBe(true)
+      expect(
+        Option.isNone(
+          decode({ roles: { codemod: { models: [{ provider: "openai", effort: "max" }] } } }),
+        ),
+      ).toBe(true)
+      expect(
+        Option.isNone(decode({ roles: { codemod: { models: [choice], rank: "best" } } })),
+      ).toBe(true)
+    }),
+  )
   describe("in-memory reads and writes", () => {
     it.live("seeded initial config reads back unchanged", () => {
       const initial = new UserConfig({ disabledExtensions: ["@gent/todo"] })
@@ -1838,6 +1860,47 @@ describe("user configuration", () => {
           expect((yield* cfg.get(plain)).tiers).toEqual({
             strongest: [ModelId.make("a/plan"), ModelId.make("b/plan")],
             efficient: [ModelId.make("a/work")],
+          })
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive("a project's model role replaces the user's role of that name whole", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const project = yield* fs.makeTempDirectoryScoped()
+        const plain = yield* fs.makeTempDirectoryScoped()
+        const opus = { provider: "anthropic", family: "claude-opus", effort: "high" } as const
+        const sol = { provider: "openai", family: "gpt-sol", effort: "medium" } as const
+        const luna = { provider: "openai", family: "gpt-luna", effort: "max" } as const
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        yield* fs.writeFileString(
+          userConfigPath,
+          encodeJson({
+            roles: { planner: { models: [opus] }, reviewer: { models: [sol, opus] } },
+          }),
+        )
+        yield* fs.makeDirectory(path.join(project, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(project, ".gent", "config.json"),
+          encodeJson({ roles: { reviewer: { models: [luna], rank: "cheapest" } } }),
+        )
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd: plain, home })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect((yield* cfg.get(project)).roles).toEqual({
+            planner: { models: [opus] },
+            reviewer: { models: [luna], rank: "cheapest" },
+          })
+          expect((yield* cfg.get(plain)).roles).toEqual({
+            planner: { models: [opus] },
+            reviewer: { models: [sol, opus] },
           })
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),

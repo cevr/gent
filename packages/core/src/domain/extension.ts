@@ -1446,6 +1446,25 @@ interface ModelTiers {
   readonly efficient: ReadonlyArray<ModelId>
 }
 
+/** One resolved choice of a model role: the model it runs now, its effort, and its maker. */
+interface ModelRoleChoice {
+  readonly model: ModelId
+  readonly effort: ReasoningEffort
+  /** The lab that made the model (`makerOf`); none when the catalog does not say. */
+  readonly maker: Option.Option<string>
+}
+
+/**
+ * A model role (config `roles`) resolved over the models the profile lists:
+ * each choice is the newest model of its family on its provider, in the
+ * role's order. A choice no listed model matches is in `unresolved`.
+ */
+export interface ModelRole {
+  readonly choices: ReadonlyArray<ModelRoleChoice>
+  readonly unresolved: ReadonlyArray<{ readonly provider: string; readonly family: string }>
+  readonly rank: Option.Option<"cheapest">
+}
+
 /**
  * The server's accounts: how many runs their quota windows carry. A run
  * that starts other runs asks for their lanes here, as threads do.
@@ -1479,6 +1498,19 @@ export interface ExtensionAccountsService {
   readonly awaitLane: (message: MessageId) => Effect.Effect<boolean, LaneUnavailable>
   /** The owner's model tiers as the config of `cwd` names them. */
   readonly tiers: (cwd: string) => Effect.Effect<ModelTiers>
+  /**
+   * The model role `name` as the config of `cwd` names it, resolved over the
+   * models that cwd's profile lists. None when the config names no such role.
+   */
+  readonly role: (
+    cwd: string,
+    name: string,
+  ) => Effect.Effect<Option.Option<ModelRole>, ExtensionServiceError>
+  /** The lab that made `model`, among the models the profile of `cwd` lists (`makerOf`). */
+  readonly maker: (
+    cwd: string,
+    model: ModelId,
+  ) => Effect.Effect<Option.Option<string>, ExtensionServiceError>
   /**
    * The project `cwd` works in: a clone, a worktree and a rift of one
    * repository are one project, named by its `origin`.
