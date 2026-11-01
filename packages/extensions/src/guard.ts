@@ -12,12 +12,15 @@ import {
 } from "@gent/core/extensions/api"
 
 /*
- * @gent/guard: an opt-in judge of each tool call before it runs, through the
- * `toolCall` hook. It is off until a config file holds a `guard` entry with a
- * `policy` or `rules`; with none it registers no hook, and a call costs
- * nothing more than with no guard.
+ * @gent/guard: a judge of each tool call before it runs, through the
+ * `toolCall` hook. Its floor is always on: a `bash` call that loses work for
+ * good is denied, with or without config. The rest is opt-in: it judges
+ * nothing more until a config file holds a `guard` entry with a `policy` or
+ * `rules`, and the floor reads only text, with no model call.
  *
  * Order of judgement, first answer wins:
+ *   0. The floor: `rm -rf` of the root, the home or a repository's root,
+ *      `git reset --hard`, and `git clean -f` with `-d`, `-x` or `-X` deny.
  *   1. `rules`: the last rule that matches the call decides (allow, ask, deny).
  *   2. A read-only tool runs.
  *   3. With a `policy`, a classifier model reads the policy and the call and
@@ -250,6 +253,125 @@ const ruleVerdict = (
   return Option.none()
 }
 
+// ── floor ───────────────────────────────────────────────────────────────────
+
+/** The tool whose `command` the floor reads: the shipped shell tool. */
+const SHELL_TOOL = "bash"
+
+const ShellCall = Schema.Struct({ command: Schema.String, cwd: Schema.optional(Schema.String) })
+const decodeShellCall = Schema.decodeUnknownOption(ShellCall)
+
+/** A command's words: a quoted word without its quotes, else each run of non-space. */
+const commandWords = (command: string): ReadonlyArray<string> =>
+  Array.from(command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g), (match) =>
+    String(match[1] ?? match[2] ?? match[3] ?? ""),
+  )
+
+/** The letters of a command's short flags, run together (`-rf -x` is `rfx`). */
+const shortFlags = (words: ReadonlyArray<string>) =>
+  words.filter((word) => /^-[^-]/.test(word)).join("")
+
+/** A path word with `~`, `$HOME` and `${HOME}` read as the home and no trailing slash. */
+const expandHome = (word: string, home: string) =>
+  word
+    .replace(/^~(?=\/|$)/, home)
+    .replace(/^\$\{?HOME\}?(?=\/|$)/, home)
+    .replace(/\/+$/, "") || "/"
+
+/** Git's options that take the next word as their value. */
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"])
+
+/** A git command's subcommand and the words after it; the global options before it skipped. */
+const gitSubcommand = (args: ReadonlyArray<string>) => {
+  let index = 0
+  while (index < args.length && (args[index] ?? "").startsWith("-")) {
+    index += 1
+    if (GIT_VALUE_OPTIONS.has(args[index - 1] ?? "")) index += 1
+  }
+  return { name: args[index], rest: args.slice(index + 1) }
+}
+
+/**
+ * Why an `rm` loses work for good: recursive and forced, over the root, the
+ * home or a repository's root. `cwd` is where it runs, so a relative target
+ * resolves against it.
+ */
+const rmRefusal = Effect.fn("Guard.rmRefusal")(function* (
+  command: string,
+  args: ReadonlyArray<string>,
+  cwd: string,
+  home: string,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const flags = shortFlags(args)
+  const recursive = args.includes("--recursive") || /[rR]/.test(flags)
+  const force = args.includes("--force") || flags.includes("f")
+  if (!recursive || !force) return Option.none<string>()
+  for (const target of args.filter((word) => !word.startsWith("-"))) {
+    const resolved = path.resolve(cwd, expandHome(target, home))
+    if (resolved === "/" || ["/*", "*"].includes(target))
+      return Option.some(`\`${command}\` would delete the root or every file here`)
+    if (resolved === path.resolve(home) || target === "~/*")
+      return Option.some(`\`${command}\` would delete the home directory`)
+    const isRepoRoot = yield* fs
+      .exists(path.join(resolved, ".git"))
+      .pipe(Effect.orElseSucceed(() => false))
+    if (isRepoRoot) return Option.some(`\`${command}\` would delete the repository at ${resolved}`)
+  }
+  return Option.none<string>()
+})
+
+/** Why a `git` command loses work for good: a hard reset, or a forced clean with `-d`, `-x` or `-X`. */
+const gitRefusal = (command: string, args: ReadonlyArray<string>): Option.Option<string> => {
+  const sub = gitSubcommand(args)
+  if (sub.name === "reset" && sub.rest.includes("--hard"))
+    return Option.some(`\`${command}\` discards uncommitted work; stash it or commit first`)
+  if (sub.name !== "clean") return Option.none()
+  const flags = shortFlags(sub.rest)
+  const forced = flags.includes("f") || sub.rest.includes("--force")
+  const wide = /[dxX]/.test(flags)
+  const dry = flags.includes("n") || sub.rest.includes("--dry-run")
+  if (!forced || !wide || dry) return Option.none()
+  return Option.some(`\`${command}\` deletes untracked files for good; run it with -n first`)
+}
+
+/** Why one command loses work for good; none when it does not. */
+const commandRefusal = (command: string, cwd: string, home: string) => {
+  const words = commandWords(command).filter((word) => word !== "sudo" && word !== "command")
+  const head = words[0]?.split("/").pop()
+  const args = words.slice(1)
+  if (head === "rm") return rmRefusal(command, args, cwd, home)
+  if (head === "git") return Effect.succeed(gitRefusal(command, args))
+  return Effect.succeed(Option.none<string>())
+}
+
+/**
+ * The floor's verdict on a call: a deny for a `bash` call one of whose
+ * commands loses work for good, none for any other call. It splits the
+ * command on `&&`, `||`, `;`, `|` and newlines, and reads each part's words.
+ * Not a shell: `$(...)`, `eval`, a variable and a script file are not seen.
+ */
+export const floorVerdict = Effect.fn("Guard.floorVerdict")(function* (
+  call: Pick<ToolCallInput, "toolName" | "input">,
+  cwd: string,
+  home: string,
+) {
+  if (call.toolName !== SHELL_TOOL) return Option.none<ToolCallVerdict>()
+  const shell = decodeShellCall(call.input)
+  if (Option.isNone(shell)) return Option.none<ToolCallVerdict>()
+  const path = yield* Path.Path
+  const runsIn = path.resolve(cwd, shell.value.cwd ?? ".")
+  for (const command of shell.value.command.split(/&&|\|\||;|\||\n/)) {
+    const refusal = yield* commandRefusal(command.trim(), runsIn, home)
+    if (Option.isSome(refusal))
+      return Option.some(
+        ToolCallVerdict.cases.Deny.make({ reason: `the guard floor denies it: ${refusal.value}` }),
+      )
+  }
+  return Option.none<ToolCallVerdict>()
+})
+
 // ── classify ────────────────────────────────────────────────────────────────
 
 /** The classifier's own deadline. */
@@ -409,34 +531,50 @@ const makeJudge = (config: GuardConfig, deadlineMs: number) => {
 
 // ── extension ───────────────────────────────────────────────────────────────
 
+const allowed = (_call: ToolCallInput) => Effect.succeed(ToolCallVerdict.cases.Allow.make({}))
+
 /**
- * The guard with the classifier deadline `deadlineMs`. A config with neither
- * a policy nor rules registers no hook; a `guard` entry that does not decode
- * asks about every call that is not read-only, since its owner wanted a guard.
+ * The guard's judge past the floor. A config with neither a policy nor rules
+ * allows every call; a `guard` entry that does not decode asks about every
+ * call that is not read-only, since its owner wanted a guard.
  */
+const configuredJudge = Effect.fn("Guard.configuredJudge")(function* (
+  home: string,
+  cwd: string,
+  deadlineMs: number,
+) {
+  const setting = yield* readGuardSetting(home, cwd)
+  if (Option.isNone(setting)) return allowed
+  if (Result.isFailure(setting.value)) {
+    const reason = setting.value.failure
+    yield* Effect.logWarning("guard.config.invalid").pipe(Effect.annotateLogs({ reason }))
+    return (call: ToolCallInput) => {
+      if (call.readonly) return Effect.succeed(ToolCallVerdict.cases.Allow.make({}))
+      return Effect.succeed(asked(reason))
+    }
+  }
+  const config = setting.value.success
+  if (Predicate.isUndefined(config.policy) && (config.rules ?? []).length === 0) return allowed
+  return makeJudge(config, deadlineMs)
+})
+
+/** The guard with the classifier deadline `deadlineMs`: the floor, then the config's judge. */
 export const makeGuardExtension = (deadlineMs: number) =>
   defineExtension({
     id: "@gent/guard",
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
-      const setting = yield* readGuardSetting(host.home, host.cwd)
-      if (Option.isNone(setting)) return
-      if (Result.isFailure(setting.value)) {
-        const reason = setting.value.failure
-        yield* Effect.logWarning("guard.config.invalid").pipe(
-          Effect.annotateLogs({ reason: setting.value.failure }),
-        )
-        yield* host.on("toolCall", (call) => {
-          if (call.readonly) return Effect.succeed(ToolCallVerdict.cases.Allow.make({}))
-          return Effect.succeed(asked(reason))
-        })
-        return
-      }
-      const config = setting.value.success
-      if (Predicate.isUndefined(config.policy) && (config.rules ?? []).length === 0) return
-      yield* host.on("toolCall", makeJudge(config, deadlineMs))
+      const judge = yield* configuredJudge(host.home, host.cwd, deadlineMs)
+      yield* host.on("toolCall", (call) =>
+        Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
+          const floor = yield* floorVerdict(call, ctx.cwd, host.home)
+          if (Option.isSome(floor)) return floor.value
+          return yield* judge(call)
+        }),
+      )
     }),
   })
 
-/** @gent/guard: off until a config file holds a `guard` policy or rules. */
+/** @gent/guard: the floor always; rules and a policy once a config file holds them. */
 export const GuardExtension = makeGuardExtension(GUARD_DEADLINE_MS)

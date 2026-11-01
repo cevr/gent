@@ -698,8 +698,22 @@ export const ShellAsksExtension = defineExtension({
 
 ### `@gent/guard`
 
-The shipped `@gent/guard` is a `toolCall` hook. It is off: it registers no
-hook until `~/.gent/config.json` (or a trusted project's
+The shipped `@gent/guard` is a `toolCall` hook. Its floor is always on: a
+`bash` call that loses work for good is denied, with no config and before
+any rule, so an allow rule does not lift it. The floor splits the command on
+`&&`, `||`, `;`, `|` and newlines and denies a part that is:
+
+- `rm` both recursive and forced over the root, `*`, the home (`~`, `$HOME`)
+  or a directory that holds `.git`, resolved against the call's `cwd`;
+- `git reset --hard`, also after global options such as `-C <dir>`;
+- `git clean` forced (`-f`, `--force`) with `-d`, `-x` or `-X`, and not a
+  dry run (`-n`, `--dry-run`).
+
+A force-push is not on the floor. The floor reads text, not a shell:
+`$(...)`, `eval`, a variable other than `$HOME` and a script file are not
+seen. It makes no model call.
+
+The rest is off until `~/.gent/config.json` (or a trusted project's
 `.gent/config.json`) holds a `guard` entry with a `policy` or `rules`.
 
 ```json
@@ -743,7 +757,7 @@ It judges a call in this order, and the first answer wins:
 A `guard` entry that does not decode, and a config file the guard cannot
 read or that is not a JSON object, ask about each call that is not
 read-only: only a missing file or a file with no `guard` key leaves the
-guard off. Both files' entries apply: the policies join, the project's
+guard at its floor. Both files' entries apply: the policies join, the project's
 rules come after the user's, and the project's `model` wins. The guard reads
 its config when a session profile is built, from the same read of the files
 that names the profile, and an edit to a config file builds a new profile
@@ -1433,7 +1447,7 @@ beside forged copies its extension must ignore, builds one with
 | `packages/extensions/src/agents.ts`    | `agent` + turn projection prompt sections                         |
 | `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource                     |
 | `packages/extensions/src/router.ts`    | `modelRouter` from config + a classifier                          |
-| `packages/extensions/src/guard.ts`     | `toolCall` hook from config + a classifier                        |
+| `packages/extensions/src/guard.ts`     | `toolCall` hook: a fixed floor, rules from config, a classifier   |
 | `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook                      |
 | `examples/extensions/prompt-rules.ts`  | `systemPrompt` hook                                               |
 | `examples/extensions/painter.ts`       | `agent` confined by `paths`, tested beside the shipped file tools |

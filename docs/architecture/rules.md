@@ -33,7 +33,8 @@ commit.
    means no. Core has no rule schema, rule storage, or `permission.*` RPC.
    It has one hook: `toolCall` gives each call a verdict (allow, ask, deny)
    before it runs, and the strictest verdict wins. Rules live in an
-   extension (`@gent/guard`, off until a config enables it).
+   extension (`@gent/guard`: a fixed floor of shell commands that lose
+   work for good, and rules and a policy once a config enables them).
    Receipts: `packages/core/src/runtime/extension-host.ts`,
    `packages/core/src/runtime/tools.ts` (the gate),
    `packages/core/src/domain/interaction.ts`.

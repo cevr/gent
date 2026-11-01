@@ -45,7 +45,7 @@ import {
   textStep,
   toolCallStep,
 } from "@gent/core/test-utils"
-import { callSubjects, callText, makeGuardExtension } from "../src/guard.js"
+import { callSubjects, callText, floorVerdict, makeGuardExtension } from "../src/guard.js"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
@@ -173,6 +173,20 @@ const toolsExtension = (ran: Array<string>) =>
       yield* host.register(
         "tool",
         tool({
+          id: "bash",
+          description: "Run a shell command (records it, runs nothing)",
+          params: Schema.Struct({ command: Schema.String, cwd: Schema.optional(Schema.String) }),
+          output: Schema.String,
+          execute: ({ command }) =>
+            Effect.sync(() => {
+              ran.push(command)
+              return `ran ${command}`
+            }),
+        }),
+      )
+      yield* host.register(
+        "tool",
+        tool({
           id: "peek",
           description: "Read a path",
           params: Schema.Struct({ path: Schema.String }),
@@ -213,6 +227,8 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
   readonly answers: ReadonlyArray<JudgeAnswer>
   readonly steps: ReadonlyArray<SequenceStep>
   readonly deadlineMs?: number
+  /** The project directory is a repository's root (it holds `.git`). */
+  readonly repo?: boolean
   /** Extensions set up before the guard. */
   readonly before?: Parameters<typeof createRpcHarness>[0]["extensionInputs"]
   /** Extensions set up after the guard. */
@@ -221,6 +237,7 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
   const { home, cwd } = yield* writeHome(params.guard)
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  if (params.repo === true) yield* fs.makeDirectory(path.join(cwd, ".git"))
   /** Replace the user config's `guard` entry, as an owner's edit does. */
   const setGuard = (guard: Schema.Json) =>
     fs.writeFileString(path.join(home, ".gent", "config.json"), encodeExternalJson({ guard }))
@@ -339,6 +356,59 @@ describe("@gent/guard", () => {
         expect(session.ran).toEqual(["rm -rf build"])
         expect(presentedTexts(events)).toEqual([])
         expect(session.calls).toEqual([])
+        expect(answered).toBe(true)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10_000,
+  )
+
+  it.scopedLive(
+    "with no guard entry the floor still denies a shell call that loses work for good, with no model call",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* guardedSession({
+          guard: Option.none(),
+          answers: [label("allow")],
+          repo: true,
+          steps: [
+            toolCallStep("bash", { command: "git reset --hard" }),
+            toolCallStep("bash", { command: "cd . && rm -rf ." }),
+            toolCallStep("bash", { command: "git push --force origin main" }),
+            textStep("finished"),
+          ],
+        })
+        const { events, results, answered } = yield* session.run("Start over.", true)
+        const [reset, remove, push] = outcomes(results)
+        expect(reset).toContain("the guard floor denies it: `git reset --hard` discards")
+        expect(remove).toContain(
+          "the guard floor denies it: `rm -rf .` would delete the repository",
+        )
+        expect(push).toBe("ok")
+        expect(session.ran).toEqual(["git push --force origin main"])
+        expect(presentedTexts(events)).toEqual([])
+        expect(session.calls).toEqual([])
+        expect(answered).toBe(true)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10_000,
+  )
+
+  it.scopedLive(
+    "an allow rule does not lift the floor",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* guardedSession({
+          guard: Option.some({ rules: [{ tool: "bash", effect: "allow" }] }),
+          answers: [label("allow")],
+          steps: [
+            toolCallStep("bash", { command: "git clean -fdx" }),
+            toolCallStep("bash", { command: "git status" }),
+            textStep("finished"),
+          ],
+        })
+        const { results, answered } = yield* session.run("Tidy.", true)
+        const [clean, status] = outcomes(results)
+        expect(clean).toContain("the guard floor denies it: `git clean -fdx` deletes untracked")
+        expect(status).toBe("ok")
+        expect(session.ran).toEqual(["git status"])
         expect(answered).toBe(true)
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
     10_000,
@@ -714,6 +784,64 @@ describe("@gent/guard", () => {
         expect(session.calls).toEqual([])
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
     10_000,
+  )
+})
+
+describe("guard floor", () => {
+  it.scopedLive(
+    "denies an rm -rf of the root, the home or a repository's root, a hard reset and a wide forced clean",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTempDirectoryScoped("gent-floor-home-")
+        const cwd = yield* makeTempDirectoryScoped("gent-floor-cwd-")
+        const repo = path.join(cwd, "repo")
+        yield* fs.makeDirectory(path.join(repo, ".git"), { recursive: true })
+        yield* fs.makeDirectory(path.join(repo, "build"))
+        const judge = (
+          input: { readonly command?: string; readonly cwd?: string; readonly code?: string },
+          tool = "bash",
+        ) =>
+          floorVerdict({ toolName: tool, input }, cwd, home).pipe(
+            Effect.map(Option.map((verdict) => verdict._tag)),
+          )
+        const denied = Option.some("Deny" as const)
+        for (const command of [
+          "rm -rf /",
+          "rm -rf /*",
+          "sudo rm -rf ~",
+          'rm -fr "$HOME/"',
+          "rm --recursive --force ${HOME}",
+          "cd build && rm -Rf ~/*",
+          `rm -rf ${repo}`,
+          "rm -rf repo/",
+          "git reset --hard HEAD~1",
+          "git -C repo reset --hard",
+          "git clean -fd",
+          "git clean -f -x",
+          "echo done; git clean -fX | cat",
+        ])
+          expect([command, yield* judge({ command })]).toEqual([command, denied])
+        // The call's own cwd: `.` is the repository.
+        expect(yield* judge({ command: "rm -rf .", cwd: "repo" })).toEqual(denied)
+        for (const command of [
+          "rm -rf build",
+          "rm -rf repo/build",
+          "rm -r ~",
+          "rm -f ~/notes.txt",
+          "git reset --soft HEAD~1",
+          "git reset --hard-ish",
+          "git clean -n -fdx",
+          "git clean -f",
+          "git push --force origin main",
+          "trash ~",
+        ])
+          expect([command, yield* judge({ command })]).toEqual([command, Option.none()])
+        // Only the shell tool's command is read.
+        expect(yield* judge({ command: "rm -rf /" }, "run")).toEqual(Option.none())
+        expect(yield* judge({ code: "rm -rf /" })).toEqual(Option.none())
+      }).pipe(Effect.provide(platform)),
   )
 })
 
