@@ -28,7 +28,7 @@ Propose nothing against these.
 - No migrations while gent has few sessions: a persisted-format change bumps its owner's schema version, and the next open wipes and rebuilds that owner's tables. No decoder keeps an old row shape. Migrations return when the session count grows (owner, 2026-10-22).
 - Docked panes, not modal overlays.
 - A shipped extension is never more privileged than a user extension.
-- Core runs bash and monitor commands as given, with no classifier or ask in front. An extension the owner enables may put one there (`@gent/guard`, off by default).
+- Core runs bash and monitor commands as given, with no classifier or ask in front. An extension may put one there. `@gent/guard` ships on: its floor always denies a shell command that loses work for good (a recursive `rm` over the root, the home, the working directory or a repository, `git reset --hard`, a wide forced `git clean`), with no model call and no config. Its rules and classifier stay off until a `guard` config entry turns them on. `disabledExtensions` removes all of it (owner, 2026-10-31).
 - Personal library, no shims.
 - Model-shaped layers shed at any moment: a layer that serves today's models (a rank, a tier list, a classifier, a pruner, a prompt rule, a model override) may last a week. It keeps no state beyond the logs gent already writes, one function or extension owns it, nothing else reads its output shape, and deleting it falls back to a plain default (owner, 2026-10-22).
 - Child sessions cache 5 minutes, unless their agent keeps the session cache (`promptCache: "session"`, 1 hour) as a long-lived seat that waits between turns does; every child keeps its own effort (owner, 2026-10-10).
