@@ -96,6 +96,7 @@ import {
   postOAuthJson,
   apiKeyFrom,
   readOptionalEnv,
+  readPlanUsage,
   requestJsonObject,
   withHeaders,
   writesPromptCache,
@@ -3476,11 +3477,12 @@ const readOauthQuota = Effect.fn("anthropic.readOauthQuota")(function* (
   creds: CredentialCache<ClaudeCredentials>,
   services: AnthropicDriverServices,
 ) {
-  const client = Context.get(services, HttpClient.HttpClient)
   const userAgent = getUserAgent(Context.get(services, AnthropicPlatform).env)
-  const send = Effect.gen(function* () {
-    const credential = yield* creds.getFresh
-    const response = yield* client.execute(
+  const usage = yield* readPlanUsage({
+    label: "Anthropic usage",
+    creds,
+    client: Context.get(services, HttpClient.HttpClient),
+    request: (credential) =>
       HttpClientRequest.get(OAUTH_USAGE_URL).pipe(
         HttpClientRequest.setHeaders({
           authorization: `Bearer ${credential.accessToken}`,
@@ -3489,44 +3491,9 @@ const readOauthQuota = Effect.fn("anthropic.readOauthQuota")(function* (
           "user-agent": userAgent,
         }),
       ),
-    )
-    return { credential, response }
+    schema: OAuthUsage,
   })
-  const read = (response: HttpClientResponse.HttpClientResponse) =>
-    Effect.gen(function* () {
-      if (response.status !== 200) {
-        return yield* new ProviderAuthError({
-          message: `Anthropic usage read failed: HTTP ${response.status}`,
-        })
-      }
-      return usageQuota(yield* HttpClientResponse.schemaBodyJson(OAuthUsage)(response))
-    })
-  const answered = Effect.gen(function* () {
-    const first = yield* send
-    if (first.response.status !== 401) return yield* read(first.response)
-    yield* creds.invalidate(first.credential)
-    return yield* read((yield* send).response)
-  })
-  return yield* answered.pipe(
-    Effect.catchTags({
-      CredentialRefreshUnavailable: (cause) =>
-        Effect.fail(new ProviderAuthError({ message: cause.message, cause })),
-      HttpClientError: (cause) =>
-        Effect.fail(
-          new ProviderAuthError({
-            message: `Anthropic usage read failed: ${cause.message}`,
-            cause,
-          }),
-        ),
-      SchemaError: (cause) =>
-        Effect.fail(
-          new ProviderAuthError({
-            message: `Anthropic usage answer unreadable: ${cause.message}`,
-            cause,
-          }),
-        ),
-    }),
-  )
+  return usageQuota(usage)
 })
 
 // ── rate-limit reset ──

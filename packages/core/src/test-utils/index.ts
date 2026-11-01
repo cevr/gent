@@ -18,6 +18,7 @@ export {
   fixtureModelCatalog,
   MODEL_CATALOG_FIXTURE,
   modelCatalogFixture,
+  oauthAuth,
   serveModelCatalogFixture,
   plantInFlightTurn,
   plantToolCallBinding,

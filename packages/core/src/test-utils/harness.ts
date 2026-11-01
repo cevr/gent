@@ -2487,6 +2487,27 @@ export const apiKeyAuth = (
     }).pipe(Effect.orDie),
   ).pipe(Layer.provide(Auth.Test()))
 
+/**
+ * An in-memory auth store holding one OAuth sign-in per `[provider, slot,
+ * credential]`, as a completed login stores it: a driver handed the slot reads
+ * and refreshes that sign-in through the store.
+ */
+export const oauthAuth = (
+  signIns: ReadonlyArray<
+    readonly [provider: string, slot: CredentialSlot, credential: StoredOAuthCredentials]
+  >,
+): Layer.Layer<Auth> =>
+  Layer.effect(
+    Auth,
+    Effect.gen(function* () {
+      const auth = yield* Auth
+      for (const [provider, slot, credential] of signIns) {
+        yield* auth.set(provider, AuthInfo.cases.Oauth.make({ type: "oauth", ...credential }), slot)
+      }
+      return auth
+    }).pipe(Effect.orDie),
+  ).pipe(Layer.provide(Auth.Test()))
+
 class WaitForError extends Schema.TaggedError<WaitForError, { readonly brand: unique symbol }>()(
   "@gent/core/src/test-utils/harness/WaitForError",
   { message: Schema.String },

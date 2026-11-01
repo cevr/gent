@@ -3501,6 +3501,10 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "strictEffectProvide:off -- device endpoints at extension boundary",
   },
   {
+    file: "packages/extensions/src/openai.ts",
+    text: "strictEffectProvide:off -- ChatGPT usage endpoint at extension boundary",
+  },
+  {
     file: "packages/core/src/server/rpc.ts",
     text: "schemaStructWithTag:off -- the RPC client builds the payload with make, and a defaulted tag would read { scope: {} } as Launch.",
   },

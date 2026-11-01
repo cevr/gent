@@ -755,6 +755,61 @@ const CredentialRejection = Context.Reference<Option.Option<{ reject: Effect.Eff
   { defaultValue: () => Option.none() },
 )
 
+// ── plan usage reads ────────────────────────────────────────────────────────
+
+/**
+ * One read of a plan's usage endpoint, which spends no quota (a driver's
+ * `readQuota`): `request` signed with the credential `creds` serves, sent
+ * over `client`, and its 200 answer decoded with `schema`. The credential
+ * comes from the cache the driver's requests use, so a refresh runs under the
+ * store lock and a slot serves only its own sign-in. A 401 invalidates the
+ * credential it sent and reads once more, as a request does
+ * (`authorizedClient`). Any other failure is a `ProviderAuthError` whose
+ * message starts with `label`.
+ */
+export const readPlanUsage = <C, S extends Schema.Constraint>(options: {
+  readonly label: string
+  readonly creds: CredentialCache<C>
+  readonly client: HttpClient.HttpClient
+  readonly request: (credential: C) => HttpClientRequest.HttpClientRequest
+  readonly schema: S
+}): Effect.Effect<S["Type"], ProviderAuthError, S["DecodingServices"]> => {
+  const { label, creds, client } = options
+  const send = Effect.gen(function* () {
+    const credential = yield* creds.getFresh
+    const response = yield* client.execute(options.request(credential))
+    return { credential, response }
+  })
+  const read = (response: HttpClientResponse.HttpClientResponse) =>
+    Effect.gen(function* () {
+      if (response.status !== 200) {
+        return yield* new ProviderAuthError({
+          message: `${label} read failed: HTTP ${response.status}`,
+        })
+      }
+      return yield* HttpClientResponse.schemaBodyJson(options.schema)(response)
+    })
+  return Effect.gen(function* () {
+    const first = yield* send
+    if (first.response.status !== 401) return yield* read(first.response)
+    yield* creds.invalidate(first.credential)
+    return yield* read((yield* send).response)
+  }).pipe(
+    Effect.catchTags({
+      CredentialRefreshUnavailable: (cause) =>
+        Effect.fail(new ProviderAuthError({ message: cause.message, cause })),
+      HttpClientError: (cause) =>
+        Effect.fail(
+          new ProviderAuthError({ message: `${label} read failed: ${cause.message}`, cause }),
+        ),
+      SchemaError: (cause) =>
+        Effect.fail(
+          new ProviderAuthError({ message: `${label} answer unreadable: ${cause.message}`, cause }),
+        ),
+    }),
+  )
+}
+
 // ── json request bodies ─────────────────────────────────────────────────────
 
 /**

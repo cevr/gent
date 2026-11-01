@@ -53,6 +53,7 @@ import {
   type UpdateStoredOAuth,
   type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
+  type ProviderAuthInfo,
   type ProviderHints,
   type QuotaReading,
   reportProviderQuota,
@@ -90,6 +91,7 @@ import {
   apiKeyFrom,
   isJsonObject,
   readOptionalEnv,
+  readPlanUsage,
   requestJsonObject,
   rewriteJsonBody,
   replaceHeldCredential,
@@ -1370,33 +1372,127 @@ const codexWindowName = (minutes: number): string => {
 }
 
 /**
- * The quota windows an answer's headers name. A window at its limit is
- * rejected until its reset: past it the plan refuses, or spends credits,
- * which are extra usage and never quota. A window with no length or no
- * reset says nothing. Headers that do not decode report none.
+ * One quota window, as both the headers and the usage endpoint state it: the
+ * percent used (0 to 100), the length in minutes and the reset in epoch
+ * seconds. A window at its limit is rejected until its reset: past it the
+ * plan refuses, or spends credits, which are extra usage and never quota. A
+ * window with no length or no reset says nothing.
  */
+const codexWindowReading = (window: {
+  readonly used: Option.Option<number>
+  readonly minutes: Option.Option<number>
+  readonly resetSeconds: Option.Option<number>
+}): ReadonlyArray<QuotaReading> =>
+  Option.toArray(
+    Option.map(
+      Option.all({
+        used: window.used,
+        minutes: Option.filter(window.minutes, (n) => n > 0),
+        resetSeconds: window.resetSeconds,
+      }),
+      (found): QuotaReading => ({
+        window: codexWindowName(found.minutes),
+        utilization: found.used / 100,
+        resetAt: found.resetSeconds * 1000,
+        rejected: found.used >= 100,
+      }),
+    ),
+  )
+
+/** The quota windows an answer's headers name. Headers that do not decode report none. */
 const codexQuota = (headers: Headers.Headers): ReadonlyArray<QuotaReading> =>
   Option.match(Schema.decodeUnknownOption(CodexQuotaHeaders)(headers), {
     onNone: () => [],
     onSome: (codex) =>
       (["primary", "secondary"] as const).flatMap((family) =>
-        Option.toArray(
-          Option.map(
-            Option.all({
-              used: codex[`x-codex-${family}-used-percent`],
-              minutes: Option.filter(codex[`x-codex-${family}-window-minutes`], (n) => n > 0),
-              resetSeconds: codex[`x-codex-${family}-reset-at`],
-            }),
-            (found): QuotaReading => ({
-              window: codexWindowName(found.minutes),
-              utilization: found.used / 100,
-              resetAt: found.resetSeconds * 1000,
-              rejected: found.used >= 100,
-            }),
-          ),
-        ),
+        codexWindowReading({
+          used: codex[`x-codex-${family}-used-percent`],
+          minutes: codex[`x-codex-${family}-window-minutes`],
+          resetSeconds: codex[`x-codex-${family}-reset-at`],
+        }),
       ),
   })
+
+/**
+ * The plan's usage endpoint, which Codex reads for `/status` without spending
+ * quota (openai/codex `94350a9`, read 2026-11-01:
+ * `codex-rs/backend-client/src/client/rate_limit_resets.rs`
+ * `get_rate_limit_status`, its payload in
+ * `codex-backend-openapi-models/src/models/rate_limit_status_payload.rs`).
+ * The plan's own limit is `rate_limit`, with a `primary_window` and a
+ * `secondary_window` (`rate_limit_window_snapshot.rs`): `used_percent` (0 to
+ * 100), `limit_window_seconds` and `reset_at` (epoch seconds), the fields the
+ * `x-codex-*` headers carry. Codex turns the seconds into minutes rounded up
+ * (`client.rs` `window_minutes_from_seconds`), so a window here takes the name
+ * the headers give it. `additional_rate_limits` meter single models, as the
+ * other header families do, so gent reads the plan's own limit only. The
+ * top-level `rate_limit_reset_credits.available_count` is the plan's count of
+ * reset credits (`backend-client/src/types.rs`), which gent does not read.
+ */
+const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+const CodexUsageNumber = Schema.OptionFromOptionalNullOr(Schema.Finite)
+const CodexUsageWindow = Schema.OptionFromOptionalNullOr(
+  Schema.Struct({
+    used_percent: CodexUsageNumber,
+    limit_window_seconds: CodexUsageNumber,
+    reset_at: CodexUsageNumber,
+  }),
+)
+const CodexUsage = Schema.Struct({
+  rate_limit: Schema.OptionFromOptionalNullOr(
+    Schema.Struct({ primary_window: CodexUsageWindow, secondary_window: CodexUsageWindow }),
+  ),
+})
+
+/**
+ * The quota windows a usage answer names. A plan whose limit states one
+ * window (a 7-day `primary_window` and a null `secondary_window`) reads that
+ * one: a window is named by its length, never by its place.
+ */
+const codexUsageQuota = (usage: typeof CodexUsage.Type): ReadonlyArray<QuotaReading> =>
+  Option.match(usage.rate_limit, {
+    onNone: () => [],
+    onSome: (limit) =>
+      [limit.primary_window, limit.secondary_window].flatMap((slot) =>
+        Option.match(slot, {
+          onNone: () => [],
+          onSome: (window) =>
+            codexWindowReading({
+              used: window.used_percent,
+              minutes: Option.map(window.limit_window_seconds, (seconds) =>
+                Math.ceil(seconds / 60),
+              ),
+              resetSeconds: window.reset_at,
+            }),
+        }),
+      ),
+  })
+
+/**
+ * Read the plan `creds` signs in to from the usage endpoint, with the headers
+ * a Codex request carries (`buildOauthHeaders`). The read goes through
+ * `readPlanUsage`: the token the requests use, and a 401 reads once more.
+ */
+const readCodexQuota = Effect.fn("openai.readCodexQuota")(
+  function* (creds: CredentialCache<OpenAICredentials>) {
+    const usage = yield* readPlanUsage({
+      label: "ChatGPT usage",
+      creds,
+      client: yield* HttpClient.HttpClient,
+      request: (credential) => {
+        const request = HttpClientRequest.get(CODEX_USAGE_URL).pipe(HttpClientRequest.acceptJson)
+        return withHeaders(
+          request,
+          buildOauthHeaders(request, credential.access, credential.accountId),
+        )
+      },
+      schema: CodexUsage,
+    })
+    return codexUsageQuota(usage)
+  },
+  // @effect-diagnostics-next-line strictEffectProvide:off -- ChatGPT usage endpoint at extension boundary
+  Effect.provide(FetchHttpClient.layer),
+)
 
 // ── extension ───────────────────────────────────────────────────────────────
 
@@ -2203,6 +2299,14 @@ export const buildOpenAIModelDriver = (
         }).pipe(Effect.onExit((exit) => Deferred.done(entry.finished, settledLogin(exit))))
       }),
     )
+  /** The credential cache a ChatGPT sign-in's requests and quota reads share. */
+  const oauthCredentialCache = (signIn: Extract<ProviderAuthInfo, { readonly _tag: "Oauth" }>) =>
+    makeOpenAICredentialCache(
+      cellFor(signIn.slot),
+      realIO,
+      signIn.update,
+      Option.fromUndefinedOr(signIn.signedInAt),
+    )
   return {
     id: "openai",
     name: "OpenAI",
@@ -2213,6 +2317,12 @@ export const buildOpenAIModelDriver = (
       retryAt: openAiRetryAt,
     },
     overrides: OPENAI_OVERRIDES,
+    // A ChatGPT sign-in reads its plan's windows from the usage endpoint; an
+    // API key is metered by no window and reads none.
+    readQuota: (authInfo) => {
+      if (authInfo._tag !== "Oauth") return Effect.succeed([])
+      return Effect.flatMap(oauthCredentialCache(authInfo), readCodexQuota)
+    },
     resolveModel: (modelName, authInfo, hintsInput, catalog) =>
       Effect.gen(function* () {
         const auth = Option.fromNullishOr(authInfo)
@@ -2233,12 +2343,7 @@ export const buildOpenAIModelDriver = (
               credentialFailure: "UnsupportedModel",
             })
           }
-          const creds = yield* makeOpenAICredentialCache(
-            cellFor(auth.value.slot),
-            realIO,
-            auth.value.update,
-            Option.fromUndefinedOr(auth.value.signedInAt),
-          )
+          const creds = yield* oauthCredentialCache(auth.value)
           yield* checkCredentials(creds)
           return AiModel.make(
             "openai",
