@@ -1075,9 +1075,13 @@ interface MachineStoreService {
     ReadonlyArray<{ readonly seq: number; readonly at: number; readonly step: MachineStep }>,
     MachineStorageError
   >
-  /** Every step of `run` its state visits are read from (`VISIT_TAGS`), oldest first. */
+  /**
+   * The steps of `run` its state visits are read from (`VISIT_TAGS`), from
+   * seq `since` through seq `through`, oldest first.
+   */
   readonly visitSteps: (
     run: RunId,
+    window: { readonly since: number; readonly through: number },
   ) => Effect.Effect<
     ReadonlyArray<{ readonly seq: number; readonly at: number; readonly step: MachineStep }>,
     MachineStorageError
@@ -1301,9 +1305,10 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
           Effect.mapError(storageError("Failed to read machine steps")),
         ),
         visitSteps: Effect.fn("MachineStore.visitSteps")(
-          function* (run) {
+          function* (run, window) {
+            // The primary key (run, seq) bounds the read to the window.
             const rows = yield* sql`SELECT seq, at, step_json FROM machine_steps
-              WHERE run = ${run}
+              WHERE run = ${run} AND seq >= ${window.since} AND seq <= ${window.through}
                 AND json_extract(step_json, '$._tag') IN (${sql.literal(
                   VISIT_TAGS.map((tag) => `'${tag}'`).join(", "),
                 )})
@@ -1682,7 +1687,10 @@ const foldSteps = (memo: RunMemo, steps: ReadonlyArray<MachineStep>): RunMemo =>
 /** The steps `foldStep` reads: a read of the memo loads only these. */
 const MEMO_TAGS = ["Dispatched", "Finished", "Granted", "Saved"] as const
 
-/** The steps `stateVisits` reads: a visit's start, its receipts, its rounds, its answer and its move. */
+/**
+ * The steps `stateVisits` reads: a visit's start, its receipts, its rounds,
+ * its answer, its move, and the run's end.
+ */
 const VISIT_TAGS = [
   "Dispatched",
   "Recorded",
@@ -1690,6 +1698,8 @@ const VISIT_TAGS = [
   "Answered",
   "Moved",
   "Finished",
+  "Stopped",
+  "Failed",
 ] as const
 
 /** The choices an ask offers, by its reason and its state (the table in the design, B2). */
@@ -4446,12 +4456,14 @@ const runStatus = Effect.fn("Machines.runStatus")(function* (params: typeof RunS
  * One visit of a state, as the TUI's run page draws it: when it began and
  * ended, the thread and model of its newest round, its rounds and what the
  * priced ones cost, and how it ended. `outcome`: the round's verdict, a
- * check's `pass` or `fail`, a gate's `green` or `red`, an ask's answer, or
- * `exhausted`; none while the visit is open and on a final state. `dead`:
- * its newest round ended with no verdict. `to`: the state the run moved to
- * from it.
+ * check's `pass` or `fail`, a gate's `green` or `red`, an ask's answer,
+ * `exhausted`, or the run's end (`stopped`, `failed`); none while the visit
+ * is open and on a final state. `dead`: its newest round ended with no
+ * verdict. `to`: the state the run moved to from it. `seq`: its first step,
+ * the visit's key in the run.
  */
 const StateVisit = Schema.Struct({
+  seq: Count,
   state: StateName,
   visit: PositiveInt,
   at: Schema.Finite,
@@ -4469,6 +4481,7 @@ type StateVisit = typeof StateVisit.Type
 
 /** A visit while its steps are folded in. */
 interface VisitTally {
+  readonly seq: number
   readonly state: StateName
   readonly visit: number
   readonly at: number
@@ -4486,127 +4499,247 @@ interface VisitTally {
 /** A `Moved.by` that names the mechanism, not the key: the round's verdict or the ask's answer is the outcome. */
 const isMechanismMove = Schema.is(Schema.Literals(["verdict", "answer"]))
 
-/**
- * Each state visit of a run, oldest first, from its steps (`VISIT_TAGS`).
- * An action names its state and visit, so a retry, a rerun and a
- * no-verdict ask stay in the visit they serve; a final state's `Finished`
- * is its visit. A round, an answer and a move belong to the open visit.
- */
-const stateVisits = (
-  steps: ReadonlyArray<{ readonly at: number; readonly step: MachineStep }>,
-): ReadonlyArray<StateVisit> => {
-  const visits: Array<VisitTally> = []
-  const byKey = new Map<string, VisitTally>()
-  let open = Option.none<VisitTally>()
-  const enter = (state: StateName, visit: number, at: number): VisitTally => {
-    const key = `${state}\u0000${visit}`
-    const found = byKey.get(key)
-    if (Predicate.isNotUndefined(found)) return found
-    const entry: VisitTally = {
-      state,
-      visit,
-      at,
-      endedAt: Option.none(),
-      thread: Option.none(),
-      model: Option.none(),
-      rounds: 0,
-      priced: 0,
-      costUsd: 0,
-      dead: false,
-      outcome: Option.none(),
-      to: Option.none(),
-    }
-    byKey.set(key, entry)
-    visits.push(entry)
-    return entry
+/** The visits a run's steps fold to, and the first step of the visit still open. */
+interface FoldedVisits {
+  readonly trail: ReadonlyArray<StateVisit>
+  readonly open: Option.Option<number>
+}
+
+/** A fold over a run's visit steps: the visits so far, the open one, the run's memo. */
+interface VisitFold {
+  readonly visits: Array<VisitTally>
+  open: Option.Option<VisitTally>
+  readonly counts: Readonly<Record<string, number>>
+}
+
+type VisitStep = { readonly seq: number; readonly at: number; readonly step: MachineStep }
+
+/** Begin a visit at step `seq`; it is not open until the caller opens it. */
+const beginVisit = (
+  fold: VisitFold,
+  seq: number,
+  state: StateName,
+  visit: number,
+  at: number,
+): VisitTally => {
+  const entry: VisitTally = {
+    seq,
+    state,
+    visit,
+    at,
+    endedAt: Option.none(),
+    thread: Option.none(),
+    model: Option.none(),
+    rounds: 0,
+    priced: 0,
+    costUsd: 0,
+    dead: false,
+    outcome: Option.none(),
+    to: Option.none(),
   }
-  const receipt = (entry: VisitTally, action: PendingAction): void => {
-    if (action._tag !== "Round") return
-    entry.thread = Option.orElse(Option.fromUndefinedOr(action.thread), () => entry.thread)
-    entry.model = Option.orElse(Option.fromUndefinedOr(action.model), () => entry.model)
+  fold.visits.push(entry)
+  return entry
+}
+
+/** End the open visit at `at`, if one is open. */
+const endVisit = (fold: VisitFold, at: number): void => {
+  if (Option.isSome(fold.open)) fold.open.value.endedAt = Option.some(at)
+  fold.open = Option.none()
+}
+
+/** The run's end ends its open visit with `outcome`; an answer (`stop`) keeps its word. */
+const settleVisit = (fold: VisitFold, outcome: string, at: number): void => {
+  if (Option.isSome(fold.open)) {
+    const entry = fold.open.value
+    entry.outcome = Option.orElse(entry.outcome, () => Option.some(outcome))
   }
-  for (const { at, step } of steps) {
-    switch (step._tag) {
-      case "Dispatched": {
-        const entry = enter(step.action.state, step.action.visit, at)
-        receipt(entry, step.action)
-        open = Option.some(entry)
-        break
-      }
-      case "Recorded":
-        receipt(enter(step.action.state, step.action.visit, at), step.action)
-        break
-      case "RoundEnded": {
-        const entry = Option.filter(open, (value) => value.state === step.state)
-        if (Option.isNone(entry)) break
-        const tally = entry.value
-        tally.rounds += 1
-        tally.dead = step.dead
-        tally.model = Option.orElse(Option.fromUndefinedOr(step.model), () => tally.model)
-        tally.outcome = Option.fromUndefinedOr(step.verdict)
-        if (Predicate.isNotUndefined(step.costUsd)) {
-          tally.priced += 1
-          tally.costUsd += step.costUsd
-        }
-        break
-      }
-      case "Answered":
-        if (Option.isSome(open)) open.value.outcome = Option.some(step.choice)
-        break
-      case "Moved": {
-        const entry = Option.filter(open, (value) => value.state === step.from)
-        if (Option.isSome(entry)) {
-          entry.value.to = Option.some(step.to)
-          entry.value.endedAt = Option.some(at)
-          if (!isMechanismMove(step.by)) entry.value.outcome = Option.some(step.by)
-        }
-        open = Option.none()
-        break
-      }
-      case "Finished": {
-        const visit = visits.filter((entry) => entry.state === step.state).length + 1
-        enter(step.state, visit, at).endedAt = Option.some(at)
-        open = Option.none()
-        break
-      }
-      default:
-        break
-    }
+  endVisit(fold, at)
+}
+
+/** The open visit, when it is the action's state and visit. */
+const openVisitFor = (fold: VisitFold, action: PendingAction): Option.Option<VisitTally> =>
+  Option.filter(fold.open, (entry) => entry.state === action.state && entry.visit === action.visit)
+
+/** A round's thread and model, kept on its visit. */
+const roundReceipt = (entry: VisitTally, action: PendingAction): void => {
+  if (action._tag !== "Round") return
+  entry.thread = Option.orElse(Option.fromUndefinedOr(action.thread), () => entry.thread)
+  entry.model = Option.orElse(Option.fromUndefinedOr(action.model), () => entry.model)
+}
+
+/** A dispatch of the open visit stays in it; any other ends it and begins one. */
+const foldDispatched = (fold: VisitFold, seq: number, at: number, action: PendingAction): void => {
+  const current = openVisitFor(fold, action)
+  if (Option.isSome(current)) {
+    roundReceipt(current.value, action)
+    return
   }
-  return visits.map((entry) => ({
-    state: entry.state,
-    visit: entry.visit,
-    at: entry.at,
-    rounds: entry.rounds,
-    priced: entry.priced,
-    costUsd: entry.costUsd,
-    dead: entry.dead,
-    ...omitUndefined({
-      endedAt: Option.getOrUndefined(entry.endedAt),
-      thread: Option.getOrUndefined(entry.thread),
-      model: Option.getOrUndefined(entry.model),
-      outcome: Option.getOrUndefined(entry.outcome),
-      to: Option.getOrUndefined(entry.to),
-    }),
-  }))
+  endVisit(fold, at)
+  const entry = beginVisit(fold, seq, action.state, action.visit, at)
+  roundReceipt(entry, action)
+  fold.open = Option.some(entry)
+}
+
+/** A round's end tallies on the open visit of its state. */
+const foldRoundEnded = (fold: VisitFold, step: RoundEnded): void => {
+  const entry = Option.filter(fold.open, (value) => value.state === step.state)
+  if (Option.isNone(entry)) return
+  const tally = entry.value
+  tally.rounds += 1
+  tally.dead = step.dead
+  tally.model = Option.orElse(Option.fromUndefinedOr(step.model), () => tally.model)
+  tally.outcome = Option.fromUndefinedOr(step.verdict)
+  if (Predicate.isNotUndefined(step.costUsd)) {
+    tally.priced += 1
+    tally.costUsd += step.costUsd
+  }
 }
 
 /**
- * One run as the TUI's run page reads it through `MachinesRpc.Status`: what
- * `machine.status` gives, and every visit of its states (`trail`). The
- * model's tool leaves the trail out: its steps say the same.
+ * A move ends the open visit of its state, with where the run went. A move
+ * off a state out of rounds has no open visit: it refuses the visit past
+ * the state's count.
+ */
+const foldMoved = (
+  fold: VisitFold,
+  seq: number,
+  at: number,
+  step: Extract<MachineStep, { readonly _tag: "Moved" }>,
+): void => {
+  const entry = Option.filter(fold.open, (value) => value.state === step.from)
+  if (Option.isSome(entry)) {
+    entry.value.to = Option.some(step.to)
+    if (!isMechanismMove(step.by)) entry.value.outcome = Option.some(step.by)
+    endVisit(fold, at)
+    return
+  }
+  endVisit(fold, at)
+  if (step.by !== "exhausted") return
+  const refused = beginVisit(fold, seq, step.from, (fold.counts[step.from] ?? 0) + 1, at)
+  refused.endedAt = Option.some(at)
+  refused.outcome = Option.some(step.by)
+  refused.to = Option.some(step.to)
+}
+
+/** One visit step on the fold. */
+const foldVisitStep = (fold: VisitFold, { seq, at, step }: VisitStep): void => {
+  switch (step._tag) {
+    case "Dispatched":
+      return foldDispatched(fold, seq, at, step.action)
+    case "Recorded":
+      return Option.match(openVisitFor(fold, step.action), {
+        onNone: () => {},
+        onSome: (entry) => roundReceipt(entry, step.action),
+      })
+    case "RoundEnded":
+      return foldRoundEnded(fold, step)
+    case "Answered":
+      if (Option.isSome(fold.open)) fold.open.value.outcome = Option.some(step.choice)
+      return
+    case "Moved":
+      return foldMoved(fold, seq, at, step)
+    case "Finished": {
+      endVisit(fold, at)
+      const visit = Math.max(1, fold.counts[step.state] ?? 0)
+      beginVisit(fold, seq, step.state, visit, at).endedAt = Option.some(at)
+      return
+    }
+    case "Stopped":
+      return settleVisit(fold, "stopped", at)
+    case "Failed":
+      return settleVisit(fold, "failed", at)
+    default:
+      return
+  }
+}
+
+/**
+ * Each state visit of a run, oldest first, from its steps (`VISIT_TAGS`).
+ * The run has one pending action: a dispatch of the open visit's state and
+ * visit (a resumed round, a retry, a rerun, a no-verdict ask) stays in it,
+ * and any other dispatch ends the open visit and begins one. A round, an
+ * answer and a move belong to the open visit; a stop or a failure ends it.
+ * Two visits have no dispatch: a move off a state out of rounds
+ * (`exhausted`) refuses the visit past its count, and a final state's
+ * `Finished` is its visit. `counts` is the run's memo, and neither state's
+ * count changes after that step. A read from a visit's first step folds to
+ * the same visits as the whole log.
+ */
+const stateVisits = (
+  steps: ReadonlyArray<VisitStep>,
+  counts: Readonly<Record<string, number>>,
+): FoldedVisits => {
+  const fold: VisitFold = { visits: [], open: Option.none(), counts }
+  for (const step of steps) foldVisitStep(fold, step)
+  return {
+    trail: fold.visits.map((entry) => ({
+      seq: entry.seq,
+      state: entry.state,
+      visit: entry.visit,
+      at: entry.at,
+      rounds: entry.rounds,
+      priced: entry.priced,
+      costUsd: entry.costUsd,
+      dead: entry.dead,
+      ...omitUndefined({
+        endedAt: Option.getOrUndefined(entry.endedAt),
+        thread: Option.getOrUndefined(entry.thread),
+        model: Option.getOrUndefined(entry.model),
+        outcome: Option.getOrUndefined(entry.outcome),
+        to: Option.getOrUndefined(entry.to),
+      }),
+    })),
+    open: Option.map(fold.open, (entry) => entry.seq),
+  }
+}
+
+/**
+ * One run as the TUI's run page reads it through `MachinesRpc.Page`: its
+ * status, machine, start and pending action, and its state visits from
+ * step `since` on (`trail`). `next` is the next read's `since`: the open
+ * visit's first step, else the step after the run's last. A visit before
+ * it never changes, so a reader keeps what it read and reads only what is
+ * new.
  */
 export const MachineRunPage = Schema.Struct({
-  ...MachineRunStatus.fields,
+  run: RunId,
+  machine: MachineName,
+  status: RunStatus,
+  createdAt: Schema.Finite,
+  pending: Schema.optionalKey(PendingAction),
+  since: Count,
+  next: Count,
   trail: Schema.Array(StateVisit),
 })
 export type MachineRunPage = typeof MachineRunPage.Type
 
-const runPage = Effect.fn("Machines.runPage")(function* (params: typeof RunStatusParams.Type) {
+const RunPageParams = Schema.Struct({
+  run: RunId,
+  /** The first step the visits are read from: the last page's `next`; the whole log without it. */
+  since: Schema.optionalKey(Count),
+})
+
+/**
+ * The run page's read: the run's row and the visit steps from `since`
+ * through the row's seq, the steps its memo was folded over. It reads no
+ * other run's log and no step a kept visit holds.
+ */
+const runPage = Effect.fn("Machines.runPage")(function* (params: typeof RunPageParams.Type) {
   const store = yield* MachineStore
-  const status = yield* runStatus(params)
-  const trail = stateVisits(yield* store.visitSteps(status.run))
-  return { ...status, trail }
+  const run = yield* ownedRun(params.run)
+  const since = params.since ?? 0
+  const steps = yield* store.visitSteps(run.run, { since, through: run.seq })
+  const folded = stateVisits(steps, run.visits.counts)
+  return {
+    run: run.run,
+    machine: run.machine,
+    status: run.status,
+    createdAt: run.createdAt,
+    since,
+    next: Option.getOrElse(folded.open, () => Math.max(since, run.seq + 1)),
+    trail: folded.trail,
+    ...omitUndefined({ pending: Option.getOrUndefined(run.pending) }),
+  }
 })
 
 const ThreadQualityParams = Schema.Struct({ session: SessionId })
@@ -4655,16 +4788,25 @@ const ownedRuns = Effect.fn("Machines.ownedRuns")(function* () {
 /**
  * What a client outside any turn reads of runs and does to them (`gent ctl
  * request`, the TUI's band and run page), asked as a session of the owner's
- * thread: the views `machine.status` (with its trail) and `machine.list`
- * give, and the stop `machine.stop` makes.
+ * thread: the views `machine.status` and `machine.list` give, the run
+ * page's visits, and the stop `machine.stop` makes.
  */
 export const MachinesRpc = defineRequests(MACHINES_EXTENSION_ID, {
   Status: request({
     id: "run-status",
-    description:
-      "Read one run your thread owns: its state, status, pending action, last steps and every state visit",
+    description: "Read one run your thread owns: its state, status, pending action and last steps",
     answersDuringTurn: true,
     input: RunStatusParams,
+    output: MachineRunStatus,
+    resources: [MachineStoreResource],
+    execute: runStatus,
+  }),
+  Page: request({
+    id: "run-page",
+    description:
+      "Read one run your thread owns as the run page draws it: its status and its state visits from a step on",
+    answersDuringTurn: true,
+    input: RunPageParams,
     output: MachineRunPage,
     resources: [MachineStoreResource],
     execute: runPage,
@@ -4784,6 +4926,7 @@ export const MachinesExtension = defineExtension({
     yield* host.register(
       "request",
       MachinesRpc.Status,
+      MachinesRpc.Page,
       MachinesRpc.Stop,
       MachinesRpc.Runs,
       MachinesRpc.Quality,

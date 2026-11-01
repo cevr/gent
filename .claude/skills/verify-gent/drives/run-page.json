@@ -47,6 +47,8 @@
     ["waitFor", "ctrl\\+x again to stop this run", 5000],
     ["keys", "ctrl+x"],
     ["waitFor", "Run soak · stopped", 10000],
+    ["waitFor", "■ settle #1 · stopped", 10000],
+    ["expectNot", "› .*#\\d"],
     ["expectNot", "ctrl\\+x stop"],
     ["wait", 300],
     ["cap", "87-stopped"],

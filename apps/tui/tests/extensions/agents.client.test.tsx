@@ -1,6 +1,17 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Deferred, Effect, Exit, Layer, Option, Predicate, Schema, Scope } from "effect"
+import {
+  Clock,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Predicate,
+  Schema,
+  Scope,
+} from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal, Show } from "solid-js"
 import {
@@ -19,6 +30,7 @@ import {
   BTW_EXTENSION_ID,
   type ListAgentsInput,
   MachineRunPage,
+  MachineRunView,
   ModelQuality,
   SESSION_TOOLS_EXTENSION_ID,
   threadRoundText,
@@ -108,6 +120,28 @@ const noMachines = {
   runs: () => Effect.succeed([]),
   page: () => Effect.never,
   stop: () => Effect.void,
+}
+
+/** This clock's now: a pane controller whose server keeps the same time. */
+const clockNow = (): number => DateTime.toEpochMillis(DateTime.nowUnsafe())
+
+/**
+ * The listing's row for a page's run with no pending action: on its last
+ * visit's state, each state's count its highest visit, as the run's memo
+ * has them.
+ */
+const runViewOf = (page: MachineRunPage): MachineRunView => {
+  const visits: Record<string, number> = {}
+  for (const visit of page.trail)
+    visits[visit.state] = Math.max(visits[visit.state] ?? 0, visit.visit)
+  return Schema.decodeSync(MachineRunView)({
+    run: page.run,
+    machine: page.machine,
+    state: page.trail.at(-1)?.state ?? "start",
+    status: page.status,
+    visits,
+    createdAt: page.createdAt,
+  })
 }
 
 /** A pane controller's runs while the thread has none: the list shows, no page. */
@@ -664,6 +698,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             quality: () => [],
             runs: noRuns,
+            now: clockNow,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -707,6 +742,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             quality: () => [],
             runs: noRuns,
+            now: clockNow,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -761,6 +797,7 @@ describe("Agents pane navigation", () => {
               reload: () => {},
               quality: () => [],
               runs: noRuns,
+              now: clockNow,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -823,6 +860,7 @@ describe("Agents pane navigation", () => {
             detail,
             quality: () => [],
             runs: noRuns,
+            now: clockNow,
             done: () => [],
             select: (selection) => {
               Option.match(selection, {
@@ -889,6 +927,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             quality: () => [],
             runs: noRuns,
+            now: clockNow,
             detail: () =>
               Option.some({
                 status: "Running",
@@ -936,6 +975,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             quality: () => [],
             runs: noRuns,
+            now: clockNow,
             detail: () =>
               Option.some({
                 status: "WaitingForInteraction",
@@ -978,6 +1018,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             quality: () => [],
             runs: noRuns,
+            now: clockNow,
             detail: () => Option.some(detail(1)),
             select: () => {},
             done: () => [],
@@ -1046,6 +1087,7 @@ describe("Agents pane delete", () => {
             reload: () => {},
             quality: () => [],
             runs: noRuns,
+            now: clockNow,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -1080,24 +1122,23 @@ describe("agents pane machine runs", () => {
   })
   const MINUTE = 60_000
   const RUN = "run-00000000000000a1"
-
   /**
    * A `track` run on its second implement visit: implement handed off to
    * review, review sent it back. Each visit's round ran on a thread the
    * listing holds: the implementer's under a later session of its thread.
+   * Read from the run's first step: the next read starts at the open visit.
    */
   const trackRun = (now: number, status: string): MachineRunPage =>
     Schema.decodeUnknownSync(MachineRunPage)({
       run: RUN,
       machine: "track",
-      state: "implement",
       status,
-      visits: { implement: 2, review: 1 },
       createdAt: now - 9 * MINUTE,
-      steps: [],
-      quality: [],
+      since: 0,
+      next: 9,
       trail: [
         {
+          seq: 0,
           state: "implement",
           visit: 1,
           at: now - 9 * MINUTE,
@@ -1112,6 +1153,7 @@ describe("agents pane machine runs", () => {
           to: "review",
         },
         {
+          seq: 4,
           state: "review",
           visit: 1,
           at: now - 6 * MINUTE,
@@ -1126,6 +1168,7 @@ describe("agents pane machine runs", () => {
           to: "implement",
         },
         {
+          seq: 9,
           state: "implement",
           visit: 2,
           at: now - 4 * MINUTE,
@@ -1138,6 +1181,23 @@ describe("agents pane machine runs", () => {
         },
       ],
     })
+
+  /**
+   * The same run after a stop, as the server's fold reads it: the stop
+   * ended the open visit with the outcome `stopped`, and the next read
+   * starts after the run's last step.
+   */
+  const stoppedRun = (now: number): MachineRunPage => {
+    const track = trackRun(now, "stopped")
+    return {
+      ...track,
+      next: 12,
+      trail: track.trail.map((visit) => {
+        if (visit.seq !== 9) return visit
+        return { ...visit, endedAt: now - MINUTE, outcome: "stopped" }
+      }),
+    }
+  }
 
   /** The round threads' rows: the implementer's thread moved to a later session. */
   const threadRows: ReadonlyArray<AgentRowEntry> = [
@@ -1171,7 +1231,7 @@ describe("agents pane machine runs", () => {
               reload: () => {},
               quality: () => [],
               runs: {
-                list: () => [page],
+                list: () => [runViewOf(page)],
                 viewing,
                 page: () => Option.map(viewing(), () => page),
                 error: () => Option.none(),
@@ -1181,6 +1241,7 @@ describe("agents pane machine runs", () => {
                 },
                 stop: (run) => stopped.push(run),
               },
+              now: clockNow,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1287,6 +1348,40 @@ describe("agents pane machine runs", () => {
       }),
   )
 
+  it.scopedLive("a narrow row too short for the model and the outcome keeps the outcome", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const track = trackRun(now, "running")
+      // The second review ran out of rounds: the run went to a person.
+      const page = yield* Schema.decodeUnknownEffect(MachineRunPage)({
+        ...track,
+        next: 14,
+        trail: [
+          ...track.trail.slice(0, 2),
+          { ...track.trail[0], seq: 9, visit: 2, at: now - 4 * MINUTE, endedAt: now - 3 * MINUTE },
+          {
+            ...track.trail[1],
+            seq: 12,
+            visit: 2,
+            at: now - 3 * MINUTE,
+            endedAt: now - 2 * MINUTE,
+            rounds: 1,
+            outcome: "exhausted",
+            to: "escalate-to-human",
+          },
+        ],
+      })
+      const { setup } = yield* pageOpen(page, { width: 58, height: 24 })
+      yield* waitForFrame(setup, (frame) => frame.includes("review #2"), "narrow run page")
+      const lines = renderFrame(setup).split("\n")
+      const exhausted = lines.find((line) => line.includes("review #2")) ?? ""
+      // The model goes first; what is left of the room holds the outcome's head.
+      expect(exhausted).toContain("review #2 · exhausted → escalate-")
+      expect(exhausted).not.toContain("gpt-6-mini")
+      expect(textWidth(exhausted)).toBeLessThanOrEqual(58)
+    }),
+  )
+
   it.scopedLive("Enter on a visit opens its round's thread by the thread's listed row", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
@@ -1378,12 +1473,22 @@ describe("agents pane machine runs", () => {
   it.scopedLive("an ended run's page offers no stop, and Ctrl+X asks none", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
-      const { setup, stopped } = yield* pageOpen(trackRun(now, "stopped"), {
+      const { setup, stopped } = yield* pageOpen(stoppedRun(now), {
         width: 80,
         height: 40,
       })
       expect(renderFrame(setup)).toContain("Run track · stopped · 3 visits")
       expect(renderFrame(setup)).not.toContain("ctrl+x stop")
+      // The stop ended the last visit: no visit is open, the last one says why it ended.
+      const visits = renderFrame(setup)
+        .split("\n")
+        .filter((line) => /(implement|review) #\d/.test(line) && !line.includes("  ·  "))
+      expect(visits).toHaveLength(3)
+      expect(visits.filter((line) => line.includes("›"))).toEqual([])
+      const last = visits.find((line) => line.includes("implement #2")) ?? ""
+      expect(last).toContain("■ implement #2")
+      expect(last).toContain("Claude Sonnet 5.5 · stopped")
+      expect(renderFrame(setup)).toMatch(/implement #2 {2}· {2}1 round {2}· {2}took 3m/)
       setup.mockInput.pressKey("x", { ctrl: true })
       setup.mockInput.pressKey("x", { ctrl: true })
       yield* Effect.promise(() => setup.renderOnce())
@@ -1413,47 +1518,107 @@ describe("agents pane machine runs", () => {
 })
 
 describe("Agents controller machine runs", () => {
-  const page = Schema.decodeSync(MachineRunPage)({
-    run: "run-00000000000000b2",
-    machine: "track",
+  const RUN_B = "run-00000000000000b2"
+  const RUN_C = "run-00000000000000c3"
+  type RunId = MachineRunPage["run"]
+  type VisitFields = Record<string, string | number | boolean>
+  const ENDED = {
+    seq: 0,
+    state: "implement",
+    visit: 1,
+    at: 0,
+    endedAt: 1,
+    rounds: 1,
+    priced: 0,
+    costUsd: 0,
+    dead: false,
+    to: "review",
+  } satisfies VisitFields
+  const OPEN = {
+    seq: 3,
     state: "review",
-    status: "running",
-    visits: { review: 1 },
-    createdAt: 0,
-    steps: [],
-    quality: [],
-    trail: [],
-  })
+    visit: 1,
+    at: 1,
+    rounds: 1,
+    priced: 0,
+    costUsd: 0,
+    dead: false,
+  } satisfies VisitFields
+  /** A running `track` run's page, read from step `since`. */
+  const pageOf = (
+    run: string,
+    since: number,
+    trail: ReadonlyArray<VisitFields>,
+    createdAt = 0,
+  ): MachineRunPage =>
+    Schema.decodeUnknownSync(MachineRunPage)({
+      run,
+      machine: "track",
+      status: "running",
+      createdAt,
+      since,
+      next: 3,
+      trail,
+    })
+  /** Read from the first step: the ended visit, then the open one. */
+  const first = (run: string) => pageOf(run, 0, [ENDED, OPEN])
+  /** Read from the open visit's first step, a round later. */
+  const later = (run: string) => pageOf(run, 3, [{ ...OPEN, rounds: 2 }])
+
+  const KEY = { sessionId: SessionId.make("main"), branchId: BranchId.make("main-branch") }
+
+  /**
+   * The controller over a server whose page reads are `page`, each read it
+   * asks in `asked`; its listing lists runs B and C. The poll stays still:
+   * each read is one the test asked for.
+   */
+  const runsController = (
+    page: (run: RunId, since: number) => Effect.Effect<MachineRunPage>,
+    asked: Array<string>,
+  ) =>
+    Effect.gen(function* () {
+      const pane = makePaneSlot()
+      const clock = yield* TestClock.make()
+      const controller = yield* provideClientServices(
+        makeAgentsController(
+          () => Effect.succeed([row("main")]),
+          () => Effect.succeed(detail(0)),
+          {
+            quality: () => Effect.succeed([]),
+            runs: (session) =>
+              Effect.sync(() => {
+                asked.push(`runs ${session.sessionId}`)
+                return [runViewOf(first(RUN_B)), runViewOf(first(RUN_C))]
+              }),
+            page: (run, since) =>
+              Effect.suspend(() => {
+                asked.push(`page ${run} ${since}`)
+                return page(run, since)
+              }),
+            stop: (run) => Effect.sync(() => asked.push(`stop ${run}`)),
+          },
+        ).pipe(Effect.provideService(Clock.Clock, clock)),
+        { currentSession: () => KEY, shell: { pane } },
+      )
+      return { controller, pane }
+    })
+
+  /** Each page read the controller asked, in order. */
+  const pageReads = (asked: ReadonlyArray<string>) =>
+    asked.filter((entry) => entry.startsWith("page "))
 
   it.scopedLive(
-    "the open pane reads the thread's runs; a viewed run's page reads, and a stop reads again",
+    "the open pane reads the thread's runs; a viewed run's page reads from its last next, and a stop reads again",
     () =>
       Effect.gen(function* () {
-        const key = { sessionId: SessionId.make("main"), branchId: BranchId.make("main-branch") }
         const asked: Array<string> = []
-        const pane = makePaneSlot()
-        // The poll stays still: each read below is one the test asked for.
-        const clock = yield* TestClock.make()
-        const controller = yield* provideClientServices(
-          makeAgentsController(
-            () => Effect.succeed([row("main")]),
-            () => Effect.succeed(detail(0)),
-            {
-              quality: () => Effect.succeed([]),
-              runs: (session) =>
-                Effect.sync(() => {
-                  asked.push(`runs ${session.sessionId}`)
-                  return [page]
-                }),
-              page: (run) =>
-                Effect.sync(() => {
-                  asked.push(`page ${run}`)
-                  return page
-                }),
-              stop: (run) => Effect.sync(() => asked.push(`stop ${run}`)),
-            },
-          ).pipe(Effect.provideService(Clock.Clock, clock)),
-          { currentSession: () => key, shell: { pane } },
+        const { controller, pane } = yield* runsController(
+          (run, since) =>
+            Effect.sync(() => {
+              if (since === 0) return first(run)
+              return later(run)
+            }),
+          asked,
         )
         // The closed pane's tray lists no runs.
         yield* waitUntil(() => controller.rows().length === 1, "tray listing")
@@ -1462,21 +1627,185 @@ describe("Agents controller machine runs", () => {
 
         pane.open("agents.pane")
         controller.refresh("")
-        yield* waitUntil(() => controller.runs.list().length === 1, "runs listed")
+        yield* waitUntil(() => controller.runs.list().length === 2, "runs listed")
         expect(asked).toEqual(["runs main"])
 
-        controller.runs.view(Option.some(page.run))
+        controller.runs.view(Option.some(first(RUN_B).run))
         yield* waitUntil(() => Option.isSome(controller.runs.page()), "page read")
-        expect(asked).toEqual(["runs main", `page ${page.run}`])
+        expect(asked).toEqual(["runs main", `page ${RUN_B} 0`])
 
-        controller.runs.stop(page.run)
+        controller.runs.stop(first(RUN_B).run)
         yield* waitUntil(() => asked.length >= 5, "stop, then the listing and the page again")
-        expect(asked.slice(2)).toEqual([`stop ${page.run}`, "runs main", `page ${page.run}`])
+        expect(asked.slice(2)).toEqual([`stop ${RUN_B}`, "runs main", `page ${RUN_B} 3`])
+        // The read from the open visit's first step replaced that visit; the ended one stays.
+        yield* waitUntil(
+          () => Option.exists(controller.runs.page(), (page) => page.trail.at(-1)?.rounds === 2),
+          "page merged",
+        )
+        expect(
+          Option.map(controller.runs.page(), (page) =>
+            page.trail.map((visit) => [visit.seq, visit.rounds]),
+          ),
+        ).toEqual(
+          Option.some([
+            [0, 1],
+            [3, 2],
+          ]),
+        )
 
         controller.runs.view(Option.none())
         expect(controller.runs.page()).toEqual(Option.none())
       }).pipe(Effect.timeout("10 seconds")),
   )
+
+  it.scopedLive("a closed pane reads no page; its reopen reads the viewed run's page once", () =>
+    Effect.gen(function* () {
+      const asked: Array<string> = []
+      const { controller, pane } = yield* runsController(
+        (run, since) =>
+          Effect.sync(() => {
+            if (since === 0) return first(run)
+            return later(run)
+          }),
+        asked,
+      )
+      pane.open("agents.pane")
+      controller.refresh("")
+      yield* waitUntil(() => controller.runs.list().length === 2, "runs listed")
+      controller.runs.view(Option.some(first(RUN_B).run))
+      yield* waitUntil(() => Option.isSome(controller.runs.page()), "page read")
+
+      // The pane closes with the page in view: the tray's listing lands and asks no page.
+      const closed = asked.length
+      pane.close("agents.pane")
+      controller.reload()
+      yield* waitUntil(() => controller.runs.list().length === 0, "tray listing")
+
+      // The reopened pane's listing reads the page again, once, after its runs.
+      pane.open("agents.pane")
+      controller.refresh("")
+      yield* waitUntil(() => pageReads(asked.slice(closed)).length > 0, "page read again")
+      expect(asked.slice(closed)).toEqual(["runs main", `page ${RUN_B} 3`])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a page reply for a run no longer viewed, or from a read before its run was viewed again, is dropped",
+    () =>
+      Effect.gen(function* () {
+        const asked: Array<string> = []
+        // The page reads answer in order, each when the test lets it.
+        const replies = [
+          yield* Deferred.make<MachineRunPage>(),
+          yield* Deferred.make<MachineRunPage>(),
+          yield* Deferred.make<MachineRunPage>(),
+          yield* Deferred.make<MachineRunPage>(),
+        ]
+        let reads = 0
+        const { controller, pane } = yield* runsController(() => {
+          const reply = replies[reads]
+          reads += 1
+          if (Predicate.isUndefined(reply)) return Effect.never
+          return Deferred.await(reply)
+        }, asked)
+        pane.open("agents.pane")
+        controller.refresh("")
+        yield* waitUntil(() => controller.runs.list().length === 2, "runs listed")
+
+        // B's page is asked; the reader moves to C before B's reply lands.
+        controller.runs.view(Option.some(first(RUN_B).run))
+        yield* waitUntil(() => pageReads(asked).length === 1, "B's page asked")
+        controller.runs.view(Option.some(first(RUN_C).run))
+        yield* Deferred.succeed(replies[0]!, first(RUN_B))
+        // C's read starts once B's reply was handled: B's page never shows.
+        yield* waitUntil(() => pageReads(asked).length === 2, "C's page asked")
+        expect(pageReads(asked)).toEqual([`page ${RUN_B} 0`, `page ${RUN_C} 0`])
+        expect(controller.runs.page()).toEqual(Option.none())
+
+        yield* Deferred.succeed(replies[1]!, first(RUN_C))
+        yield* waitUntil(() => Option.isSome(controller.runs.page()), "C's page read")
+
+        // A read from C's open visit is asked; C is viewed again before it lands.
+        controller.reload()
+        yield* waitUntil(() => pageReads(asked).length === 3, "C's open visit asked")
+        expect(pageReads(asked)[2]).toBe(`page ${RUN_C} 3`)
+        controller.runs.view(Option.none())
+        controller.runs.view(Option.some(first(RUN_C).run))
+        yield* Deferred.succeed(replies[2]!, later(RUN_C))
+        // Its reply holds only the open visit: the page read from the start replaces it.
+        yield* waitUntil(() => pageReads(asked).length === 4, "C's page asked again")
+        expect(pageReads(asked)[3]).toBe(`page ${RUN_C} 0`)
+        expect(controller.runs.page()).toEqual(Option.none())
+        yield* Deferred.succeed(replies[3]!, first(RUN_C))
+        yield* waitUntil(() => Option.isSome(controller.runs.page()), "C's page read again")
+        expect(controller.runs.page()).toEqual(Option.some(first(RUN_C)))
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  for (const [label, offset] of [
+    ["120 s ahead of", -120_000],
+    ["120 s behind", 120_000],
+  ] as const) {
+    it.scopedLive(`a client ${label} the server reads each age on the server's clock`, () =>
+      Effect.gen(function* () {
+        const serverNow = clockNow() + offset
+        const page = pageOf(
+          RUN_B,
+          0,
+          [{ ...OPEN, seq: 0, at: serverNow - 4 * 60_000 }],
+          serverNow - 9 * 60_000,
+        )
+        const pane = makePaneSlot()
+        pane.open("agents.pane")
+        const controller = yield* provideClientServices(
+          makeAgentsController(
+            () => Effect.succeed([agedRow("aged", "Alpha", serverNow - 5 * 60_000)]),
+            () => Effect.never,
+            {
+              quality: () => Effect.succeed([]),
+              runs: () => Effect.succeed([runViewOf(page)]),
+              page: () => Effect.succeed(page),
+              stop: () => Effect.void,
+            },
+          ),
+          {
+            currentSession: () => KEY,
+            shell: { pane },
+            serverClockOffset: () => Option.some(offset),
+          },
+        )
+        const setup = yield* renderScoped(
+          () => (
+            <AgentsPane
+              models={() => []}
+              place={PLACE}
+              open={true}
+              controller={controller}
+              onSelect={() => {}}
+              onDelete={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 80, height: 30 },
+        )
+        controller.refresh("")
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("Runs (1)") && frame.includes("Alpha"),
+          "runs and sessions",
+        )
+        const lines = renderFrame(setup).split("\n")
+        expect(lines.find((line) => line.includes("track · review #1"))).toMatch(/9m\s*$/)
+        expect(lines.find((line) => line.includes("Alpha"))).toMatch(/5m\s*$/)
+
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => frame.includes("Run track"), "run page")
+        const frame = renderFrame(setup)
+        expect(frame).toContain("Run track · 1 visit · 1 round · 9m")
+        expect(frame.split("\n").find((line) => line.includes("› "))).toMatch(/4m\s*$/)
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
 })
 
 describe("Agents pane reopen", () => {
@@ -1577,6 +1906,7 @@ describe("Agents pane framing", () => {
                 reload: () => {},
                 quality: () => [],
                 runs: noRuns,
+                now: clockNow,
                 detail: () =>
                   Option.some({
                     status: "Idle",
@@ -1647,6 +1977,7 @@ describe("Agents pane framing", () => {
               reload: () => {},
               quality: () => [],
               runs: noRuns,
+              now: clockNow,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1701,6 +2032,7 @@ describe("Agents pane framing", () => {
               reload: () => {},
               quality: () => [],
               runs: noRuns,
+              now: clockNow,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1761,6 +2093,7 @@ describe("Agents pane framing", () => {
               reload: () => {},
               quality: () => [],
               runs: noRuns,
+              now: clockNow,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1844,6 +2177,7 @@ describe("agents pane rows", () => {
             reload: () => {},
             quality: () => [],
             runs: noRuns,
+            now: clockNow,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -2075,6 +2409,7 @@ describe("agents pane command center", () => {
                 reload: () => {},
                 quality: () => quality,
                 runs: noRuns,
+                now: clockNow,
                 detail: () => detail,
                 select: () => {},
                 done: () => [],
@@ -2581,6 +2916,7 @@ describe("agents pane counts and detail", () => {
               reload: () => {},
               quality: () => [],
               runs: noRuns,
+              now: clockNow,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -2616,6 +2952,7 @@ describe("idle middle parent", () => {
     reload: () => {},
     quality: () => [],
     runs: noRuns,
+    now: clockNow,
     detail: () => Option.none(),
     select: () => {},
     done: () => [],
@@ -2680,6 +3017,7 @@ describe("thread rows", () => {
     reload: () => {},
     quality: () => [],
     runs: noRuns,
+    now: clockNow,
     detail: () => Option.none(),
     select: () => {},
     done: () => [],
@@ -3340,6 +3678,7 @@ describe("done threads", () => {
               reload: () => {},
               quality: () => [],
               runs: noRuns,
+              now: clockNow,
               detail: () => Option.none(),
               select: () => {},
               done: () => [finished],
@@ -3466,6 +3805,7 @@ describe("Subagent tray", () => {
               reload: () => {},
               quality: () => [],
               runs: noRuns,
+              now: clockNow,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -3527,6 +3867,7 @@ describe("Subagent tray", () => {
                   reload: () => {},
                   quality: () => [],
                   runs: noRuns,
+                  now: clockNow,
                   detail: () => Option.none(),
                   select: () => {},
                   done: () => [],
@@ -3585,6 +3926,7 @@ describe("Subagent tray", () => {
                 reload: () => {},
                 quality: () => [],
                 runs: noRuns,
+                now: clockNow,
                 detail: () => Option.none(),
                 select: () => {},
                 done: () => done,
@@ -3638,6 +3980,7 @@ describe("Subagent tray", () => {
               reload: () => {},
               quality: () => [],
               runs: noRuns,
+              now: clockNow,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -3667,6 +4010,7 @@ describe("Subagent tray", () => {
             reload: () => {},
             quality: () => [],
             runs: noRuns,
+            now: clockNow,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],

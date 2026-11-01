@@ -126,16 +126,24 @@
   - An `integrate` state pushes the run's head through the integration gate
     and moves by `on.green` or `on.red` (Integration gate in `shipped-extensions.md`).
   - A client reads runs as a session of the owner's thread:
-    `MachinesRpc.Status` (`run-status`, `gent ctl status --run`) and
-    `MachinesRpc.Runs` (`run-list`), and stops one with `MachinesRpc.Stop`
-    (`run-stop`, the stop `machine.stop` asks). `Status` gives what
-    `machine.status` gives and the run's `trail`: one `StateVisit` per visit
-    of a state, oldest first, folded from the run's whole log
-    (`visitSteps`): its start and end, the thread and model of its newest
-    round, its rounds and their priced cost, whether the last round ended
-    with no verdict, its outcome (the verdict, the answer, a check's
-    `pass`/`fail`, a gate's `green`/`red`, or `exhausted`) and the state it
-    moved to. The model's tool leaves the trail out: its steps say the same.
+    `MachinesRpc.Status` (`run-status`, `gent ctl status --run`, what
+    `machine.status` gives), `MachinesRpc.Runs` (`run-list`) and
+    `MachinesRpc.Page` (`run-page`), and stops one with `MachinesRpc.Stop`
+    (`run-stop`, the stop `machine.stop` asks). `Page` gives the run's
+    row (status, machine, start, pending action) and its `trail` from step
+    `since` on: one `StateVisit` per visit of a state, oldest first, keyed
+    by its first step (`seq`): its start and end, the thread and model of
+    its newest round, its rounds and their priced cost, whether the last
+    round ended with no verdict, its outcome (the verdict, the answer, a
+    check's `pass`/`fail`, a gate's `green`/`red`, `exhausted`, or
+    `stopped`/`failed` for the visit a stop or a failure ended) and the
+    state it moved to. `next` is the next read's `since`: the open visit's
+    first step, else the step after the run's last. A visit before it never
+    changes, so a reader keeps its trail and each read folds only the open
+    visit's steps (`visitSteps` over `since` to the run's `seq`); the page
+    reads no other run's log and no outcome tally. A refused visit (a move
+    off a state out of rounds) and a final state's visit take their number
+    from the run's memo. The model's tool has no trail: its steps say the same.
     The TUI agents pane lists the shell's thread's runs (each active one,
     then the three newest ended) above its sessions; Enter opens a run's
     page, one row per visit with its model, outcome, cost and age under the

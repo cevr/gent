@@ -57,6 +57,7 @@ import {
   LanguageModelLayers,
   runToolWithCtx,
   TEST_MODEL_ID,
+  testLeafContext,
   testToolContext,
   UserConfig,
   advanceUntil,
@@ -69,6 +70,7 @@ import {
   MACHINE_END_TYPE,
   MachineAnswerTool,
   type MachineDefinitionJson,
+  MachineRunPage,
   MachineRunStatus,
   MachineStopTool,
   MachinesExtension,
@@ -282,6 +284,27 @@ const LOOP = {
   states: {
     work: { kind: "thread", thread: "worker", say: "STATE work {{visit}}", next: "gate" },
     gate: { kind: "ask", ask: "Again?", on: { again: "work", done: "done" } },
+    done: { kind: "final" },
+  },
+}
+
+/** The visits of b the long loop allows: a and b take turns until b runs out. */
+const LONG_LOOP_VISITS = 20
+
+/** a ↔ b over `true` until b is out of rounds and moves to done: a long log, with no model. */
+const LONG_LOOP = {
+  name: "long-loop",
+  threads: {},
+  start: "a",
+  states: {
+    a: { kind: "run", run: "true", on: { pass: "b", fail: "done" }, maxVisits: 30 },
+    b: {
+      kind: "run",
+      run: "true",
+      on: { pass: "a", fail: "done" },
+      maxVisits: LONG_LOOP_VISITS,
+      exhausted: "done",
+    },
     done: { kind: "final" },
   },
 }
@@ -649,7 +672,7 @@ describe("a machine run", () => {
   )
 
   it.live(
-    "the run page reads every state visit and stops the run through the client requests",
+    "the run page reads every state visit, then only the open one, and stops the run through the client requests",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
@@ -664,7 +687,8 @@ describe("a machine run", () => {
         const owner = { sessionId, branchId }
         const run = decodeRunId(yield* startRun(client, owner, TRACK, "track", { spec: "S" }))
         yield* askDetails(client, owner, 1)
-        const page = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), { run })
+        const pageRef = ref(MachinesRpc.Page)
+        const page = yield* machinesRequest(client, owner, pageRef, { run })
         // A visit per state entry, oldest first: how each ended and where the run went.
         expect(
           page.trail.map((visit) => [
@@ -689,7 +713,14 @@ describe("a machine run", () => {
             .flatMap((visit) => Option.toArray(Option.fromUndefinedOr(visit.thread)))
             .map(String),
         ).toEqual([implementer, reviewer, implementer, reviewer].map(String))
-        expect(page.trail.filter((visit) => Predicate.isUndefined(visit.endedAt))).toHaveLength(1)
+        const open = page.trail.filter((visit) => Predicate.isUndefined(visit.endedAt))
+        expect(open.map((visit) => `${visit.state}#${visit.visit}`)).toEqual(["decide#1"])
+        // The next read starts at the open visit's first step: only that visit again.
+        expect(page.since).toBe(0)
+        expect(open.map((visit) => visit.seq)).toEqual([page.next])
+        const again = yield* machinesRequest(client, owner, pageRef, { run, since: page.next })
+        expect(again.trail).toEqual(open)
+        expect(again.next).toBe(page.next)
         // Only the owner's thread stops it; a stop of a stopped run answers again.
         const stopRef = ref(MachinesRpc.Stop)
         const stranger = yield* client.session.create({ cwd: home.cwd })
@@ -703,9 +734,130 @@ describe("a machine run", () => {
           run,
           status: "stopped",
         })
-        const stopped = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), { run })
+        // The stop ends the open visit: from its first step, and over the whole log.
+        const stopped = yield* machinesRequest(client, owner, pageRef, { run, since: page.next })
         expect(stopped.status).toBe("stopped")
+        expect(
+          stopped.trail.map((visit) => [
+            `${visit.state}#${visit.visit}`,
+            visit.outcome ?? "",
+            Predicate.isNumber(visit.endedAt),
+          ]),
+        ).toEqual([["decide#1", "stopped", true]])
+        expect(stopped.next).toBeGreaterThan(page.next)
+        const whole = yield* machinesRequest(client, owner, pageRef, { run })
+        expect(whole.trail.filter((visit) => Predicate.isUndefined(visit.endedAt))).toEqual([])
+        expect(whole.trail.slice(0, -1)).toEqual(page.trail.slice(0, -1))
+        // The model's view of the run is the status it was: its steps, no trail.
+        const status = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), { run })
+        expect(status.status).toBe("stopped")
+        expect(status.steps.length).toBeGreaterThan(0)
+        expect(Object.hasOwn(status, "trail")).toBe(false)
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live(
+    "a long run's page reads its whole trail once, then only what is new, and never the machine's other runs",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels(trackWorker)
+        const ran = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+            const owner = ownerOf(yield* client.session.create({}))
+            const run = decodeRunId(yield* startRun(client, owner, LONG_LOOP, "long-loop"))
+            yield* waitForEnd(client, owner)
+            return { owner, run }
+          }),
+        )
+        // Over the same file, with no server: the store counts what the page reads.
+        const reads = yield* Ref.make({ outcomes: 0, steps: 0, rows: 0 })
+        const counted = Layer.effect(
+          MachineStore,
+          Effect.map(MachineStore, (live) =>
+            MachineStore.of({
+              ...live,
+              outcomesOf: (machine) =>
+                Effect.andThen(
+                  Ref.update(reads, (seen) => ({ ...seen, outcomes: seen.outcomes + 1 })),
+                  live.outcomesOf(machine),
+                ),
+              steps: (run, limit) =>
+                Effect.andThen(
+                  Ref.update(reads, (seen) => ({ ...seen, steps: seen.steps + 1 })),
+                  live.steps(run, limit),
+                ),
+              visitSteps: (run, window) =>
+                live
+                  .visitSteps(run, window)
+                  .pipe(
+                    Effect.tap((rows) =>
+                      Ref.update(reads, (seen) => ({ ...seen, rows: seen.rows + rows.length })),
+                    ),
+                  ),
+            }),
+          ),
+        ).pipe(
+          Layer.provide(MachineStore.Live),
+          Layer.provide(BunSqlite.file(`${home.home}/gent.db`)),
+          Layer.provide(BunServices.layer),
+        )
+        const stub = testToolContext().Session
+        // oxlint-disable-next-line effect/noNullish -- the facade's absent-session answer
+        const absentSession: Session | undefined = undefined
+        const ctx = testToolContext({
+          ...ran.owner,
+          cwd: home.cwd,
+          home: home.home,
+          Session: { ...stub, getSession: () => Effect.succeed(absentSession) },
+        })
+        // The handler as the registry runs it, typed by what this test gives it.
+        const pageHandler: (
+          input: typeof MachinesRpc.Page.input.Type,
+        ) => Effect.Effect<
+          MachineRunPage,
+          Effect.Error<ReturnType<typeof MachinesRpc.Page.effect>>,
+          MachineStore | ExtensionContext
+        > = MachinesRpc.Page.effect
+        const readPage = (since: Option.Option<number>) =>
+          pageHandler({
+            run: ran.run,
+            ...omitUndefined({ since: Option.getOrUndefined(since) }),
+          }).pipe(
+            Effect.flatMap(Schema.encodeUnknownEffect(MachineRunPage)),
+            Effect.flatMap(Schema.decodeUnknownEffect(MachineRunPage)),
+            Effect.provideService(ExtensionContext, testLeafContext(ctx)),
+            Effect.provide(counted),
+          )
+        const whole = yield* readPage(Option.none())
+        // a and b take turns until b is out of rounds: its refused visit moves to done.
+        expect(whole.status).toBe("final")
+        expect(whole.trail).toHaveLength(LONG_LOOP_VISITS * 2 + 3)
+        expect(
+          whole.trail
+            .slice(-3)
+            .map((visit) => [`${visit.state}#${visit.visit}`, visit.outcome ?? "", visit.to ?? ""]),
+        ).toEqual([
+          [`a#${LONG_LOOP_VISITS + 1}`, "pass", "b"],
+          [`b#${LONG_LOOP_VISITS + 1}`, "exhausted", "done"],
+          ["done#1", "", ""],
+        ])
+        expect(whole.trail.filter((visit) => Predicate.isUndefined(visit.endedAt))).toEqual([])
+        const read = yield* Ref.get(reads)
+        expect(read.outcomes).toBe(0)
+        expect(read.steps).toBe(0)
+        // The run ended: the read from its `next` holds no visit and reads no step.
+        const after = yield* readPage(Option.some(whole.next))
+        expect(after.trail).toEqual([])
+        expect(after.next).toBe(whole.next)
+        expect(yield* Ref.get(reads)).toEqual(read)
+        // A read from the last visit's first step reads that visit's steps alone.
+        const last = whole.trail.at(-1)?.seq ?? 0
+        const tail = yield* readPage(Option.some(last))
+        expect(tail.trail).toEqual(whole.trail.slice(-1))
+        expect((yield* Ref.get(reads)).rows - read.rows).toBe(1)
+      }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
   )
 })
 

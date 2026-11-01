@@ -194,6 +194,13 @@ export interface ClientTransport {
    */
   readonly connection: () => Option.Option<number>
   /**
+   * The server's clock less this one, in milliseconds, as the last snapshot
+   * measured it: `now + offset` is this clock's now on the server's, the
+   * clock a server time (a run's start, a row's last step) is on. Reactive;
+   * None before the first snapshot and from a server that sends no time.
+   */
+  readonly serverClockOffset: () => Option.Option<number>
+  /**
    * The server's account lanes (`accounts.lanes`): each provider gent read a
    * quota window of, its free lanes and its fuel rates. The accounts are the
    * server's, so no session names the read.
@@ -246,6 +253,7 @@ export type ClientShellTransport = Pick<
   | "modelCatalog"
   | "selectedModel"
   | "connection"
+  | "serverClockOffset"
 > & {
   readonly client: GentNamespacedClient
 }
@@ -263,6 +271,7 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   modelCatalog: payload.modelCatalog,
   selectedModel: payload.selectedModel,
   connection: payload.connection,
+  serverClockOffset: payload.serverClockOffset,
   // Built when it runs: building the facet reaches no server.
   accountLanes: Effect.suspend(() =>
     shellRead(payload, "accounts.lanes", (client) => client.accounts.lanes()),

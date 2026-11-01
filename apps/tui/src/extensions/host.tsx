@@ -390,6 +390,7 @@ export function ExtensionUIProvider(props: {
       modelCatalog: client.modelCatalog,
       selectedModel: client.model,
       connection: client.connectedGeneration,
+      serverClockOffset: client.serverClockOffset,
     },
     workspace: {
       cwd: workspace.cwd,

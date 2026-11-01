@@ -46,6 +46,8 @@ interface ClientExtensionHarnessOptions {
   readonly selectedModel?: () => Option.Option<string>
   /** The open connection's generation; generation 1 by default. */
   readonly connection?: () => Option.Option<number>
+  /** The server's clock less this one's; none (this clock's) by default. */
+  readonly serverClockOffset?: () => Option.Option<number>
   /**
    * Workspace the extension sees. Defaults to a shared `/nonexistent` pair,
    * which is fine for a setup that only reads `cwd`; a test whose extension
@@ -160,6 +162,7 @@ export const makeClientTestTransport = (
     modelCatalog: opts.modelCatalog ?? (() => Option.some([])),
     selectedModel: opts.selectedModel ?? (() => Option.some("test/model")),
     connection: opts.connection ?? (() => Option.some(1)),
+    serverClockOffset: opts.serverClockOffset ?? (() => Option.none()),
   }
 }
 
@@ -186,6 +189,7 @@ export const makeUnreachableTransport = (): ClientShellTransport => ({
   modelCatalog: () => Option.none(),
   selectedModel: () => Option.some("test/model"),
   connection: () => Option.some(1),
+  serverClockOffset: () => Option.none(),
 })
 
 export const makeClientExtensionRuntime = (

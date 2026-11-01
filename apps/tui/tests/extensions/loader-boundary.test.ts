@@ -1535,6 +1535,7 @@ describe("loadTuiExtensions", () => {
           modelCatalog: () => Option.none(),
           selectedModel: () => Option.some("test/model"),
           connection: () => Option.some(1),
+          serverClockOffset: () => Option.none(),
         },
       })
       return Effect.gen(function* () {

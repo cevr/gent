@@ -374,6 +374,13 @@ interface AgentsController {
   readonly done: () => ReadonlyArray<AgentRowEntry>
   /** The machine runs the open pane lists, and the run page it shows. */
   readonly runs: RunsController
+  /**
+   * This clock's now on the server's (`serverClockOffset`): a row's last
+   * step, a turn's start and a run's start are server times, so each age
+   * the pane shows reads against it. This clock's own before the first
+   * snapshot measured the offset.
+   */
+  readonly now: () => number
 }
 
 /** The machine runs the open pane lists and the one run page it shows. */
@@ -382,7 +389,10 @@ interface RunsController {
   readonly list: () => ReadonlyArray<MachineRunView>
   /** The run whose page shows; none while the pane shows its list. */
   readonly viewing: () => Option.Option<RunId>
-  /** The viewed run's page; none until its first read lands. */
+  /**
+   * The viewed run's page: every visit read so far, and the step the next
+   * read starts from (`next`); none until its first read lands.
+   */
   readonly page: () => Option.Option<MachineRunPage>
   /** Why the viewed run's last read failed. */
   readonly error: () => Option.Option<string>
@@ -402,7 +412,11 @@ type RunId = MachineRunView["run"]
 interface MachineReads {
   readonly quality: (key: RowKey) => Effect.Effect<ReadonlyArray<ModelQuality>>
   readonly runs: (session: ActiveExtensionSession) => Effect.Effect<ReadonlyArray<MachineRunView>>
-  readonly page: (run: RunId) => Effect.Effect<MachineRunPage, { readonly message: string }>
+  /** The run's page from step `since` on: its status and the visits that began there or later. */
+  readonly page: (
+    run: RunId,
+    since: number,
+  ) => Effect.Effect<MachineRunPage, { readonly message: string }>
   readonly stop: (run: RunId) => Effect.Effect<void, { readonly message: string }>
 }
 
@@ -443,8 +457,23 @@ interface Listing {
 /** The slow clock a child's own turns are read on; they raise no event in this session. */
 const POLL_EVERY = "2 seconds"
 
-const isActiveRun = (run: MachineRunView): boolean =>
+const isActiveRun = (run: Pick<MachineRunView, "status">): boolean =>
   run.status === "running" || run.status === "asking"
+
+/**
+ * The page after a read from `next.since`: the kept visits that began
+ * before that step, then the read's.
+ */
+const mergePage = (kept: Option.Option<MachineRunPage>, next: MachineRunPage): MachineRunPage => {
+  const before = Option.match(
+    Option.filter(kept, (page) => page.run === next.run),
+    {
+      onNone: () => [],
+      onSome: (page) => page.trail.filter((visit) => visit.seq < next.since),
+    },
+  )
+  return { ...next, trail: [...before, ...next.trail] }
+}
 
 /** Ended runs the list keeps under the active ones. */
 const RUN_HISTORY = 3
@@ -529,22 +558,31 @@ export const makeAgentsController = (
 
     // The run whose page shows, and its last read. As with the detail, a
     // reply writes only while its run is still the one viewed.
+    // A read starts at the kept page's `next`: the visits before it never
+    // change, so it carries only the open visit and the ones after it. A
+    // reply from any other start (a read from before the run was viewed
+    // again) is dropped, and the next read asks again.
     const [viewing, setViewing] = createSignal(Option.none<RunId>())
     const [page, setPage] = createSignal(Option.none<MachineRunPage>())
     const [pageError, setPageError] = createSignal(Option.none<string>())
+    const sinceFor = (run: RunId): number =>
+      Option.match(
+        Option.filter(page(), (kept) => kept.run === run),
+        { onNone: () => 0, onSome: (kept) => kept.next },
+      )
     const readPage = coalescedRead(shell.cast, () =>
       Option.match(viewing(), {
         onNone: () => Effect.void,
         onSome: (run) =>
-          machines.page(run).pipe(
+          machines.page(run, sinceFor(run)).pipe(
             Effect.match({
               onFailure: (error) => {
                 if (Option.contains(viewing(), run)) setPageError(Option.some(error.message))
               },
               onSuccess: (next) => {
-                if (!Option.contains(viewing(), run)) return
+                if (!Option.contains(viewing(), run) || next.since !== sinceFor(run)) return
                 setPageError(Option.none())
-                setPage(Option.some(next))
+                setPage(Option.some(mergePage(page(), next)))
               },
             }),
           ),
@@ -864,6 +902,9 @@ export const makeAgentsController = (
       open,
       done,
       runs,
+      now: () =>
+        DateTime.toEpochMillis(DateTime.nowUnsafe()) +
+        Option.getOrElse(transport.serverClockOffset(), () => 0),
       watched,
     }
   })
@@ -1431,8 +1472,11 @@ interface RunMark {
   readonly tone: RunTone
 }
 
+/** What a run's glyph reads: a listed run's and a run page's alike. */
+type RunState = Pick<MachineRunView, "status" | "pending">
+
 /** Whether a run's round waits for its account until a time still ahead. */
-const runWaits = (run: MachineRunView, now: number): boolean => {
+const runWaits = (run: RunState, now: number): boolean => {
   const pending = run.pending
   if (Predicate.isUndefined(pending) || pending._tag !== "Round") return false
   return Predicate.isNotUndefined(pending.notBefore) && pending.notBefore > now
@@ -1443,7 +1487,7 @@ const runWaits = (run: MachineRunView, now: number): boolean => {
  * while it asks the reader, `◷` while its round waits for its account, `✓`
  * once final, `✕` failed, `■` stopped.
  */
-const runMark = (run: MachineRunView, now: number, frame: string): RunMark => {
+const runMark = (run: RunState, now: number, frame: string): RunMark => {
   if (run.status === "asking") return { glyph: "●", tone: "needs" }
   if (run.status === "final") return { glyph: "✓", tone: "done" }
   if (run.status === "failed") return { glyph: "✕", tone: "failed" }
@@ -1468,8 +1512,11 @@ const runToneColor = (
   return theme.textMuted
 }
 
-/** The outcomes that failed their visit: a check's `fail`, a gate's `red`, a state out of rounds. */
-const FAILED_OUTCOMES: ReadonlySet<string> = new Set(["fail", "red", "exhausted"])
+/**
+ * The outcomes that failed their visit: a check's `fail`, a gate's `red`,
+ * a state out of rounds, a run that failed in it.
+ */
+const FAILED_OUTCOMES: ReadonlySet<string> = new Set(["fail", "red", "exhausted", "failed"])
 
 type StateVisit = MachineRunPage["trail"][number]
 
@@ -1477,11 +1524,13 @@ type StateVisit = MachineRunPage["trail"][number]
 const isOpenVisit = (visit: StateVisit): boolean => Predicate.isUndefined(visit.endedAt)
 
 /**
- * A visit's glyph: an ended visit's `✓`, or `✕` for a failed outcome or a
- * last round with no verdict; the open visit's is its run's.
+ * A visit's glyph: an ended visit's `✓`, `■` for the visit a stop ended,
+ * or `✕` for a failed outcome or a last round with no verdict; the open
+ * visit's is its run's.
  */
 const visitMark = (visit: StateVisit, run: MachineRunPage, now: number, frame: string): RunMark => {
   if (isOpenVisit(visit)) return runMark(run, now, frame)
+  if (visit.outcome === "stopped") return { glyph: "■", tone: "stopped" }
   const failed =
     Option.exists(Option.fromUndefinedOr(visit.outcome), (outcome) =>
       FAILED_OUTCOMES.has(outcome),
@@ -1613,7 +1662,7 @@ function RunPage(props: {
   // A first Ctrl+X arms the stop; the second stops, any other key disarms.
   const [armed, setArmed] = createSignal(false)
   const page = () => Option.filter(props.controller.runs.page(), (value) => value.run === props.run)
-  const now = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
+  const now = props.controller.now
   const frame = () => workingIconFrame(tick())
   const active = () => Option.exists(page(), isActiveRun)
 
@@ -1646,7 +1695,7 @@ function RunPage(props: {
     const outcome = visitOutcome(visit)
     const room = Math.floor(Math.max(0, rowWidth() - textWidth(right) - 2) / 2)
     const withModel = [model, outcome].filter((part) => part.length > 0).join(" · ")
-    const doing = [withModel, outcome].find((text) => textWidth(text) <= room) ?? withModel
+    const doing = [withModel, outcome].find((text) => textWidth(text) <= room) ?? outcome
     return paneRow(
       {
         lead: currentMarker(isOpenVisit(visit)),
@@ -1689,13 +1738,11 @@ function RunPage(props: {
 
   // The visit under the cursor, for the detail line.
   const [cursor, setCursor] = createSignal(Option.none<StateVisit>())
-  // A re-read builds new visits; the cursor follows the state and its visit.
+  // A re-read builds new visits; the cursor follows the visit's first step.
   const cursorVisit = () =>
     Option.flatMap(cursor(), (visit) =>
       Option.flatMap(page(), (run) =>
-        Option.fromUndefinedOr(
-          run.trail.find((entry) => entry.state === visit.state && entry.visit === visit.visit),
-        ),
+        Option.fromUndefinedOr(run.trail.find((entry) => entry.seq === visit.seq)),
       ),
     )
 
@@ -1744,7 +1791,7 @@ function RunPage(props: {
         id="run-page"
         open
         rows={rows}
-        rowKey={(visit) => `${visit.state}#${visit.visit}`}
+        rowKey={(visit) => String(visit.seq)}
         // The page opens on the visit the run is on, else its last.
         sticky={(visits) => {
           const open = visits.findIndex(isOpenVisit)
@@ -1888,12 +1935,7 @@ export function AgentsPane(props: {
    */
   const rowRuns = (row: AgentRowEntry, selected: boolean): ReadonlyArray<TextRun<RowTone>> => {
     if (Option.contains(armed(), row.sessionId)) return [{ text: deletePrompt(row), tone: "muted" }]
-    const right = rightColumn(
-      row,
-      DateTime.toEpochMillis(DateTime.nowUnsafe()),
-      listWidth(),
-      props.models(),
-    )
+    const right = rightColumn(row, props.controller.now(), listWidth(), props.models())
     return paneRow(
       {
         lead: `${currentMarker(isCurrent(row))}${indentFor(row.depth)}`,
@@ -1914,7 +1956,7 @@ export function AgentsPane(props: {
    * edge, in the session rows' columns.
    */
   const runRowRuns = (run: MachineRunView): ReadonlyArray<TextRun<RowTone>> => {
-    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+    const now = props.controller.now()
     return paneRow(
       {
         lead: currentMarker(false),
@@ -1935,8 +1977,7 @@ export function AgentsPane(props: {
       }
       const runColor = (kind: RowTone) => {
         if (kind === "glyph") {
-          const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
-          return runToneColor(theme, runMark(run, now, "").tone, selected())
+          return runToneColor(theme, runMark(run, props.controller.now(), "").tone, selected())
         }
         if (selected()) return theme.selectedListItemText
         if (kind === "name") return theme.info
@@ -2047,7 +2088,7 @@ export function AgentsPane(props: {
         Option.match(cursorRun(), {
           onNone: () => [],
           onSome: (run) => {
-            const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+            const now = props.controller.now()
             return runDetailLines(run, runMark(run, now, workingIconFrame(tick())), now)
           },
         }),
@@ -2124,8 +2165,7 @@ export function AgentsPane(props: {
                     onNone: () =>
                       Option.match(cursorRun(), {
                         onNone: () => "",
-                        onSome: (run) =>
-                          runDetailLabel(run, DateTime.toEpochMillis(DateTime.nowUnsafe())),
+                        onSome: (run) => runDetailLabel(run, props.controller.now()),
                       }),
                     onSome: (row) => detailLabel(row, cursorDetail(row), props.models()),
                   }),
@@ -2247,9 +2287,9 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
           transport
             .request(ref(MachinesRpc.Runs), {}, session)
             .pipe(Effect.orElseSucceed((): ReadonlyArray<MachineRunView> => [])),
-        page: (run) =>
+        page: (run, since) =>
           transport
-            .request(ref(MachinesRpc.Status), { run })
+            .request(ref(MachinesRpc.Page), { run, since })
             .pipe(Effect.mapError((error) => ({ message: error.message }))),
         stop: (run) =>
           transport.request(ref(MachinesRpc.Stop), { run }).pipe(

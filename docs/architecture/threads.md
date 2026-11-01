@@ -378,10 +378,16 @@
   `<glyph> <machine> · <state> #<visit>[ · <status>]` and its age. Enter on
   a run opens its page in the pane's place: the title carries the run's
   status, visits, rounds, priced cost and age, and one row per state visit
-  (`MachinesRpc.Status`'s `trail`, oldest first) shows its glyph, its
+  (`MachinesRpc.Page`'s `trail`, oldest first) shows its glyph, its
   model, its outcome and the state it went to, its cost and its age, with
-  `›` on the visit the run is on. The page reads again on each listing
-  reply. Enter (or →) on a visit opens its round's thread by the listed row
+  `›` on the visit the run is on and `■` on the visit a stop ended. A
+  narrow row drops the model, then cuts the outcome. The page reads again
+  on each reply of the open pane's listing, from the last read's `next`:
+  the reply replaces the visits from its `since` on and keeps the ones
+  before. A reply for a run no longer viewed, or from another `since` (a
+  read from before the run was viewed again), is dropped. Each age on the
+  page and on a session row reads on the server's clock
+  (`ClientTransport.serverClockOffset`). Enter (or →) on a visit opens its round's thread by the listed row
   of that thread (`thread` or a member id), as a session pick does; a
   double Ctrl+X stops an active run (`MachinesRpc.Stop`, then the listing
   and the page read again), and any other key disarms the first; Esc or ←
