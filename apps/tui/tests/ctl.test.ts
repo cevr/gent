@@ -20,6 +20,7 @@ import {
   ConfigProvider,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Option,
@@ -27,6 +28,7 @@ import {
   Runtime,
   Schedule,
   Schema,
+  Scope,
   Sink,
   Stdio,
 } from "effect"
@@ -527,13 +529,14 @@ describe("gent ctl against a running server", () => {
   )
 
   it.live(
-    "pool needs no session: one Pool value and exit 0, or with --follow bare PoolFacts lines that run on",
+    "pool needs no session: one Pool value and exit 0, or with --follow bare PoolFacts lines until the server stops",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           // A ledger with the account's weekly reading: its reset is the account's `week`.
           const now = yield* Clock.currentTimeMillis
           const weekEnd = now + 100 * 3_600_000
+          const serverScope = yield* Scope.make()
           const seeded = yield* serveScratchHomeWith(
             Option.some({
               buckets: [],
@@ -549,7 +552,7 @@ describe("gent ctl against a running server", () => {
                 },
               ],
             }),
-          )
+          ).pipe(Scope.provide(serverScope))
           const printed = yield* runCtl(seeded.home, ["pool"])
           // One JSON value, its providers one record per line.
           expect(printed.stdout.split("\n").filter((row) => row.length > 0)).toHaveLength(3)
@@ -589,6 +592,17 @@ describe("gent ctl against a running server", () => {
           const hungUp = yield* runCtl(seeded.home, ["pool", "--follow"], { brokenStdout: true })
           expect(hungUp.code).toBe(CTL_EXIT.failed)
           expect((yield* errorOf(hungUp))._tag).toBe("CtlFailed")
+
+          // The server stops: it ends the stream before its listener drains, so
+          // neither waits on the other, and the call ends in one error line and exit 1.
+          yield* Scope.close(serverScope, Exit.void).pipe(Effect.timeout("5 seconds"))
+          const ended = yield* Fiber.join(follow).pipe(Effect.timeout("5 seconds"))
+          expect(ended.stdout).toBe(first)
+          expect(ended.code).toBe(CTL_EXIT.failed)
+          expect(ended.stderr.trimEnd().split("\n")).toHaveLength(1)
+          const stopped = yield* Schema.decodeEffect(Schema.fromJsonString(ErrorLine))(ended.stderr)
+          expect(stopped._tag).toBe("CtlFailed")
+          expect(stopped.message).toBe("the server stopped")
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,

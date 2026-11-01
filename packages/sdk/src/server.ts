@@ -8,6 +8,7 @@ import {
   workspaceIdForCwd,
   buildServerRoutes,
   createDependencies,
+  endFollowerStreams,
   ModelRegistry,
   ModelResolver,
   ScriptedLanguageModel,
@@ -182,6 +183,9 @@ export const buildOwnedServer = (
     )
 
     yield* Layer.buildWithScope(HttpServerLive, scope).pipe(Effect.orDie)
+    // Runs first at shutdown (finalizers run in reverse): the follower
+    // streams end before the listener drains, which waits on each open one.
+    yield* Effect.addFinalizer(() => endFollowerStreams.pipe(Effect.provideContext(coreServices)))
 
     if (Predicate.isNotUndefined(options.seed)) {
       yield* options.seed.pipe(

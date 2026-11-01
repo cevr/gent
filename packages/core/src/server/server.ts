@@ -2475,6 +2475,15 @@ interface ServerRoutesConfig {
  * in-process clients call: the request dedupers and login leases they hold
  * are one per server, whichever transport a call comes on.
  */
+/**
+ * Ends the server's open follower streams (`accounts.pool`). A host runs it
+ * as its shutdown begins, before its listener drains: Bun's drain waits up
+ * to 20 s on each open stream.
+ */
+export const endFollowerStreams = Effect.gen(function* () {
+  yield* (yield* CredentialPlacement).endPool
+})
+
 export const buildServerRoutes = (
   handlers: Context.Context<Layer.Success<typeof RpcHandlersLive>>,
   config: ServerRoutesConfig,

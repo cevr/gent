@@ -17,6 +17,7 @@ import {
   Order,
   Path,
   Predicate,
+  Queue,
   Random,
   Ref,
   Result,
@@ -26,7 +27,6 @@ import {
   Semaphore,
   Stream,
   Struct,
-  SubscriptionRef,
 } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { ModelCatalogSnapshotStorage, type TurnLane } from "../storage/storage.js"
@@ -3711,8 +3711,9 @@ const MODEL_FIT_PASSES = 20
  */
 const LANE_RESERVATION_MS = 2 * 60_000
 /**
- * How often the pool facts stream sends the facts again when nothing
- * changed, so a reader on another machine knows the link lives. A guess.
+ * How long a pool facts reader goes with no line before the stream sends
+ * the facts again, so a reader on another machine knows the link lives.
+ * A guess.
  */
 const POOL_FACTS_HEARTBEAT = Duration.seconds(30)
 /**
@@ -4099,9 +4100,16 @@ interface CredentialPlacementService {
   /**
    * This server's own pool facts (`PoolFacts`): the current facts first,
    * then the facts at each change, and the same facts again after 30 s with
-   * no change. It never ends. Each value is whole: a reader keeps the last.
+   * no line. Each value is whole: a reader that falls behind gets the newest
+   * facts next and skips the ones between. It ends at `endPool`.
    */
   readonly pool: Stream.Stream<PoolFacts>
+  /**
+   * Ends every `pool` stream now, and each later one after its first facts.
+   * A host runs it as its shutdown begins, before its listener drains: the
+   * drain waits on each open stream. The placement runs it as it closes.
+   */
+  readonly endPool: Effect.Effect<void>
   /** Write the usage ledger now, when anything was recorded since the last write. */
   readonly flush: Effect.Effect<void>
 }
@@ -5741,20 +5749,29 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     .map((part) => part.toString(16).padStart(8, "0"))
     .join("")
   let facts: PoolFacts = { boot, seq: 0, providers: [] }
-  const factsRef = yield* SubscriptionRef.make(facts)
   /**
-   * Builds the facts at the clock's now and publishes them when they
-   * differ from the last, under a higher `seq`. Whether they changed. Under
-   * the lock.
+   * Each reader's pending facts: one slot, the newest, so a reader that
+   * stalls holds one value and an offer never waits under the lock.
    */
-  const publishFacts = Effect.flatMap(Clock.currentTimeMillis, (now) =>
-    Effect.suspend(() => {
-      const providers = poolProviders(now)
-      if (Equal.equals(providers, facts.providers)) return Effect.succeed(false)
-      facts = { boot, seq: facts.seq + 1, providers }
-      return Effect.as(SubscriptionRef.set(factsRef, facts), true)
-    }),
-  )
+  const readers = new Set<Queue.Queue<PoolFacts, Cause.Done>>()
+  let ended = false
+  const endPool = Effect.suspend(() => {
+    ended = true
+    return Effect.forEach(readers, (reader) => Queue.end(reader), { discard: true })
+  }).pipe(lock.withPermits(1))
+  yield* Effect.addFinalizer(() => endPool)
+  /**
+   * Builds the facts at the clock's now and offers them to each reader when
+   * they differ from the last, under a higher `seq`. Whether they changed.
+   * Under the lock.
+   */
+  const publishFacts = Effect.map(Clock.currentTimeMillis, (now) => {
+    const providers = poolProviders(now)
+    if (Equal.equals(providers, facts.providers)) return false
+    facts = { boot, seq: facts.seq + 1, providers }
+    for (const reader of readers) Queue.offerUnsafe(reader, facts)
+    return true
+  })
   /**
    * One read or change of the state at a time: a burst of placements reads
    * each earlier one. Each publishes the pool facts it changed.
@@ -7370,23 +7387,38 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     // A warm cache goes cold and a grant lapses with no call: the facts are
     // built afresh as a reader joins and at each heartbeat.
     pool: Stream.unwrap(
-      Effect.as(
-        lock.withPermits(1)(publishFacts),
-        Stream.merge(
-          SubscriptionRef.changes(factsRef),
-          Stream.tick(POOL_FACTS_HEARTBEAT).pipe(
-            Stream.drop(1),
-            // A change is sent by the changes above; the heartbeat repeats facts that did not change.
-            Stream.mapEffect(() =>
-              Effect.map(publishFacts, (changed) =>
-                Option.liftPredicate(facts, () => !changed),
-              ).pipe(lock.withPermits(1)),
+      Effect.gen(function* () {
+        const reader = yield* Queue.sliding<PoolFacts, Cause.Done>(1)
+        yield* Effect.acquireRelease(
+          Effect.suspend(() => {
+            readers.add(reader)
+            Queue.offerUnsafe(reader, facts)
+            if (ended) return Queue.end(reader)
+            return Effect.void
+          }).pipe(Effect.andThen(publishFacts), lock.withPermits(1)),
+          () => Effect.sync(() => readers.delete(reader)),
+        )
+        // 30 s with no line: the facts afresh, the same ones when nothing changed.
+        const heartbeat = publishFacts.pipe(
+          Effect.map((changed) => {
+            if (!changed) Queue.offerUnsafe(reader, facts)
+          }),
+          lock.withPermits(1),
+        )
+        return Stream.fromEffectRepeat(
+          Queue.take(reader).pipe(
+            Effect.timeoutOption(POOL_FACTS_HEARTBEAT),
+            Effect.flatMap((line) =>
+              Option.match(line, {
+                onSome: Effect.succeed,
+                onNone: () => Effect.andThen(heartbeat, Queue.take(reader)),
+              }),
             ),
-            Stream.filterMap((line) => Result.fromOption(line, () => "changed")),
           ),
-        ),
-      ),
+        )
+      }),
     ),
+    endPool,
     flush: write,
   } satisfies CredentialPlacementService
 })

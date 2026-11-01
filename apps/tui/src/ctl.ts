@@ -1440,6 +1440,8 @@ const pool = Command.make(
             (error) => Effect.fail(new CtlFailed({ message: `output: ${String(error)}` })),
           ),
         )
+        // The server ends the stream as it stops.
+        return yield* new CtlFailed({ message: "the server stopped" })
       }),
     ),
 ).pipe(

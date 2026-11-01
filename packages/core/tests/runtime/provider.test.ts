@@ -8597,30 +8597,86 @@ describe("account lanes", () => {
     )
 
     it.effect(
-      "the pool stream sends the facts, a line at each change, and the same facts after 30 s",
+      "the pool stream sends the facts, a line at each change, and the same facts after 30 s with no line",
       () =>
         Effect.gen(function* () {
           const { placement, admit } = yield* accounts()
-          const subscribed = yield* Deferred.make<boolean>()
-          const lines = yield* placement.pool.pipe(
-            Stream.tap(() => Deferred.succeed(subscribed, true)),
-            Stream.take(4),
-            Stream.runCollect,
+          const lines = yield* Ref.make<ReadonlyArray<readonly [number, number]>>([])
+          yield* placement.pool.pipe(
+            Stream.runForEach((line) =>
+              Ref.update(lines, (sent) => [...sent, [line.seq, runsOf(line).length] as const]),
+            ),
             Effect.forkScoped,
           )
-          yield* Deferred.await(subscribed)
+          /** The lines sent so far, once the reader has run. */
+          const sentNow = Effect.yieldNow.pipe(
+            Effect.repeat({ times: 10 }),
+            Effect.andThen(Ref.get(lines)),
+          )
+          expect(yield* sentNow).toEqual([[0, 0]])
           expect(yield* admit([a], "start")).toBe("admitted")
+          yield* TestClock.adjust("29 seconds")
           yield* placement.freeReservation("start")
-          yield* TestClock.adjust("30 seconds")
-          const sent = yield* Fiber.join(lines)
-          expect(sent.map((line) => [line.seq, runsOf(line).length])).toEqual([
+          expect(yield* sentNow).toEqual([
             [0, 0],
             [1, 1],
             [2, 0],
-            // The heartbeat: nothing changed.
-            [2, 0],
           ])
+          // 30 s after the first line, but 1 s after the last: no heartbeat yet.
+          yield* TestClock.adjust("1 second")
+          expect((yield* sentNow).length).toBe(3)
+          // 30 s after the last line: the heartbeat, the same facts.
+          yield* TestClock.adjust("29 seconds")
+          expect((yield* sentNow).at(-1)).toEqual([2, 0])
+          expect((yield* sentNow).length).toBe(4)
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("a pool reader that stalls gets the newest facts next, not each one it missed", () =>
+      Effect.gen(function* () {
+        const { placement, admit } = yield* accounts()
+        const first = yield* Deferred.make<boolean>()
+        const resume = yield* Deferred.make<boolean>()
+        // The reader stalls on its first line, as a stdout no one reads does.
+        const lines = yield* placement.pool.pipe(
+          Stream.tap((line) =>
+            Effect.when(
+              Effect.andThen(Deferred.succeed(first, true), Deferred.await(resume)),
+              Effect.succeed(line.seq === 0),
+            ),
+          ),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        yield* Deferred.await(first)
+        for (const key of ["one", "two", "three", "four", "five"]) {
+          expect(yield* admit([a], key)).toBe("admitted")
+          yield* placement.freeReservation(key)
+        }
+        yield* Deferred.succeed(resume, true)
+        const sent = yield* Fiber.join(lines)
+        // Ten changes while it stalled: it reads the tenth.
+        expect(sent.map((line) => line.seq)).toEqual([0, 10])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("the pool stream ends as the placement closes", () =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.make()
+        const { placement } = yield* accounts().pipe(Scope.provide(scope))
+        const subscribed = yield* Deferred.make<boolean>()
+        const lines = yield* placement.pool.pipe(
+          Stream.tap(() => Deferred.succeed(subscribed, true)),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        yield* Deferred.await(subscribed)
+        yield* Scope.close(scope, Exit.void)
+        expect((yield* Fiber.join(lines)).map((line) => line.seq)).toEqual([0])
+        // A reader that joins after the close gets the facts, then the end.
+        expect((yield* Stream.runCollect(placement.pool)).length).toBe(1)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
   })
 

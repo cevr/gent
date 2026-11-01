@@ -35,6 +35,7 @@ export {
 export {
   buildServerRoutes,
   createDependencies,
+  endFollowerStreams,
   makeInProcessClient,
   RpcHandlersLive,
 } from "./server/server.js"

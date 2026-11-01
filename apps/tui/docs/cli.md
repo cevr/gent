@@ -189,12 +189,13 @@ time of this machine's clock.
 ```
 
 `pool --follow` prints the facts as JSON lines on stdout: one now, one at each
-change, and the same facts again after 30 s with no change. A line is one
+change, and the same facts again after 30 s with no line. A line is one
 whole `PoolFacts` value with no `_tag` and no `server`, so a reader keeps the
-last line and needs no earlier one. It runs until the server stops or the
+last line and needs no earlier one; a reader that falls behind gets the newest
+facts next and skips the ones between. It runs until the server stops (the
+stream ends as the stop begins, so the stop does not wait on it) or the
 connection drops, then prints one `CtlFailed` line on stderr and exits 1; a
-write to a closed stdout ends it the same way. The server waits up to 20 s
-for an open `--follow` connection as it stops.
+write to a closed stdout ends it the same way.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 

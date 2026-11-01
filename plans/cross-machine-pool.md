@@ -1,7 +1,8 @@
 # Two machines, one pool (queue row 56, was row 21)
 
 Date: 2026-10-31. Revised 2026-11-01 against main `92f0a8653`, after rows
-53 to 55. Status: design, not built.
+53 to 55, and again after review round 1 and the owner's link decision.
+Status: step 1 built; steps 2 to 4 are design.
 
 The owner works on the Mac and on the workbox (`bite-workbox`, Tailscale)
 at the same time. Each machine runs its own gent server, with its own
@@ -34,6 +35,14 @@ hurt" 3). Measured (the owner's transcripts, counted in the retro).
    the 5h window a 90% cap. `rankPlacement` and `FIVE_HOUR_SHARE` already
    follow it (measured: provider.ts, credentials.md "Credential
    placement").
+3. **Both link modes** (2026-11-01, verbatim: "Let's do both I and II").
+   (i) Each machine reads its peer on its own link. (ii) Each link also
+   carries the reader's own facts to the peer on stdin, so one working link
+   keeps both servers informed. The workbox already reaches the Mac over
+   Tailscale SSH with a key the Mac accepts, and finds `gent` on the
+   non-interactive `PATH` (measured 2026-11-01 from the workbox:
+   `echo ok; command -v gent` printed `ok` and `/Users/cvr/.local/bin/gent`).
+   So (i) needs no access change.
 
 ## What each server sees now (measured from source)
 
@@ -165,9 +174,12 @@ varies on its own (inferred). Utilization also shows past spend only. It
 cannot show the other machine's admitted runs, which are the future load
 admission needs. Rejected.
 
-**(b) A read-only peer link.** Each server publishes its own facts: its
+**(b) A peer link of own facts.** Each server publishes its own facts: its
 admitted runs and its metered fuel, per account. The other server reads
-them and counts them. Nothing is written to the other machine.
+them and counts them. With owner rule 3 (ii), a link also writes the
+reader's own facts to the peer, which notes them as if it had read them.
+No admission state is written to the other machine: only each server's own
+facts, which the receiver holds as a cache.
 
 **(c) One authority with grants and leases, no credentials.** Exact: one
 admitter, no race. Cost: a write API on the authority, a lease protocol
@@ -182,8 +194,9 @@ Why, by the principles in `~/Developer/personal/dotfiles/principles/`:
 - **Separate before serializing shared state.** The two servers do not
   need one mutable admission state. Each publishes independent facts (its
   own runs, its own fuel), and each merges them at read. Only a race
-  inside one propagation delay is left unserialized, and its bound is
-  below.
+  inside one propagation delay, and a partition, are left unserialized.
+  This is best-effort coordination, not a guarantee: the bounds and their
+  costs are under "Failure modes".
 - **Derive, don't sync.** A server never copies the peer's facts into its
   ledger. It holds the peer's latest facts as a cache with a lifetime, and
   derives load, fuel per percent and ranking from own state plus that
@@ -222,7 +235,7 @@ cannot republish what it read.
       own segments; the counts stay on the label they were counted on and
       are not saved.
     - `week`: the `resetAt` of the account's latest account-wide `7d`
-      reading.
+      reading. A diagnostic, not identity ("Account identity" below).
 
 No time from the peer's clock is in the facts. Schema: `PoolFacts`,
 packages/core/src/domain/driver.ts.
@@ -231,34 +244,71 @@ packages/core/src/domain/driver.ts.
 
 - The server serves its facts as a stream (`accounts.pool`, built in step
   1): the current facts, one line at each change, and a heartbeat after
-  30 s with no change (guess) that repeats the last facts under the same
+  30 s with no line (guess) that repeats the last facts under the same
   `seq`. Each line is a whole snapshot, so a reader keeps the last one and
-  the reader is the same whichever machine starts the link. `gent ctl
-  pool --follow` prints that stream as bare `PoolFacts` JSON lines and
-  exits 1 when the connection drops; `gent ctl pool` prints the first.
-- The user file names the peer as a command (`pool.peer`, an argv array),
-  for example `["ssh", "bite-workbox", "gent", "ctl", "pool", "--follow"]`
-  on the Mac. A project file cannot set it, as with `extraUsage` and
+  the reader is the same whichever machine starts the link. Each reader
+  holds one pending snapshot, the newest: a stalled SSH reader costs one
+  value, gets the newest facts when it resumes, and never holds the
+  placement lock. The stream ends as the server's shutdown begins, so a
+  peer follower never delays a restart. `gent ctl pool --follow` prints
+  that stream as bare `PoolFacts` JSON lines and exits 1 when the stream
+  ends or the connection drops; `gent ctl pool` prints the first. Measured
+  (step 1 tests).
+- The user file names the peer as a command (`pool.peer`, an argv array).
+  On the Mac: `["ssh", "bite-workbox", "gent", "ctl", "pool", "--follow"]`.
+  On the workbox: `["ssh", "cvr@cristians-macbook-pro", "gent", "ctl",
+  "pool", "--follow"]`. Both are Tailscale names; the config holds names,
+  never addresses. A project file cannot set it, as with `extraUsage` and
   `sabbath` (measured: config.ts counts them in the user file only); the
   command runs code.
 - A scoped server fiber, beside the pool sweep, runs the command, decodes
-  each line, and notes it on placement (`CredentialPlacement.notePeer`).
-  It restarts with backoff to 5 minutes (T3's follower rule) and logs each
-  failure (`credential-placement.peer.failed`).
+  each stdout line, and notes it on placement (`CredentialPlacement.notePeer`).
+  The same fiber writes this server's own `pool` stream to the command's
+  stdin, one `PoolFacts` line each (owner rule 3 (ii)). It restarts with
+  backoff to 5 minutes (T3's follower rule) and logs each failure
+  (`credential-placement.peer.failed`).
+- **The input side (step 2).** `gent ctl pool --follow` also reads
+  `PoolFacts` lines on its stdin and sends each to the server it attaches
+  to (a new RPC, `accounts.notePeer`), which notes them as the peer's
+  facts, as its own fiber would. Stdin closed: the forwarding stops and the
+  stream keeps printing. A line that does not decode fails the command with
+  a `CtlFailed` line, so the sending fiber restarts the link. Step 1 does
+  not read stdin.
+- **One peer cache, two sources.** A server holds one peer's facts, fed by
+  its own link's stdout and by the lines its peer's link sends in. A line
+  replaces the cache when its `boot` differs (a restart) or its `seq` is
+  higher under the same `boot`; a lower or equal `seq` only refreshes the
+  last-line time (a heartbeat, or the same line from the other source).
+  Freshness is the reader's own clock at the arrival of any line from
+  either source. Two machines only: a third is out of scope.
 - No `pool.peer`: nothing runs and nothing changes. The single-machine
-  path stays as it is today.
+  path stays as it is today. A server with no `pool.peer` that receives
+  lines on `accounts.notePeer` counts them (a link the other machine
+  started), so one config on one machine already informs both.
 
 ### How placement counts the peer
 
-- **Account identity.** Labels name accounts on each machine. A peer
-  account counts only when its label matches and its `week` is within
-  60 s (`QUOTA_RESET_TOLERANCE_MS`) of this server's own `7d` reset for
-  that label. A mismatch ignores that account and logs
-  `credential-placement.peer.account-mismatch`. Anthropic sign-ins store
-  no account id (measured: no account uuid in anthropic.ts), so the reset
-  time is the check. The Mac's pool labels are 7 (measured, its user
-  file); that the workbox uses the same labels is a guess, and the check
-  catches it.
+- **Account identity: the label, by convention.** One account holds the
+  same label on both machines; the label is the identity. Anthropic
+  sign-ins store no account id (measured: no account uuid in
+  anthropic.ts), and a reset time is not an identity: one account named
+  differently on two machines would count nothing, two accounts whose
+  weekly resets fall within 60 s would merge, and a rollover would refuse
+  a true match. The convention holds today: each machine stores 8
+  Anthropic credentials, and all 8 labels are on both (measured
+  2026-11-01: `gent auth list` on each machine, each `provider/label`
+  hashed with sha256 and the hash sets intersected; counts only, no label
+  printed). Checked at link time: on the first line of each peer `boot`,
+  a peer label that names none of this server's pool accounts, and an own
+  pool label the peer does not list, are logged once
+  (`credential-placement.peer.label-unmatched`, labels only, both
+  directions) and count no peer data. `week` is a diagnostic only: a
+  matched label whose peer `week` differs from this server's own `7d`
+  reset by more than 60 s (`QUOTA_RESET_TOLERANCE_MS`) logs
+  `credential-placement.peer.week-mismatch` once per `boot` and still
+  counts. Not built: a `pool.peer.accounts` map of peer label to own
+  label. It is the next step only if the labels ever stop matching; the
+  convention needs no config (subtract before you add).
 - **Load (F1, F5).** `laneLoad` adds the peer's `runs` whose accounts
   overlap the scope. `loneStart` reads the pool load, so one lone start runs across
   both machines, not one per machine.
@@ -268,46 +318,113 @@ packages/core/src/domain/driver.ts.
   account's `spend` `fuel` per model since the last line and adds it to
   that account's open segments, as `noteFuel` does. A rise of a model's
   `unpriced` drops that model's segments and the account's own, as an
-  unpriced own request does. Fuel is conserved: a rise
-  that belongs to a segment that just closed lands in the next one, so the
-  sums behind `fuelPerPct` stay right (inferred).
+  unpriced own request does.
+- **Fuel reconciliation: a close waits for the next peer line.** The
+  peer's fuel and the provider's reading of it reach this server by two
+  paths, in either order. Moving a late rise into the next segment does
+  not preserve `fuelPerPct`: a segment closes at the first 1% move
+  (`read`, provider.ts), and a segment with zero fuel is not kept. Say A
+  reads B's point before B's line brings its fuel F (quota-before-facts):
+  A closes a zero-fuel segment, which is dropped; F lands in the next
+  segment; A then spends F for a second point, and the fit keeps 2F for 1
+  point, not F per point. Capacity on that account is overstated (2x when
+  these are its only kept segments).
+  Inferred from `read` and the fit. The rule: on an account the peer
+  shares (its last facts list spend or runs on it), a reading that would
+  close a segment marks it pending instead. The next peer line to arrive,
+  by arrival order on this server and never by a peer clock, adds its
+  fuel rise to the pending segment, keeps it, and the segment that reading
+  opened starts with no fuel from that line. A pending segment that sees
+  no peer line within 60 s (two heartbeats) is dropped: its fuel is
+  unknown, never zero. What it costs: the peer's spend between the reading
+  and that line's arrival (one propagation delay, plus at most one
+  heartbeat when the peer is idle) counts in the closing segment, not the
+  next. That is a shift by the lag, not a loss: fuel is conserved, and in
+  steady spend the shift is the same at both ends of each segment
+  (inferred). A segment's close is held up to 60 s, so `fuelPerPct` reads
+  one point later. An account the peer does not share closes at once, as
+  today.
 - **Band (F7).** `accounts.lanes` reports the peer: its name, its runs per
   provider, and the age of its last line by this server's clock.
-- **Overshoot signal.** When a peer line makes own plus peer load exceed
-  the capacity, the server logs `credential-placement.pool-overshoot`
-  once per crossing. Step 4 depends on this log.
+- **Overshoot signal.** The server logs
+  `credential-placement.pool-overshoot` once per crossing when own plus
+  counted peer load exceeds the capacity. Two events can cross: a peer
+  line that raises the peer's load, and a reading that lowers the
+  capacity (the account-wide room fell faster than counted load
+  explains, which a silent peer's spend does). The second needs no peer
+  line, so the log also measures a partition. Step 4 depends on this log.
 
 ### Failure modes
 
-- **The peer is offline** (asleep, or its server stopped). A stopped gent
-  server runs no lanes, so its load is truly 0. After 10 minutes with no
-  line (guess: one sweep interval), the reader counts the peer's load as 0. Until then it holds the last load, so a short network cut does not
-  admit twice. While the peer is silent, the reader drops its open
-  segments on the accounts the peer last had runs on: their fuel is
-  unknown, never zero.
+This is best-effort coordination. The bounds below hold only while both
+servers follow the same rules; nothing revokes a run already admitted.
+
+- **One link is down.** Each link carries both directions (owner rule 3),
+  so either link alone keeps both servers informed. The counts do not
+  change; only the band (step 3) shows the link that failed. Inferred
+  from the link design.
+- **A partition: both links down** (Tailscale down, a machine asleep, or
+  its server stopped). Silence does not prove the peer stopped: a
+  sleeping Mac resumes its runs when it wakes, and a cut network hides
+  runs that go on. The policy, from the owner's goal (spend each week to
+  100% before its reset) and row 57 (a usage limit now waits for the
+  reset; it no longer kills the run):
+  1. **Silent:** no line from either source for 90 s (three heartbeats).
+     The reader drops its open and pending segments on the accounts the
+     peer shares: their fuel is unknown, never zero. It logs
+     `credential-placement.peer.silent` once.
+  2. **Hold, the first 30 minutes of silence (guess).** The reader keeps
+     the peer's last-known runs and live sessions counted, and caps its
+     own load at half the capacity: it admits a start only while its own
+     load stays under `min(C - peer runs, C / 2)`. With both servers on
+     this rule the pool stays at or under C. Proof sketch: at the cut A
+     holds a runs and B holds b, with a + b at most C. A server at or
+     under half admits up to half, and a server over half admits nothing;
+     the other one admits at most C minus the first one's last-known runs.
+     So the total is at most C (inferred). This also closes the case the
+     first plan missed: A holds C long runs, B loses its view of A, and
+     B, still counting A's C runs, admits nothing (the first plan's
+     10-minute expiry let B admit C more, so 2C).
+  3. **Release, after 30 minutes.** The reader counts the peer's runs as
+     0 and lifts its own cap to C. The release is a bet that a peer silent
+     that long has stopped or paused; it is not a proof. The
+     `pool-overshoot` log (readings lowering the capacity under counted
+     load) shows when the bet was wrong.
+  4. **A line arrives:** the counts resume at once. A new `boot` is
+     handled as a restart (below).
+
+  What it costs. During a hold, each machine starts at most half the
+  pace, though the other machine may be idle: a short cut wastes up to
+  half the pool's pace for 30 minutes. After a release with both machines
+  busy, the pool can run up to 2x the pace until a link returns. The 90%
+  cap on the 5h window and the row 57 wait bound that damage to a pause,
+  not a lost run. Holding forever was rejected: a Mac asleep overnight
+  would hold the workbox at half the pace all night, and quota a week
+  does not spend is lost at its reset, while overshoot only pauses work
+  until a reset. A Mac that wakes resumes its runs before its link is
+  back (backoff up to 5 minutes), so the pool can pass C by the Mac's
+  runs at sleep for that time; the log measures it.
+
 - **The peer restarts.** A new `boot` gives no fuel rise for the gap. The
-  reader drops the open segments on the accounts the old boot had fuel or
-  runs on, then counts from the new base.
+  reader drops the open and pending segments on the accounts the old boot
+  had fuel or runs on, then counts from the new base.
 - **Clock skew.** The facts carry no peer time. Freshness is the reader's
-  own clock at receipt. Identity compares two provider `resetAt` values,
-  both on the provider's clock. So skew between the machines changes
+  own clock at arrival. The `week` diagnostic compares two provider
+  `resetAt` values, both on the provider's clock, and the fuel
+  reconciliation uses arrival order. So skew between the machines changes
   nothing. Inferred from the schema.
-- **One reader is down.** Say A reads B, and B cannot read A. A subtracts
-  B's runs; B admits as today. B's admissions are at most the capacity C;
-  A's are at most C minus B's runs. Together at most C. B's fuel per
-  percent stays biased low by A's spend, so B admits less, not more.
-  Inferred. Both readers down is today's behavior (F1 to F5). The band
-  shows a silent peer, so the owner sees it.
 - **Both admit at the same moment.** Each sees the other's runs one
   propagation delay late: an SSH line over Tailscale, under a second
   (guess). Two starts inside that delay can both take the last room.
   Overshoot needs simultaneous bursts on both machines. The
   `pool-overshoot` log measures how often it happens. Step 4 bounds it
   only if the log shows it.
-- **A label mismatch.** That account counts no peer data. The account
-  behaves as today: F2's bias on it, no peer runs subtracted.
+- **A label on one side only.** That account counts no peer data and is
+  logged (`peer.label-unmatched`). It behaves as today: F2's bias on it,
+  no peer runs subtracted.
 - **A wrong command.** The fiber fails, logs, backs off; the band shows the
-  peer as unread.
+  peer as unread. A partition follows if the other machine's link is down
+  too.
 
 ## Part 3: steps
 
@@ -327,11 +444,22 @@ running the test (feedback: validate the regression test).
    core/tests/server/rpc.test.ts), one-shot `gent ctl pool` beside
    `--follow`, and the facts' shape above (runs per scope and model, spend
    per model).
+   Review round 1 fix (`fix(lanes): …`): each reader holds one pending
+   snapshot, the newest (a stalled reader skips to the newest `seq`); the
+   heartbeat comes after 30 s with no line, not on a fixed period; the
+   streams end as the server's shutdown begins (`endPool`, run by the SDK
+   server before Bun's listener drain), and `--follow` then exits 1 with
+   `the server stopped`. Tests: the stall, the idle heartbeat (a change at
+   29 s, no repeat at 30 s, one at 59 s), the end at close, and the ctl
+   test over the real server, which closes the server and needs the
+   follower to end within 5 s.
 2. **`feat(lanes): count the peer's runs and fuel in the pool`.** The
-   `pool.peer` config (user file only), the reader fiber, `notePeer`, and
-   load, lone start, ranking and fuel in one commit (F1 and F2 must land
-   together). Tests over two placements and one scripted account set, the
-   peer fed in memory (the probe's setup):
+   `pool.peer` config (user file only), the reader fiber with both
+   directions (stdout read, own facts written to stdin), the stdin side of
+   `gent ctl pool --follow` and `accounts.notePeer`, the one peer cache,
+   `notePeer`, and load, lone start, ranking and fuel in one commit (F1 and
+   F2 must land together). Tests over two placements and one scripted
+   account set, the peer fed in memory (the probe's setup):
    - disjoint accounts: A's and B's admitted starts sum to the solo
      capacity (13), not 26. Fails without the peer's runs in `laneLoad`.
    - shared account: each server's `fuelPerPct` is the true rate (2 M), not
@@ -340,15 +468,37 @@ running the test (feedback: validate the regression test).
      (6), not 3 or less. Fails with load on and fuel off.
    - newcomer: the sum stays at or under the solo capacity. Fails today
      (15 against 12).
-   - a peer silent for 10 minutes counts 0 runs, and its accounts' open
-     segments are dropped; a new `boot` drops them too.
-   - a label whose `week` differs by more than 60 s counts no peer data.
+   - quota-before-facts: A reads the point B's fuel F moved before B's line
+     brings F; then A spends F for the next point. `fuelPerPct` is F per
+     point, not 2F. Fails when the close does not wait for the peer line.
+   - facts-before-quota: B's line brings F, then A reads the point. The
+     segment keeps F for 1 point, and the next peer line (a heartbeat, no
+     rise) releases it with no fuel added. Fails when the pending close
+     discards the fuel the segment already held.
+   - a pending segment with no peer line for 60 s is dropped.
+   - partition: after 90 s of silence the reader holds the peer's
+     last-known runs and caps its own load at `min(C - peer runs, C / 2)`;
+     the case A holds C, then the cut, admits nothing on B. After 30
+     minutes the peer's runs count 0 and the cap lifts. A line ends the
+     silence at once. A new `boot` drops the open segments. Each fails with
+     its rule removed.
+   - identity: a label on one side only counts no peer data and logs
+     `peer.label-unmatched`; a matched label whose `week` differs by more
+     than 60 s still counts and logs `peer.week-mismatch`.
+   - one cache, two sources: the same line from both sources counts its
+     fuel rise once; a lower `seq` under the same `boot` only refreshes the
+     time.
+   - ctl stdin: `gent ctl pool --follow` with `PoolFacts` lines on stdin
+     notes them on the real server (the step 1 ctl test's setup); a bad
+     line exits 1 with `CtlFailed`.
    - A's facts after it reads B list A's runs alone.
-     Docs: lanes.md, credentials.md (placement). Live check: both machines
-     with `pool.peer`, `gent ctl lanes` on each shows the other's runs.
+     Docs: lanes.md, credentials.md (placement), cli.md. Live check: the Mac
+     with `pool.peer` alone, then both machines; `gent ctl lanes` on each
+     shows the other's runs.
 3. **`feat(tui): show the peer in the lanes band`.** A row after the
    provider rows: `peer <name> <runs> runs · <age>`, or `peer <name>
-   unread <age>` when silent; `gent ctl lanes --line` prints the same.
+   unread <age>` when silent, with a mark when one of the two links is
+   down; `gent ctl lanes --line` prints the same.
    Tests: `laneRows` in apps/tui/tests (fails without the row), the ctl
    line test. `bun run test:e2e` and the verify-gent live check at normal
    and narrow widths.
@@ -401,12 +551,8 @@ Measured (the retro).
 
 ## Owner choices
 
-1. **How the workbox reads the Mac.** (i) The owner lets the workbox SSH
-   to the Mac over Tailscale: one `authorized_keys` line on the Mac. The
-   Mac's sshd listens (measured, 2026-11-01, a local port check); whether
-   the workbox has a key the Mac accepts is not known. (ii) One link the
-   Mac starts carries both directions: the workbox's `gent ctl pool` also
-   reads the Mac's facts from its stdin and notes them on the workbox
-   server. No new access, but a dropped link blinds both servers at once.
-   Recommendation: (i). Two independent readers keep the pool bounded when
-   one fails (Failure modes, "One reader is down").
+1. **How the workbox reads the Mac: decided 2026-11-01, both modes.** The
+   owner chose (i) and (ii) together ("Let's do both I and II"): each
+   machine reads its peer on its own link, and each link also carries the
+   reader's own facts on stdin. Owner rule 3 holds the decision; "The
+   link" and "Failure modes" hold the design. No choice is open.

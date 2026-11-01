@@ -5233,6 +5233,9 @@ describe("AccountsRpcs", () => {
         Effect.gen(function* () {
           const work = CredentialSlot.make("work")
           const message = MessageId.make("pool-run")
+          // A reader that falls behind skips to the newest facts, so the run
+          // stays held until the reader has seen it.
+          const runSeen = yield* Deferred.make<void>()
           // A tool admits a start, then cancels it: one run, then none.
           const poolProbe = defineExtension({
             id: "@test/pool-run",
@@ -5247,6 +5250,7 @@ describe("AccountsRpcs", () => {
                   execute: Effect.fn("PoolRun.execute")(function* () {
                     const ctx = yield* ExtensionContext
                     yield* ctx.Accounts.admit({ message, cwd: ctx.cwd })
+                    yield* Deferred.await(runSeen)
                     yield* ctx.Accounts.cancel(message)
                     return {}
                   }),
@@ -5293,6 +5297,13 @@ describe("AccountsRpcs", () => {
                 account.spend.map((spent) => [account.slot, spent.model, spent.fuel]),
               ),
             )
+          yield* waitFor(
+            Ref.get(lines),
+            (sent) => sent.some((facts) => runsOf(facts).length > 0),
+            5_000,
+            "the pool facts with the admitted run",
+          )
+          yield* Deferred.succeed(runSeen, void 0)
           // The turn settles with both steps' fuel counted.
           yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
