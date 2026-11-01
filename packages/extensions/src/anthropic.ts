@@ -36,6 +36,8 @@ import {
   omitUndefined,
   Model,
   type PendingRotation,
+  type StoredOAuthCredentials,
+  type UpdateStoredOAuth,
   QuarantinedRotation,
   type SourceRotation,
   type ModelDriverContribution,
@@ -84,7 +86,12 @@ import {
   isCacheableBlock,
   isTransientTokenStatus,
   makeCredentialCache,
+  type CredentialStore,
+  generateOAuthState,
+  generatePkce,
+  type PkceCodes,
   postOAuthForm,
+  postOAuthJson,
   apiKeyFrom,
   readOptionalEnv,
   requestJsonObject,
@@ -1015,6 +1022,133 @@ const refreshViaOAuthClient = (
     return creds.value
   })
 
+// ── claude account sign-in ──────────────────────────────────────────────────
+
+/**
+ * A Claude account gent signs in to itself, in Claude Code's OAuth client,
+ * through the page that shows a code to paste back (it works over SSH). The
+ * login is a token family of its own: gent's store holds it and only gent
+ * refreshes it, so no other program's login (Claude Code, TeamClaude, or the
+ * same account on another machine) is rotated by it. Values from TeamClaude
+ * 1.1.27 `src/oauth.js`, which signs in the same way; its token endpoint takes
+ * the code exchange as JSON.
+ */
+const OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
+const OAUTH_CODE_REDIRECT = "https://console.anthropic.com/oauth/code/callback"
+const OAUTH_EXCHANGE_URL = "https://platform.claude.com/v1/oauth/token"
+const OAUTH_SCOPES =
+  "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+
+/** The index of the Claude account sign-in among the driver's auth methods. */
+const SIGN_IN_METHOD = 3
+
+/** How long a started sign-in waits for its code. */
+const SIGN_IN_TTL = Duration.minutes(10)
+
+/** The metadata of an account gent holds the tokens of (`metadata.owner`). */
+const GENT_OWNED = { owner: "gent" } as const
+
+/** Whether a stored sign-in is an account gent signed in to and holds. */
+const isGentOwned = (signIn: { readonly metadata?: Readonly<Record<string, string>> }) =>
+  signIn.metadata?.["owner"] === GENT_OWNED.owner
+
+/** The authorize page of one sign-in: its PKCE challenge and its state. */
+const claudeAuthorizeUrl = (pkce: PkceCodes, state: string): string => {
+  const url = new URL(OAUTH_AUTHORIZE_URL)
+  url.searchParams.set("code", "true")
+  url.searchParams.set("client_id", OAUTH_CLIENT_ID)
+  url.searchParams.set("response_type", "code")
+  url.searchParams.set("redirect_uri", OAUTH_CODE_REDIRECT)
+  url.searchParams.set("scope", OAUTH_SCOPES)
+  url.searchParams.set("code_challenge", pkce.challenge)
+  url.searchParams.set("code_challenge_method", "S256")
+  url.searchParams.set("state", state)
+  return url.toString()
+}
+
+/**
+ * The code a paste carries, and its state: the code page's `code#state`, the
+ * address a browser reached (`?code=…&state=…`), or a bare code. A paste that
+ * names a state must name this sign-in's; a bare code carries none, and PKCE
+ * still binds its exchange to this sign-in's verifier.
+ */
+export const parsePastedCode = (
+  input: string,
+  expected: string,
+): Effect.Effect<{ readonly code: string; readonly state: string }, ProviderAuthError> => {
+  const text = input.trim()
+  const refuse = (message: string) => Effect.fail(new ProviderAuthError({ message }))
+  const mismatch = refuse(
+    "That code is from another sign-in: open this sign-in's page again and paste the code it shows",
+  )
+  if (text === "") return refuse("Paste the code the sign-in page shows")
+  if (/^https?:\/\//i.test(text)) {
+    const params = Option.fromNullishOr(URL.parse(text)).pipe(Option.map((url) => url.searchParams))
+    const field = (name: string) =>
+      params.pipe(
+        Option.flatMap((found) => Option.fromNullishOr(found.get(name))),
+        Option.filter((value) => value !== ""),
+      )
+    const code = field("code")
+    if (Option.isNone(code))
+      return refuse("That address carries no code: paste the code the page shows")
+    if (!Option.contains(field("state"), expected)) return mismatch
+    return Effect.succeed({ code: code.value, state: expected })
+  }
+  const at = text.indexOf("#")
+  if (at === -1) return Effect.succeed({ code: text, state: expected })
+  const code = text.slice(0, at).trim()
+  const state = text.slice(at + 1).trim()
+  if (code === "" || state === "") return refuse("Paste all of the code, the part after the # too")
+  if (state !== expected) return mismatch
+  return Effect.succeed({ code, state })
+}
+
+/**
+ * Trade a sign-in's code for its tokens. A refusal names the endpoint's
+ * status and reply; a reply without a refresh token is refused, since gent
+ * could not keep the account signed in.
+ */
+const exchangeClaudeCode = (
+  grant: { readonly code: string; readonly state: string },
+  verifier: string,
+): Effect.Effect<ClaudeCredentials, ProviderAuthError, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const response = yield* postOAuthJson(OAUTH_EXCHANGE_URL, {
+      grant_type: "authorization_code",
+      client_id: OAUTH_CLIENT_ID,
+      code: grant.code,
+      state: grant.state,
+      redirect_uri: OAUTH_CODE_REDIRECT,
+      code_verifier: verifier,
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAuthError({ message: `Claude sign-in failed: ${cause.message}`, cause }),
+      ),
+    )
+    if (response.status >= 400) {
+      return yield* new ProviderAuthError({
+        message: `Claude sign-in failed: ${response.status} ${response.body}`,
+      })
+    }
+    const now = yield* Clock.currentTimeMillis
+    const creds = parseOAuthResponse(response.body, "", now)
+    if (Option.isNone(creds) || creds.value.refreshToken === "") {
+      return yield* new ProviderAuthError({
+        message: "Claude sign-in failed: the reply carried no access and refresh token",
+      })
+    }
+    return creds.value
+  })
+
+/** A started sign-in: the verifier its exchange needs, the state its code carries, and when it began. */
+interface PendingSignIn {
+  readonly verifier: string
+  readonly state: string
+  readonly startedAt: number
+}
+
 /**
  * Run `claude -p .` so the CLI refreshes its own credentials. stdin is
  * closed so the CLI does not wait for piped input. It runs in the home
@@ -1895,6 +2029,90 @@ const makeLinkedCredentialCache = (
     source,
   )
 
+/**
+ * The credential cache of an account gent holds (`GENT_OWNED`): the gent
+ * auth store is the truth, read and written through `update` under its lock,
+ * as the OpenAI sign-in's is, and a refresh trades the stored refresh token at
+ * the token endpoint. No other program holds the family, so nothing else is
+ * read or written.
+ */
+const makeOwnedCredentialCache = (
+  cellRef: CredentialCacheCellRef<ClaudeCredentials>,
+  update: UpdateStoredOAuth,
+  signedInAt: Option.Option<number>,
+  refresh: (refreshToken: string) => Effect.Effect<ClaudeCredentials, CredentialFailure>,
+): Effect.Effect<CredentialCache<ClaudeCredentials>> =>
+  makeCredentialCache<ClaudeCredentials>({
+    label: "Anthropic",
+    credentials: ClaudeCredentials,
+    cellRef,
+    expiresAt: (creds) => creds.expiresAt,
+    read: Option.none(),
+    refresh: (held) => {
+      const token = held.pipe(
+        Option.map((creds) => creds.refreshToken),
+        Option.filter((value) => value !== ""),
+      )
+      if (Option.isNone(token)) {
+        return Effect.fail(
+          new ProviderAuthError({
+            message: `Claude account sign-in is unavailable. ${OWNED_SIGN_IN_HINT}`,
+            credentialFailure: "Unavailable",
+          }),
+        )
+      }
+      return refresh(token.value).pipe(
+        Effect.mapError((cause): CredentialFailure => {
+          if (cause._tag === "CredentialRefreshUnavailable") return cause
+          return new ProviderAuthError({
+            message: `Claude account sign-in failed: ${cause.message}. ${OWNED_SIGN_IN_HINT}`,
+            cause,
+            ...omitUndefined({ credentialFailure: cause.credentialFailure }),
+          })
+        }),
+      )
+    },
+    store: Option.some(ownedStore(update, signedInAt)),
+  })
+
+/** What a user does when an account gent holds no longer signs in. */
+const OWNED_SIGN_IN_HINT = "Sign in to the account again in /auth."
+
+const fromStoredClaude = (stored: StoredOAuthCredentials): ClaudeCredentials => ({
+  accessToken: stored.access,
+  refreshToken: stored.refresh,
+  expiresAt: stored.expires,
+})
+
+const toStoredClaude = (creds: ClaudeCredentials): StoredOAuthCredentials => ({
+  access: creds.accessToken,
+  refresh: creds.refreshToken,
+  expires: creds.expiresAt,
+})
+
+/** The gent auth store behind `update`, as the credential cache reads and writes it. */
+const ownedStore = (
+  update: UpdateStoredOAuth,
+  signedInAt: Option.Option<number>,
+): CredentialStore<ClaudeCredentials> => ({
+  ...omitUndefined({ signedInAt: Option.getOrUndefined(signedInAt) }),
+  update: <A, E>(
+    f: (
+      stored: Option.Option<ClaudeCredentials>,
+    ) => Effect.Effect<readonly [A, Option.Option<ClaudeCredentials>], E>,
+  ) =>
+    update((stored) =>
+      Effect.map(
+        f(Option.map(stored, fromStoredClaude)),
+        (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
+          pair[0],
+          Option.map(pair[1], toStoredClaude),
+        ],
+      ),
+    ),
+  same: (a, b) => a.refreshToken === b.refreshToken,
+})
+
 /** How a source's cache reads (given the credential it holds, if any) and refreshes. */
 interface SourceIO<R> {
   readonly read: (
@@ -1969,10 +2187,11 @@ const makeSourceCredentialCache = <R>(
   })
 
 /**
- * A named slot's sign-in is a link to a Claude Code config directory: the
- * record names the directory (`metadata.directory`) and holds no token. A
- * record with no directory is an owned copy an older gent imported; it fails
- * closed and asks for a link, and its tokens are never refreshed.
+ * A named slot's sign-in is an account gent signed in to and holds
+ * (`GENT_OWNED`), or a link to a Claude Code config directory: the record
+ * names the directory (`metadata.directory`) and holds no token. A record
+ * with neither is a copy an older gent imported; it fails closed and asks for
+ * a link, and its tokens are never refreshed: another program may hold them.
  */
 const linkedDirectory = (
   signIn: { readonly metadata?: Readonly<Record<string, string>> },
@@ -3991,30 +4210,44 @@ export const buildAnthropicModelDriver = (
   services: AnthropicDriverServices,
   promptCacheTtl: PromptCacheTtl,
 ): ModelDriverContribution & Required<Pick<ModelDriverContribution, "resolveModel">> => {
-  // A linked slot's warm cell serves one link alone: the sign-in stamp and
-  // the directory it was read for. A label linked again, by this process or
-  // another, gets a new stamp, so it reads its new directory and is never
-  // answered by the last one's warm token. A request still on the old link
-  // takes a cell of its own; no cell ever holds two links' tokens. A
-  // rotation gent holds is not in the cell: it is in the credential store,
-  // keyed by the directory, so every link of that directory meets it.
-  interface LinkedCell {
-    readonly link: string
+  // A named slot's warm cell serves one sign-in alone: its stamp and what
+  // it was read for (the linked directory, or the account gent holds). A
+  // label signed in again, by this process or another, gets a new stamp, so
+  // it is never answered by the last sign-in's warm token. A request still
+  // on the old sign-in takes a cell of its own; no cell ever holds two
+  // sign-ins' tokens. A rotation gent holds for a link is not in the cell:
+  // it is in the credential store, keyed by the directory, so every link of
+  // that directory meets it.
+  interface SlotCell {
+    readonly signIn: string
     readonly cell: CredentialCacheCellRef<ClaudeCredentials>
   }
-  const linkedCells = new Map<CredentialSlot, LinkedCell>()
-  const linkedCell = (slot: CredentialSlot, link: string): LinkedCell => {
-    const held = linkedCells.get(slot)
-    if (Predicate.isNotUndefined(held) && held.link === link) return held
-    const fresh: LinkedCell = {
-      link,
+  const slotCells = new Map<CredentialSlot, SlotCell>()
+  const slotCell = (slot: CredentialSlot, signIn: string): SlotCell => {
+    const held = slotCells.get(slot)
+    if (Predicate.isNotUndefined(held) && held.signIn === signIn) return held
+    const fresh: SlotCell = {
+      signIn,
       cell: SynchronizedRef.makeUnsafe<CredentialCacheCell<ClaudeCredentials>>(
         EMPTY_CREDENTIAL_CELL,
       ),
     }
-    linkedCells.set(slot, fresh)
+    slotCells.set(slot, fresh)
     return fresh
   }
+  /** The credential cache of a named slot whose account gent signed in to and holds. */
+  const buildOwnedCredentialCache = (
+    signIn: { readonly update: UpdateStoredOAuth; readonly signedInAt?: number },
+    slot: CredentialSlot,
+  ) =>
+    makeOwnedCredentialCache(
+      slotCell(slot, `${signIn.signedInAt ?? "unstamped"}\u0000gent`).cell,
+      signIn.update,
+      Option.fromUndefinedOr(signIn.signedInAt),
+      (refreshToken) => refreshViaOAuthClient(refreshToken).pipe(Effect.provideContext(services)),
+    )
+  /** Sign-ins started and waiting for their code, by authorization id. */
+  const pendingSignIns = new Map<string, PendingSignIn>()
   /** The credential cache of a named slot: the Claude Code directory its sign-in links. */
   const buildLinkedCredentialCache = (
     signIn: {
@@ -4034,10 +4267,7 @@ export const buildAnthropicModelDriver = (
           credentialFailure: "Unavailable",
         })
       }
-      const linked = linkedCell(
-        slot,
-        `${signIn.signedInAt ?? "unstamped"}\u0000${source.directory}`,
-      )
+      const linked = slotCell(slot, `${signIn.signedInAt ?? "unstamped"}\u0000${source.directory}`)
       return yield* makeLinkedCredentialCache(linked.cell, source, lock)
     }).pipe(Effect.provideContext(services))
   return {
@@ -4091,13 +4321,16 @@ export const buildAnthropicModelDriver = (
           // cell, so credential reuse survives. The credentials are checked before the
           // layer exists, so an expired sign-in fails with its own message.
           // The default slot is Claude Code's own account; a named slot is
-          // the Claude Code directory it links.
+          // an account gent signed in to and holds, or the Claude Code
+          // directory it links.
           const slot = auth.value.slot ?? DEFAULT_CREDENTIAL_SLOT
           let cacheEffect: Effect.Effect<
             CredentialCache<ClaudeCredentials>,
             ProviderAuthError
           > = buildLiveCredentialCache(credentialCellRef, services)
-          if (slot !== DEFAULT_CREDENTIAL_SLOT) {
+          if (slot !== DEFAULT_CREDENTIAL_SLOT && isGentOwned(auth.value)) {
+            cacheEffect = buildOwnedCredentialCache(auth.value, slot)
+          } else if (slot !== DEFAULT_CREDENTIAL_SLOT) {
             cacheEffect = buildLinkedCredentialCache(auth.value, slot)
           }
           const creds = yield* cacheEffect
@@ -4155,10 +4388,47 @@ export const buildAnthropicModelDriver = (
             },
           ],
         }),
+        // gent's own login to an account: a token family no other program
+        // holds, so it never rotates Claude Code's or TeamClaude's.
+        AuthMethod.make({
+          type: "oauth",
+          label: "Sign in to a Claude account",
+          credentialTarget: "named",
+        }),
       ],
       authorize: (ctx) =>
         Effect.gen(function* () {
           const slot = ctx.slot ?? DEFAULT_CREDENTIAL_SLOT
+          if (ctx.methodIndex === SIGN_IN_METHOD) {
+            if (slot === DEFAULT_CREDENTIAL_SLOT)
+              return yield* new ProviderAuthError({
+                message: "Signing in to a Claude account needs a named credential slot",
+              })
+            const begun = yield* Effect.all({
+              pkce: generatePkce,
+              state: generateOAuthState,
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAuthError({
+                    message: `Claude sign-in could not start: ${cause.message}`,
+                    cause,
+                  }),
+              ),
+            )
+            const now = yield* Clock.currentTimeMillis
+            pendingSignIns.set(ctx.authorizationId, {
+              verifier: begun.pkce.verifier,
+              state: begun.state,
+              startedAt: now,
+            })
+            return Option.some({
+              url: claudeAuthorizeUrl(begun.pkce, begun.state),
+              method: "code" as const,
+              instructions:
+                "Sign in to the Claude account on the page, then paste the code it shows.",
+            })
+          }
           if (ctx.methodIndex === 2) {
             if (slot === DEFAULT_CREDENTIAL_SLOT)
               return yield* new ProviderAuthError({
@@ -4271,6 +4541,40 @@ export const buildAnthropicModelDriver = (
           ),
           Effect.provideContext(services),
         ),
+      // The sign-in's code: take the started sign-in (a code trades once),
+      // trade the code for the account's tokens, and store them as gent's.
+      callback: (ctx) =>
+        Effect.gen(function* () {
+          if (ctx.methodIndex !== SIGN_IN_METHOD)
+            return yield* new ProviderAuthError({
+              message: "Only a Claude account sign-in takes a code",
+            })
+          const pending = Option.fromUndefinedOr(pendingSignIns.get(ctx.authorizationId))
+          const now = yield* Clock.currentTimeMillis
+          if (
+            Option.isNone(pending) ||
+            now - pending.value.startedAt > Duration.toMillis(SIGN_IN_TTL)
+          ) {
+            pendingSignIns.delete(ctx.authorizationId)
+            return yield* new ProviderAuthError({
+              message: "This Claude sign-in expired or was never started: start it again in /auth",
+            })
+          }
+          // A paste that does not parse leaves the sign-in open for another
+          // paste; one that parses spends it, since its code trades once.
+          const grant = yield* parsePastedCode(ctx.code ?? "", pending.value.state)
+          pendingSignIns.delete(ctx.authorizationId)
+          const creds = yield* exchangeClaudeCode(grant, pending.value.verifier).pipe(
+            Effect.provideContext(services),
+          )
+          yield* ctx.persist({
+            type: "oauth",
+            access: creds.accessToken,
+            refresh: creds.refreshToken,
+            expires: creds.expiresAt,
+            metadata: GENT_OWNED,
+          })
+        }),
     },
   }
 }

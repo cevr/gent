@@ -14,6 +14,7 @@ import {
   getModelBetas,
   MESSAGES_CLASS,
   parseOAuthResponse,
+  parsePastedCode,
   readAnthropicKeychainEnv,
   readPromptCacheTtl,
   SYSTEM_IDENTITY_PREFIX,
@@ -51,6 +52,7 @@ import {
 import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
+import { Base64Url } from "effect/encoding"
 import { ChildProcessSpawner } from "effect/process"
 import {
   captureProviderReport,
@@ -89,7 +91,9 @@ import {
   ProviderAuthInfo,
   type LockSourceRotation,
   type PendingRotation,
+  type StoredOAuthCredentials,
   type TurnNotice,
+  type UpdateStoredOAuth,
 } from "@gent/core/extensions/api"
 import { buildOpenCodeModelDriver, OPENCODE_GATEWAYS } from "../src/opencode.js"
 import { monitorMessage, WakeEntry, wakeTurnNotice } from "../src/wake.js"
@@ -6825,5 +6829,265 @@ describe("link persistence and publication", () => {
         yield* rig.importFrom(rig.sourceB)
         expect(yield* rig.requestUses("fake-b")).toBe(true)
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
+})
+
+// ── Claude accounts gent signs in to ────────────────────────────────────────
+
+const EXCHANGE_URL = "https://platform.claude.com/v1/oauth/token"
+/** An expiry no run of this suite reaches (2100); the suite runs on the real clock here. */
+const YEAR_2100 = 4_102_444_800_000
+const decodeExchangeBody = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+)
+const ACCOUNT_SLOT = CredentialSlot.make("work")
+
+/**
+ * gent's credential store for one owned slot, as `Auth` keeps it: `update`
+ * runs under one lock and writes what it returns; `writes` is every record
+ * it stored, oldest first.
+ */
+const ownedRecord = (initial: StoredOAuthCredentials) => {
+  let stored = Option.some(initial)
+  const writes: Array<StoredOAuthCredentials> = []
+  const lock = Semaphore.makeUnsafe(1)
+  const update: UpdateStoredOAuth = (f) =>
+    Effect.flatMap(f(stored), ([value, next]) =>
+      Effect.sync(() => {
+        if (Option.isSome(next)) {
+          stored = next
+          writes.push(next.value)
+        }
+        return value
+      }),
+    ).pipe(lock.withPermits(1))
+  return { update, writes, current: () => stored }
+}
+
+/** The sign-in an owned slot stores: gent's owner mark, read through `update`. */
+const ownedSignIn = (record: ReturnType<typeof ownedRecord>, signedInAt = 1): ProviderAuthInfo =>
+  ProviderAuthInfo.cases.Oauth.make({
+    slot: ACCOUNT_SLOT,
+    signedInAt,
+    metadata: { owner: "gent" },
+    update: record.update,
+    lockSourceRotation: processStore.lockSourceRotation,
+  })
+
+/** The token endpoint trading a sign-in's code: one account's tokens, and a happy reply elsewhere. */
+const exchangeEndpoint: FakeResponder = (request) => {
+  if (request.url !== EXCHANGE_URL) return anthropicHappyResponse()
+  return {
+    status: 200,
+    body: encodeExternalJson({
+      access_token: "fake-signed-in-access",
+      refresh_token: "fake-signed-in-refresh",
+      expires_in: 3600,
+    }),
+  }
+}
+
+describe("Claude account sign-in", () => {
+  it.scopedLive(
+    "a sign-in opens Claude's code page with a PKCE challenge, and its pasted code stores gent's own tokens for the slot",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const auth = driver.auth
+        if (
+          Predicate.isUndefined(auth) ||
+          Predicate.isUndefined(auth.authorize) ||
+          Predicate.isUndefined(auth.callback)
+        )
+          return yield* Effect.die("no sign-in")
+        const method = auth.methods.findIndex(
+          (entry) => entry.label === "Sign in to a Claude account",
+        )
+        expect(auth.methods[method]?.credentialTarget).toBe("named")
+        const persisted: Array<Parameters<Parameters<typeof authorize>[0]["persist"]>[0]> = []
+        const authorize = auth.authorize
+        const context: Parameters<typeof authorize>[0] = {
+          sessionId: SessionId.make("sign-in"),
+          methodIndex: method,
+          authorizationId: "sign-in-1",
+          slot: ACCOUNT_SLOT,
+          persist: (record) =>
+            Effect.sync(() => {
+              persisted.push(record)
+            }),
+        }
+        const started = yield* authorize(context)
+        if (Option.isNone(started)) return yield* Effect.die("no authorization")
+        expect(started.value.method).toBe("code")
+        const url = new URL(started.value.url)
+        expect(`${url.origin}${url.pathname}`).toBe("https://claude.ai/oauth/authorize")
+        expect(url.searchParams.get("client_id")).toBe("9d1c250a-e61b-44d9-88ed-5944d1962f5e")
+        expect(url.searchParams.get("redirect_uri")).toBe(
+          "https://console.anthropic.com/oauth/code/callback",
+        )
+        expect(url.searchParams.get("scope")).toContain("user:inference")
+        expect(url.searchParams.get("code_challenge_method")).toBe("S256")
+        const state = url.searchParams.get("state") ?? ""
+        expect(state.length).toBeGreaterThan(20)
+        // A paste from another sign-in is refused and leaves this one open.
+        const stale = yield* Effect.flip(
+          auth.callback({ ...context, code: "fake-code#another-state" }),
+        )
+        expect(stale.message).toContain("another sign-in")
+        const fetches = makeFakeFetchState()
+        yield* auth
+          .callback({ ...context, code: ` fake-code#${state} ` })
+          .pipe(Effect.provide(fakeFetchLayer(fetches, exchangeEndpoint)))
+        const exchanges = fetches.captured.filter((request) => request.url === EXCHANGE_URL)
+        expect(exchanges.length).toBe(1)
+        const body = decodeExchangeBody(exchanges[0]?.body ?? "{}")
+        expect(body).toMatchObject({
+          grant_type: "authorization_code",
+          code: "fake-code",
+          state,
+          redirect_uri: "https://console.anthropic.com/oauth/code/callback",
+          client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        })
+        // The exchange carries the verifier the page's challenge was made from.
+        const crypto = yield* Crypto.Crypto
+        const digest = yield* crypto.digest(
+          "SHA-256",
+          new TextEncoder().encode(body["code_verifier"] ?? ""),
+        )
+        expect(Base64Url.encode(digest)).toBe(url.searchParams.get("code_challenge") ?? "absent")
+        expect(persisted).toEqual([
+          {
+            type: "oauth",
+            access: "fake-signed-in-access",
+            refresh: "fake-signed-in-refresh",
+            expires: expect.any(Number),
+            metadata: { owner: "gent" },
+          },
+        ])
+        // The code traded once: the sign-in is spent.
+        const again = yield* Effect.flip(
+          auth
+            .callback({ ...context, code: `fake-code#${state}` })
+            .pipe(Effect.provide(fakeFetchLayer(makeFakeFetchState(), exchangeEndpoint))),
+        )
+        expect(again.message).toContain("start it again")
+        // No keychain, no Claude Code login is read or written.
+        expect(keychain.calls).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "the default slot stays Claude Code's own account: a sign-in there is refused",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+        const auth = driver.auth
+        if (Predicate.isUndefined(auth) || Predicate.isUndefined(auth.authorize))
+          return yield* Effect.die("no sign-in")
+        const method = auth.methods.findIndex(
+          (entry) => entry.label === "Sign in to a Claude account",
+        )
+        const refused = yield* Effect.flip(
+          auth.authorize({
+            sessionId: SessionId.make("sign-in"),
+            methodIndex: method,
+            authorizationId: "sign-in-default",
+            persist: () => Effect.void,
+          }),
+        )
+        expect(refused.message).toContain("named credential slot")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "an owned slot sends its stored token, and its refresh writes the rotation to gent's store and nowhere else",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([
+          [PRIMARY_SERVICE, { account: "alice", blob: claudeBlob("fake-primary", 0) }],
+        ])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const fresh = ownedRecord({
+          access: "fake-owned-access",
+          refresh: "fake-owned-refresh",
+          expires: YEAR_2100,
+        })
+        const served = yield* sendThrough(driver, ownedSignIn(fresh), rotatingEndpoint())
+        expect(served.authorization).toBe("Bearer fake-owned-access")
+        expect(served.refreshTokens).toEqual([])
+        expect(fresh.writes).toEqual([])
+        const expired = ownedRecord({
+          access: "fake-expired-access",
+          refresh: "fake-expired-refresh",
+          expires: 0,
+        })
+        const sent = yield* sendThrough(driver, ownedSignIn(expired, 2), rotatingEndpoint())
+        expect(sent.refreshTokens).toEqual(["fake-expired-refresh"])
+        expect(sent.authorization).toBe("Bearer fake-rotated-access")
+        expect(expired.writes.map((record) => record.refresh)).toEqual(["fake-rotated-refresh"])
+        expect(keychain.calls).toEqual([])
+        expect(heldAccess(processStore)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a named record with neither gent's mark nor a directory still fails closed and spends nothing",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+        const record = ownedRecord({
+          access: "fake-copy",
+          refresh: "fake-copy-refresh",
+          expires: 0,
+        })
+        const failure = yield* resolveFailure(
+          driver,
+          ProviderAuthInfo.cases.Oauth.make({
+            slot: ACCOUNT_SLOT,
+            signedInAt: 1,
+            update: record.update,
+            lockSourceRotation: processStore.lockSourceRotation,
+          }),
+        )
+        expect(Option.map(failure, (error) => error.message)).toEqual(
+          Option.some(expect.stringContaining("links no Claude Code directory")),
+        )
+        expect(record.writes).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("parsePastedCode", () => {
+  it.effect("reads the code page's code#state, a reached address, and a bare code", () =>
+    Effect.gen(function* () {
+      expect(yield* parsePastedCode("abc#s1", "s1")).toEqual({ code: "abc", state: "s1" })
+      expect(
+        yield* parsePastedCode(
+          "https://console.anthropic.com/oauth/code/callback?code=abc&state=s1",
+          "s1",
+        ),
+      ).toEqual({ code: "abc", state: "s1" })
+      expect(yield* parsePastedCode("  abc  ", "s1")).toEqual({ code: "abc", state: "s1" })
+    }),
+  )
+
+  it.effect(
+    "refuses an empty paste, a cut code, an address without a code, and another sign-in's state",
+    () =>
+      Effect.gen(function* () {
+        for (const paste of [
+          "",
+          "abc#",
+          "#s1",
+          "https://console.anthropic.com/oauth/code/callback?state=s1",
+          "abc#s2",
+          "https://console.anthropic.com/oauth/code/callback?code=abc&state=s2",
+          "https://console.anthropic.com/oauth/code/callback?code=abc",
+        ]) {
+          const failure = yield* Effect.flip(parsePastedCode(paste, "s1"))
+          expect(Schema.is(ProviderAuthError)(failure)).toBe(true)
+        }
+      }),
   )
 })

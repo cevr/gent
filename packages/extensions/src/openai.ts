@@ -83,6 +83,9 @@ import {
   isTransientTokenStatus,
   makeCredentialCache,
   type CredentialStore,
+  generateOAuthState,
+  generatePkce,
+  type PkceCodes,
   postOAuthForm,
   apiKeyFrom,
   isJsonObject,
@@ -232,11 +235,6 @@ const DEVICE_POLL_DEFAULT = Duration.seconds(5)
 const DEVICE_POLL_BACKOFF = Duration.seconds(5)
 const DEVICE_DEADLINE = Duration.minutes(15)
 
-interface PkceCodes {
-  readonly verifier: string
-  readonly challenge: string
-}
-
 interface OpenAIOAuthTokens {
   readonly type: "oauth"
   readonly access: string
@@ -273,14 +271,7 @@ interface OpenAIAuthorizationFlow {
   readonly grant: (manualInput?: string) => Effect.Effect<AuthorizationGrant, OAuthError>
   readonly exchange: (grant: AuthorizationGrant) => Effect.Effect<OpenAIOAuthTokens, OAuthError>
 }
-const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-  const bytes = yield* crypto.randomBytes(43)
-  const verifier = Array.from(bytes, (byte) => chars[byte % chars.length]).join("")
-  const hash = yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier))
-  return { verifier, challenge: Base64Url.encode(hash) }
-}).pipe(
+const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = generatePkce.pipe(
   Effect.mapError(
     (error) =>
       new OAuthError({
@@ -610,8 +601,7 @@ const authorizeOpenAI: Effect.Effect<
   Scope.Scope | Crypto.Crypto | GentPlatform
 > = Effect.gen(function* () {
   const pkce = yield* generatePKCE
-  const crypto = yield* Crypto.Crypto
-  const stateBytes = yield* crypto.randomBytes(32).pipe(
+  const state = yield* generateOAuthState.pipe(
     Effect.mapError(
       (error) =>
         new OAuthError({
@@ -620,7 +610,6 @@ const authorizeOpenAI: Effect.Effect<
         }),
     ),
   )
-  const state = Base64Url.encode(stateBytes)
   const port = yield* OAuthRedirectPort
   const redirectUri = `http://localhost:${port}/auth/callback`
   const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)

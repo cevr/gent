@@ -3,6 +3,7 @@ import {
   Clock,
   Config,
   Context,
+  Crypto,
   Duration,
   Effect,
   Exit,
@@ -47,6 +48,7 @@ import {
   HttpClientResponse,
 } from "effect/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/http/HttpClientError"
+import { Base64Url } from "effect/encoding"
 import { AiError, Model as AiModel } from "effect/ai"
 import type { OpenAiLanguageModel as OpenAiChatLanguageModel } from "@effect/ai-openai-compat"
 import type * as ChatSdkModule from "@effect/ai-openai-compat"
@@ -844,11 +846,22 @@ export const postOAuthForm = (
   url: string,
   params: Record<string, string>,
 ): Effect.Effect<OAuthTokenResponse, OAuthTokenPostError, HttpClient.HttpClient> =>
+  postOAuth(url, HttpClientRequest.post(url).pipe(HttpClientRequest.bodyUrlParams(params)))
+
+/** `postOAuthForm` with a JSON body, as an authorization-code exchange that takes JSON needs. */
+export const postOAuthJson = (
+  url: string,
+  body: Record<string, string>,
+): Effect.Effect<OAuthTokenResponse, OAuthTokenPostError, HttpClient.HttpClient> =>
+  postOAuth(url, HttpClientRequest.post(url).pipe(HttpClientRequest.bodyJsonUnsafe(body)))
+
+const postOAuth = (
+  url: string,
+  request: HttpClientRequest.HttpClientRequest,
+): Effect.Effect<OAuthTokenResponse, OAuthTokenPostError, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
-    const response = yield* http.execute(
-      HttpClientRequest.post(url).pipe(HttpClientRequest.bodyUrlParams(params)),
-    )
+    const response = yield* http.execute(request)
     const body = yield* response.text
     return { status: response.status, body }
   }).pipe(
@@ -863,6 +876,31 @@ export const postOAuthForm = (
       Effect.fail(new OAuthTokenPostError({ message: cause.message, cause })),
     ),
   )
+
+/** A login's PKCE pair: the verifier it keeps, and the S256 challenge its authorize URL carries. */
+export interface PkceCodes {
+  readonly verifier: string
+  readonly challenge: string
+}
+
+/** RFC 7636's unreserved characters, the alphabet of a verifier. */
+const PKCE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+
+/** A fresh PKCE pair: 43 random unreserved characters and their SHA-256 in base64url. */
+export const generatePkce = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto
+  const bytes = yield* crypto.randomBytes(43)
+  const verifier = Array.from(bytes, (byte) => PKCE_CHARS[byte % PKCE_CHARS.length]).join("")
+  const hash = yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier))
+  const codes: PkceCodes = { verifier, challenge: Base64Url.encode(hash) }
+  return codes
+})
+
+/** A login's `state`: 32 random bytes in base64url, which its code must come back with. */
+export const generateOAuthState = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto
+  return Base64Url.encode(yield* crypto.randomBytes(32))
+})
 
 // ── reasoning plan ──────────────────────────────────────────────────────────
 //
