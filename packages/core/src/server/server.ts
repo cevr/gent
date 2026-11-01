@@ -149,6 +149,7 @@ import {
   listCatalogProviders,
   makeExtensionModels,
   sweepPoolQuotas,
+  followPoolPeer,
   removeSignIn,
   renameSignIn,
   signInEntries,
@@ -1472,6 +1473,20 @@ interface LoginLease {
   done: boolean
 }
 
+/**
+ * Each provider's pool accounts, as `registry`'s config names them: the
+ * accounts its unpinned runs spend from (`credentialLane` with no pin).
+ */
+const poolScopeOf =
+  (registry: ExtensionRegistryService, modelRegistry: ModelRegistry["Service"]) =>
+  (provider: string) =>
+    Effect.map(
+      credentialLane(provider, Option.none(), registry).pipe(
+        Effect.provideService(ModelRegistry, modelRegistry),
+      ),
+      Option.map((lane) => lane.scope),
+    )
+
 /** What a sign-in call reads under the session's profile. */
 type ProfileAuthServices = ExtensionRegistry | Auth | GentPlatform | ModelCatalogSource
 
@@ -1887,19 +1902,21 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.gen(function* () {
           const profile = yield* profileForCwd(Option.none())
           return yield* placement.lanes(
-            (provider) =>
-              Effect.map(
-                credentialLane(provider, Option.none(), profile.registryService).pipe(
-                  Effect.provideService(ModelRegistry, modelRegistry),
-                ),
-                Option.map((lane) => lane.scope),
-              ),
+            poolScopeOf(profile.registryService, modelRegistry),
             yield* configService.sabbath,
           )
         }).pipe(Effect.scoped),
 
       // Own state alone: a server on another machine reads it to share the pool.
       "accounts.pool": () => placement.pool,
+
+      // A link the peer server runs sends its facts in here (`gent ctl pool
+      // --follow` on its stdin): counted as this server's own link counts them.
+      "accounts.notePeer": (facts) =>
+        Effect.gen(function* () {
+          const profile = yield* profileForCwd(Option.none())
+          yield* placement.notePeer(facts, poolScopeOf(profile.registryService, modelRegistry))
+        }).pipe(Effect.scoped),
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
@@ -2343,6 +2360,27 @@ export const createDependencies = (config: DependenciesConfig) => {
     }),
   )
 
+  // The pool's peer link (`pool.peer` in the user file) on its own fiber:
+  // each line the command prints counts as the peer's facts, each pool
+  // account read through the launch cwd's profile as the line arrives.
+  const poolPeerLive = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const cache = yield* SessionProfileCache
+      const modelRegistry = yield* ModelRegistry
+      yield* Effect.forkScoped(
+        followPoolPeer((provider) =>
+          cache.resolve(config.cwd).pipe(
+            Effect.flatMap((profile) =>
+              poolScopeOf(profile.registryService, modelRegistry)(provider),
+            ),
+            Effect.scoped,
+            Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(config.cwd)),
+          ),
+        ),
+      )
+    }),
+  )
+
   // One graph, built bottom up: each level provides every level above it,
   // and each layer appears in it once, so each builds once. Effect memoizes
   // only leaf layers; a composite (`provide`, `merge`) builds once for every
@@ -2405,7 +2443,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Every cluster id fits what the client reads back: a client without
   // 64-bit reads (a Durable Object's) gets ids under 2^53.
   return Layer.provideMerge(
-    Layer.mergeAll(interactionRecoveryLive, branchWakeClockLive, poolQuotaSweepLive),
+    Layer.mergeAll(interactionRecoveryLive, branchWakeClockLive, poolQuotaSweepLive, poolPeerLive),
     actor,
   ).pipe(withClusterIdSpace)
 }

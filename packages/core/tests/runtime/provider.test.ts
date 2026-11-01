@@ -12,10 +12,13 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Logger,
   Option,
   Path,
   Predicate,
+  Queue,
   Ref,
+  References,
   Schema,
   Scope,
   Stream,
@@ -41,6 +44,7 @@ import {
   modelFromCatalog,
   type PendingRotation,
   type PoolFacts,
+  PoolFacts as PoolFactsSchema,
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderResolution,
@@ -73,6 +77,7 @@ import {
   makeExtensionModels,
   rankPlacement,
   sweepPoolQuotas,
+  followPoolPeer,
   requestCredentialOrder,
   retryProviderCall,
   listModelCatalog,
@@ -8678,6 +8683,732 @@ describe("account lanes", () => {
         expect((yield* Stream.runCollect(placement.pool)).length).toBe(1)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
+  })
+
+  describe("the peer", () => {
+    type Fixture = Effect.Success<ReturnType<typeof accounts>>
+    const z = CredentialSlot.make("z")
+    /** The facts the pool stream sends first: the placement's own, now. */
+    const factsOf = (placement: { readonly pool: Stream.Stream<PoolFacts> }) =>
+      Stream.runHead(placement.pool).pipe(Effect.flatMap(Effect.fromOption), Effect.orDie)
+    /** `from`'s facts now, noted on `to` as its peer's line, over `to`'s pool. */
+    const relay = (from: Fixture, to: Fixture, pool: Scope = [a, b]) =>
+      Effect.flatMap(factsOf(from.placement), (facts) =>
+        to.placement.notePeer(facts, scopeOf(pool)),
+      )
+    /** A line of the peer's on `plan`, written by hand. */
+    const peerLine = (
+      boot: string,
+      seq: number,
+      runs: PoolFacts["providers"][number]["runs"],
+      peerAccounts: PoolFacts["providers"][number]["accounts"] = [],
+    ): PoolFacts => ({ boot, seq, providers: [{ provider: "plan", runs, accounts: peerAccounts }] })
+    /** Starts admitted under `prefix` until one is refused: their keys. The refused one leaves its queue. */
+    const admitAll = (fixture: Fixture, scope: Scope, prefix: string) =>
+      Effect.gen(function* () {
+        const keys: Array<string> = []
+        while (keys.length < 100) {
+          const key = `${prefix}-${keys.length}`
+          if ((yield* fixture.admit(scope, key)) !== "admitted") {
+            yield* fixture.placement.withdraw(key)
+            break
+          }
+          keys.push(key)
+        }
+        return keys
+      })
+    const freeAll = (fixture: Fixture, keys: ReadonlyArray<string>) =>
+      Effect.forEach(keys, (key) => fixture.placement.freeReservation(key), { discard: true })
+    /** The warnings logged: each message with its annotations, as text. */
+    const warnings = () => {
+      const seen: Array<{
+        readonly message: string
+        readonly annotations: ReadonlyMap<string, string>
+      }> = []
+      const logger = Logger.make(({ message, fiber }) => {
+        let text = String(message)
+        if (Array.isArray(message)) text = message.map((part) => String(part)).join(" ")
+        const annotations = Object.entries(fiber.getRef(References.CurrentLogAnnotations))
+        seen.push({
+          message: text,
+          annotations: new Map(annotations.map(([key, value]) => [key, String(value)])),
+        })
+      })
+      const named = (message: string) => seen.filter((entry) => entry.message === message)
+      return {
+        named,
+        layer: Layer.merge(
+          Logger.layer([logger]),
+          Layer.succeed(References.MinimumLogLevel, "Warn"),
+        ),
+      }
+    }
+    /** The 5h and 7d readings at `u5` and `u7`, resetting at `r5` and `r7`. */
+    const both = (u5: number, u7: number, r5: number, r7: number) => [
+      { window: "5h", utilization: u5, resetAt: r5 },
+      { window: "7d", utilization: u7, resetAt: r7 },
+    ]
+    /**
+     * Three servers: `solo` spends what `A` and `B` spend, alone; `A` and
+     * `B` each spend part, linked or not. Each `$10` step is 2 M fuel.
+     */
+    const servers = Effect.gen(function* () {
+      yield* TestClock.adjust("1 hour")
+      const start = yield* Clock.currentTimeMillis
+      return {
+        solo: yield* accounts(),
+        A: yield* accounts(),
+        B: yield* accounts(),
+        r5: start + 4 * HOUR,
+        r7: start + 30 * HOUR,
+      }
+    })
+    /** Admitted starts: solo's, then A's until refused, then B's once A's facts reached it. */
+    const starts = (
+      solo: Fixture,
+      A: Fixture,
+      B: Fixture,
+      link: (from: Fixture, to: Fixture) => Effect.Effect<void>,
+      scope: Scope,
+    ) =>
+      Effect.gen(function* () {
+        const alone = (yield* admitAll(solo, scope, "solo")).length
+        const first = (yield* admitAll(A, scope, "A")).length
+        yield* link(A, B)
+        const second = (yield* admitAll(B, scope, "B")).length
+        return { solo: alone, A: first, B: second }
+      })
+
+    /**
+     * Disjoint accounts: A spends on a, B on b, and each reads the other's
+     * account every tenth step, as its sweep does.
+     */
+    const disjoint = (linked: boolean) =>
+      Effect.gen(function* () {
+        const { solo, A, B, r5, r7 } = yield* servers
+        const link = (from: Fixture, to: Fixture) => {
+          if (!linked) return Effect.void
+          return relay(from, to)
+        }
+        let ua = 0.1
+        let ub = 0.1
+        let wa = 0.3
+        let wb = 0.3
+        for (const server of [solo, A, B]) {
+          yield* server.read(a, both(ua, wa, r5, r7))
+          yield* server.read(b, both(ub, wb, r5, r7))
+        }
+        for (let step = 0; step < 20; step++) {
+          yield* TestClock.adjust("30 seconds")
+          yield* A.spend(a, Option.some(10))
+          yield* link(A, B)
+          yield* solo.spend(a, Option.some(10))
+          ua += 0.01
+          wa += 0.002
+          yield* A.read(a, both(ua, wa, r5, r7))
+          yield* B.spend(b, Option.some(10))
+          yield* link(B, A)
+          yield* solo.spend(b, Option.some(10))
+          ub += 0.01
+          wb += 0.002
+          yield* B.read(b, both(ub, wb, r5, r7))
+          yield* solo.read(a, both(ua, wa, r5, r7))
+          yield* solo.read(b, both(ub, wb, r5, r7))
+          if (step % 10 === 9) {
+            yield* A.read(b, both(ub, wb, r5, r7))
+            yield* B.read(a, both(ua, wa, r5, r7))
+          }
+        }
+        // The heartbeat after the last reads.
+        yield* link(A, B)
+        yield* link(B, A)
+        return yield* starts(solo, A, B, link, [a, b])
+      })
+
+    it.effect(
+      "two servers on disjoint accounts admit no more together than one server spending both",
+      () =>
+        Effect.gen(function* () {
+          const apart = yield* disjoint(false)
+          const linked = yield* disjoint(true)
+          // Apart, each counts its own account alone: 13 and 13 starts beside solo's 13.
+          expect(apart.A + apart.B).toBeGreaterThan(apart.solo)
+          expect(linked.A + linked.B).toBeLessThanOrEqual(linked.solo)
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    /** B spends alone on a for 30 steps, then A joins: 20 pairs. Each step moves 0.5 points. */
+    const newcomer = (linked: boolean) =>
+      Effect.gen(function* () {
+        const { solo, A, B, r5, r7 } = yield* servers
+        const link = (from: Fixture, to: Fixture) => {
+          if (!linked) return Effect.void
+          return relay(from, to, [a])
+        }
+        let u5 = 0.1
+        let u7 = 0.3
+        for (const server of [solo, A, B]) yield* server.read(a, both(u5, u7, r5, r7))
+        const step = (server: Fixture, other: Fixture) =>
+          Effect.gen(function* () {
+            yield* server.spend(a, Option.some(10))
+            yield* link(server, other)
+            yield* solo.spend(a, Option.some(10))
+            u5 += 0.005
+            u7 += 0.001
+            yield* server.read(a, both(u5, u7, r5, r7))
+            yield* solo.read(a, both(u5, u7, r5, r7))
+          })
+        for (let index = 0; index < 30; index++) {
+          yield* TestClock.adjust("30 seconds")
+          yield* step(B, A)
+        }
+        // A's first reading of the account: its sweep.
+        yield* A.read(a, both(u5, u7, r5, r7))
+        for (let index = 0; index < 20; index++) {
+          yield* TestClock.adjust("30 seconds")
+          yield* step(A, B)
+          yield* step(B, A)
+        }
+        yield* link(A, B)
+        yield* link(B, A)
+        return yield* starts(solo, A, B, link, [a])
+      })
+
+    it.effect(
+      "a server that joins an account late admits no more with its peer than one server alone",
+      () =>
+        Effect.gen(function* () {
+          const apart = yield* newcomer(false)
+          const linked = yield* newcomer(true)
+          // Apart, A reads B's spend as outside its own: 6 and 8 starts beside solo's 12.
+          expect(apart.A + apart.B).toBeGreaterThan(apart.solo)
+          expect(linked.A + linked.B).toBeLessThanOrEqual(linked.solo)
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "two servers on one account read its true fuel per percent and admit what one server would",
+      () =>
+        Effect.gen(function* () {
+          const { solo, A, B, r5, r7 } = yield* servers
+          let u5 = 0.1
+          let u7 = 0.3
+          for (const server of [solo, A, B]) yield* server.read(a, both(u5, u7, r5, r7))
+          // The link is up before either spends.
+          yield* relay(A, B, [a])
+          yield* relay(B, A, [a])
+          for (let index = 0; index < 20; index++) {
+            yield* TestClock.adjust("30 seconds")
+            // Each server's step moves the account 1 point on 5h; both read
+            // it before either line reaches the other, as a line lags.
+            for (const server of [A, B, solo, solo]) yield* server.spend(a, Option.some(10))
+            u5 += 0.02
+            u7 += 0.004
+            for (const server of [A, B, solo]) yield* server.read(a, both(u5, u7, r5, r7))
+            yield* relay(A, B, [a])
+            yield* relay(B, A, [a])
+          }
+          // $10 is 2 M fuel, and each step moved 1 point.
+          for (const server of [solo, A, B])
+            expect((yield* server.windowOf([a], a, "5h")).fuelPerPct).toBeCloseTo(2_000_000, -3)
+          const counted = yield* starts(solo, A, B, (from, to) => relay(from, to, [a]), [a])
+          expect(counted.A + counted.B).toBeLessThanOrEqual(counted.solo)
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    /** An account of the peer's line: the fuel it spent on the plan model, and its warm sessions there. */
+    const spentOn = (
+      slot: CredentialSlot,
+      fuel: number,
+      sessions = 0,
+    ): PoolFacts["providers"][number]["accounts"][number] => ({
+      slot,
+      live: [{ model: planModel, sessions }].filter((entry) => entry.sessions > 0),
+      spend: [{ model: planModel, fuel, unpriced: 0 }],
+    })
+    const fiveHour = (utilization: number, resetAt: number) => [
+      { window: "5h", utilization, resetAt },
+    ]
+    /**
+     * A server linked to the peer `boot` on a, which spent nothing there yet;
+     * its 5h segment on a opened at 10%, resetting at `resetAt`.
+     */
+    const linked = (resetAt: number, boot = "peer") =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        const line = peerLine(boot, 1, [], [spentOn(a, 0)])
+        yield* fixture.placement.notePeer(line, scopeOf([a]))
+        yield* fixture.read(a, fiveHour(0.1, resetAt))
+        // The heartbeat: the reading that opened the segment held no peer spend.
+        yield* fixture.placement.notePeer(line, scopeOf([a]))
+        return fixture
+      })
+    const noted = (fixture: Fixture, line: PoolFacts, pool: Scope = [a]) =>
+      fixture.placement.notePeer(line, scopeOf(pool))
+    const resetIn = (hours: number) =>
+      Effect.map(Clock.currentTimeMillis, (now) => now + hours * HOUR)
+
+    it.effect(
+      "the peer's fuel lands in the point it moved, whether its line or the reading comes first",
+      () =>
+        Effect.gen(function* () {
+          yield* TestClock.adjust("1 hour")
+          const resetAt = yield* resetIn(4)
+          // Quota first: the provider moved a point on the peer's 2 M before its line came.
+          const quotaFirst = yield* linked(resetAt)
+          yield* quotaFirst.read(a, fiveHour(0.11, resetAt))
+          yield* noted(quotaFirst, peerLine("peer", 2, [], [spentOn(a, 2_000_000)]))
+          // This server's own 2 M moves the next point; a heartbeat follows.
+          yield* quotaFirst.spend(a, Option.some(10))
+          yield* quotaFirst.read(a, fiveHour(0.12, resetAt))
+          yield* noted(quotaFirst, peerLine("peer", 2, [], [spentOn(a, 2_000_000)]))
+          expect((yield* quotaFirst.windowOf([a], a, "5h")).fuelPerPct).toBeCloseTo(2_000_000, -3)
+          // Facts first: each line brought the peer's 2 M before the point it moved.
+          const factsFirst = yield* linked(resetAt)
+          for (const [seq, utilization] of [
+            [2, 0.11],
+            [3, 0.12],
+          ] as const) {
+            const line = peerLine("peer", seq, [], [spentOn(a, (seq - 1) * 2_000_000)])
+            yield* noted(factsFirst, line)
+            yield* factsFirst.read(a, fiveHour(utilization, resetAt))
+            yield* noted(factsFirst, line)
+          }
+          expect((yield* factsFirst.windowOf([a], a, "5h")).fuelPerPct).toBeCloseTo(2_000_000, -3)
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("a point the peer's next line does not reach within 60 s counts nothing", () =>
+      Effect.gen(function* () {
+        yield* TestClock.adjust("1 hour")
+        const resetAt = yield* resetIn(4)
+        const closeAfter = (wait: Duration.Input) =>
+          Effect.gen(function* () {
+            const fixture = yield* linked(resetAt)
+            yield* fixture.spend(a, Option.some(10))
+            yield* fixture.read(a, fiveHour(0.11, resetAt))
+            yield* TestClock.adjust(wait)
+            yield* noted(fixture, peerLine("peer", 1, [], [spentOn(a, 0)]))
+            return yield* fixture.windowOf([a], a, "5h")
+          })
+        const prompt = yield* closeAfter("59 seconds")
+        expect(prompt.samples).toBe(1)
+        expect(prompt.fuelPerPct).toBeCloseTo(2_000_000, -3)
+        const late = yield* closeAfter("61 seconds")
+        expect(late.samples).toBe(0)
+        expect(late.fuelPerPct).toBeUndefined()
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("an unpriced step on the peer's side leaves the point it falls in unmeasured", () =>
+      Effect.gen(function* () {
+        yield* TestClock.adjust("1 hour")
+        const resetAt = yield* resetIn(4)
+        const fixture = yield* linked(resetAt)
+        yield* fixture.spend(a, Option.some(10))
+        const unpriced = peerLine(
+          "peer",
+          2,
+          [],
+          [{ ...spentOn(a, 0), spend: [{ model: planModel, fuel: 0, unpriced: 1 }] }],
+        )
+        yield* noted(fixture, unpriced)
+        yield* fixture.read(a, fiveHour(0.11, resetAt))
+        yield* noted(fixture, unpriced)
+        const window = yield* fixture.windowOf([a], a, "5h")
+        expect(window.samples).toBe(0)
+        expect(window.fuelPerPct).toBeUndefined()
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "a point that waits for the peer moves with a rename and goes with a new sign-in",
+      () =>
+        Effect.gen(function* () {
+          yield* TestClock.adjust("1 hour")
+          const resetAt = yield* resetIn(4)
+          const heartbeat = peerLine("peer", 1, [], [spentOn(a, 0)])
+          // Renamed to c before the peer's next line: the point counts on c.
+          const renamed = yield* linked(resetAt)
+          yield* renamed.spend(a, Option.some(10))
+          yield* renamed.read(a, fiveHour(0.11, resetAt))
+          yield* renamed.placement.renameLabel({ provider: "plan", from: a, to: c })
+          yield* noted(renamed, heartbeat, [c])
+          expect((yield* renamed.windowOf([c], c, "5h")).samples).toBe(1)
+          // A new sign-in under a before the line: the old sign-in's point goes.
+          const old = { slot: a, signedInAt: 1 }
+          const replaced = { slot: a, signedInAt: 2 }
+          const fixture = yield* accounts()
+          yield* noted(fixture, heartbeat, [old])
+          yield* fixture.read(old, fiveHour(0.1, resetAt))
+          yield* noted(fixture, heartbeat, [old])
+          yield* fixture.spend(old, Option.some(10))
+          yield* fixture.read(old, fiveHour(0.11, resetAt))
+          expect(yield* fixture.admit([replaced], "after")).toBe("admitted")
+          yield* fixture.read(replaced, fiveHour(0.11, resetAt))
+          yield* noted(fixture, heartbeat, [replaced])
+          expect((yield* fixture.windowOf([replaced], a, "5h")).samples).toBe(0)
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "a peer label no pool account holds counts nothing and is logged once each way",
+      () => {
+        const logged = warnings()
+        return Effect.gen(function* () {
+          yield* TestClock.adjust("1 hour")
+          const resetAt = yield* resetIn(4)
+          const fixture = yield* accounts()
+          yield* fixture.read(z, fiveHour(0.1, resetAt))
+          const line = (seq: number, fuel: number) =>
+            peerLine("peer", seq, [{ accounts: [z], count: 3 }], [spentOn(z, fuel)])
+          yield* noted(fixture, line(1, 0))
+          yield* noted(fixture, line(2, 2_000_000))
+          yield* fixture.read(z, fiveHour(0.11, resetAt))
+          // z is outside this server's pool: neither the peer's runs nor its fuel count there.
+          expect((yield* fixture.lanes([a, z])).load).toBe(0)
+          expect((yield* fixture.windowOf([a, z], z, "5h")).fuelPerPct).toBeUndefined()
+          const unmatched = () =>
+            logged
+              .named("credential-placement.peer.label-unmatched")
+              .map((entry) => [entry.annotations.get("side"), entry.annotations.get("labels")])
+          expect(unmatched()).toEqual([["peer", "z"]])
+          // After its sweep had time, the own label the peer does not list.
+          yield* TestClock.adjust("61 seconds")
+          yield* noted(fixture, line(3, 2_000_000))
+          yield* noted(fixture, line(4, 2_000_000))
+          expect(unmatched()).toEqual([
+            ["peer", "z"],
+            ["own", "a"],
+          ])
+        }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
+      },
+    )
+
+    it.effect(
+      "a silent peer's runs count and this server keeps to half the pace for 30 minutes, then the peer counts nothing",
+      () => {
+        const logged = warnings()
+        return Effect.gen(function* () {
+          const fixture = yield* rollingPool
+          const { pool } = fixture
+          const line = (seq: number) => peerLine("peer", seq, [{ accounts: [a], count: 2 }])
+          const admitted = Effect.gen(function* () {
+            const keys = yield* admitAll(fixture, pool, "run")
+            yield* freeAll(fixture, keys)
+            return keys.length
+          })
+          expect(yield* admitted).toBe(8)
+          yield* noted(fixture, line(1), pool)
+          // 8 lanes, 2 of them the peer's.
+          expect(yield* admitted).toBe(6)
+          yield* TestClock.adjust("91 seconds")
+          expect(logged.named("credential-placement.peer.silent")).toHaveLength(1)
+          // min(8 - 2, 8 / 2)
+          expect(yield* admitted).toBe(4)
+          yield* TestClock.adjust("30 minutes")
+          expect(yield* admitted).toBe(8)
+          // A line ends the silence at once.
+          yield* noted(fixture, line(2), pool)
+          expect(yield* admitted).toBe(6)
+          expect(logged.named("credential-placement.peer.silent")).toHaveLength(1)
+        }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
+      },
+    )
+
+    it.effect(
+      "a peer that held the whole pace when it went silent leaves no start in its hold",
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* rollingPool
+          const { pool } = fixture
+          yield* noted(fixture, peerLine("peer", 1, [{ accounts: [a], count: 8 }]), pool)
+          yield* TestClock.adjust("91 seconds")
+          expect(yield* fixture.admit(pool, "cut")).toBe("queued")
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("a run queued in a silent peer's hold starts as the hold ends", () =>
+      Effect.gen(function* () {
+        const fixture = yield* rollingPool
+        const { pool } = fixture
+        yield* noted(fixture, peerLine("peer", 1, [{ accounts: [a], count: 2 }]), pool)
+        yield* TestClock.adjust("91 seconds")
+        // min(8 - 2, 8 / 2): the fifth run waits.
+        // Their turns open: a reservation would lapse in the half hour.
+        for (let index = 0; index < 4; index += 1) {
+          expect(yield* fixture.admit(pool, `held-${index}`)).toBe("admitted")
+          yield* fixture.placement.openLane({
+            sessionId: SessionId.make(`held-${index}`),
+            key: `held-${index}`,
+            provider: "plan",
+            scope: Arr.map(pool, receiptOf),
+            model: planModel,
+            resumed: Option.none(),
+          })
+        }
+        expect(yield* fixture.admit(pool, "late")).toBe("queued")
+        yield* TestClock.adjust("29 minutes")
+        expect(yield* fixture.admit(pool, "late")).toBe("queued")
+        // The hold's end serves the queue: no other step runs.
+        yield* TestClock.adjust("1 minute")
+        expect(yield* fixture.admit(pool, "late")).toBe("admitted")
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "one peer cache serves both links: a repeated or older line adds no fuel and only keeps the peer heard",
+      () => {
+        const logged = warnings()
+        return Effect.gen(function* () {
+          yield* TestClock.adjust("1 hour")
+          const resetAt = yield* resetIn(4)
+          const fixture = yield* linked(resetAt)
+          const line = (seq: number) =>
+            peerLine("peer", seq, [], [spentOn(a, (seq - 1) * 2_000_000)])
+          // Each line as both links bring it, and seq 2 again after seq 3.
+          for (const seq of [2, 2, 3, 2, 3]) yield* noted(fixture, line(seq))
+          yield* fixture.read(a, fiveHour(0.12, resetAt))
+          yield* noted(fixture, line(3))
+          // The peer spent 4 M over the 2 points.
+          expect((yield* fixture.windowOf([a], a, "5h")).fuelPerPct).toBeCloseTo(2_000_000, -3)
+          // An older line still counts as heard.
+          yield* TestClock.adjust("80 seconds")
+          yield* noted(fixture, line(2))
+          yield* TestClock.adjust("80 seconds")
+          expect(logged.named("credential-placement.peer.silent")).toHaveLength(0)
+          yield* TestClock.adjust("11 seconds")
+          expect(logged.named("credential-placement.peer.silent")).toHaveLength(1)
+        }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
+      },
+    )
+
+    it.effect("this server's facts list its own runs alone after it counts the peer's", () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        yield* fixture.read(a, fiveHour(0.1, yield* resetIn(4)))
+        for (const key of ["own-0", "own-1"])
+          expect(yield* fixture.admit([a], key)).toBe("admitted")
+        yield* noted(fixture, peerLine("peer", 1, [{ accounts: [a], count: 3 }]))
+        expect((yield* fixture.lanes([a])).load).toBe(5)
+        const facts = yield* factsOf(fixture.placement)
+        expect(facts.providers.flatMap((entry) => entry.runs)).toEqual([
+          { accounts: [a], model: planModel, count: 2 },
+        ])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("a peer's new boot drops the open segments its old boot shared", () =>
+      Effect.gen(function* () {
+        yield* TestClock.adjust("1 hour")
+        const resetAt = yield* resetIn(4)
+        const closeAfterLineOf = (boot: string) =>
+          Effect.gen(function* () {
+            const fixture = yield* linked(resetAt)
+            yield* fixture.spend(a, Option.some(10))
+            const line = peerLine(boot, 1, [], [spentOn(a, 0)])
+            yield* noted(fixture, line)
+            yield* fixture.read(a, fiveHour(0.11, resetAt))
+            yield* noted(fixture, line)
+            return (yield* fixture.windowOf([a], a, "5h")).samples
+          })
+        expect(yield* closeAfterLineOf("peer")).toBe(1)
+        // The restarted peer's spend before its new base is unknown.
+        expect(yield* closeAfterLineOf("restarted")).toBe(0)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "a matched label whose weekly reset differs is logged once per boot and still counts",
+      () => {
+        const logged = warnings()
+        return Effect.gen(function* () {
+          const fixture = yield* accounts()
+          const week = yield* resetIn(100)
+          yield* fixture.read(a, [{ window: "7d", utilization: 0.3, resetAt: week }])
+          const line = (boot: string, seq: number, peerWeek: number) =>
+            peerLine(
+              boot,
+              seq,
+              [{ accounts: [a], count: 1 }],
+              [{ ...spentOn(a, 0), week: peerWeek }],
+            )
+          yield* noted(fixture, line("peer", 1, week + 30_000))
+          expect(logged.named("credential-placement.peer.week-mismatch")).toHaveLength(0)
+          yield* noted(fixture, line("restarted", 1, week + 120_000))
+          yield* noted(fixture, line("restarted", 2, week + 120_000))
+          expect(
+            logged
+              .named("credential-placement.peer.week-mismatch")
+              .map((entry) => [
+                entry.annotations.get("slot"),
+                entry.annotations.get("differenceMs"),
+              ]),
+          ).toEqual([[a, "120000"]])
+          expect((yield* fixture.lanes([a])).load).toBe(1)
+        }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
+      },
+    )
+
+    it.effect(
+      "a peer line that lifts the pool's load past its capacity is logged once per crossing",
+      () => {
+        const logged = warnings()
+        return Effect.gen(function* () {
+          const fixture = yield* rollingPool
+          const { pool } = fixture
+          for (let index = 0; index < 6; index += 1)
+            expect(yield* fixture.admit(pool, `own-${index}`)).toBe("admitted")
+          const overshoots = () =>
+            logged
+              .named("credential-placement.pool-overshoot")
+              .map((entry) => entry.annotations.get("load"))
+          // 6 own runs beside the peer's: over 8.6 lanes at 3.
+          for (const [seq, count] of [
+            [1, 2],
+            [2, 3],
+            [3, 3],
+            [4, 1],
+            [5, 3],
+          ] as const)
+            yield* noted(fixture, peerLine("peer", seq, [{ accounts: [a], count }]), pool)
+          expect(overshoots()).toEqual(["9", "9"])
+          // Back under at 8 lanes; then a reading lowers the capacity under them.
+          yield* noted(fixture, peerLine("peer", 6, [{ accounts: [a], count: 2 }]), pool)
+          const now = yield* Clock.currentTimeMillis
+          yield* fixture.read(a, [{ window: "7d", utilization: 0.6, resetAt: now + 166 * HOUR }])
+          expect(overshoots()).toEqual(["9", "9", "8"])
+        }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
+      },
+    )
+
+    it.effect("the peer's warm sessions count where a run is placed", () =>
+      Effect.gen(function* () {
+        const placeFirst = (sessions: number) =>
+          Effect.gen(function* () {
+            const fixture = yield* accounts()
+            if (sessions > 0)
+              yield* noted(fixture, peerLine("peer", 1, [], [spentOn(a, 0, sessions)]), [a, b])
+            return (yield* fixture.place("next"))[0]
+          })
+        expect(yield* placeFirst(0)).toBe(a)
+        expect(yield* placeFirst(2)).toBe(b)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "a peer's run is the pool's lone start: this server starts no second one past the pace",
+      () =>
+        Effect.gen(function* () {
+          const { read, admit, placement, now } = yield* pacedAccounts()
+          yield* read(a, [
+            { window: "7d", utilization: 0.5, resetAt: now + 160 * HOUR },
+            { window: "5h", utilization: 0.6, resetAt: now + 4 * HOUR },
+          ])
+          yield* read(b, [
+            { window: "7d", utilization: 1, resetAt: now + HOUR, rejected: true },
+            { window: "5h", utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
+          ])
+          // The pace carries no run: alone, one starts anyway.
+          expect(yield* admit([a, b], "alone")).toBe("admitted")
+          yield* placement.freeReservation("alone")
+          yield* placement.notePeer(
+            peerLine("peer", 1, [{ accounts: [a], count: 1 }]),
+            scopeOf([a, b]),
+          )
+          expect(yield* admit([a, b], "second")).not.toBe("admitted")
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    const encodeFacts = Schema.encodeSync(Schema.fromJsonString(PoolFactsSchema))
+    const decodeFacts = Schema.decodeUnknownSync(Schema.fromJsonString(PoolFactsSchema))
+    /**
+     * The server link of `fixture` running `command` as its `pool.peer`,
+     * until the scope closes: each line it notes, once noted.
+     */
+    const follow = (fixture: Fixture, command: readonly [string, ...Array<string>]) =>
+      Effect.gen(function* () {
+        const noted = yield* Queue.unbounded<PoolFacts>()
+        const placement = {
+          ...fixture.placement,
+          notePeer: (facts: PoolFacts, pool: Parameters<typeof fixture.placement.notePeer>[1]) =>
+            Effect.andThen(fixture.placement.notePeer(facts, pool), Queue.offer(noted, facts)),
+        }
+        yield* Effect.forkScoped(
+          followPoolPeer(scopeOf([a])).pipe(
+            Effect.provideService(CredentialPlacement, placement),
+            Effect.provide(ConfigService.Test(new UserConfig({ pool: { peer: command } }))),
+          ),
+        )
+        return noted
+      })
+
+    it.live(
+      "one link informs both servers: the command's lines reach this one, and this one's facts reach the command",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* makeTempDirectoryScoped("gent-peer-")
+          const sent = `${dir}/sent`
+          const A = yield* accounts()
+          const B = yield* accounts()
+          for (const fixture of [A, B]) yield* fixture.read(a, fiveHour(0.1, yield* resetIn(4)))
+          expect(yield* A.admit([a], "A-0")).toBe("admitted")
+          for (const key of ["B-0", "B-1"]) expect(yield* B.admit([a], key)).toBe("admitted")
+          // The command keeps the first line it reads, then prints B's facts,
+          // as `gent ctl pool --follow` on B does.
+          const script =
+            'IFS= read -r own; printf "%s\\n" "$own" > "$0"; printf "%s\\n" "$1"; exec cat > /dev/null'
+          const noted = yield* follow(A, [
+            "sh",
+            "-c",
+            script,
+            sent,
+            encodeFacts(yield* factsOf(B.placement)),
+          ])
+          yield* Queue.take(noted)
+          expect((yield* A.lanes([a])).load).toBe(3)
+          // A's facts reached the command: B notes them, as its ctl does.
+          const first = (yield* fs.readFileString(sent)).trim()
+          yield* B.placement.notePeer(decodeFacts(first), scopeOf([a]))
+          expect((yield* B.lanes([a])).load).toBe(3)
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.live("the link runs its command again after it ends, and logs each end", () => {
+      const logged = warnings()
+      return Effect.gen(function* () {
+        const A = yield* accounts()
+        yield* A.read(a, fiveHour(0.1, yield* resetIn(4)))
+        const line = encodeFacts(peerLine("peer", 1, [{ accounts: [a], count: 2 }]))
+        const noted = yield* follow(A, ["sh", "-c", 'printf "%s\\n" "$0"; exit 3', line])
+        // Two runs, a second apart.
+        yield* Queue.take(noted)
+        yield* Queue.take(noted)
+        expect((yield* A.lanes([a])).load).toBe(2)
+        const failed = logged.named("credential-placement.peer.failed")
+        expect(failed.length).toBeGreaterThanOrEqual(1)
+        expect(failed[0]?.annotations.get("command")).toBe("sh")
+        expect(failed[0]?.annotations.get("error")).toContain("exit code 3")
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
+    })
+
+    it.live("a line the link cannot read ends the command's run", () => {
+      const logged = warnings()
+      return Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("gent-peer-")
+        const A = yield* accounts()
+        const line = encodeFacts(peerLine("peer", 1, []))
+        // The first run prints a line that is no facts and stays up; the next prints facts.
+        const script =
+          'if [ -e "$0" ]; then printf "%s\\n" "$1"; else : > "$0"; printf "not facts\\n"; fi; exec cat > /dev/null'
+        const noted = yield* follow(A, ["sh", "-c", script, `${dir}/ran`, line])
+        yield* Queue.take(noted)
+        const failed = logged.named("credential-placement.peer.failed")
+        expect(failed).toHaveLength(1)
+        expect(failed[0]?.annotations.get("error")).not.toContain("exit code")
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
+    })
   })
 
   describe("lost logins", () => {

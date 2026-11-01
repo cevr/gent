@@ -2,7 +2,8 @@
 
 Date: 2026-10-31. Revised 2026-11-01 against main `92f0a8653`, after rows
 53 to 55, and again after review round 1 and the owner's link decision.
-Status: step 1 built; steps 2 to 4 are design.
+Status: steps 1 and 2 built; steps 3 and 4 are design. The live check of
+step 2 on both machines is open.
 
 The owner works on the Mac and on the workbox (`bite-workbox`, Tailscale)
 at the same time. Each machine runs its own gent server, with its own
@@ -277,8 +278,10 @@ packages/core/src/domain/driver.ts.
 - **One peer cache, two sources.** A server holds one peer's facts, fed by
   its own link's stdout and by the lines its peer's link sends in. A line
   replaces the cache when its `boot` differs (a restart) or its `seq` is
-  higher under the same `boot`; a lower or equal `seq` only refreshes the
-  last-line time (a heartbeat, or the same line from the other source).
+  higher or equal under the same `boot` (an equal one, a heartbeat or the
+  same line from the other source, adds no fuel but releases the pending
+  segments; built in step 2); a lower `seq` only refreshes the last-line
+  time.
   Freshness is the reader's own clock at the arrival of any line from
   either source. Two machines only: a third is out of scope.
 - No `pool.peer`: nothing runs and nothing changes. The single-machine
@@ -453,7 +456,8 @@ running the test (feedback: validate the regression test).
    29 s, no repeat at 30 s, one at 59 s), the end at close, and the ctl
    test over the real server, which closes the server and needs the
    follower to end within 5 s.
-2. **`feat(lanes): count the peer's runs and fuel in the pool`.** The
+2. **Done: `feat(lanes): count the peer's runs and fuel in the pool`.** The
+
    `pool.peer` config (user file only), the reader fiber with both
    directions (stdout read, own facts written to stdin), the stdin side of
    `gent ctl pool --follow` and `accounts.notePeer`, the one peer cache,
@@ -495,6 +499,58 @@ running the test (feedback: validate the regression test).
      Docs: lanes.md, credentials.md (placement), cli.md. Live check: the Mac
      with `pool.peer` alone, then both machines; `gent ctl lanes` on each
      shows the other's runs.
+     Built as: `PoolConfig` (config.ts), `followPoolPeer` (the link, a
+     server fiber beside the pool sweep), `notePeer` and its helpers in
+     runtime/provider.ts, `accounts.notePeer` (rpc.ts, server.ts), and the
+     stdin side of `gent ctl pool --follow`. Measured with the probe's setup
+     (two placements and a solo, one scripted account set, the peer fed in
+     memory, steps of 30 s): disjoint accounts admit 13 + 13 = 26 apart
+     against the solo's 13, and 12 + 0 linked; the newcomer admits 6 + 8 =
+     14 apart against 12 (not 15: the steps moved to 30 s, see below), and
+     12 + 0 linked; one shared account reads 2 M fuel per point on the solo,
+     A and B, and admits 6 + 0 against the solo's 6. Each test fails with
+     its protection removed (32 probes). Where the code differs from the
+     design above:
+   - Equal `seq` counts as a new line, not a refresh: its rise is 0, and
+     it commits the pending segments. The heartbeat repeats the same
+     `seq`, and the facts-first case needs it to release a point. A lower
+     `seq` under the same `boot` only refreshes the time.
+   - A pending list per window, and the rise goes to the newest pending
+     segment. A reading that opens a fresh segment, or closes one of
+     unknown fuel, on a shared account leaves a placeholder pending (no
+     segment), so the next line's rise lands there and not in the point
+     after it.
+   - Facts first (the peer's line before the reading of the point it
+     moved) is the common order on a live link. Then a steady peer's
+     rise lands one line late: conserved over a long run, biased at the
+     edges. The test feeds a heartbeat after each reading.
+   - A new base (the first line, a new `boot`, or the first line after
+     silence) gives no rise, and drops the open and pending segments of
+     each account the old facts used or the new facts list spend on.
+     Before the first line a segment holds this server's fuel alone: the
+     link must be up before both spend (the shared-account test brings it
+     up first).
+   - Overshoot is counted with no Sabbath, over this server's pool, both
+     at a peer line and at a reading.
+   - The silence needs a timer: a watch armed 90 s after each line serves
+     the queue, which turns the peer silent. The hold's end is also a
+     wake time of the queue.
+   - The half cap applies to the providers the peer's facts list, and to
+     the pool's check only (a model's own window keeps the plain check).
+     A lone start still goes in the hold when the pool load is 0.
+   - The peer's rise adds fuel, not tokens: the facts carry no tokens.
+   - A rename carries pending segments to the new label; a new sign-in
+     drops them.
+   - The link reads `pool.peer` at each run; with none it stops, so a
+     `pool.peer` added while the server runs takes a server restart.
+   - `gent ctl pool --follow` reads no stdin when stdin is a terminal.
+   - The 1-minute steps of the probe let a pending segment expire exactly
+     at 60 s, a test artifact: the tests step 30 s.
+   - Left: a silent peer's next line with a lower `seq` of the same
+     `boot` replaces the cache (it starts a new base), not a refresh.
+     Not done: the live check on the two machines (no access from the
+     build; queued for the owner).
+
 3. **`feat(tui): show the peer in the lanes band`.** A row after the
    provider rows: `peer <name> <runs> runs · <age>`, or `peer <name>
    unread <age>` when silent, with a mark when one of the two links is

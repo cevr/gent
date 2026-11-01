@@ -1387,6 +1387,7 @@ const lanes = Command.make(
 )
 
 const encodePoolLine = Schema.encodeEffect(Schema.fromJsonString(PoolFacts))
+const decodePoolLine = Schema.decodeEffect(Schema.fromJsonString(PoolFacts))
 
 const pool = Command.make(
   "pool",
@@ -1394,7 +1395,7 @@ const pool = Command.make(
     connect: connectFlag,
     follow: Flag.Boolean("follow").pipe(
       Flag.withDescription(
-        "Print the facts as JSON lines until the server stops: now, at each change, and again every 30 s",
+        "Print the facts as JSON lines until the server stops: now, at each change, and again every 30 s. Each line on stdin is the peer server's facts, sent to this server",
       ),
       Flag.withDefault(false),
     ),
@@ -1424,6 +1425,29 @@ const pool = Command.make(
         // One whole facts value per line, as the server sends it: a reader keeps the last.
         const connection = yield* connectCtl({ connect: input.connect, cwd: cwdOf(flags) })
         const stdio = yield* Stdio.Stdio
+        // The peer's link writes its server's facts to stdin, one line each:
+        // each goes to this server (`accounts.notePeer`). A closed stdin ends
+        // the forwarding alone; a line that does not decode fails the command,
+        // so the link restarts. A terminal is not a link.
+        const forward = Effect.gen(function* () {
+          if (yield* stdio.stdinIsTerminal) return
+          yield* stdio.stdin.pipe(
+            Stream.decodeText,
+            Stream.splitLines,
+            Stream.filter((line) => line.trim().length > 0),
+            Stream.mapError((error) => new CtlFailed({ message: `input: ${error.message}` })),
+            Stream.runForEach((line) =>
+              decodePoolLine(line).pipe(
+                Effect.mapError(
+                  (error) => new CtlFailed({ message: `input decode: ${error.message}` }),
+                ),
+                Effect.flatMap((facts) =>
+                  connection.client.accounts.notePeer(facts).pipe(Effect.mapError(rpcFailure)),
+                ),
+              ),
+            ),
+          )
+        })
         yield* connection.client.accounts.pool().pipe(
           Stream.mapError(rpcFailure),
           Stream.mapEffect((facts) =>
@@ -1439,6 +1463,8 @@ const pool = Command.make(
             (error) => !Schema.is(CtlError)(error),
             (error) => Effect.fail(new CtlFailed({ message: `output: ${String(error)}` })),
           ),
+          // The stream outlives a forwarding that ended; a failed one ends it.
+          Effect.raceFirst(Effect.andThen(forward, Effect.never)),
         )
         // The server ends the stream as it stops.
         return yield* new CtlFailed({ message: "the server stopped" })

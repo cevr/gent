@@ -31,6 +31,7 @@ import {
   Scope,
   Sink,
   Stdio,
+  Stream,
 } from "effect"
 import { CTL_EXIT, CtlResult, runCtlCli } from "../src/ctl"
 
@@ -46,12 +47,17 @@ interface CtlRun {
  * Run `gent ctl <args>` through its process boundary with `HOME` set to
  * `home`; collect its exit code and streams. `brokenStdout` makes a write to
  * stdout die, as a closed pipe can. `stdout` lets a test read stdout while
- * the call still runs.
+ * the call still runs. `stdin` is what the call reads on its stdin, which
+ * then closes; none by default.
  */
 const runCtl = (
   home: string,
   args: ReadonlyArray<string>,
-  options: { readonly brokenStdout?: boolean; readonly stdout?: Ref.Ref<string> } = {},
+  options: {
+    readonly brokenStdout?: boolean
+    readonly stdout?: Ref.Ref<string>
+    readonly stdin?: string
+  } = {},
 ) =>
   Effect.gen(function* () {
     const out = options.stdout ?? (yield* Ref.make(""))
@@ -69,6 +75,7 @@ const runCtl = (
               return capture(out)
             },
             stderr: () => capture(err),
+            stdin: Stream.make(new TextEncoder().encode(options.stdin ?? "")),
           }),
           ConfigProvider.layer(ConfigProvider.fromEnv({ env: { HOME: home } })),
         ),
@@ -603,6 +610,81 @@ describe("gent ctl against a running server", () => {
           const stopped = yield* Schema.decodeEffect(Schema.fromJsonString(ErrorLine))(ended.stderr)
           expect(stopped._tag).toBe("CtlFailed")
           expect(stopped.message).toBe("the server stopped")
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "pool --follow sends each PoolFacts line of its stdin to the server, and a line it cannot read fails it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          const seeded = yield* serveScratchHomeWith(
+            Option.some({
+              buckets: [],
+              readings: [
+                {
+                  provider: "anthropic",
+                  slot: "default",
+                  window: "7d",
+                  utilization: 0.3,
+                  resetAt: now + 100 * 3_600_000,
+                  readAt: now - 60_000,
+                  rejected: false,
+                },
+              ],
+            }),
+          )
+          // The peer's line, as its server's link writes it: two runs on default.
+          const peerLine = yield* encodePoolLine({
+            boot: "peer",
+            seq: 1,
+            providers: [
+              {
+                provider: "anthropic",
+                runs: [{ accounts: [CredentialSlot.make("default")], count: 2 }],
+                accounts: [],
+              },
+            ],
+          })
+          const out = yield* Ref.make("")
+          const follow = yield* runCtl(seeded.home, ["pool", "--follow"], {
+            stdout: out,
+            stdin: `${peerLine}\n`,
+          }).pipe(Effect.forkScoped)
+          const loadOf = Effect.map(
+            Effect.flatMap(runCtl(seeded.home, ["lanes"]), resultAs("Lanes")),
+            (lanes) => lanes.providers.find((lanes) => lanes.provider === "anthropic")?.load,
+          )
+          const load = yield* loadOf.pipe(
+            Effect.repeat({
+              until: (found) => found === 2,
+              schedule: Schedule.spaced("20 millis"),
+            }),
+            Effect.timeout("5 seconds"),
+          )
+          expect(load).toBe(2)
+          // Its stdin closed: the forwarding ended, and the stream still prints.
+          yield* Ref.get(out).pipe(
+            Effect.repeat({
+              until: (text) => text.includes("\n"),
+              schedule: Schedule.spaced("20 millis"),
+            }),
+            Effect.timeout("5 seconds"),
+          )
+          expect(follow.pollUnsafe()).toBeUndefined()
+
+          // A line that is no PoolFacts: one CtlFailed line and exit 1, so the link restarts.
+          const unread = yield* runCtl(seeded.home, ["pool", "--follow"], {
+            stdin: "not facts\n",
+          }).pipe(Effect.timeout("5 seconds"))
+          expect(unread.code).toBe(CTL_EXIT.failed)
+          expect(unread.stderr.trimEnd().split("\n")).toHaveLength(1)
+          const failed = yield* Schema.decodeEffect(Schema.fromJsonString(ErrorLine))(unread.stderr)
+          expect(failed._tag).toBe("CtlFailed")
+          expect(failed.message).toMatch(/^input decode: /)
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,

@@ -29,6 +29,7 @@ import {
   Struct,
 } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
+import { ChildProcess } from "effect/process"
 import { ModelCatalogSnapshotStorage, type TurnLane } from "../storage/storage.js"
 import { type ExtensionModelsService, ExtensionServiceError } from "../domain/extension.js"
 import {
@@ -89,10 +90,11 @@ import {
   LaneUnavailable,
   type LaneWindow,
   type LoginLossReason,
-  type PoolFacts,
+  PoolFacts,
   type ProviderLanes,
   type QuotaReading,
   liveResets,
+  roundLanes,
   ResetGrant,
   SpendLimit,
   type RetryPolicy,
@@ -102,6 +104,7 @@ import {
 } from "../domain/driver.js"
 import { GentPlatform, resolveDataDir, writeFileAtomic } from "./gent-platform.js"
 import {
+  ConfigService,
   type ProviderConfig,
   type ProviderConfigEntry,
   RuntimeEnvironment,
@@ -3716,6 +3719,21 @@ const LANE_RESERVATION_MS = 2 * 60_000
  * A guess.
  */
 const POOL_FACTS_HEARTBEAT = Duration.seconds(30)
+/** A peer that sends no line this long is silent: three heartbeats. */
+const PEER_SILENT_MS = 90_000
+/**
+ * How long a silent peer's last runs and live sessions still count, while
+ * this server keeps its own load under half the capacity. A guess.
+ */
+const PEER_HOLD_MS = 30 * 60_000
+/** How long a segment closed on an account the peer shares waits for its next line: two heartbeats. */
+const PEER_PENDING_MS = 60_000
+/**
+ * How long after a peer boot's first line this server's own labels are
+ * checked against the peer's: the peer's sweep has read its accounts by
+ * then. A guess.
+ */
+const PEER_LABEL_SETTLE_MS = 60_000
 /**
  * When a run refused as spent checks again at the soonest, when no window
  * or hold names a later time. A guess.
@@ -4087,6 +4105,16 @@ interface CredentialPlacementService {
    * the lane its session holds.
    */
   readonly noteFuel: (fuel: PlacementFuel) => Effect.Effect<void>
+  /**
+   * A line of the peer's pool facts came, from this server's link or from
+   * the peer's (`accounts.notePeer`): one cache, the newest `seq` of a
+   * `boot`. Its runs count as load and its live sessions in the ranking,
+   * and each rise of its spend adds to the open (or pending) segments of
+   * the account. Labels are the identity: a peer label `scopeOf` does not
+   * name in this server's pool counts nothing. A line of this server's own
+   * `boot` is ignored. A line serves the lane queue.
+   */
+  readonly notePeer: (facts: PoolFacts, scopeOf: LaneScopeOf) => Effect.Effect<void>
   /**
    * The lanes of every provider gent read a quota window or banked resets
    * of, or lost a login on: each account's windows, fuel per percent,
@@ -5152,6 +5180,34 @@ export const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(f
   return { load: load(), save } satisfies PlacementLedgerStore
 })
 
+/** What placement holds of the peer's pool facts (`notePeer`). */
+interface PeerView {
+  readonly facts: PoolFacts
+  /** This server's clock at the last line from either source. */
+  readonly heardAt: number
+  /** When the first line of `facts.boot` came. */
+  readonly firstAt: number
+  /** Its silence was taken: the segments it shared dropped, and the hold began. */
+  readonly silent: boolean
+  /** provider → this server's own pool at the last line: the labels peer data counts on. */
+  readonly pools: ReadonlyMap<string, ReadonlySet<CredentialSlot>>
+}
+
+/**
+ * A reading that began a segment on an account the peer shares: the peer's
+ * next line, if it comes by `until`, counts before that reading. `segment`
+ * is the one the reading closed, which that line's rise joins; none when it
+ * closed none, or one of unknown fuel, and the rise drops. Each boundary
+ * puts the same lag on the same side, so a segment loses at its start what
+ * it gains at its end.
+ */
+interface PendingSegment {
+  readonly segment: Option.Option<FuelSegment>
+  /** The one model the window meters (`QuotaReading.model`). */
+  readonly model: Option.Option<ModelId>
+  readonly until: number
+}
+
 /** A bucket as the placement state keeps it: its sessions as a set. */
 interface HeldBucket extends Omit<UsageBucket, "sessions"> {
   readonly sessions: ReadonlySet<SessionId>
@@ -5386,12 +5442,111 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         (models.find((entry) => entry.model === named)?.weight ?? 1),
     })
   /**
+   * The peer's last pool facts (`notePeer`), none before its first line.
+   * One cache for both links.
+   */
+  let peer = Option.none<PeerView>()
+  /** The notices logged for the peer's boot: each unmatched label, the own-label check, a week mismatch. */
+  const peerLogged = new Set<string>()
+  /**
+   * provider, slot, window (`windowKey`) → the segments closed on an account
+   * the peer shares, oldest first: the peer's next line adds its rise to the
+   * newest and keeps them; none in 60 s drops them (`PEER_PENDING_MS`).
+   */
+  const pendingSegments = new Map<string, ReadonlyArray<PendingSegment>>()
+  /** Providers whose counted load passed their capacity (`pool-overshoot`), until it falls back. */
+  const overshot = new Set<string>()
+  /** Logs a step under the lock asked for: written once the lock is let go (`locked`). */
+  const notices: Array<Effect.Effect<void>> = []
+  /** The peer's facts while they count: within 90 s of its last line, or in the 30-minute hold after. */
+  const peerCounted = (now: number) =>
+    Option.filter(peer, (view) => now - view.heardAt < PEER_SILENT_MS + PEER_HOLD_MS)
+  /** The peer is silent and held: its last runs count, and this server keeps to half the pace. */
+  const peerHolding = (now: number) =>
+    Option.exists(peerCounted(now), (view) => now - view.heardAt >= PEER_SILENT_MS)
+  /** `provider`'s entry of `facts`. */
+  const providerFacts = (facts: PoolFacts, provider: string) =>
+    Option.fromUndefinedOr(facts.providers.find((entry) => entry.provider === provider))
+  /** Whether a peer label names an account of this server's pool: the label is the identity. */
+  const peerMatched = (view: PeerView, provider: string, slot: CredentialSlot) =>
+    view.pools.get(provider)?.has(slot) ?? false
+  /** Whether `facts` list spend or a run on `slot` of `provider`. */
+  const usesAccount = (facts: PoolFacts, provider: string, slot: CredentialSlot) =>
+    Option.exists(
+      providerFacts(facts, provider),
+      (entry) =>
+        entry.accounts.some((account) => account.slot === slot && account.spend.length > 0) ||
+        entry.runs.some((run) => run.accounts.includes(slot)),
+    )
+  /**
+   * Whether the peer shares `slot` now: its counted facts list spend or a
+   * run on it, under a label of this server's pool. A segment closed there
+   * waits for the peer's next line.
+   */
+  const peerShares = (provider: string, slot: CredentialSlot, now: number) =>
+    Option.exists(
+      peerCounted(now),
+      (view) => peerMatched(view, provider, slot) && usesAccount(view.facts, provider, slot),
+    )
+  /**
+   * The peer's runs on `provider` that share an account of this server's
+   * pool with `scope`, of `model` alone when one is named, sized as
+   * `laneLoad` sizes this server's own; 0 once its facts no longer count.
+   */
+  const peerLoad = (
+    provider: string,
+    scope: ReadonlyArray<CredentialSlot>,
+    model: Option.Option<ModelId>,
+    models: ReadonlyArray<LaneModel>,
+    now: number,
+  ) =>
+    Option.match(peerCounted(now), {
+      onNone: () => 0,
+      onSome: (view) => {
+        let load = 0
+        const runs = Option.match(providerFacts(view.facts, provider), {
+          onNone: () => [],
+          onSome: (entry) => entry.runs,
+        })
+        for (const run of runs) {
+          const runModel = Option.fromUndefinedOr(run.model)
+          if (
+            !run.accounts.some((slot) => peerMatched(view, provider, slot) && scope.includes(slot))
+          )
+            continue
+          if (Option.isSome(model) && !Option.contains(runModel, model.value)) continue
+          load +=
+            run.count *
+            Option.match(model, {
+              onNone: () => runShare(provider, models, runModel),
+              onSome: () => 1,
+            })
+        }
+        return load
+      },
+    })
+  /**
    * The runs holding a lane on `provider` that share an account with
-   * `scope`, of `model` alone when one is named; `asker`'s own open turn is
-   * left out. A model's window counts its runs whole; the account's windows
-   * count each run at its share (`runShare`).
+   * `scope`, of `model` alone when one is named: this server's own
+   * (`ownLoad`) and the peer's while its facts count (`peerLoad`).
    */
   const laneLoad = (
+    provider: string,
+    scope: ReadonlyArray<CredentialSlot>,
+    model: Option.Option<ModelId>,
+    models: ReadonlyArray<LaneModel>,
+    asker: Option.Option<SessionId>,
+    now: number,
+  ) =>
+    ownLoad(provider, scope, model, models, asker, now) +
+    peerLoad(provider, scope, model, models, now)
+  /**
+   * This server's own runs holding a lane on `provider` that share an
+   * account with `scope`, of `model` alone when one is named; `asker`'s own
+   * open turn is left out. A model's window counts its runs whole; the
+   * account's windows count each run at its share (`runShare`).
+   */
+  const ownLoad = (
     provider: string,
     scope: ReadonlyArray<CredentialSlot>,
     model: Option.Option<ModelId>,
@@ -5455,6 +5610,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const key of [...openSegments.keys()])
       if (ofLabel(key, provider, slot)) openSegments.delete(key)
     for (const key of [...segments.keys()]) if (ofLabel(key, provider, slot)) segments.delete(key)
+    for (const key of [...pendingSegments.keys()])
+      if (ofLabel(key, provider, slot)) pendingSegments.delete(key)
     for (const key of [...spendMeters.keys()])
       if (ofLabel(key, provider, slot)) spendMeters.delete(key)
     for (const key of [...held.keys()])
@@ -5483,6 +5640,17 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       segments.set(
         moved(key),
         list.map((segment) => ({ ...segment, slot: to })),
+      )
+    }
+    for (const [key, list] of [...pendingSegments]) {
+      if (!ofLabel(key, provider, from)) continue
+      pendingSegments.delete(key)
+      pendingSegments.set(
+        moved(key),
+        list.map((pending) => ({
+          ...pending,
+          segment: Option.map(pending.segment, (segment) => ({ ...segment, slot: to })),
+        })),
       )
     }
     for (const [key, meter] of [...spendMeters]) {
@@ -5774,12 +5942,14 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   })
   /**
    * One read or change of the state at a time: a burst of placements reads
-   * each earlier one. Each publishes the pool facts it changed.
+   * each earlier one. Each publishes the pool facts it changed, and writes
+   * the logs it asked for (`notices`) once the lock is let go.
    */
   const locked = <A>(body: () => A) =>
     Effect.sync(body).pipe(
       Effect.tap(() => publishFacts),
       lock.withPermits(1),
+      Effect.tap(() => Effect.suspend(() => Effect.all(notices.splice(0), { discard: true }))),
     )
   const windowStart = (now: number) => Math.floor((now - PLACEMENT_WINDOW_MS) / PLACEMENT_BUCKET_MS)
   /**
@@ -5802,6 +5972,58 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const key of [...spendMeters.keys()]) if (meterReadings(key, now)) pruned = true
     if (trimResets(now)) pruned = true
     if (pruned) version += 1
+    trimPeer(now)
+  }
+  /**
+   * A pending segment that saw no peer line in 60 s goes: its fuel is
+   * unknown, never zero. A peer with no line for 90 s turns silent once: the
+   * open and pending segments of the accounts it shares go, and the hold
+   * begins. Under the lock.
+   */
+  const trimPeer = (now: number) => {
+    for (const [key, list] of pendingSegments) {
+      const kept = list.filter((pending) => pending.until > now)
+      if (kept.length === list.length) continue
+      if (kept.length === 0) pendingSegments.delete(key)
+      else pendingSegments.set(key, kept)
+    }
+    if (Option.isNone(peer)) return
+    const view = peer.value
+    if (view.silent || now - view.heardAt < PEER_SILENT_MS) return
+    peer = Option.some({ ...view, silent: true })
+    for (const [provider, pool] of view.pools)
+      for (const slot of pool)
+        if (usesAccount(view.facts, provider, slot))
+          dropAccountSegments(provider, slot, Option.none())
+    notices.push(
+      Effect.logWarning("credential-placement.peer.silent").pipe(
+        Effect.annotateLogs({ boot: view.facts.boot, silentMs: now - view.heardAt }),
+      ),
+    )
+  }
+  /**
+   * The open and pending segments of `provider`'s `slot` go: the account-wide
+   * windows' and, with a model named, that model's alone; with none, every
+   * window's. Their fuel is unknown. Under the lock.
+   */
+  const dropAccountSegments = (
+    provider: string,
+    slot: CredentialSlot,
+    model: Option.Option<ModelId>,
+  ) => {
+    const reaches = (windowModel: Option.Option<ModelId>) =>
+      Option.isNone(model) ||
+      Option.isNone(windowModel) ||
+      Option.contains(windowModel, model.value)
+    for (const [key, open] of openSegments)
+      if (ofLabel(key, provider, slot) && reaches(open.model))
+        openSegments.set(key, { ...open, fuel: Option.none(), step: Option.none() })
+    for (const [key, list] of [...pendingSegments])
+      if (
+        ofLabel(key, provider, slot) &&
+        reaches(Option.flatMap(Option.fromUndefinedOr(list[0]), (pending) => pending.model))
+      )
+        pendingSegments.delete(key)
   }
   /**
    * Drops each lapsed grant, an account left with none, and an account whose
@@ -6125,12 +6347,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       })
     }, writeLock.withPermits(1)),
   })
-  /** The live sessions on `slot` but `except`, each at its model's share of a mean run. */
+  /**
+   * The live sessions on `slot` but `except`, each at its model's share of a
+   * mean run: this server's own, and the peer's while its facts count.
+   */
   const liveOn = (
     provider: string,
     slot: CredentialSlot,
     except: SessionId,
     models: ReadonlyArray<LaneModel>,
+    now: number,
   ) => {
     let load = 0
     for (const [key, entry] of live)
@@ -6140,6 +6366,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         key !== placementKey(provider, except)
       )
         load += runShare(provider, models, Option.some(entry.model))
+    const view = Option.filter(peerCounted(now), (found) => peerMatched(found, provider, slot))
+    if (Option.isNone(view)) return load
+    for (const account of Option.match(providerFacts(view.value.facts, provider), {
+      onNone: () => [],
+      onSome: (entry) => entry.accounts,
+    }))
+      if (account.slot === slot)
+        for (const entry of account.live)
+          load += entry.sessions * runShare(provider, models, Option.some(entry.model))
     return load
   }
   /**
@@ -6175,6 +6410,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       opened: Option.none<number>(),
     }
     const open = Option.fromUndefinedOr(openSegments.get(key))
+    // On an account the peer shares, the peer's next line may bring spend
+    // from before this reading: a reading that begins a segment leaves it
+    // that line's rise (`PendingSegment`, `notePeer`).
+    const shared = peerShares(provider, slot, now)
+    const waitForPeer = (segment: Option.Option<FuelSegment>) =>
+      pendingSegments.set(key, [
+        ...(pendingSegments.get(key) ?? []),
+        { segment, model: fresh.model, until: now + PEER_PENDING_MS },
+      ])
     const continues = Option.exists(
       last,
       (previous) =>
@@ -6186,6 +6430,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     )
     if (!continues || Option.isNone(open) || Option.isNone(last)) {
       openSegments.set(key, fresh)
+      if (shared) waitForPeer(Option.none())
       return
     }
     const moved = reading.utilization - open.value.from
@@ -6197,25 +6442,31 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }
     // The step that closed this segment opens the next one.
     openSegments.set(key, { ...fresh, opened: open.value.step })
-    if (Option.isNone(open.value.fuel)) return
-    segments.set(key, [
-      ...(segments.get(key) ?? []),
-      {
-        provider,
-        slot,
-        window: reading.window,
-        ...omitUndefined({ signedInAt, model: reading.model }),
-        endedAt: now,
-        fuel: open.value.fuel.value,
-        deltaPct: moved * 100,
-        tokens: open.value.tokens,
-        models: [...open.value.models].map(([model, fuel]) => ({ model, fuel })),
-        edges: {
-          close: Option.getOrElse(open.value.step, () => 0),
-          ...omitUndefined({ open: Option.getOrUndefined(open.value.opened) }),
-        },
+    if (Option.isNone(open.value.fuel)) {
+      if (shared) waitForPeer(Option.none())
+      return
+    }
+    const closed: FuelSegment = {
+      provider,
+      slot,
+      window: reading.window,
+      ...omitUndefined({ signedInAt, model: reading.model }),
+      endedAt: now,
+      fuel: open.value.fuel.value,
+      deltaPct: moved * 100,
+      tokens: open.value.tokens,
+      models: [...open.value.models].map(([model, fuel]) => ({ model, fuel })),
+      edges: {
+        close: Option.getOrElse(open.value.step, () => 0),
+        ...omitUndefined({ open: Option.getOrUndefined(open.value.opened) }),
       },
-    ])
+    }
+    // The point may hold peer fuel the peer's next line has yet to bring.
+    if (shared) {
+      waitForPeer(Option.some(closed))
+      return
+    }
+    segments.set(key, [...(segments.get(key) ?? []), closed])
   }
   const spendAt = Effect.fn("CredentialPlacement.spendAt")(function* (
     spend: PlacementSpend,
@@ -6601,12 +6852,20 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           now,
           request.sabbath,
         )
-        const load = laneLoad(request.provider, scope, model, lanes.models, request.asker, now)
+        const own = ownLoad(request.provider, scope, model, lanes.models, request.asker, now)
+        const load = own + peerLoad(request.provider, scope, model, lanes.models, now)
         // The account's windows count the run at its share; a model's own, whole.
         const size = Option.match(model, {
           onNone: () => runShare(request.provider, lanes.models, request.model),
           onSome: () => 1,
         })
+        // A silent peer in its hold may still run what it last held and
+        // admit on its own side: this server keeps its own pool load under
+        // half the capacity, so the two stay at or under it.
+        const halved =
+          Option.isNone(model) &&
+          peerHolding(now) &&
+          Option.exists(peer, (view) => Option.isSome(providerFacts(view.facts, request.provider)))
         return Option.filter(
           Option.map(supply, (lanesFree) => ({
             lanes,
@@ -6616,7 +6875,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             pool: Option.isNone(model),
             capacity: Math.floor(lanesFree + 1e-9),
           })),
-          (check) => check.load + check.size > check.supply + 1e-9,
+          (check) =>
+            check.load + check.size > check.supply + 1e-9 ||
+            (halved && own + check.size > check.supply / 2 + 1e-9),
         )
       },
     )
@@ -6797,10 +7058,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         const sabbaths = Array.from(waiting.values(), (waiter) =>
           Option.map(waiter.request.sabbath, (place) => sabbathAround(now, place).start),
         ).flatMap(Option.toArray)
+        // A silent peer's runs stop counting at its hold's end.
+        const peerRelease = Option.map(peer, (view) => view.heardAt + PEER_SILENT_MS + PEER_HOLD_MS)
         const times = [
           ...Array.from(readings.values(), (reading) => reading.resetAt),
           ...held.values(),
           ...sabbaths,
+          ...Option.toArray(peerRelease),
         ].filter((at) => at > now)
         return Option.liftPredicate(Math.min(...times), () => times.length > 0)
       })
@@ -6901,6 +7165,251 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         },
       ),
     )
+  /** The armed serve 90 s after the peer's last line: it turns the peer silent (`trimPeer`). */
+  let silenceWatch = Option.none<Fiber.Fiber<void>>()
+  /**
+   * Logs `credential-placement.pool-overshoot` once per crossing: a provider
+   * whose counted load, this server's and the peer's, passed its capacity
+   * over this server's pool. Under the lock.
+   */
+  const checkOvershoot = (now: number) => {
+    if (Option.isNone(peer)) return
+    for (const [provider, pool] of peer.value.pools) {
+      const { lanes, supply } = providerLanes(
+        provider,
+        [...pool],
+        Option.none(),
+        now,
+        Option.none(),
+      )
+      const over = Option.filter(supply, (capacity) => lanes.load > capacity + 1e-9)
+      if (Option.isNone(over)) {
+        overshot.delete(provider)
+        continue
+      }
+      if (overshot.has(provider)) continue
+      overshot.add(provider)
+      notices.push(
+        Effect.logWarning("credential-placement.pool-overshoot").pipe(
+          Effect.annotateLogs({
+            provider,
+            load: roundLanes(lanes.load),
+            capacity: roundLanes(over.value),
+          }),
+        ),
+      )
+    }
+  }
+  /**
+   * The peer spent `rise` more fuel on `model` of `slot`: in each window it
+   * reaches, the newest reading that waits for it (`PendingSegment`) takes
+   * it, into the segment it closed or dropped with none; else the open
+   * segment does.
+   */
+  const addPeerFuel = (provider: string, slot: CredentialSlot, model: ModelId, rise: number) => {
+    for (const [key, open] of openSegments) {
+      if (!ofLabel(key, provider, slot)) continue
+      // Another model's spend never moves a model's window.
+      if (Option.isSome(open.model) && open.model.value !== model) continue
+      const pending = pendingSegments.get(key) ?? []
+      const newest = pending.at(-1)
+      if (Predicate.isNotUndefined(newest)) {
+        if (Option.isNone(newest.segment)) continue
+        const segment = newest.segment.value
+        const models = segment.models ?? []
+        pendingSegments.set(key, [
+          ...pending.slice(0, -1),
+          {
+            ...newest,
+            segment: Option.some({
+              ...segment,
+              fuel: segment.fuel + rise,
+              models: [
+                ...models.filter((entry) => entry.model !== model),
+                {
+                  model,
+                  fuel: (models.find((entry) => entry.model === model)?.fuel ?? 0) + rise,
+                },
+              ],
+              edges: { ...segment.edges, close: (segment.edges?.close ?? 0) + rise },
+            }),
+          },
+        ])
+        continue
+      }
+      openSegments.set(key, {
+        ...open,
+        fuel: Option.map(open.fuel, (fuel) => fuel + rise),
+        step: Option.map(open.step, (fuel) => fuel + rise),
+        models: new Map(open.models).set(model, (open.models.get(model) ?? 0) + rise),
+      })
+    }
+  }
+  /**
+   * The rise of each matched account's spend from `before` to `facts`, per
+   * model: a priced rise adds to its segments (`addPeerFuel`), a rise of the
+   * unpriced count drops them, as an unpriced own request does.
+   */
+  const addPeerRise = (
+    before: PoolFacts,
+    facts: PoolFacts,
+    pools: ReadonlyMap<string, ReadonlySet<CredentialSlot>>,
+  ) => {
+    for (const entry of facts.providers) {
+      const pool = pools.get(entry.provider)
+      const earlier = providerFacts(before, entry.provider)
+      for (const account of entry.accounts) {
+        if (!(pool?.has(account.slot) ?? false)) continue
+        const was = Option.match(earlier, {
+          onNone: () => [],
+          onSome: (found) => found.accounts.find((old) => old.slot === account.slot)?.spend ?? [],
+        })
+        for (const spent of account.spend) {
+          const old = was.find((item) => item.model === spent.model)
+          if (spent.unpriced > (old?.unpriced ?? 0)) {
+            dropAccountSegments(entry.provider, account.slot, Option.some(spent.model))
+            continue
+          }
+          const rise = spent.fuel - (old?.fuel ?? 0)
+          if (rise > 0) addPeerFuel(entry.provider, account.slot, spent.model, rise)
+        }
+      }
+    }
+  }
+  /**
+   * A notice for each matched label of `entry` whose weekly reset differs
+   * from this server's by more than 60 s, once per boot (`once`). Under the
+   * lock.
+   */
+  const checkPeerWeeks = (
+    entry: PoolFacts["providers"][number],
+    pool: ReadonlySet<CredentialSlot>,
+    once: (...key: ReadonlyArray<string>) => boolean,
+  ) => {
+    for (const account of entry.accounts) {
+      const week = account.week
+      if (Predicate.isUndefined(week) || !pool.has(account.slot)) continue
+      const own = readings.get(windowKey(entry.provider, account.slot, { window: "7d" }))
+      if (Predicate.isUndefined(own)) continue
+      if (Math.abs(own.resetAt - week) <= QUOTA_RESET_TOLERANCE_MS) continue
+      if (!once("week", entry.provider, account.slot)) continue
+      notices.push(
+        Effect.logWarning("credential-placement.peer.week-mismatch").pipe(
+          Effect.annotateLogs({
+            provider: entry.provider,
+            slot: account.slot,
+            differenceMs: Math.abs(own.resetAt - week),
+          }),
+        ),
+      )
+    }
+  }
+  /**
+   * Each label notice of the peer's boot, once: a peer label no account of
+   * this server's pool holds, an own pool label the peer does not list
+   * (60 s after its boot's first line, once its sweep read its accounts),
+   * and a matched label whose weekly reset differs from this server's by
+   * more than 60 s, which still counts. Under the lock.
+   */
+  const checkPeerLabels = (view: PeerView, now: number) => {
+    const once = (...key: ReadonlyArray<string>) => {
+      const entry = placementKey(...key)
+      if (peerLogged.has(entry)) return false
+      peerLogged.add(entry)
+      return true
+    }
+    const unmatched = (provider: string, side: string, labels: ReadonlyArray<CredentialSlot>) =>
+      notices.push(
+        Effect.logWarning("credential-placement.peer.label-unmatched").pipe(
+          Effect.annotateLogs({ provider, side, labels: labels.toSorted().join(", ") }),
+        ),
+      )
+    for (const entry of view.facts.providers) {
+      const pool = view.pools.get(entry.provider) ?? new Set<CredentialSlot>()
+      const listed = new Set([
+        ...entry.accounts.map((account) => account.slot),
+        ...entry.runs.flatMap((run) => run.accounts),
+      ])
+      const peerOnly = [...listed].filter(
+        (slot) => !pool.has(slot) && once("peer", entry.provider, slot),
+      )
+      if (peerOnly.length > 0) unmatched(entry.provider, "peer", peerOnly)
+      if (now - view.firstAt >= PEER_LABEL_SETTLE_MS && once("own", entry.provider)) {
+        const ownOnly = [...pool].filter((slot) => !listed.has(slot))
+        if (ownOnly.length > 0) unmatched(entry.provider, "own", ownOnly)
+      }
+      checkPeerWeeks(entry, pool, once)
+    }
+  }
+  /**
+   * A peer line with no base gives no rise: the open and pending segments of
+   * the pool accounts the old facts used or the new ones list spend on go.
+   * Under the lock.
+   */
+  const dropPeerBase = (
+    old: Option.Option<PoolFacts>,
+    facts: PoolFacts,
+    pools: ReadonlyMap<string, ReadonlySet<CredentialSlot>>,
+  ) => {
+    for (const [provider, pool] of pools)
+      for (const slot of pool)
+        if (
+          Option.exists(old, (before) => usesAccount(before, provider, slot)) ||
+          Option.exists(providerFacts(facts, provider), (entry) =>
+            entry.accounts.some((account) => account.slot === slot && account.spend.length > 0),
+          )
+        )
+          dropAccountSegments(provider, slot, Option.none())
+  }
+  /** A peer line came after each pending segment's reading: each keeps what it holds. Under the lock. */
+  const commitPending = () => {
+    if (pendingSegments.size === 0) return
+    for (const [key, list] of pendingSegments) {
+      const closed = list.flatMap((pending) => Option.toArray(pending.segment))
+      if (closed.length > 0) segments.set(key, [...(segments.get(key) ?? []), ...closed])
+    }
+    pendingSegments.clear()
+    version += 1
+  }
+  /**
+   * The peer's line `facts` at `now`, `pools` this server's own pool per
+   * provider. A lower `seq` of the cached boot only refreshes the time. A
+   * higher or equal one adds its spend's rise and replaces the cache. A
+   * line with no base (the first, a new boot, or the first after silence)
+   * gives no rise: the open and pending segments of the accounts the old
+   * facts used or the new ones list spend on go. Then each pending segment
+   * keeps what it holds: this line came after its reading. Under the lock.
+   */
+  const takePeerLine = (
+    facts: PoolFacts,
+    pools: ReadonlyMap<string, ReadonlySet<CredentialSlot>>,
+    now: number,
+  ) => {
+    const sameBoot = Option.filter(peer, (view) => view.facts.boot === facts.boot)
+    const base = Option.filter(sameBoot, (view) => !view.silent)
+    if (Option.isSome(base) && facts.seq < base.value.facts.seq) {
+      peer = Option.some({ ...base.value, heardAt: now })
+      return
+    }
+    if (Option.isSome(base)) addPeerRise(base.value.facts, facts, pools)
+    else
+      dropPeerBase(
+        Option.map(peer, (view) => view.facts),
+        facts,
+        pools,
+      )
+    commitPending()
+    if (Option.isNone(sameBoot)) peerLogged.clear()
+    const view: PeerView = {
+      facts,
+      heardAt: now,
+      firstAt: Option.match(sameBoot, { onNone: () => now, onSome: (found) => found.firstAt }),
+      silent: false,
+      pools,
+    }
+    peer = Option.some(view)
+    checkPeerLabels(view, now)
+  }
   return {
     place: Effect.fn("CredentialPlacement.place")(function* (request: PlacementRequest) {
       const now = yield* Clock.currentTimeMillis
@@ -6948,7 +7457,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             return {
               slot,
               load: load.get(slot) ?? 0,
-              live: liveOn(request.provider, slot, request.sessionId, lanes.models),
+              live: liveOn(request.provider, slot, request.sessionId, lanes.models, now),
               held: isHeld(request.provider, slot, request.model, now) || warmedBySibling(slot),
               ...omitUndefined({
                 sustainable: Option.getOrUndefined(
@@ -7277,6 +7786,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         for (const reading of quota.readings) read(quota.provider, slot.value, reading, now)
         if (Predicate.isNotUndefined(quota.resets))
           bank(quota.provider, slot.value, quota.resets, now)
+        // A reading can lower the capacity under the counted load.
+        checkOvershoot(now)
         return serve(now)
       })
       yield* afterServe(grants)
@@ -7340,6 +7851,46 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         }
         if (spend.limits.length > 0) meter(spend, slot.value, priced, now)
       })
+    }),
+    notePeer: Effect.fn("CredentialPlacement.notePeer")(function* (
+      facts: PoolFacts,
+      scopeOf: LaneScopeOf,
+    ) {
+      // A link that reached this server itself.
+      if (facts.boot === boot) return
+      const pools = new Map(
+        yield* Effect.forEach(facts.providers, (entry) =>
+          Effect.map(
+            scopeOf(entry.provider),
+            (scope) =>
+              [
+                entry.provider,
+                new Set(
+                  Option.match(scope, {
+                    onNone: () => [],
+                    onSome: (accounts) => accounts.map((account) => account.slot),
+                  }),
+                ),
+              ] as const,
+          ),
+        ),
+      )
+      const now = yield* Clock.currentTimeMillis
+      const grants = yield* locked(() => {
+        trim(now)
+        takePeerLine(facts, pools, now)
+        checkOvershoot(now)
+        return serve(now)
+      })
+      yield* afterServe(grants)
+      // 90 s with no other line: a serve turns the peer silent and holds it.
+      const watch = yield* Effect.forkIn(
+        Effect.andThen(Effect.sleep(Duration.millis(PEER_SILENT_MS)), serveNow),
+        scope,
+      )
+      const before = silenceWatch
+      silenceWatch = Option.some(watch)
+      if (Option.isSome(before)) yield* Fiber.interrupt(before.value)
     }),
     lanes: Effect.fn("CredentialPlacement.lanes")(function* (
       scopeOf: LaneScopeOf,
@@ -7534,6 +8085,101 @@ export const sweepPoolQuotas = <E>(
     Effect.repeat(Schedule.spaced(POOL_QUOTA_SWEEP_INTERVAL)),
     Effect.asVoid,
   )
+
+// ── pool peer link ──────────────────────────────────────────────────────────
+
+/** The wait after the peer command's first failure; each failure with no line between doubles it. */
+const PEER_RETRY_FIRST = Duration.seconds(1)
+/** The longest wait between two runs of the peer command. */
+const PEER_RETRY_MAX = Duration.minutes(5)
+/** How long a stopped peer command has after SIGTERM before SIGKILL. */
+const PEER_FORCE_KILL_AFTER = Duration.seconds(2)
+/** How much of the command's stderr a failure log keeps: its last characters. */
+const PEER_STDERR_TAIL = 2_000
+
+const PoolFactsLine = Schema.fromJsonString(PoolFacts)
+const encodePoolFactsLine = Schema.encodeSync(PoolFactsLine)
+const decodePoolFactsLine = Schema.decodeEffect(PoolFactsLine)
+
+/**
+ * One run of the peer command: its stdin gets this server's own pool facts
+ * (`CredentialPlacement.pool`), one JSON line each, and each line of its
+ * stdout is noted as the peer's facts (`notePeer`). It ends when the
+ * command's stdout ends, with the exit code and the end of its stderr, or
+ * fails at a line that does not decode. Scoped: the command stops with it.
+ * `heard` turns true at the first line noted.
+ */
+const runPoolPeer = (
+  command: readonly [string, ...Array<string>],
+  scopeOf: LaneScopeOf,
+  heard: Ref.Ref<boolean>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const placement = yield* CredentialPlacement
+      const encoder = new TextEncoder()
+      const handle = yield* ChildProcess.make(command[0], command.slice(1), {
+        stdin: placement.pool.pipe(
+          Stream.map((facts) => encoder.encode(`${encodePoolFactsLine(facts)}\n`)),
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+        forceKillAfter: PEER_FORCE_KILL_AFTER,
+      })
+      const lines = handle.stdout.pipe(
+        Stream.decodeText,
+        Stream.splitLines,
+        Stream.filter((line) => line.trim().length > 0),
+        Stream.runForEach((line) =>
+          decodePoolFactsLine(line).pipe(
+            Effect.flatMap((facts) => placement.notePeer(facts, scopeOf)),
+            Effect.andThen(Ref.set(heard, true)),
+          ),
+        ),
+      )
+      const stderr = handle.stderr.pipe(
+        Stream.decodeText,
+        Stream.runFold(
+          () => "",
+          (tail: string, text: string) => (tail + text).slice(-PEER_STDERR_TAIL),
+        ),
+      )
+      const [, tail] = yield* Effect.all([lines, stderr], { concurrency: "unbounded" })
+      const exitCode = yield* handle.exitCode
+      return `the command ended with exit code ${exitCode}: ${tail.trim()}`
+    }),
+  )
+
+/**
+ * The server's peer link (`pool.peer` in the user file, `PoolConfig`): runs
+ * the command (`runPoolPeer`) and runs it again each time it ends or fails,
+ * after a wait that starts at `PEER_RETRY_FIRST`, doubles up to
+ * `PEER_RETRY_MAX`, and starts over once a run noted a line. Each end is
+ * logged (`credential-placement.peer.failed`). The command is read from the
+ * config at each run; with none, the link stops. `scopeOf` names each
+ * provider's pool accounts, as `notePeer` reads them.
+ */
+export const followPoolPeer = Effect.fn("CredentialPlacement.followPoolPeer")(function* (
+  scopeOf: LaneScopeOf,
+) {
+  const config = yield* ConfigService
+  let wait = PEER_RETRY_FIRST
+  while (true) {
+    const command = yield* config.poolPeer
+    if (Option.isNone(command)) return
+    const heard = yield* Ref.make(false)
+    const reason = yield* runPoolPeer(command.value, scopeOf, heard).pipe(
+      Effect.catch((error) => Effect.succeed(error.message)),
+      Effect.catchDefect((defect) => Effect.succeed(causeMessage(defect))),
+    )
+    yield* Effect.logWarning("credential-placement.peer.failed").pipe(
+      Effect.annotateLogs({ command: command.value[0], error: reason }),
+    )
+    if (yield* Ref.get(heard)) wait = PEER_RETRY_FIRST
+    yield* Effect.sleep(wait)
+    wait = Duration.min(Duration.times(wait, 2), PEER_RETRY_MAX)
+  }
+})
 
 // ── decision-model-resolver ─────────────────────────────────────────────────
 

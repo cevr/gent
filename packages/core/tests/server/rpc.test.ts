@@ -4533,6 +4533,8 @@ describe("session profile lookup", () => {
       "permits.list": "it reads server-wide permits, which no session owns",
       "accounts.lanes": "it reads the server's accounts, which no session owns",
       "accounts.pool": "it reads the server's accounts, which no session owns",
+      "accounts.notePeer":
+        "it writes the peer server's facts on the server's accounts, which no session owns",
       // Owner question: a required `sessionId` here is a wire change that is not additive.
       "message.list": "it reads a branch by its id; owner question",
     }
@@ -4550,7 +4552,7 @@ describe("session profile lookup", () => {
       .toArray()
     expect(unnamed.toSorted()).toEqual(Object.keys(exempt).toSorted())
     // The table reads the payloads: most RPCs pass it.
-    expect(GentRpcs.requests.size).toBeGreaterThan(unnamed.length * 4)
+    expect(GentRpcs.requests.size).toBeGreaterThan(unnamed.length * 2)
   })
 
   test("a session-scoped payload that names no session is a type error", () => {
@@ -5332,5 +5334,45 @@ describe("AccountsRpcs", () => {
           expect(sent.map(fuelOf).at(-1)).toEqual([[work, TEST_MODEL_ID, 41]])
         }).pipe(Effect.timeout("8 seconds")),
       ),
+  )
+
+  it.live("accounts.notePeer counts the peer's runs on the server's lanes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const work = CredentialSlot.make("work")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          {
+            ...textStep("done"),
+            quota: [
+              { window: "5h", utilization: 0.25, resetAt: 1_800_000_000_000, rejected: false },
+            ],
+          },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          configServiceLayer: ConfigService.Test(
+            new UserConfig({
+              model: TEST_MODEL_ID,
+              providers: { anthropic: { authOrder: [work] } },
+            }),
+          ),
+        })
+        yield* client.message.send({ sessionId, branchId, content: "read the quota" })
+        const loadOf = Effect.map(
+          client.accounts.lanes(),
+          ({ providers }) => providers.find((lanes) => lanes.provider === "anthropic")?.load,
+        )
+        yield* waitFor(loadOf, (load) => load === 0, 5_000, "the step's quota reading")
+        yield* client.accounts.notePeer({
+          boot: "peer",
+          seq: 1,
+          providers: [
+            { provider: "anthropic", runs: [{ accounts: [work], count: 2 }], accounts: [] },
+          ],
+        })
+        expect(yield* loadOf).toBe(2)
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
   )
 })

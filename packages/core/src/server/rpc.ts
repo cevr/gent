@@ -704,6 +704,11 @@ class AccountsRpcs extends RpcGroup.make(
     stream: true,
     error: GentRpcError,
   }),
+  // The peer server's pool facts, one line its link sent in: counted as its own link's are.
+  Rpc.make("notePeer", {
+    payload: PoolFacts.fields,
+    error: GentRpcError,
+  }),
 ).prefix("accounts.") {}
 
 // ── extension, driver and model rpcs ────────────────────────────────────────

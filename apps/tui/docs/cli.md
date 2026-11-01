@@ -131,7 +131,7 @@ gent ctl request --extension @gent/machines --id run-status --input '{"run":"run
 gent ctl lanes                              # the server's account lanes, no session
 gent ctl lanes --line                       # lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%
 gent ctl pool                               # this server's own pool facts, no session
-gent ctl pool --follow                      # the same facts as JSON lines until the server stops
+gent ctl pool --follow                      # the same facts as JSON lines until the server stops; stdin lines are the peer's facts
 ```
 
 Without `--session`, a call names the newest conversation in `--cwd` (default:
@@ -196,6 +196,31 @@ facts next and skips the ones between. It runs until the server stops (the
 stream ends as the stop begins, so the stop does not wait on it) or the
 connection drops, then prints one `CtlFailed` line on stderr and exits 1; a
 write to a closed stdout ends it the same way.
+
+`pool --follow` also reads its stdin, when stdin is not a terminal: each
+non-empty line is the peer server's `PoolFacts`, sent to this server
+(`accounts.notePeer`), which counts the peer's runs and fuel in its lanes
+(docs/architecture/lanes.md). A closed stdin ends the forwarding alone, and the
+stream keeps printing. A line that does not decode prints one `CtlFailed` line
+(`input decode: …`) and exits 1, so the link that runs the call starts it
+again. The peer link is this call through ssh: `pool.peer` in the user file
+`~/.gent/config.json` (a project file cannot set it) names the command, an argv
+array, by the other machine's Tailscale name. On the Mac:
+
+```json
+{ "pool": { "peer": ["ssh", "bite-workbox", "gent", "ctl", "pool", "--follow"] } }
+```
+
+On the workbox:
+
+```json
+{ "pool": { "peer": ["ssh", "cvr@cristians-macbook-pro", "gent", "ctl", "pool", "--follow"] } }
+```
+
+With both entries set, each server runs a link and both feed one cache of the
+peer's facts: either link alone keeps both servers informed. The server reads
+`pool.peer` at each run of the command; one added while the server runs takes a
+server restart.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 
