@@ -5,6 +5,7 @@ import {
   Context,
   DateTime,
   Deferred,
+  Duration,
   Effect,
   Fiber,
   FileSystem,
@@ -22,6 +23,7 @@ import { TestClock } from "effect/testing"
 import { SqlClient } from "effect/sql"
 import { BunServices } from "@effect/platform-bun"
 import type * as Prompt from "effect/ai/Prompt"
+import * as AiError from "effect/ai/AiError"
 import { workspaceIdForCwd } from "@gent/core/host"
 import {
   CredentialSlot,
@@ -39,6 +41,7 @@ import {
   omitUndefined,
   type QuotaReading,
   reportProviderQuota,
+  RequestId,
   runProcess,
   sessionThread,
   tool,
@@ -52,6 +55,7 @@ import {
   createRpcHarness,
   CurrentWorkspaceId,
   finishPart,
+  isHostContextUpdate,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   runtimeHostContext,
@@ -70,6 +74,7 @@ import {
   type EventEnvelope,
   ModelId,
   SessionId,
+  SteerCommand,
   ToolCallId,
 } from "@gent/core/protocol"
 import { AgentsExtension } from "../src/agents.js"
@@ -114,15 +119,18 @@ const turnEnds = <E>(stream: Stream.Stream<EventEnvelope, E>, count: number) =>
 
 const THREAD_TASK = "THREAD-TASK: tidy the changelog"
 
-/** The text of each user message in a request, in order. */
-const userTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
-  prompt.content.flatMap((message) => {
-    if (message.role !== "user") return []
+/** The text of each user message, in order; a host notice is no user message. */
+const textsOf = (messages: ReadonlyArray<Prompt.Message>): ReadonlyArray<string> =>
+  messages.flatMap((message) => {
+    if (message.role !== "user" || isHostContextUpdate(message)) return []
     return message.content.flatMap((part) => {
       if (part.type !== "text") return []
       return [part.text]
     })
   })
+
+/** The text of each user message in a request, in order. */
+const userTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> => textsOf(prompt.content)
 
 /** A thread's request: its first user message carries a thread task. */
 const isThreadRequest = (prompt: Prompt.Prompt): boolean =>
@@ -139,6 +147,33 @@ const reply = (text: string, usage: Option.Option<StepUsage> = Option.none()) =>
       ...omitUndefined({ usage: Option.getOrUndefined(usage) }),
     }),
   ])
+
+/** A model step that stops on a usage limit, which resets `resetsIn` later: past every in-turn retry. */
+const usageLimitStream = (resetsIn: Duration.Duration) =>
+  Stream.fail(
+    AiError.make({
+      module: "Test",
+      method: "streamText",
+      reason: new AiError.RateLimitError({ retryAfter: resetsIn }),
+    }),
+  )
+
+/** The starter's message whose model step opens and never ends, until the turn is interrupted. */
+const STALL = "STALL: think it over"
+
+const stalledStream = (opened: Deferred.Deferred<void>) =>
+  Stream.make(textDeltaPart("thinking")).pipe(
+    Stream.concat(Stream.fromEffect(Deferred.succeed(opened, void 0)).pipe(Stream.drain)),
+    Stream.concat(Stream.never),
+  )
+
+/** The user's own config under `home`, with `wake.autoResume` as given. */
+const writeAutoResume = (home: string, autoResume: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
+    yield* fs.writeFileString(`${home}/.gent/config.json`, `{"wake":{"autoResume":${autoResume}}}`)
+  }).pipe(Effect.provide(BunServices.layer))
 
 /** One thread-tool call a scripted model step makes. */
 interface ThreadOp {
@@ -200,10 +235,12 @@ const decodeQueuedHandle = Schema.decodeEffect(
 const decodeRoundRead = Schema.decodeEffect(
   Schema.fromJsonString(
     Schema.Struct({
-      status: Schema.Literals(["open", "ended"]),
+      status: Schema.Literals(["open", "waiting", "ended"]),
+      text: Schema.String,
       streamFailed: Schema.Boolean,
       interrupted: Schema.Boolean,
       unanswered: Schema.Boolean,
+      stopped: Schema.Boolean,
       error: Schema.optionalKey(Schema.String),
       retryAt: Schema.optionalKey(Schema.Finite),
       sabbath: Schema.optionalKey(Schema.Boolean),
@@ -216,7 +253,14 @@ const ListedOutput = Schema.fromJsonString(
       thread: SessionId,
       sessions: Schema.Finite,
       current: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
-      status: Schema.Literals(["running", "idle"]),
+      status: Schema.Literals(["running", "waiting", "idle"]),
+      openRound: Schema.optionalKey(
+        Schema.Struct({
+          round: Schema.String,
+          number: Schema.Finite,
+          retryAt: Schema.optionalKey(Schema.Finite),
+        }),
+      ),
       preview: Schema.String,
       account: Schema.optionalKey(Schema.String),
       placement: Schema.optionalKey(Schema.Literals(["pinned", "assigned", "walked"])),
@@ -240,8 +284,11 @@ const StoppedOutput = Schema.fromJsonString(
 const accountsRig = (options: RigAccounts) =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<boolean>()
+    const stalling = yield* Deferred.make<void>()
     const scripted = new Map<string, ReadonlyArray<ThreadOp>>()
+    const issued = new Set<string>()
     const usage = Option.fromUndefinedOr(options.usage)
+    const limited = new Set(options.limitedThreadCalls ?? [])
     let threadRequestCount = 0
     let starterRequestCount = 0
     const reportQuota = (step: number) =>
@@ -252,15 +299,30 @@ const accountsRig = (options: RigAccounts) =>
     const providerLayer = LanguageModelLayers.testStream((request) => {
       if (isThreadRequest(request.prompt)) {
         threadRequestCount += 1
+        if (limited.has(threadRequestCount)) {
+          return Effect.succeed(usageLimitStream(options.limitResetsIn ?? Duration.seconds(60)))
+        }
         return Deferred.await(gate).pipe(Effect.as(reply("THREAD-REPLY: changelog tidied", usage)))
       }
       starterRequestCount += 1
       const quota = reportQuota(starterRequestCount)
-      if (request.prompt.content.at(-1)?.role === "tool") {
+      // A host notice that follows the tool results is no new message.
+      const last = request.prompt.content.findLast((message) => !isHostContextUpdate(message))
+      if (last?.role === "tool") {
         return Effect.as(quota, reply("noted", usage))
       }
-      const ops = scripted.get(userTexts(request.prompt).at(-1) ?? "") ?? []
+      // The turn's own messages: a round's end that lands with a label joins
+      // its turn, after it or before it. A label runs once: a fork's copy of
+      // the history carries the label of the call that forked it.
+      const since = request.prompt.content.findLastIndex((message) => message.role === "assistant")
+      const fresh = textsOf(request.prompt.content.slice(since + 1))
+      if (fresh.at(-1) === STALL) {
+        return Effect.as(quota, stalledStream(stalling))
+      }
+      const label = fresh.findLast((text) => scripted.has(text) && !issued.has(text)) ?? ""
+      const ops = scripted.get(label) ?? []
       if (ops.length === 0) return Effect.as(quota, reply("nothing to do", usage))
+      issued.add(label)
       return Effect.as(
         quota,
         Stream.fromIterable([
@@ -282,6 +344,7 @@ const accountsRig = (options: RigAccounts) =>
       providerLayer,
       extensionInputs: [AgentsExtension, SessionToolsExtension, ...(options.extensions ?? [])],
       ...omitUndefined({
+        home: options.home,
         modelPricing: options.pricing,
         configServiceLayer: Option.getOrUndefined(
           Option.map(Option.fromUndefinedOr(options.order), (order) =>
@@ -366,6 +429,7 @@ const accountsRig = (options: RigAccounts) =>
       cwd,
       starter,
       gate,
+      stalling,
       threadRequests,
       act,
       op,
@@ -551,6 +615,12 @@ interface RigAccounts {
     readonly timeZone: string
   }
   readonly extensions?: ReadonlyArray<(typeof e2ePreset.extensionInputs)[number]>
+  /** The runtime's home, whose `.gent/config.json` is the user's own config. */
+  readonly home?: string
+  /** The thread requests, counted from 1, that a usage limit stops; the rest wait for `gate`. */
+  readonly limitedThreadCalls?: ReadonlyArray<number>
+  /** How long after a stopped request its limit resets; default a minute. */
+  readonly limitResetsIn?: Duration.Duration
 }
 
 const threadRig = accountsRig({})
@@ -1349,6 +1419,294 @@ describe("threads", () => {
           }).pipe(Effect.timeout("12 seconds")),
         ),
       15_000,
+    )
+
+    it.live(
+      "with auto-resume on, a queued round a spent account refuses waits for the reset, then runs and wakes its starter",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const home = yield* makeTempDirectoryScoped("gent-threads-home-")
+            yield* writeAutoResume(home, "{}")
+            const now = yield* Clock.currentTimeMillis
+            const resetAt = now + 3_600_000
+            // The fourth starter step reads the window rejected until the reset.
+            const rig = yield* accountsRig({
+              ...metered,
+              home,
+              quota: (step) => {
+                if (step < 4) return oneLane(now)(step)
+                return [{ window: "7d", utilization: 1, resetAt, rejected: true }]
+              },
+            })
+            // The gate stays shut: the first round holds the one lane.
+            yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            const queued = yield* Effect.flatMap(
+              rig.one(
+                rig.starter,
+                rig.op("thread.start", { task: THREAD_TASK, notify: "starter" }),
+              ),
+              decodeStarted,
+            )
+            const round = queued.round?.round ?? ""
+            expect(queued.round?.queued).toBe(0)
+            // Each read is a new call: a tool call id names one call in the starter's history.
+            const read = Effect.suspend(() =>
+              Effect.flatMap(
+                rig.one(rig.starter, rig.op("thread.round", { round })),
+                decodeRoundRead,
+              ),
+            )
+            const waiting = yield* waitFor(
+              read,
+              (view) => view.status !== "open",
+              4_000,
+              "the refusal holds the round",
+            )
+            expect(waiting).toMatchObject({ status: "waiting", retryAt: resetAt })
+            expect(waiting.error).toContain("No lane on anthropic")
+            yield* Deferred.succeed(rig.gate, true)
+            yield* loadIs(rig, 0, "the first round ended, and the waiting round holds no lane")
+            expect(yield* rig.threadRequests).toBe(1)
+            const woken = Effect.map(
+              rig.client.session.getSnapshot(rig.starter),
+              (current) =>
+                current.messages.filter(
+                  (message) => message.metadata?.customType === THREAD_ROUND_END_TYPE,
+                ).length,
+            )
+            expect(yield* woken).toBe(0)
+            // The wait ends 30 seconds after the reset, when the window is full again.
+            yield* TestClock.adjust(Duration.millis(resetAt - now + 20_000))
+            const ended = yield* advanceUntil(read, (view) => view.status === "ended", {
+              label: "the round ran after the reset",
+              step: "5 seconds",
+              timeoutMs: 10_000,
+            })
+            expect(ended).toMatchObject({
+              text: "THREAD-REPLY: changelog tidied",
+              streamFailed: false,
+            })
+            expect(ended.retryAt).toBeUndefined()
+            expect(yield* rig.threadRequests).toBe(2)
+            yield* waitFor(woken, (count) => count === 1, 4_000, "the round's end woke the starter")
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("20 seconds")),
+        ),
+      25_000,
+    )
+  })
+
+  describe("a round a usage limit stops", () => {
+    /** A rig whose user config sets `wake.autoResume` to `autoResume`. */
+    const limitRig = (autoResume: string, options: RigAccounts) =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("gent-threads-home-")
+        yield* writeAutoResume(home, autoResume)
+        return yield* accountsRig({ ...options, home })
+      })
+    type LimitRig = Effect.Success<ReturnType<typeof limitRig>>
+    /** A round `thread.start` opened for its starter to wait for. */
+    const startForStarter = (rig: LimitRig) =>
+      Effect.flatMap(
+        rig.one(rig.starter, rig.op("thread.start", { task: THREAD_TASK, notify: "starter" })),
+        decodeStarted,
+      )
+    /** Each read is a new call: a tool call id names one call in the starter's history. */
+    const roundOf = (rig: LimitRig, round: string) =>
+      Effect.suspend(() =>
+        Effect.flatMap(rig.one(rig.starter, rig.op("thread.round", { round })), decodeRoundRead),
+      )
+    /** The round ends that reached the starter. */
+    const wakesOf = (rig: LimitRig) =>
+      Effect.map(
+        rig.client.session.getSnapshot(rig.starter),
+        (current) =>
+          current.messages.filter(
+            (message) => message.metadata?.customType === THREAD_ROUND_END_TYPE,
+          ).length,
+      )
+    const waitingOf = (rig: LimitRig, round: string) =>
+      waitFor(
+        roundOf(rig, round),
+        (view) => view.status !== "open",
+        4_000,
+        "the usage limit stopped the round's turn",
+      )
+
+    it.live(
+      "waits for the reset instead of ending, shows its time, wakes nobody, then runs again and wakes its starter once",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rig = yield* limitRig("{}", { limitedThreadCalls: [1] })
+            yield* Deferred.succeed(rig.gate, true)
+            const now = yield* Clock.currentTimeMillis
+            const started = yield* startForStarter(rig)
+            const round = started.round?.round ?? ""
+            const waiting = yield* waitingOf(rig, round)
+            expect(waiting).toMatchObject({ status: "waiting", retryAt: now + 60_000 })
+            expect(waiting.error).toBeDefined()
+            const [row] = yield* rig.list(rig.starter, started.thread)
+            expect(row).toMatchObject({
+              status: "waiting",
+              openRound: { round, retryAt: now + 60_000 },
+            })
+            expect(yield* wakesOf(rig)).toBe(0)
+            expect(yield* rig.threadRequests).toBe(1)
+            // The wait ends 30 seconds after the reset.
+            yield* TestClock.adjust("80 seconds")
+            const ended = yield* advanceUntil(
+              roundOf(rig, round),
+              (view) => view.status === "ended",
+              { label: "the round ran after the reset", step: "5 seconds", timeoutMs: 10_000 },
+            )
+            expect(ended).toMatchObject({
+              text: "THREAD-REPLY: changelog tidied",
+              streamFailed: false,
+              stopped: false,
+            })
+            expect(ended.retryAt).toBeUndefined()
+            expect(yield* rig.threadRequests).toBe(2)
+            yield* waitFor(wakesOf(rig), (count) => count >= 1, 4_000, "the end woke the starter")
+            const [after] = yield* rig.list(rig.starter, started.thread)
+            expect(after?.status).toBe("idle")
+            expect(yield* wakesOf(rig)).toBe(1)
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("20 seconds")),
+        ),
+      25_000,
+    )
+
+    it.live(
+      "ends failed with its reset once it has waited `maxResumes` times",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rig = yield* limitRig(`{"maxResumes":1}`, { limitedThreadCalls: [1, 2] })
+            yield* Deferred.succeed(rig.gate, true)
+            const started = yield* startForStarter(rig)
+            const round = started.round?.round ?? ""
+            expect((yield* waitingOf(rig, round)).status).toBe("waiting")
+            yield* TestClock.adjust("80 seconds")
+            const ended = yield* advanceUntil(
+              roundOf(rig, round),
+              (view) => view.status === "ended",
+              { label: "the second stop ended the round", step: "5 seconds", timeoutMs: 10_000 },
+            )
+            const at = yield* Clock.currentTimeMillis
+            expect(ended).toMatchObject({ streamFailed: true, stopped: false })
+            expect(ended.retryAt).toBeGreaterThan(90_000)
+            expect(ended.retryAt).toBeLessThanOrEqual(at + 60_000)
+            expect(yield* rig.threadRequests).toBe(2)
+            yield* waitFor(wakesOf(rig), (count) => count === 1, 4_000, "the end woke the starter")
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("20 seconds")),
+        ),
+      25_000,
+    )
+
+    it.live(
+      "ends failed at once when the limit resets more than a day away",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rig = yield* limitRig("{}", {
+              limitedThreadCalls: [1],
+              limitResetsIn: Duration.hours(25),
+            })
+            yield* Deferred.succeed(rig.gate, true)
+            const now = yield* Clock.currentTimeMillis
+            const started = yield* startForStarter(rig)
+            const ended = yield* waitingOf(rig, started.round?.round ?? "")
+            expect(ended).toMatchObject({
+              status: "ended",
+              streamFailed: true,
+              retryAt: now + 25 * 3_600_000,
+            })
+            yield* waitFor(wakesOf(rig), (count) => count === 1, 4_000, "the end woke the starter")
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("20 seconds")),
+        ),
+      25_000,
+    )
+
+    it.live(
+      "ends failed at once when the user's config leaves auto-resume off",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rig = yield* accountsRig({ limitedThreadCalls: [1] })
+            yield* Deferred.succeed(rig.gate, true)
+            const started = yield* Effect.flatMap(
+              rig.one(
+                rig.starter,
+                rig.op("thread.start", { task: THREAD_TASK, notify: "starter" }),
+              ),
+              decodeStarted,
+            )
+            const ended = yield* waitingOf(rig, started.round?.round ?? "")
+            expect(ended).toMatchObject({ status: "ended", streamFailed: true })
+            expect(ended.retryAt).toBeDefined()
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("20 seconds")),
+        ),
+      25_000,
+    )
+
+    it.live(
+      "thread.stop ends a waiting round at once: it never runs again and wakes nobody",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rig = yield* limitRig("{}", { limitedThreadCalls: [1] })
+            yield* Deferred.succeed(rig.gate, true)
+            const started = yield* startForStarter(rig)
+            const round = started.round?.round ?? ""
+            expect((yield* waitingOf(rig, round)).status).toBe("waiting")
+            yield* rig.stop(rig.starter, started.thread)
+            const ended = yield* roundOf(rig, round)
+            expect(ended).toMatchObject({ status: "ended", stopped: true, interrupted: true })
+            // Past the reset: the stopped round's alarm is gone with it. A fire
+            // would send the round's turn at once; a second of real time lets one run.
+            yield* TestClock.adjust("2 minutes")
+            // oxlint-disable-next-line effect/noFixedWaitInTests -- a negative assertion: no event marks an alarm that never fires, so real time gives a fire's send the chance to run
+            yield* Effect.sleep("1 second").pipe(TestClock.withLive)
+            expect((yield* roundOf(rig, round)).status).toBe("ended")
+            expect(yield* rig.threadRequests).toBe(1)
+            expect(yield* wakesOf(rig)).toBe(0)
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("20 seconds")),
+        ),
+      25_000,
+    )
+
+    it.live(
+      "the starter's interrupt ends its waiting round at once",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rig = yield* limitRig("{}", { limitedThreadCalls: [1] })
+            yield* Deferred.succeed(rig.gate, true)
+            const started = yield* startForStarter(rig)
+            const round = started.round?.round ?? ""
+            expect((yield* waitingOf(rig, round)).status).toBe("waiting")
+            // The starter's next turn stalls at its model, and the user interrupts it.
+            yield* rig.client.message.send({ ...rig.starter, content: STALL })
+            yield* Deferred.await(rig.stalling)
+            yield* rig.client.steer.command({
+              command: SteerCommand.cases.Cancel.make({
+                ...rig.starter,
+                requestId: RequestId.make("interrupt-the-waiting-starter"),
+              }),
+            })
+            const ended = yield* waitFor(
+              roundOf(rig, round),
+              (view) => view.status === "ended",
+              4_000,
+              "the interrupt ended the round",
+            )
+            expect(ended).toMatchObject({ stopped: true, interrupted: true })
+            expect(yield* rig.threadRequests).toBe(1)
+            expect(yield* wakesOf(rig)).toBe(0)
+          }).pipe(Effect.timeout("20 seconds")),
+        ),
+      25_000,
     )
   })
 
@@ -3066,11 +3424,12 @@ const saveUnsentRound = (
       yield* sql`
         INSERT INTO thread_rounds (
           round, thread, number, starter_session_id, starter_branch_id, starter_thread,
-          session_id, branch_id, message_id, content, notify, started_at
+          session_id, branch_id, message_id, turn_message_id, content, notify, started_at
         ) VALUES (
           ${input.round}, ${input.thread.thread}, 1, ${input.starter.sessionId},
           ${input.starter.branchId}, ${input.starter.sessionId}, ${input.thread.sessionId},
-          ${input.thread.branchId}, ${`thread-round:${input.round}`}, ${content}, 'starter',
+          ${input.thread.branchId}, ${`thread-round:${input.round}`}, ${`thread-round:${input.round}`},
+          ${content}, 'starter',
           ${input.startedAt}
         )
       `
@@ -3227,11 +3586,12 @@ describe("a thread round running when the server stopped", () => {
               yield* sql`
                 INSERT INTO thread_rounds (
                   round, thread, number, starter_session_id, starter_branch_id, starter_thread,
-                  session_id, branch_id, message_id, content, notify, started_at
+                  session_id, branch_id, message_id, turn_message_id, content, notify, started_at
                 ) VALUES (
                   ${round}, ${first.impl.thread}, 1, ${first.starter.sessionId},
                   ${first.starter.branchId}, ${first.starter.sessionId}, ${first.impl.sessionId},
-                  ${first.impl.branchId}, ${`thread-round:${round}`}, ${content}, 'starter', 0
+                  ${first.impl.branchId}, ${`thread-round:${round}`}, ${`thread-round:${round}`},
+                  ${content}, 'starter', 0
                 )
               `
             }),
@@ -3247,6 +3607,72 @@ describe("a thread round running when the server stopped", () => {
                 ["thread.round", "read-sent", { round }],
               ])
               expect(read?.result).toMatchObject({ status: "ended", text: "sent at last" })
+            }),
+          )
+        }).pipe(Effect.timeout("40 seconds")),
+      ),
+    45_000,
+  )
+
+  it.live(
+    "a round that waited for a usage limit's reset runs when the starter opens, though its alarm was lost, and wakes the starter once",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const first = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              const starter: SessionKey = yield* client.session.create({})
+              const impl = yield* startWorker(client, starter, "start-impl")
+              return { starter, impl }
+            }),
+          )
+          // The process died while the round waited, and its alarm was lost
+          // with it: only the round's row says it waits. Its reset is long past.
+          const round = "round-waited"
+          yield* home.sql(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              const content = threadRoundText({
+                number: 1,
+                starter: first.starter.sessionId,
+                message: "ECHO sent after the reset",
+                reply: Option.none(),
+                notify: "starter",
+                place: Option.none(),
+              })
+              yield* sql`
+                INSERT INTO thread_rounds (
+                  round, thread, number, starter_session_id, starter_branch_id, starter_thread,
+                  session_id, branch_id, message_id, turn_message_id, content, notify, started_at,
+                  error, retry_at, retry_cause, waits
+                ) VALUES (
+                  ${round}, ${first.impl.thread}, 1, ${first.starter.sessionId},
+                  ${first.starter.branchId}, ${first.starter.sessionId}, ${first.impl.sessionId},
+                  ${first.impl.branchId}, ${`thread-round:${round}`}, ${`thread-round:${round}`},
+                  ${content}, 'starter', 0,
+                  'No lane on anthropic', 0, 'limit', 1
+                )
+              `
+            }),
+          )
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              const woke = yield* waitForWakes(client, first.starter, 1)
+              expect(wakeTexts(woke.messages)[0]).toContain(round)
+              const [read] = yield* call(client, first.starter, [
+                ["thread.round", "read-waited", { round }],
+              ])
+              expect(read?.result).toMatchObject({ status: "ended", text: "sent after the reset" })
+              const settled = yield* waitFor(
+                client.session.getSnapshot(first.starter),
+                (current) => current.runtime._tag === "Idle",
+                8_000,
+                "the starter is idle",
+              )
+              expect(wakes(settled.messages)).toHaveLength(1)
             }),
           )
         }).pipe(Effect.timeout("40 seconds")),

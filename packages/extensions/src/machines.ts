@@ -3303,7 +3303,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
   const view = found.value
   // A move off a maker in flight (a restart between its two commits) settles first.
   if (Predicate.isNotUndefined(action.leaving)) return yield* settleLeaving(run, action, roundId)
-  if (view.status === "open") {
+  if (view.status !== "ended") {
     // Open, stopped from outside or not: the worker's turn still runs (a
     // stopped turn may hold out in an uninterruptible tool), or it waits
     // for its lane. Its end, which Threads publishes whether the round was
@@ -3659,7 +3659,7 @@ const stopPending = (run: Run, action: PendingAction) =>
             onNone: () => threads.sendRound(round.key),
           })
           const found = yield* threads.findRound(roundId)
-          if (Option.isSome(found) && found.value.status === "open") {
+          if (Option.isSome(found) && found.value.status !== "ended") {
             yield* threads.stop(found.value.thread, Option.some(`machine-stop:${run.run}`))
           }
           return false

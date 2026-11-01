@@ -23,7 +23,11 @@
  * publishes the end to the `Threads` service's subscribers, then notifies as
  * the round's `notify` says: the user reads it (`user`), a message that
  * carries the answer and the row it draws wakes the starter (`starter`), or
- * nobody is told (`none`, the service's own senders). A branch's loop open
+ * nobody is told (`none`, the service's own senders). A round a usage limit
+ * stops (a turn that failed with a retry time, or a lane refused) does not
+ * end when the user turned `wake.autoResume` on: it waits, durable, and runs
+ * again after the reset on the account placement picks then (`waitOrEnd`).
+ * Its starter reads it `waiting`; only its real end wakes anyone. A branch's loop open
  * reconciles what a restart left, and its next turn reconciles again after
  * a threads hook failed. The starter's interrupt stops the `starter` rounds
  * whose end would wake it, and its next turns read which; it leaves `user`
@@ -89,6 +93,8 @@ import {
   tool,
   type TurnAfterInput,
   type TurnRetry,
+  type WakeDueInput,
+  WakeNext,
   ensureExtensionTables,
 } from "@gent/core/extensions/api"
 import {
@@ -103,6 +109,7 @@ import {
   usageOf,
 } from "./child-turns.js"
 import { childSessionName } from "./session-names.js"
+import { MAXIMUM_WAKE_DELAY_MS, readAutoResume, RESUME_MARGIN_MS } from "./wake.js"
 import {
   type CollectedWork,
   type WorkspaceError,
@@ -327,6 +334,9 @@ const currentPlace = (found: StartedThread) =>
 
 // ── round storage ───────────────────────────────────────────────────────────
 
+/** The retry cause of each lane refusal's reason. */
+const REFUSAL_CAUSE = { spent: "limit", sabbath: "sabbath" } as const
+
 /**
  * Who hears a round's end. `user`: the user reads it in the thread, and
  * nothing reaches the starter. `starter`: a message that carries the answer
@@ -355,11 +365,12 @@ const ToolNotify = Schema.Literals(["user", "starter"]).annotate({
  * the flags are 0 or 1. `wake_session_id` and `wake_branch_id` are where a
  * `starter` round's end wakes its starter, saved before the wake is sent (or
  * when the interrupt that stops it is that place's), so a second delivery
- * goes where the first one went.
+ * goes where the first one went. `message_id` opens the round's first turn;
+ * `turn_message_id` is the turn it runs now, the first until a usage limit
+ * makes the round wait, and the lane, the stop and the turn's end are keyed
+ * by it. `waits` counts those waits. A round waits while it is open, not
+ * stopped, and `retry_at` is set (`isWaiting`).
  */
-/** The retry cause of each lane refusal's reason. */
-const REFUSAL_CAUSE = { spent: "limit", sabbath: "sabbath" } as const
-
 const RoundRow = Schema.Struct({
   round: Schema.String,
   thread: Schema.String,
@@ -370,6 +381,7 @@ const RoundRow = Schema.Struct({
   session_id: Schema.String,
   branch_id: Schema.String,
   message_id: Schema.String,
+  turn_message_id: Schema.String,
   content: Schema.String,
   reply_spec: Schema.NullOr(Schema.String),
   notify: RoundNotify,
@@ -389,8 +401,27 @@ const RoundRow = Schema.Struct({
   stop_notice_at: Schema.NullOr(Schema.Finite),
   retry_at: Schema.NullOr(Schema.Finite),
   retry_cause: Schema.NullOr(RetryCause),
+  waits: Schema.Finite,
 })
 type RoundRow = typeof RoundRow.Type
+
+/** The round is open, not stopped, and waits for `retry_at` to run again. */
+const isWaiting = (round: RoundRow): boolean =>
+  Predicate.isNull(round.ended_at) &&
+  Predicate.isNull(round.stopped_at) &&
+  Predicate.isNotNull(round.retry_at)
+
+/** What a round's wait records (`ThreadRoundsService.waitRound`). */
+interface RoundWait {
+  /** The turn the round ran when the limit stopped it: the wait applies only while it is still the round's turn. */
+  readonly turn: string
+  /** The turn that runs at `retry.at`: a new one when the stopped turn reached the branch, else the same. */
+  readonly nextTurn: string
+  readonly retry: TurnRetry
+  readonly error: Option.Option<string>
+  /** The bill of every turn the round ran so far. */
+  readonly usage: Option.Option<typeof ChildUsage.Type>
+}
 
 /** A session and branch: where a round runs, or where its end wakes. */
 interface Place {
@@ -479,6 +510,14 @@ interface ThreadRoundsService {
    * starter as any other does.
    */
   readonly endRound: (round: string, end: RoundEnd) => Effect.Effect<void, ThreadStorageError>
+  /**
+   * Holds an open round until `wait.retry.at` instead of ending it, once per
+   * stopped turn: false when the round ended, was stopped, waits already, or
+   * runs another turn than `wait.turn`. Counts the wait.
+   */
+  readonly waitRound: (round: string, wait: RoundWait) => Effect.Effect<boolean, ThreadStorageError>
+  /** Ends a round's wait; its cause stays for the turn that resumes it. False when it did not wait. */
+  readonly resumeRound: (round: string) => Effect.Effect<boolean, ThreadStorageError>
   readonly markStopped: (round: string, at: number) => Effect.Effect<void, ThreadStorageError>
   /** Clears the stop `markStopped` set at `at`, and no other. */
   readonly unmarkStopped: (round: string, at: number) => Effect.Effect<void, ThreadStorageError>
@@ -533,8 +572,8 @@ interface ThreadRoundsService {
   /** Drops a round that is still open: its turn was refused, so it never ran. */
   readonly releaseRound: (round: string) => Effect.Effect<void, ThreadStorageError>
   /**
-   * Drops the rounds a deleted session ran, and returns the ids of the ones
-   * still open. A round it sent stays: the starter's thread owns it, and its
+   * Drops the rounds a deleted session ran, and returns the turns of the ones
+   * still open, which may hold a lane. A round it sent stays: the starter's thread owns it, and its
    * handoffs still read and hear it. A deleted thread's own threads go with
    * it, spawned below it, and their rounds with them.
    */
@@ -611,8 +650,9 @@ const makeReconciledBranches = Effect.map(
  * `stop_notice_at` is when the stop notice of a round the starter's interrupt
  * stopped was written, until a turn of the starter reads it. `retry_at` is
  * when a round that could not run may run again, and `retry_cause` why
- * (`RetryCause`): a sender that is not a model turn (a machine) waits for it
- * instead of sending again at once.
+ * (`RetryCause`). On an open round it is the time its wait ends
+ * (`waitOrEnd`); on an ended one, a sender that is not a model turn (a
+ * machine) waits for it instead of sending again at once.
  */
 const createThreadRounds = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -628,6 +668,7 @@ const createThreadRounds = Effect.gen(function* () {
         session_id TEXT NOT NULL,
         branch_id TEXT NOT NULL,
         message_id TEXT NOT NULL,
+        turn_message_id TEXT NOT NULL,
         content TEXT NOT NULL,
         reply_spec TEXT,
         notify TEXT NOT NULL,
@@ -646,7 +687,8 @@ const createThreadRounds = Effect.gen(function* () {
         delivered_at INTEGER,
         stop_notice_at INTEGER,
         retry_at INTEGER,
-        retry_cause TEXT
+        retry_cause TEXT,
+        waits INTEGER NOT NULL DEFAULT 0
       )`,
       `CREATE INDEX thread_rounds_by_thread ON thread_rounds (thread, ended_at)`,
       `CREATE INDEX thread_rounds_open_at ON thread_rounds (session_id, branch_id) WHERE ended_at IS NULL`,
@@ -661,7 +703,7 @@ const createThreadRounds = Effect.gen(function* () {
 
 const ensureThreadRounds = ensureExtensionTables({
   owner: "@gent/threads",
-  version: 2,
+  version: 3,
   tables: ["thread_rounds"],
   create: createThreadRounds,
 }).pipe(Effect.mapError(storageError("Thread table setup failed")))
@@ -748,11 +790,12 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
               yield* sql`
                 INSERT INTO thread_rounds (
                   round, thread, number, starter_session_id, starter_branch_id, starter_thread,
-                  session_id, branch_id, message_id, content, reply_spec, notify, started_at
+                  session_id, branch_id, message_id, turn_message_id, content, reply_spec, notify,
+                  started_at
                 ) VALUES (
                   ${input.round}, ${input.thread}, ${number}, ${input.starter.sessionId},
                   ${input.starter.branchId}, ${input.starter.thread}, ${input.place.sessionId},
-                  ${input.place.branchId}, ${input.messageId}, ${input.content(number)},
+                  ${input.place.branchId}, ${input.messageId}, ${input.messageId}, ${input.content(number)},
                   ${Option.getOrNull(input.replySpec)}, ${input.notify}, ${input.startedAt}
                 )
               `
@@ -810,6 +853,42 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
             `
           },
           Effect.mapError(storageError("Failed to record the round's end")),
+        ),
+
+        waitRound: Effect.fn("ThreadRounds.waitRound")(
+          function* (round, wait) {
+            const usage = yield* Option.match(wait.usage, {
+              onNone: () => Effect.succeed(Option.none<string>()),
+              onSome: (value) => Effect.asSome(encodeUsage(value)),
+            })
+            const rows = yield* sql<{ readonly round: string }>`
+              UPDATE thread_rounds
+              SET retry_at = ${wait.retry.at},
+                  retry_cause = ${wait.retry.cause},
+                  error = ${Option.getOrNull(wait.error)},
+                  usage_json = ${Option.getOrNull(usage)},
+                  turn_message_id = ${wait.nextTurn},
+                  waits = waits + 1
+              WHERE round = ${round} AND ended_at IS NULL AND stopped_at IS NULL
+                AND retry_at IS NULL AND turn_message_id = ${wait.turn}
+              RETURNING round
+            `
+            return rows.length > 0
+          },
+          Effect.mapError(storageError("Failed to hold the round")),
+        ),
+
+        resumeRound: Effect.fn("ThreadRounds.resumeRound")(
+          function* (round) {
+            const rows = yield* sql<{ readonly round: string }>`
+              UPDATE thread_rounds SET retry_at = NULL
+              WHERE round = ${round} AND ended_at IS NULL AND stopped_at IS NULL
+                AND retry_at IS NOT NULL
+              RETURNING round
+            `
+            return rows.length > 0
+          },
+          Effect.mapError(storageError("Failed to resume the round")),
         ),
 
         stopCandidates: Effect.fn("ThreadRounds.stopCandidates")(
@@ -953,13 +1032,13 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
 
         removeSession: Effect.fn("ThreadRounds.removeSession")(
           function* (sessionId) {
-            const removed = yield* sql<Pick<RoundRow, "round" | "ended_at">>`
+            const removed = yield* sql<Pick<RoundRow, "turn_message_id" | "ended_at">>`
               DELETE FROM thread_rounds WHERE session_id = ${sessionId}
-              RETURNING round, ended_at
+              RETURNING turn_message_id, ended_at
             `
             return removed.flatMap((row) => {
               if (Predicate.isNotNull(row.ended_at)) return []
-              return [row.round]
+              return [row.turn_message_id]
             })
           },
           Effect.mapError(storageError("Failed to remove the session's rounds")),
@@ -1001,6 +1080,13 @@ const requireToolCall = Effect.fn("Threads.requireToolCall")(function* (operatio
 
 /** The message that opens a round's turn on the thread; the turn's command id is the same. */
 const roundMessageId = (round: string) => MessageId.make(`thread-round:${round}`)
+
+/** The turn a round runs after its `waits`-th wait: each one opens with its own message. */
+const resumedTurnId = (round: RoundRow) => `${round.message_id}:resume-${round.waits + 1}`
+
+/** The wake record (`Session.wakeAt`) that ends a round's wait, on its starter's place. */
+const ROUND_WAIT_SOURCE = "thread-round-wait:"
+const roundWaitSource = (round: string) => `${ROUND_WAIT_SOURCE}${round}`
 
 /** The steer that carries a round's end: the starter's message id derives from it. */
 const roundEndRequestId = (round: string) => RequestId.make(`thread-round-end:${round}`)
@@ -1285,6 +1371,30 @@ export const threadRoundEndAnswer = (content: string): string => {
   return content.slice(start + 2, end)
 }
 
+/** The round runs a turn after a wait: its first turn's message is already on the branch. */
+const isResumed = (round: RoundRow) => round.turn_message_id !== round.message_id
+
+/**
+ * The message of a turn that resumes a round after its wait: the task is in
+ * the thread's context already, so it says only why the round stopped and
+ * that it goes on, under the round's source line.
+ */
+const resumedRoundText = (round: RoundRow) => {
+  let cause = "the usage limit that stopped it has reset"
+  if (round.retry_cause === "sabbath") cause = "the owner's Sabbath that held it has ended"
+  return [
+    `${ROUND_PREFIX}${round.number} resumes: ${cause}. ${answerLine(round.notify)}`,
+    "",
+    "Continue this round's task from where it stopped.",
+  ].join("\n")
+}
+
+/** The message of the turn the round runs now. */
+const roundTurnText = (round: RoundRow) => {
+  if (isResumed(round)) return resumedRoundText(round)
+  return round.content
+}
+
 /** Admits (or re-sends) a round's turn on the thread. A repeat admits nothing new. */
 const sendRoundTurn = Effect.fn("Threads.sendRoundTurn")(function* (round: RoundRow) {
   const ctx = yield* ExtensionContext
@@ -1292,8 +1402,8 @@ const sendRoundTurn = Effect.fn("Threads.sendRoundTurn")(function* (round: Round
     delivery: "turn",
     sessionId: SessionId.make(round.session_id),
     branchId: BranchId.make(round.branch_id),
-    content: round.content,
-    commandId: ActorCommandId.make(round.message_id),
+    content: roundTurnText(round),
+    commandId: ActorCommandId.make(round.turn_message_id),
     completion: "admission",
     metadata: {
       customType: THREAD_ROUND_TYPE,
@@ -1317,14 +1427,19 @@ const sendRoundTurn = Effect.fn("Threads.sendRoundTurn")(function* (round: Round
  * nothing (a reply lost after the loop admitted the turn, a concurrent repeat
  * of the request refused as already processing): the round stays, its turn's
  * end records it, and a retry or the starter's reconcile sends a turn that
- * never arrived.
+ * never arrived. A round that resumes after its wait already ran a turn and
+ * its starter waits for its end: a full queue ends it, as a queued round's
+ * (`startQueuedRound`).
  */
 const sendClaimedRound = Effect.fn("Threads.sendClaimedRound")(function* (round: RoundRow) {
+  if (isResumed(round)) return yield* startQueuedRound(round)
   const rounds = yield* ThreadRounds
   yield* sendRoundTurn(round).pipe(
     Effect.tapError((error) => {
       if (!Schema.is(FollowUpQueueFull)(error)) return Effect.void
-      return rounds.releaseRound(round.round).pipe(Effect.andThen(cancelLane(round.round)))
+      return rounds
+        .releaseRound(round.round)
+        .pipe(Effect.andThen(cancelLane(MessageId.make(round.turn_message_id))))
     }),
   )
 })
@@ -1337,11 +1452,30 @@ const branchMessages = Effect.fn("Threads.branchMessages")(function* (round: Rou
   return branch?.messages ?? []
 })
 
-/** The round's message is on the thread's branch: its turn was admitted. */
+/** The message of the round's current turn is on the thread's branch: that turn was admitted. */
 const admitted = Effect.fn("Threads.admitted")(function* (round: RoundRow) {
   const messages = yield* branchMessages(round)
-  return messages.some((message) => message.id === round.message_id)
+  return messages.some((message) => message.id === round.turn_message_id)
 })
+
+/**
+ * The round's messages on its branch: from its first turn's message to the
+ * end of the turn it runs now, so a round that waited and resumed counts
+ * every turn it ran. A current turn that never reached the branch (a round
+ * that waits) ends the span with its first turn.
+ */
+const roundMessages = <M extends Parameters<typeof startTurnMessages>[0][number]>(
+  messages: ReadonlyArray<M>,
+  round: RoundRow,
+): ReadonlyArray<M> => {
+  const first = startTurnMessages(messages, MessageId.make(round.message_id))
+  if (!isResumed(round)) return first
+  const current = startTurnMessages(messages, MessageId.make(round.turn_message_id))
+  const start = messages.findIndex((message) => message.id === round.message_id)
+  const last = current.at(-1)
+  if (start === -1 || Predicate.isUndefined(last)) return first
+  return messages.slice(start, messages.indexOf(last) + 1)
+}
 
 /** The place a round's end wakes, once one was saved. */
 const wakeTargetOf = (round: RoundRow) =>
@@ -1422,15 +1556,15 @@ const wakeTarget = Effect.fn("Threads.wakeTarget")(function* (round: RoundRow) {
 /**
  * The work of a thread in a copy, brought back to the origin as a branch before
  * the round's end goes out; a thread with no copy has none. The workspaces
- * turn end collects the same turn under the same key (the round's message),
- * so the turn is collected once, whichever runs first. A collect that fails
- * is one line in the message, which still goes out.
+ * turn end collects the same turn under the same key (the message of the
+ * round's last turn), so the turn is collected once, whichever runs first.
+ * A collect that fails is one line in the message, which still goes out.
  */
 const roundWork = Effect.fn("Threads.roundWork")(function* (round: RoundRow) {
   const places = yield* Effect.serviceOption(Workspaces)
   if (Option.isNone(places)) return Option.none<RoundWork>()
   const collected = yield* places.value
-    .collect(SessionId.make(round.session_id), round.message_id)
+    .collect(SessionId.make(round.session_id), round.turn_message_id)
     .pipe(Effect.result)
   if (collected._tag === "Success") return Option.map(collected.success, workOf)
   const message = collected.failure.message
@@ -1442,7 +1576,7 @@ const roundWork = Effect.fn("Threads.roundWork")(function* (round: RoundRow) {
 
 /**
  * The starter's message for a recorded end, and the row's details: read from
- * the round's own turn, so a forked thread's copied window counts for
+ * the round's own turns, so a forked thread's copied window counts for
  * nothing, and from the thread's session, for its name and agent.
  */
 const roundEndMessage = Effect.fn("Threads.roundEndMessage")(function* (round: RoundRow) {
@@ -1450,7 +1584,7 @@ const roundEndMessage = Effect.fn("Threads.roundEndMessage")(function* (round: R
   const sessionId = SessionId.make(round.session_id)
   const detail = yield* ctx.Session.getDetail(sessionId)
   const branch = detail.branches.find((current) => current.branch.id === round.branch_id)
-  const messages = startTurnMessages(branch?.messages ?? [], MessageId.make(round.message_id))
+  const messages = roundMessages(branch?.messages ?? [], round)
   const tools = turnToolLines(messages)
   const name = Option.fromUndefinedOr(detail.session.name)
   const agentName = Option.fromUndefinedOr(detail.session.admission?.agent)
@@ -1540,11 +1674,11 @@ interface TurnOutcome {
 const endRound = Effect.fn("Threads.endRound")(function* (round: RoundRow, outcome: TurnOutcome) {
   const rounds = yield* ThreadRounds
   // A closed round holds no lane and waits in no queue.
-  yield* cancelLane(round.round)
-  const text = latestAssistantText(
-    startTurnMessages(yield* branchMessages(round), MessageId.make(round.message_id)),
-  )
+  yield* cancelLane(MessageId.make(round.turn_message_id))
+  const text = latestAssistantText(roundMessages(yield* branchMessages(round), round))
   const failed = outcome.interrupted || outcome.streamFailed || outcome.unanswered
+  // A round that waited keeps the bill of the turns it ran before.
+  const stored = Option.flatMap(Option.fromNullishOr(round.usage_json), decodeUsage)
   yield* rounds.endRound(round.round, {
     ...outcome,
     text,
@@ -1552,21 +1686,191 @@ const endRound = Effect.fn("Threads.endRound")(function* (round: RoundRow, outco
       Option.filter(outcome.error, () => failed),
       (error) => oneLine(error, maximumErrorChars),
     ),
+    usage: addUsage(stored, outcome.usage),
     endedAt: yield* Clock.currentTimeMillis,
   })
+  // A round that waited may still hold its wake record: the end needs none.
+  if (round.waits > 0) yield* cancelRoundWait(round)
   const ended = yield* rounds.round(round.round)
   if (Option.isNone(ended) || Predicate.isNotNull(ended.value.delivered_at)) return
   yield* deliverRoundEnd(ended.value)
 })
 
-/** The thread's own turn receipt: the round it opened, or one joined into it, ends here. */
+/** Two bills as one; none only when both are none. */
+const addUsage = (
+  left: Option.Option<typeof ChildUsage.Type>,
+  right: Option.Option<typeof ChildUsage.Type>,
+): Option.Option<typeof ChildUsage.Type> => {
+  if (Option.isNone(left)) return right
+  if (Option.isNone(right)) return left
+  const sum = (key: "cacheRead" | "cacheWrite" | "costUsd") => {
+    const first = left.value[key]
+    const second = right.value[key]
+    if (Predicate.isUndefined(first)) return second
+    if (Predicate.isUndefined(second)) return first
+    return first + second
+  }
+  return Option.some({
+    input: left.value.input + right.value.input,
+    output: left.value.output + right.value.output,
+    ...omitUndefined({
+      cacheRead: sum("cacheRead"),
+      cacheWrite: sum("cacheWrite"),
+      costUsd: sum("costUsd"),
+    }),
+  })
+}
+
+/**
+ * Why a round that a usage limit stopped (a turn that failed with `retry`,
+ * or a lane refused for good) waits for `retry.at` instead of ending: the
+ * user turned on `wake.autoResume` (wake.ts) in their own config, as for a
+ * session's resume, since a rerun spends their money; the round's end
+ * reaches a model or a user (`notify` is not `none`: a machine waits for an
+ * ended round itself, and may move to another model); no stop closed it;
+ * the reset is at most `MAXIMUM_WAKE_DELAY_MS` away; and the round waited
+ * fewer than `maxResumes` times. Otherwise none, and the round ends.
+ */
+const planWait = Effect.fn("Threads.planWait")(function* (round: RoundRow, outcome: TurnOutcome) {
+  if (outcome.interrupted || round.notify === "none") return Option.none<TurnRetry>()
+  if (Predicate.isNotNull(round.stopped_at)) return Option.none<TurnRetry>()
+  if (Option.isNone(outcome.retry)) return Option.none<TurnRetry>()
+  const retry = outcome.retry.value
+  if (retry.at - (yield* Clock.currentTimeMillis) > MAXIMUM_WAKE_DELAY_MS) {
+    return Option.none<TurnRetry>()
+  }
+  const config = yield* readAutoResume()
+  if (Option.isNone(config) || round.waits >= config.value.maxResumes) {
+    return Option.none<TurnRetry>()
+  }
+  return Option.some(retry)
+})
+
+/**
+ * Arms the wake record that ends the round's wait, `RESUME_MARGIN_MS` after
+ * `retry_at`, as a session's resume is due. It fires on the starter's
+ * current place, the side that sends a round's turn, as its reconcile does:
+ * a hook on the thread's own branch cannot open a turn there. The record is
+ * durable, so a restart fires it, late or not; a repeat writes the same
+ * record.
+ */
+const armRoundWait = Effect.fn("Threads.armRoundWait")(function* (round: RoundRow) {
+  const ctx = yield* ExtensionContext
+  if (Predicate.isNull(round.retry_at)) return
+  yield* ctx.Session.wakeAt({
+    sourceId: roundWaitSource(round.round),
+    at: round.retry_at + RESUME_MARGIN_MS,
+    ...(yield* starterPlace(round)),
+  })
+})
+
+/**
+ * Drops the round's wake record, when one is left. A record the starter's
+ * handoff left on its earlier place stays, and its fire finds the round
+ * settled (`roundWaitDue`).
+ */
+const cancelRoundWait = Effect.fn("Threads.cancelRoundWait")(function* (round: RoundRow) {
+  const ctx = yield* ExtensionContext
+  yield* ctx.Session.cancelWake({
+    sourceId: roundWaitSource(round.round),
+    ...(yield* starterPlace(round)),
+  })
+})
+
+/**
+ * Ends the round with its turn's outcome, or, when a usage limit stopped it
+ * and the round may wait (`planWait`), holds it open until the reset. A
+ * waiting round keeps its error and its bill so far, frees its lane, and
+ * arms its wake record (`roundWaitDue`); it is `waiting` to its starter and
+ * wakes nobody. A turn that reached the branch is followed by a new one, so
+ * its receipt and its successor's stay apart. Of two writers for one stopped
+ * turn (the hook and a reconcile) one waits; the other changes nothing.
+ */
+const waitOrEnd = Effect.fn("Threads.waitOrEnd")(function* (round: RoundRow, outcome: TurnOutcome) {
+  const ctx = yield* ExtensionContext
+  const rounds = yield* ThreadRounds
+  const retry = yield* planWait(round, outcome)
+  if (Option.isNone(retry)) return yield* endRound(round, outcome)
+  const ran = yield* admitted(round)
+  let nextTurn = round.turn_message_id
+  let usage = Option.flatMap(Option.fromNullishOr(round.usage_json), decodeUsage)
+  if (ran) {
+    nextTurn = resumedTurnId(round)
+    usage = addUsage(usage, outcome.usage)
+  }
+  const waited = yield* rounds.waitRound(round.round, {
+    turn: round.turn_message_id,
+    nextTurn,
+    retry: retry.value,
+    error: Option.map(outcome.error, (error) => oneLine(error, maximumErrorChars)),
+    usage,
+  })
+  const current = yield* rounds.round(round.round)
+  if (Option.isNone(current)) return
+  if (!waited) {
+    // Another writer settled this turn first: it waits, it moved on, or it ended.
+    if (isWaiting(current.value) || current.value.turn_message_id !== round.turn_message_id) return
+    return yield* endRound(current.value, outcome)
+  }
+  yield* cancelLane(MessageId.make(round.turn_message_id))
+  yield* armRoundWait(current.value)
+  yield* Effect.logInfo("threads.round.waiting").pipe(
+    Effect.annotateLogs({
+      round: round.round,
+      retryAt: retry.value.at,
+      waits: current.value.waits,
+    }),
+  )
+  yield* ctx.State.changed().pipe(Effect.ignore)
+})
+
+/**
+ * The `wakeDue` hook: a round's wait ended (`armRoundWait`), on its
+ * starter's place. A round that ended, was stopped or is gone needs nothing. Its turn
+ * then runs on the account placement picks now: a turn that reached the
+ * branch (a fire after a crash) runs on; any other asks for its lane again.
+ * A round its lane queues keeps the record until a start, so a restart that
+ * loses the queue asks again; a refusal waits again or ends the round. A
+ * fire past due, after a restart, runs the round as well: its starter waits
+ * for its end.
+ */
+const roundWaitDue = Effect.fn("Threads.roundWaitDue")(function* (input: WakeDueInput) {
+  const ctx = yield* ExtensionContext
+  const rounds = yield* ThreadRounds
+  const done = WakeNext.cases.Done.make({})
+  if (!input.sourceId.startsWith(ROUND_WAIT_SOURCE)) return done
+  const found = Option.filter(
+    yield* rounds.round(input.sourceId.slice(ROUND_WAIT_SOURCE.length)),
+    (round) => Predicate.isNull(round.ended_at) && Predicate.isNull(round.stopped_at),
+  )
+  if (Option.isNone(found)) return done
+  const round = found.value
+  if (Predicate.isNotNull(round.retry_at)) {
+    const due = round.retry_at + RESUME_MARGIN_MS
+    if (due > (yield* Clock.currentTimeMillis)) return WakeNext.cases.At.make({ at: due })
+    yield* rounds.resumeRound(round.round)
+  }
+  const resumed = Option.getOrElse(yield* rounds.round(round.round), () => round)
+  if (Predicate.isNotNull(resumed.ended_at) || (yield* admitted(resumed))) return done
+  const session = yield* ctx.Session.getSession(SessionId.make(resumed.session_id))
+  if (Predicate.isUndefined(session)) {
+    yield* dropSessionRounds(SessionId.make(resumed.session_id))
+    return done
+  }
+  yield* ctx.State.changed().pipe(Effect.ignore)
+  const queued = yield* admitClaimedRound(resumed, session)
+  if (Option.isSome(queued)) return WakeNext.cases.AtStart.make({})
+  return done
+})
+
+/** The thread's own turn receipt: the round it runs, or one joined into it, ends or waits here. */
 const onRoundTurnAfter = Effect.fn("Threads.turnAfter")(function* (input: TurnAfterInput) {
   const rounds = yield* ThreadRounds
   const round = Option.filter(
     yield* rounds.openRoundAt(input),
     (open) =>
-      open.message_id === input.messageId ||
-      input.joinedMessageIds.has(MessageId.make(open.message_id)),
+      open.turn_message_id === input.messageId ||
+      input.joinedMessageIds.has(MessageId.make(open.turn_message_id)),
   )
   if (Option.isNone(round)) return
   const failed = input.interrupted || input.streamFailed || input.unanswered
@@ -1574,7 +1878,7 @@ const onRoundTurnAfter = Effect.fn("Threads.turnAfter")(function* (input: TurnAf
   // thread's events; a round that completed has none to read.
   let error = Option.none<string>()
   if (failed) error = Option.flatMap(yield* turnEnd(input), (end) => end.error)
-  yield* endRound(round.value, {
+  yield* waitOrEnd(round.value, {
     interrupted: input.interrupted,
     streamFailed: input.streamFailed,
     unanswered: input.unanswered,
@@ -1601,12 +1905,12 @@ const stoppedOutcome: TurnOutcome = {
   usage: Option.none(),
 }
 
-/** The round's turn as its receipt in the thread's history records it, once the turn ended. */
+/** The round's current turn as its receipt in the thread's history records it, once the turn ended. */
 const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: RoundRow) {
   const end = yield* turnEnd({
     sessionId: SessionId.make(round.session_id),
     branchId: BranchId.make(round.branch_id),
-    messageId: MessageId.make(round.message_id),
+    messageId: MessageId.make(round.turn_message_id),
   })
   // The hook's `retry` is held in memory: a turn whose receipt came before
   // the hook ran reads it from the error the turn ended on.
@@ -1625,15 +1929,17 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
 /**
  * The windows refused a round's lane for good: its accounts carry no run
  * of its size before `retryAt`, or the owner's Sabbath holds it until its
- * end. The round ends as a turn failed at a usage limit, with no turn run,
- * its cause the refusal's: a `starter` round wakes its starter with the
- * refusal, and a machine waits for the reset as for a worker that died there.
+ * end. The round is settled as a turn failed at a usage limit, with no turn
+ * run, its cause the refusal's (`waitOrEnd`): it waits for `retryAt` and asks
+ * for its lane again then; past its waits, a `starter` round wakes its starter
+ * with the refusal, and a machine waits for the reset as for a worker that
+ * died there.
  */
 const refuseRound = Effect.fn("Threads.refuseRound")(function* (
   round: RoundRow,
   refusal: LaneUnavailable,
 ) {
-  yield* endRound(round, {
+  yield* waitOrEnd(round, {
     interrupted: false,
     streamFailed: true,
     unanswered: false,
@@ -1681,7 +1987,7 @@ const awaitRoundLane = Effect.fn("Threads.awaitRoundLane")(function* (
 ) {
   const ctx = yield* ExtensionContext
   const rounds = yield* ThreadRounds
-  const message = roundMessageId(round.round)
+  const message = MessageId.make(round.turn_message_id)
   let granted = yield* Effect.result(ctx.Accounts.awaitLane(message))
   for (;;) {
     // Read after any withdrawal that took the round out of its queue settled.
@@ -1689,10 +1995,10 @@ const awaitRoundLane = Effect.fn("Threads.awaitRoundLane")(function* (
       yield* Semaphore.withPermit(rounds.withdrawals, rounds.round(round.round)),
       (found) => Predicate.isNull(found.ended_at) && Predicate.isNull(found.stopped_at),
     )
-    if (Option.isNone(open)) return yield* cancelLane(round.round)
+    if (Option.isNone(open)) return yield* cancelLane(message)
     if (Result.isFailure(granted)) return yield* refuseRound(open.value, granted.failure)
     if (granted.success) return yield* startQueuedRound(open.value)
-    const again = yield* Effect.result(admitLane(round.round, lane))
+    const again = yield* Effect.result(admitLane(message, lane))
     if (Result.isFailure(again)) return yield* refuseRound(open.value, again.failure)
     if (again.success._tag === "Admitted") {
       // Take the grant before the send; a run with no lane read has none to take.
@@ -1742,7 +2048,9 @@ const startRound = Effect.fn("Threads.startRound")(function* (
     // A Sabbath that started since the admission refuses it: the claimed
     // round ends with the refusal, as one refused at admission would.
     const ctx = yield* ExtensionContext
-    const taken = yield* Effect.result(ctx.Accounts.awaitLane(roundMessageId(round.round)))
+    const taken = yield* Effect.result(
+      ctx.Accounts.awaitLane(MessageId.make(round.turn_message_id)),
+    )
     if (Result.isFailure(taken)) {
       yield* refuseRound(round, taken.failure)
       return Option.none<number>()
@@ -1763,7 +2071,7 @@ const admitClaimedRound = Effect.fn("Threads.admitClaimedRound")(function* (
   round: RoundRow,
   lane: RoundLane,
 ) {
-  const answer = yield* Effect.result(admitLane(round.round, lane))
+  const answer = yield* Effect.result(admitLane(MessageId.make(round.turn_message_id), lane))
   if (Result.isFailure(answer)) {
     yield* refuseRound(round, answer.failure)
     return Option.none<number>()
@@ -1775,7 +2083,7 @@ const admitClaimedRound = Effect.fn("Threads.admitClaimedRound")(function* (
 const dropSessionRounds = Effect.fn("Threads.dropSessionRounds")(function* (sessionId: SessionId) {
   const rounds = yield* ThreadRounds
   const open = yield* rounds.removeSession(sessionId)
-  yield* Effect.forEach(open, cancelLane, { discard: true })
+  yield* Effect.forEach(open, (turn) => cancelLane(MessageId.make(turn)), { discard: true })
 })
 
 // ── reconcile ───────────────────────────────────────────────────────────────
@@ -1799,7 +2107,9 @@ const randomNonce = Effect.gen(function* () {
  * sent is admitted now, though the thread's loop is open and idle. The
  * turn's own hook ends the round. A round whose thread session was deleted
  * while no process ran (so no delete hook dropped it) goes, as the hook
- * would have dropped it: it wakes nobody.
+ * would have dropped it: it wakes nobody. A round that waits for a usage
+ * limit's reset (`waitOrEnd`) keeps waiting: the starter side arms its
+ * alarm again, a repeat of the same alarm.
  */
 const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
   round: RoundRow,
@@ -1810,8 +2120,13 @@ const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
   const session = yield* ctx.Session.getSession(sessionId)
   if (Predicate.isUndefined(session)) return yield* dropSessionRounds(sessionId)
   if (Predicate.isNotNull(round.ended_at)) return yield* deliverRoundEnd(round)
+  if (isWaiting(round)) {
+    // Its turn is settled and its alarm stored: the starter side arms it again.
+    if (starterSide) yield* armRoundWait(round)
+    return
+  }
   const recorded = yield* recordedOutcome(round)
-  if (Option.isSome(recorded)) return yield* endRound(round, recorded.value)
+  if (Option.isSome(recorded)) return yield* waitOrEnd(round, recorded.value)
   if (Predicate.isNotNull(round.stopped_at)) {
     // A stop that died before it closed the round. A round whose turn never
     // reached the branch has no turn to end it. One whose turn did ends when
@@ -2321,10 +2636,10 @@ type RoundLane = Pick<StoredSession, "cwd" | "admission" | "modelId">
  * fair queue, or refuses it as spent. The lane is held under the round's
  * message until its turn opens.
  */
-const admitLane = Effect.fn("Threads.admitLane")(function* (roundId: string, lane: RoundLane) {
+const admitLane = Effect.fn("Threads.admitLane")(function* (message: MessageId, lane: RoundLane) {
   const ctx = yield* ExtensionContext
   return yield* ctx.Accounts.admit({
-    message: roundMessageId(roundId),
+    message,
     cwd: lane.cwd ?? ctx.cwd,
     ...omitUndefined({ admission: lane.admission, modelId: lane.modelId }),
   })
@@ -2353,7 +2668,7 @@ const withdrawQueued = Effect.fn("Threads.withdrawQueued")(function* (roundId: s
       if (Option.isNone(open)) return Option.none<RoundRow>()
       const at = yield* Clock.currentTimeMillis
       yield* rounds.markStopped(roundId, at)
-      if (yield* ctx.Accounts.withdraw(roundMessageId(roundId))) return open
+      if (yield* ctx.Accounts.withdraw(MessageId.make(open.value.turn_message_id))) return open
       yield* rounds.unmarkStopped(roundId, at)
       return Option.none<RoundRow>()
     }),
@@ -2365,9 +2680,9 @@ const withdrawQueued = Effect.fn("Threads.withdrawQueued")(function* (roundId: s
 })
 
 /** The round will not run: the lane its admission took frees now, not when its hold lapses. */
-const cancelLane = Effect.fn("Threads.cancelLane")(function* (roundId: string) {
+const cancelLane = Effect.fn("Threads.cancelLane")(function* (message: MessageId) {
   const ctx = yield* ExtensionContext
-  yield* ctx.Accounts.cancel(roundMessageId(roundId))
+  yield* ctx.Accounts.cancel(message)
 })
 
 interface RoundRequest {
@@ -2421,17 +2736,18 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
           admission: Option.none<LaneAdmission>(),
         }
       }
-      const answer = yield* admitLane(roundId, lane)
+      const message = roundMessageId(roundId)
+      const answer = yield* admitLane(message, lane)
       // Past the lane, a failed create or a claim that refuses (a busy
       // thread) runs no round: the lane it took frees with it.
-      const input = yield* request.pipe(Effect.tapError(() => cancelLane(roundId)))
+      const input = yield* request.pipe(Effect.tapError(() => cancelLane(message)))
       const claimed = yield* rounds
         .claimRound({
           round: roundId,
           thread: input.thread,
           starter,
           place: input.place,
-          messageId: roundMessageId(roundId),
+          messageId: message,
           content: (number) =>
             threadRoundText({
               number,
@@ -2448,9 +2764,9 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
         .pipe(
           Effect.tap((claimed) => {
             if (claimed._tag === "Ready") return Effect.void
-            return cancelLane(roundId)
+            return cancelLane(message)
           }),
-          Effect.tapError(() => cancelLane(roundId)),
+          Effect.tapError(() => cancelLane(message)),
         )
       return { claim: claimed, admission: Option.some(answer) }
     }),
@@ -2464,7 +2780,10 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
   }
   const round = claim.round
   let queued = Option.none<number>()
-  if (claim.fresh || (Predicate.isNull(round.ended_at) && !(yield* admitted(round)))) {
+  if (
+    claim.fresh ||
+    (Predicate.isNull(round.ended_at) && !isWaiting(round) && !(yield* admitted(round)))
+  ) {
     queued = yield* Option.match(admission, {
       onSome: (answer) => startRound(round, answer, lane),
       onNone: () => admitClaimedRound(round, lane),
@@ -2624,7 +2943,7 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
           rounds.admissions,
           Effect.gen(function* () {
             if (Option.isSome(yield* rounds.round(roundId))) return false
-            yield* admitLane(roundId, lane(cwd))
+            yield* admitLane(roundMessageId(roundId), lane(cwd))
             return true
           }),
         )
@@ -2647,7 +2966,7 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
             Effect.tapError(() =>
               Effect.flatMap(Ref.get(admitted), (took) => {
                 if (!took) return Effect.void
-                return cancelLane(roundId)
+                return cancelLane(roundMessageId(roundId))
               }),
             ),
           ),
@@ -2798,7 +3117,8 @@ const sendToThread = Effect.fn("Threads.send")(function* (input: ThreadSendInput
 })
 
 /**
- * One round as its sender reads it: open, or ended with the thread's final
+ * One round as its sender reads it: open, waiting for a usage limit's reset,
+ * or ended with the thread's final
  * text, the last `thread.reply` value (null when the round asked for none or
  * got none), how the turn ended, and its bill. Flat, so a cell reads it as
  * one typed shape.
@@ -2809,7 +3129,8 @@ const RoundView = Schema.Struct({
   number: Schema.Finite,
   /** Who hears its end. */
   notify: RoundNotify,
-  status: Schema.Literals(["open", "ended"]),
+  /** `waiting`: a usage limit stopped it, and it runs again after `retryAt` (`waitOrEnd`). */
+  status: Schema.Literals(["open", "waiting", "ended"]),
   text: Schema.String,
   reply: Schema.NullOr(Schema.Json),
   replyAsked: Schema.Boolean,
@@ -2819,7 +3140,10 @@ const RoundView = Schema.Struct({
   /** A thread.stop, or the starter's interrupt, closed the round. */
   stopped: Schema.Boolean,
   error: Schema.optionalKey(Schema.String),
-  /** When a round that could not run may run again, in epoch milliseconds. */
+  /**
+   * When a round that could not run may run again, in epoch milliseconds: a
+   * `waiting` round runs again `RESUME_MARGIN_MS` after it.
+   */
   retryAt: Schema.optionalKey(Schema.Finite),
   /** The owner's Sabbath held it until `retryAt`; absent for a usage limit. */
   sabbath: Schema.optionalKey(Schema.Boolean),
@@ -2828,8 +3152,9 @@ const RoundView = Schema.Struct({
 type RoundView = typeof RoundView.Type
 
 const roundStatus = (round: RoundRow): RoundView["status"] => {
-  if (Predicate.isNull(round.ended_at)) return "open"
-  return "ended"
+  if (Predicate.isNotNull(round.ended_at)) return "ended"
+  if (isWaiting(round)) return "waiting"
+  return "open"
 }
 
 const roundView = (round: RoundRow): RoundView => ({
@@ -2850,7 +3175,10 @@ const roundView = (round: RoundRow): RoundView => ({
     retryAt: Option.getOrUndefined(Option.fromNullishOr(round.retry_at)),
     sabbath: Option.getOrUndefined(
       Option.as(
-        Option.filter(Option.fromNullishOr(round.retry_cause), (cause) => cause === "sabbath"),
+        Option.filter(
+          Option.fromNullishOr(round.retry_cause),
+          (cause) => cause === "sabbath" && Predicate.isNotNull(round.retry_at),
+        ),
         true,
       ),
     ),
@@ -2942,7 +3270,7 @@ const stopRoundTurn = Effect.fn("Threads.stopRoundTurn")(function* (
   return yield* ctx.Session.stopMessage({
     sessionId: SessionId.make(round.session_id),
     branchId: BranchId.make(round.branch_id),
-    messageId: MessageId.make(round.message_id),
+    messageId: MessageId.make(round.turn_message_id),
     requestId,
   })
 })
@@ -3025,7 +3353,12 @@ const makeThreads = (rounds: ThreadRoundsService) => {
     laneQueued: (round: string) =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
-        return yield* ctx.Accounts.waiting(roundMessageId(round))
+        // The lane is asked under the round's current turn: a waited round's is a resumed one.
+        const turn = Option.match(yield* rounds.round(round), {
+          onNone: () => roundMessageId(round),
+          onSome: (found) => MessageId.make(found.turn_message_id),
+        })
+        return yield* ctx.Accounts.waiting(turn)
       }),
     /** Takes a round still in its lane queue out of it and closes it unrun (`withdrawQueued`). */
     withdrawQueued: (round: string) => withdrawQueued(round).pipe(withRounds),
@@ -3060,7 +3393,9 @@ const makeThreads = (rounds: ThreadRoundsService) => {
      * under `key` on another model gives the lane up and is admitted afresh.
      */
     admitSend: (key: string, lane: RoundLane) =>
-      Effect.flatMap(roundIdOf("thread.send", key), (round) => admitLane(round, lane)),
+      Effect.flatMap(roundIdOf("thread.send", key), (round) =>
+        admitLane(roundMessageId(round), lane),
+      ),
     /**
      * A thread's latest round, open or ended, or with `ended` its latest
      * ended one; none for a thread that took no round. By the thread's key
@@ -3149,7 +3484,7 @@ const ThreadRoundTool = tool({
   id: "thread.round",
   resources: [ThreadsResource],
   description:
-    "Read one round you sent: open, or ended with the thread's text, its reply, how the turn ended, and its usage and cost.",
+    "Read one round you sent: open; waiting, when a usage limit stopped it, until it runs again after retryAt; or ended with the thread's text, its reply, how the turn ended, and its usage and cost.",
   promptSnippet: "Read a thread round's result",
   readonly: true,
   params: Schema.Struct({
@@ -3221,9 +3556,12 @@ const ThreadRow = Schema.Struct({
   sessions: Schema.Finite,
   /** The session a round to the thread goes to. */
   current: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
-  status: Schema.Literals(["running", "idle"]),
-  /** The round the thread runs now, if any. */
-  openRound: Schema.optionalKey(RoundHandle),
+  /** `waiting`: no loop works, and its open round waits for a usage limit's reset. */
+  status: Schema.Literals(["running", "waiting", "idle"]),
+  /** The round the thread runs now, if any; `retryAt` when it waits, as `thread.round` reads it. */
+  openRound: Schema.optionalKey(
+    Schema.Struct({ ...RoundHandle.fields, retryAt: Schema.optionalKey(Schema.Finite) }),
+  ),
   /** The thread's latest ended round: how its turn ended, and whether a stop closed it. */
   lastRound: Schema.optionalKey(
     Schema.Struct({
@@ -3247,9 +3585,13 @@ const ThreadRow = Schema.Struct({
   placement: Schema.optionalKey(SessionAccount.fields.placement),
 })
 
-/** A thread runs while any of its sessions' loops works. */
-const threadStatus = (entry: StartedThread): "running" | "idle" => {
+/** A thread runs while any of its sessions' loops works, and waits while its open round does. */
+const threadStatus = (
+  entry: StartedThread,
+  open: Option.Option<RoundRow>,
+): (typeof ThreadRow.Type)["status"] => {
   if (entry.working.length > 0) return "running"
+  if (Option.exists(open, isWaiting)) return "waiting"
   return "idle"
 }
 
@@ -3267,7 +3609,7 @@ const ThreadListTool = tool({
   id: "thread.list",
   resources: [ThreadsResource],
   description:
-    "List the threads this thread started, from any of its sessions: each one's status, its open round, its last ended round and how it ended, its current session, the account it runs on, and its latest reply. A snapshot; do not call it in a loop to wait for a thread.",
+    "List the threads this thread started, from any of its sessions: each one's status (running, waiting for a usage limit's reset, or idle), its open round and when a waiting one runs again, its last ended round and how it ended, its current session, the account it runs on, and its latest reply. A snapshot; do not call it in a loop to wait for a thread.",
   params: ThreadListParams,
   output: Schema.Array(ThreadRow),
   execute: Effect.fn("ThreadListTool.execute")(function* (params: typeof ThreadListParams.Type) {
@@ -3304,14 +3646,22 @@ const ThreadListTool = tool({
           name: current.name ?? "",
           sessions: entry.sessions.length,
           current: { sessionId: current.id, branchId },
-          status: threadStatus(entry),
+          status: threadStatus(entry, open),
           preview,
           ...omitUndefined({
             agent: current.admission?.agent,
             account: Option.getOrUndefined(Option.map(account, (found) => found.slot)),
             placement: Option.getOrUndefined(Option.map(account, (found) => found.placement)),
             openRound: Option.getOrUndefined(
-              Option.map(open, (round) => ({ round: round.round, number: round.number })),
+              Option.map(open, (round) => ({
+                round: round.round,
+                number: round.number,
+                ...omitUndefined({
+                  retryAt: Option.getOrUndefined(
+                    Option.filter(Option.fromNullishOr(round.retry_at), () => isWaiting(round)),
+                  ),
+                }),
+              })),
             ),
             lastRound: Option.getOrUndefined(
               Option.map(last, (round) => ({
@@ -3428,4 +3778,15 @@ export const registerThreads = (host: ExtensionHostService) =>
       ),
     )
     yield* host.on("sessionDeleted", ({ sessionId }) => removeSessionRounds(sessionId))
+    // A round that waits for a usage limit's reset runs again when its wake record fires.
+    // A failure keeps the record, which fires again after a backoff.
+    yield* host.on("wakeDue", (input) =>
+      roundWaitDue(input).pipe(
+        Effect.tapCause((cause) =>
+          Effect.logWarning("threads.round-wait.failed").pipe(
+            Effect.annotateLogs({ sourceId: input.sourceId, cause: Cause.pretty(cause) }),
+          ),
+        ),
+      ),
+    )
   })

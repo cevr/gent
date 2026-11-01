@@ -251,6 +251,7 @@ const plantRound = (sql: Sql, row: PlantedRound) =>
               session_id: row.session.sessionId,
               branch_id: row.session.branchId,
               message_id: `thread-round:${row.round}`,
+              turn_message_id: `thread-round:${row.round}`,
               content: row.content,
               notify: row.notify ?? "starter",
               started_at: row.startedAt,

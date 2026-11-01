@@ -39,7 +39,8 @@
     refuses as spent (`LaneUnavailable`, at start or send) or whose worker
     died at a usage limit (the round's `retryAt`,
     stored in `thread_rounds.retry_at` and read from the turn's
-    `ErrorOccurred` when a reconcile records the end) waits: the run commits
+    `ErrorOccurred` when a reconcile records the end; a `none` round ends
+    there, where a `starter` round waits on its own row: threads.md) waits: the run commits
     a `Waiting` step (`lane` or `quota`) and `Round.notBefore`, its driver
     drops its hold, re-arms the run's record at that time
     on each activation, and sleeps. At the time it sends the same round; a

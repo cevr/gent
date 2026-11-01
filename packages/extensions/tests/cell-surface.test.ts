@@ -1922,6 +1922,7 @@ const plantUnsentRound = Effect.fn("test.plantUnsentRound")(function* (input: {
     session_id: input.thread.sessionId,
     branch_id: input.thread.branchId,
     message_id: `thread-round:${round}`,
+    turn_message_id: `thread-round:${round}`,
     content: threadRoundText({
       number: 1,
       starter: input.starter.sessionId,
@@ -2700,8 +2701,8 @@ const sharedUnion = Array.from({ length: 22 }).reduce<Schema.Codec<unknown>>(
     Schema.Union([below, Schema.Array(below)]).annotate({ identifier: `Level${index + 1}` }),
   Schema.Union([Schema.Boolean, Schema.Null]).annotate({ identifier: "Level0" }),
 )
-// Anonymous unions nested with no definition to share.
-const nestedUnion = Array.from({ length: 16 }).reduce<Schema.Codec<unknown>>(
+// Anonymous unions nested with no definition to share, deep enough to pass the bound.
+const nestedUnion = Array.from({ length: 18 }).reduce<Schema.Codec<unknown>>(
   (below) => Schema.Union([Schema.Boolean, Schema.Null, Schema.Array(below)]),
   Schema.Union([Schema.Boolean, Schema.Null]),
 )

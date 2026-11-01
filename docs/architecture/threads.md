@@ -161,8 +161,9 @@
     branch's mark. A round whose thread session was deleted while no process
     ran is dropped, as the delete hook would have.
   - `thread.round({ round })` reads a round the caller's thread sent: open,
-    or ended with its text, reply (null when none was given), flags and
-    usage. `thread.reply({ value })` keeps a JSON value on the open round of
+    `waiting` for a usage limit's reset (with its `retryAt` and the error it
+    stopped on; below), or ended with its text, reply (null when none was
+    given), flags and usage. `thread.reply({ value })` keeps a JSON value on the open round of
     the caller's branch when the round asked for one; the last call wins, and
     no schema validates it. It is offered to every agent at all times and
     refuses a call when no open round there asked for a value: a tool list
@@ -230,9 +231,9 @@
     a slow send. A round's end of any kind (a stop, the starter's
     interrupt, a delete) frees its lane or takes it out of the queue
     (`endRound`, `dropSessionRounds`). A waiter refused for good (its
-    windows became spent while it waited) ends its round as a turn that
-    failed at a usage limit, with the refusal as its error and the reset as
-    its `retryAt`, and that end wakes a `starter` round's starter. A thread
+    windows became spent while it waited) is a round a usage limit stopped,
+    with the refusal as its error and the reset as its `retryAt`: it waits
+    for the reset or ends (below). A thread
     whose follow-up queue filled while its round waited refuses the turn at
     the grant: the round ends unanswered, with the full queue as its error,
     its end reaches whoever hears it and its lane frees (`startQueuedRound`).
@@ -263,6 +264,36 @@
     `delegate` or `worker` thread is denied `thread.start`. The `#
     Sessions` prompt section shows its `thread.*` lines only to an agent that
     may call `thread.start`.
+  - A spent pool does not end a round. A round a usage limit stopped (its
+    turn failed with a `retry`, or its lane refused it for good with a
+    `retryAt`, the Sabbath's refusal included) waits for the reset instead
+    (`waitOrEnd`, `planWait`) when the user's own config turns on
+    `wake.autoResume` (wake.ts; a rerun spends their money, as a session's
+    resume does), its `notify` is not `none` (a machine reads an ended round
+    and picks its own next move), no stop closed it, the reset is at most
+    24 hours away (`MAXIMUM_WAKE_DELAY_MS`), and the round waited fewer than
+    `maxResumes` times (the `waits` column). Otherwise it ends failed with
+    its `retryAt`, as before, and that end wakes a `starter` round's
+    starter. A waiting round is open, unstopped, with `retry_at` set: it
+    keeps its error and its bill so far, frees its lane, and wakes nobody;
+    `thread.round` reads it as `waiting` with its `retryAt`, and
+    `thread.list` shows its thread `waiting` (when no loop of it works) with
+    the time on its `openRound`. Its wake record (`Session.wakeAt`, source
+    `thread-round-wait:<round>`) is due `RESUME_MARGIN_MS` (30 s) after the
+    reset and lives on the starter's current place: core refuses a `turn`
+    delivery to a hook's own branch, and the starter side sends a round's
+    turns. Its fire (`roundWaitDue`) asks for the round's lane again, so the
+    turn runs on the account placement picks then; a turn that ran before
+    the wait is followed by a new one under a new key
+    (`<message>:resume-<n>`, the `turn_message_id` column, which also keys
+    the lane, the stop and the receipt), so the two receipts stay apart. A
+    stop or the starter's interrupt ends a waiting round at once, stopped:
+    the stop reaches its next turn's key, and its end drops the wake record.
+    The record is durable, and the starter's loop-open reconcile arms it
+    again (the same record), so a restart fires it, late or not, and a late
+    fire runs the round. The wait spans the round's `turnDuration`, and its
+    bill adds every turn it ran. A starter thread deleted while its round
+    waits takes the record with it: the round stays waiting until a stop.
 - Machines (`machines.ts`, `@gent/machines`) run state machines as data over threads: definitions, runs and steps, the driver, rounds and their role picks, asks, the orchestrate machine's states. They are in [machines.md](machines.md); read it when you change machines.
 
 ## Agent runs

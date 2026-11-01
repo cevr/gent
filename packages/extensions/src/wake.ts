@@ -180,7 +180,8 @@ export type WakeDetails = typeof WakeDetails.Type
  * line the session refuses is left as a notice the same way.
  */
 
-const MAXIMUM_WAKE_DELAY_MS = 24 * 60 * 60 * 1000
+/** The farthest an alarm, a resume or a thread round's wait (threads.ts) may lie ahead. */
+export const MAXIMUM_WAKE_DELAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_MONITOR_EVERY_SECONDS = 30
 const DEFAULT_MONITOR_TIMEOUT_SECONDS = 30 * 60
 const MINIMUM_MONITOR_EVERY_SECONDS = 0.1
@@ -432,7 +433,7 @@ export const nextDueAt = (dueAt: number, everySeconds: number, now: number): num
 // ── Auto-resume fire ──
 
 /** The resume is due this long after the limit resets: a margin for the provider's clock. */
-const RESUME_MARGIN_MS = 30_000
+export const RESUME_MARGIN_MS = 30_000
 /**
  * An alarm in `wake` mode this far past due when it fires (gent was not
  * running at its time, or the machine slept) starts no turn: no user may be
@@ -892,8 +893,9 @@ const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEn
  * `maxResumes` (default 3) caps the resumed turns the limit stops again in a
  * row; past it the turn leaves a notice instead. Only `~/.gent/config.json`
  * counts: a resume spends the user's money, and a project file cannot.
- * A spawned session stores none: its completion carries the error to its
- * parent, which resumes on the same account. A limit that resets more than
+ * A spawned session stores none: a thread's round that the limit stopped
+ * waits for the reset itself and runs again on the same switch and cap
+ * (threads.ts, `waitOrEnd`), and its starter sees it wait. A limit that resets more than
  * 24 hours away stores none either, and so does a turn on a branch whose
  * newest client message no user watches (`MessageMetadata.unattended`, a
  * headless run): nothing is stored, so no later fire or re-arm of the branch
@@ -918,8 +920,12 @@ const AutoResumeConfig = Schema.fromJsonString(
   }),
 )
 
-/** `wake.autoResume` from the user's own config: none when absent; a file that does not decode turns it off, with a warning. */
-const readAutoResume = Effect.fn("Wake.autoResumeConfig")(function* () {
+/**
+ * `wake.autoResume` from the user's own config: none when absent; a file that
+ * does not decode turns it off, with a warning. A thread round's wait at a
+ * usage limit reads the same switch and cap.
+ */
+export const readAutoResume = Effect.fn("Wake.autoResumeConfig")(function* () {
   const ctx = yield* ExtensionContext
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
