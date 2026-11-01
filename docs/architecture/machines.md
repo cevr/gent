@@ -127,7 +127,21 @@
     and moves by `on.green` or `on.red` (Integration gate in `shipped-extensions.md`).
   - A client reads runs as a session of the owner's thread:
     `MachinesRpc.Status` (`run-status`, `gent ctl status --run`) and
-    `MachinesRpc.Runs` (`run-list`). The TUI's lanes band
+    `MachinesRpc.Runs` (`run-list`), and stops one with `MachinesRpc.Stop`
+    (`run-stop`, the stop `machine.stop` asks). `Status` gives what
+    `machine.status` gives and the run's `trail`: one `StateVisit` per visit
+    of a state, oldest first, folded from the run's whole log
+    (`visitSteps`): its start and end, the thread and model of its newest
+    round, its rounds and their priced cost, whether the last round ended
+    with no verdict, its outcome (the verdict, the answer, a check's
+    `pass`/`fail`, a gate's `green`/`red`, or `exhausted`) and the state it
+    moved to. The model's tool leaves the trail out: its steps say the same.
+    The TUI agents pane lists the shell's thread's runs (each active one,
+    then the three newest ended) above its sessions; Enter opens a run's
+    page, one row per visit with its model, outcome, cost and age under the
+    run's totals, where Enter opens a visit's round thread and a double
+    Ctrl+X stops an active run (`agents.client.tsx`, the run page in
+    `threads.md`). The TUI's lanes band
     (`machines.client.tsx`, under the status line) shows the server's free
     lanes (`accounts.lanes`, the rows `gent ctl lanes --line` prints), then
     each active run as `<machine> <state> r<visits> <age>`, with

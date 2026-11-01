@@ -371,6 +371,22 @@
   start, interrupt and round end each send one), matched by
   `SESSION_TOOLS_EXTENSION_ID`. Round-end rows read the round-end message's
   details. Core publishes no `AgentRun*` events.
+- The open pane also lists the shell's thread's machine runs
+  (`MachinesRpc.Runs`, read with the listing and on its 2 s clock; the
+  closed pane's tray reads none) under a `Runs (n)` heading above the
+  sessions: each active run, then the three newest ended ones, as
+  `<glyph> <machine> · <state> #<visit>[ · <status>]` and its age. Enter on
+  a run opens its page in the pane's place: the title carries the run's
+  status, visits, rounds, priced cost and age, and one row per state visit
+  (`MachinesRpc.Status`'s `trail`, oldest first) shows its glyph, its
+  model, its outcome and the state it went to, its cost and its age, with
+  `›` on the visit the run is on. The page reads again on each listing
+  reply. Enter (or →) on a visit opens its round's thread by the listed row
+  of that thread (`thread` or a member id), as a session pick does; a
+  double Ctrl+X stops an active run (`MachinesRpc.Stop`, then the listing
+  and the page read again), and any other key disarms the first; Esc or ←
+  goes back to the list. Stop is on the page alone: a run row's Ctrl+X does
+  nothing, so a delete's double press never lands on a run.
 - `ListAgents` lists one row per thread: `buildRowTree` folds the sessions of
   one `sessionThread` key (a handoff chain) into one row with the newest
   session's ids, name and liveness, the most active session's status, the

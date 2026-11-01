@@ -58,6 +58,7 @@ export const keys = {
   "ctrl+t": "\x14",
   "ctrl+u": "\x15",
   "ctrl+w": "\x17",
+  "ctrl+x": "\x18",
   "ctrl+\\": "\x1c",
   "ctrl+backspace": "\x1b[127;5u",
   "ctrl+backspace-legacy": "\x08",

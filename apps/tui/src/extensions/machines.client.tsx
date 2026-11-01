@@ -10,8 +10,9 @@
  * when the connection comes back, and every 30 s.
  *
  * `gent ctl status --run <run>` reads one machine run (its state, status,
- * pending action and last steps) as a session of the owner's thread,
- * through `MachinesRpc.Status`, the view `machine.status` gives the model.
+ * pending action, last steps and every state visit) as a session of the
+ * owner's thread, through `MachinesRpc.Status`: the view `machine.status`
+ * gives the model, and the trail the agents pane's run page draws.
  */
 import { DateTime, Effect, Option, Predicate } from "effect"
 import { createEffect, createRoot, For, on, Show } from "solid-js"

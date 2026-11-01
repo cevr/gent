@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Option, Order, Predicate, Schedule } from "effect"
+import { DateTime, Effect, Option, Order, Predicate, Schedule, Schema } from "effect"
 import { createEffect, createRoot, createSignal, For, on, Show } from "solid-js"
 import {
-  type AgentRowEntry,
+  AgentRowEntry,
   AgentsViewRpc,
   BTW_EXTENSION_ID,
   type ListAgentsInput,
+  type MachineRunPage,
+  MachineRunView,
   MachinesRpc,
   type ModelQuality,
   SESSION_TOOLS_EXTENSION_ID,
@@ -370,6 +372,38 @@ interface AgentsController {
    * deletion clears it.
    */
   readonly done: () => ReadonlyArray<AgentRowEntry>
+  /** The machine runs the open pane lists, and the run page it shows. */
+  readonly runs: RunsController
+}
+
+/** The machine runs the open pane lists and the one run page it shows. */
+interface RunsController {
+  /** The shell's thread's runs: each active one, then the newest ended ones, under the pane's filter. */
+  readonly list: () => ReadonlyArray<MachineRunView>
+  /** The run whose page shows; none while the pane shows its list. */
+  readonly viewing: () => Option.Option<RunId>
+  /** The viewed run's page; none until its first read lands. */
+  readonly page: () => Option.Option<MachineRunPage>
+  /** Why the viewed run's last read failed. */
+  readonly error: () => Option.Option<string>
+  /** Show a run's page, or none to go back to the list. */
+  readonly view: (run: Option.Option<RunId>) => void
+  /** Stop a run, then read the listing, and with it the page, again. */
+  readonly stop: (run: RunId) => void
+}
+
+type RunId = MachineRunView["run"]
+
+/**
+ * What the pane reads of the `@gent/machines` extension, and the stop it
+ * asks: how each model fared in a round thread's state, the runs of the
+ * shell's thread, one run's page.
+ */
+interface MachineReads {
+  readonly quality: (key: RowKey) => Effect.Effect<ReadonlyArray<ModelQuality>>
+  readonly runs: (session: ActiveExtensionSession) => Effect.Effect<ReadonlyArray<MachineRunView>>
+  readonly page: (run: RunId) => Effect.Effect<MachineRunPage, { readonly message: string }>
+  readonly stop: (run: RunId) => Effect.Effect<void, { readonly message: string }>
 }
 
 /** The controller as its extension holds it: also what the status row reads. */
@@ -397,6 +431,8 @@ const progressStamp = (row: AgentRowEntry): string =>
 /** One listing reply and what it was asked: a filter, and the root unless it covers the workspace. */
 interface Listing {
   readonly rows: ReadonlyArray<AgentRowEntry>
+  /** The shell's thread's runs, newest first: the open pane's alone, the tray's read none. */
+  readonly runs: ReadonlyArray<MachineRunView>
   readonly query: string
   readonly root: Option.Option<string>
   readonly session: ActiveExtensionSession
@@ -407,16 +443,42 @@ interface Listing {
 /** The slow clock a child's own turns are read on; they raise no event in this session. */
 const POLL_EVERY = "2 seconds"
 
+const isActiveRun = (run: MachineRunView): boolean =>
+  run.status === "running" || run.status === "asking"
+
+/** Ended runs the list keeps under the active ones. */
+const RUN_HISTORY = 3
+
+/**
+ * The runs the list shows, from the server's newest first: each active run,
+ * then the newest ended ones. A filter keeps the runs whose machine or state
+ * holds it.
+ */
+const listedRuns = (
+  runs: ReadonlyArray<MachineRunView>,
+  query: string,
+): ReadonlyArray<MachineRunView> => {
+  const needle = query.trim().toLowerCase()
+  const matching = runs.filter((run) =>
+    `${run.machine} ${run.state}`.toLowerCase().includes(needle),
+  )
+  return [
+    ...matching.filter(isActiveRun),
+    ...matching.filter((run) => !isActiveRun(run)).slice(0, RUN_HISTORY),
+  ]
+}
+
 export const makeAgentsController = (
   fetchRows: (
     input: ListAgentsInput,
   ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
   fetchDetail: (key: RowKey) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
-  fetchQuality: (key: RowKey) => Effect.Effect<ReadonlyArray<ModelQuality>>,
+  machines: MachineReads,
 ): Effect.Effect<AgentsSource, never, ClientContext> =>
   Effect.gen(function* () {
     const { transport, shell, lifecycle, activity } = yield* ClientContext
     const empty: ReadonlyArray<AgentRowEntry> = []
+    const noRuns: ReadonlyArray<MachineRunView> = []
     // Returning to a session does not make its earlier activity current again.
     const [view, setView] = createSignal(0)
     // The filter the reader typed; a reload re-reads under it.
@@ -436,7 +498,7 @@ export const makeAgentsController = (
       Option.match(pointed, {
         onNone: () => Effect.void,
         onSome: (key) =>
-          fetchQuality(key).pipe(
+          machines.quality(key).pipe(
             Effect.map((next) => {
               if (Option.exists(pointed, (current) => sameKey(current, key))) setQuality(next)
             }),
@@ -459,6 +521,30 @@ export const makeAgentsController = (
               onSuccess: (next) => {
                 if (!Option.exists(selected, (current) => sameKey(current, key))) return
                 setDetail(Option.some(next))
+              },
+            }),
+          ),
+      }),
+    )
+
+    // The run whose page shows, and its last read. As with the detail, a
+    // reply writes only while its run is still the one viewed.
+    const [viewing, setViewing] = createSignal(Option.none<RunId>())
+    const [page, setPage] = createSignal(Option.none<MachineRunPage>())
+    const [pageError, setPageError] = createSignal(Option.none<string>())
+    const readPage = coalescedRead(shell.cast, () =>
+      Option.match(viewing(), {
+        onNone: () => Effect.void,
+        onSome: (run) =>
+          machines.page(run).pipe(
+            Effect.match({
+              onFailure: (error) => {
+                if (Option.contains(viewing(), run)) setPageError(Option.some(error.message))
+              },
+              onSuccess: (next) => {
+                if (!Option.contains(viewing(), run)) return
+                setPageError(Option.none())
+                setPage(Option.some(next))
               },
             }),
           ),
@@ -550,8 +636,13 @@ export const makeAgentsController = (
         onNone: () => ({ query: asked }),
         onSome: (sessionId) => ({ query: asked, root: sessionId }),
       })
-      return fetchRows(input).pipe(
-        Effect.flatMap((rows) => {
+      // The open pane lists the thread's machine runs beside its sessions.
+      const runs = Option.match(root, {
+        onNone: () => machines.runs(session),
+        onSome: () => Effect.succeed(noRuns),
+      })
+      return Effect.all([fetchRows(input), runs], { concurrency: 2 }).pipe(
+        Effect.flatMap(([rows, runs]) => {
           // A complete listing serves both views. Only a filtered pane needs
           // another read, on this same coalesced request and clock.
           const complete = () => {
@@ -564,6 +655,7 @@ export const makeAgentsController = (
           return complete().pipe(
             Effect.map((activityRows) => ({
               rows,
+              runs,
               query: asked,
               root,
               session,
@@ -577,6 +669,7 @@ export const makeAgentsController = (
     const listing = yield* sessionQuery<Listing>({
       initial: {
         rows: empty,
+        runs: noRuns,
         query: "",
         root: Option.none(),
         session: transport.currentSession(),
@@ -590,6 +683,8 @@ export const makeAgentsController = (
         detailAfterListing(reply.rows)
         // Only the open pane draws quality: the tray's reads ask none.
         if (open() && Option.isSome(pointed)) readQuality()
+        // A run page reads on the listing's clock: no loop of its own.
+        if (open() && Option.isSome(viewing())) readPage()
       },
     })
     const rows = () => listing.value().rows
@@ -730,6 +825,32 @@ export const makeAgentsController = (
       ),
     )
 
+    const runs: RunsController = {
+      list: () => listedRuns(listing.value().runs, listing.value().query),
+      viewing,
+      page,
+      error: pageError,
+      view: (run) => {
+        setViewing(run)
+        setPage(Option.none())
+        setPageError(Option.none())
+        readPage()
+      },
+      stop: (run) =>
+        shell.cast(
+          machines.stop(run).pipe(
+            // The reader asked for the stop, so a refusal shows on the status row.
+            Effect.catch((error) =>
+              Effect.sync(() => shell.notify(error.message)).pipe(
+                Effect.andThen(Effect.logWarning("agents.stop-run failed")),
+                Effect.annotateLogs({ run, error: error.message }),
+              ),
+            ),
+            Effect.andThen(Effect.sync(() => listing.refresh())),
+          ),
+        ),
+    }
+
     return {
       rows,
       current: transport.currentSession,
@@ -742,6 +863,7 @@ export const makeAgentsController = (
       select,
       open,
       done,
+      runs,
       watched,
     }
   })
@@ -981,6 +1103,33 @@ export const rightColumn = (
  * right column, and an armed row's delete prompt).
  */
 type RowTone = "glyph" | "name" | "muted"
+
+/**
+ * A pane row's runs in `rowWidth` columns: `<lead><glyph><name> · <doing>`
+ * cut to the room `right` leaves, then `right` padded to the row's edge.
+ */
+const paneRow = (
+  head: { readonly lead: string; readonly glyph: string },
+  name: string,
+  doing: string,
+  right: string,
+  rowWidth: number,
+): ReadonlyArray<TextRun<RowTone>> => {
+  const width = Math.max(0, rowWidth - textWidth(right) - 2)
+  const parts = rowParts(`${head.lead}${head.glyph}`, name, doing, width)
+  const left = truncateRuns<RowTone>(
+    [
+      { text: head.lead, tone: "muted" },
+      { text: head.glyph, tone: "glyph" },
+      { text: parts.name, tone: "name" },
+      { text: parts.doing, tone: "muted" },
+    ],
+    width,
+  )
+  const used = left.reduce((sum, part) => sum + textWidth(part.text), 0)
+  const pad = " ".repeat(Math.max(0, width - used) + 2)
+  return [...left, { text: `${pad}${right}`, tone: "muted" }]
+}
 
 /** What a second Ctrl+X deletes: the row's session, or each session of its thread. */
 const deletePrompt = (row: AgentRowEntry): string => {
@@ -1245,6 +1394,387 @@ const fitRuns = (runs: ReadonlyArray<DetailRun>, width: number): ReadonlyArray<D
     width,
   )
 
+// ── machine runs ────────────────────────────────────────────────────────────
+
+/** One entry of the pane's list: a session's row, or a machine run of the shell's thread. */
+const PaneEntry = Schema.Union([
+  Schema.TaggedStruct("Agent", { row: AgentRowEntry }),
+  Schema.TaggedStruct("Run", { run: MachineRunView }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+type PaneEntry = typeof PaneEntry.Type
+
+const agentEntry = (row: AgentRowEntry): PaneEntry => PaneEntry.cases.Agent.make({ row })
+const runEntry = (run: MachineRunView): PaneEntry => PaneEntry.cases.Run.make({ run })
+
+/** The entry's session row; none for a run. */
+const entryRow = (entry: PaneEntry): Option.Option<AgentRowEntry> =>
+  PaneEntry.match(entry, {
+    Agent: ({ row }) => Option.some(row),
+    Run: () => Option.none(),
+  })
+
+/** The list group an entry sits in: the runs, or a session's section. */
+const entryGroup = (entry: PaneEntry): string =>
+  PaneEntry.match(entry, {
+    Agent: ({ row }) => row.listedUnder,
+    Run: () => "runs",
+  })
+
+/**
+ * The tone of a run's or a visit's glyph: at work, waiting for the reader,
+ * waiting for its account, done, failed, stopped.
+ */
+type RunTone = "running" | "needs" | "waiting" | "done" | "failed" | "stopped"
+
+interface RunMark {
+  readonly glyph: string
+  readonly tone: RunTone
+}
+
+/** Whether a run's round waits for its account until a time still ahead. */
+const runWaits = (run: MachineRunView, now: number): boolean => {
+  const pending = run.pending
+  if (Predicate.isUndefined(pending) || pending._tag !== "Round") return false
+  return Predicate.isNotUndefined(pending.notBefore) && pending.notBefore > now
+}
+
+/**
+ * A run's glyph, in the pane's own shapes: the pulse while it works, `●`
+ * while it asks the reader, `◷` while its round waits for its account, `✓`
+ * once final, `✕` failed, `■` stopped.
+ */
+const runMark = (run: MachineRunView, now: number, frame: string): RunMark => {
+  if (run.status === "asking") return { glyph: "●", tone: "needs" }
+  if (run.status === "final") return { glyph: "✓", tone: "done" }
+  if (run.status === "failed") return { glyph: "✕", tone: "failed" }
+  if (run.status === "stopped") return { glyph: "■", tone: "stopped" }
+  if (runWaits(run, now)) return { glyph: "◷", tone: "waiting" }
+  return { glyph: frame, tone: "running" }
+}
+
+/**
+ * A run's or a visit's glyph color: the warning's while it asks the reader,
+ * the error's once it failed, the text's at work, muted otherwise.
+ */
+const runToneColor = (
+  theme: ReturnType<typeof useTheme>["theme"],
+  tone: RunTone,
+  selected: boolean,
+) => {
+  if (selected) return theme.selectedListItemText
+  if (tone === "needs") return theme.warning
+  if (tone === "failed") return theme.error
+  if (tone === "running") return theme.text
+  return theme.textMuted
+}
+
+/** The outcomes that failed their visit: a check's `fail`, a gate's `red`, a state out of rounds. */
+const FAILED_OUTCOMES: ReadonlySet<string> = new Set(["fail", "red", "exhausted"])
+
+type StateVisit = MachineRunPage["trail"][number]
+
+/** Whether the visit is the run's open one: it never ended. */
+const isOpenVisit = (visit: StateVisit): boolean => Predicate.isUndefined(visit.endedAt)
+
+/**
+ * A visit's glyph: an ended visit's `✓`, or `✕` for a failed outcome or a
+ * last round with no verdict; the open visit's is its run's.
+ */
+const visitMark = (visit: StateVisit, run: MachineRunPage, now: number, frame: string): RunMark => {
+  if (isOpenVisit(visit)) return runMark(run, now, frame)
+  const failed =
+    Option.exists(Option.fromUndefinedOr(visit.outcome), (outcome) =>
+      FAILED_OUTCOMES.has(outcome),
+    ) ||
+    (visit.dead && Predicate.isUndefined(visit.outcome))
+  if (failed) return { glyph: "✕", tone: "failed" }
+  return { glyph: "✓", tone: "done" }
+}
+
+/** What the run is doing, beside its state: blank while it works. */
+const RUN_STATUS_WORD = {
+  running: "",
+  asking: "asking",
+  final: "final",
+  failed: "failed",
+  stopped: "stopped",
+} satisfies Record<MachineRunView["status"], string>
+
+/** `implement #2`: a state and the visit of it the run is on. */
+const runAt = (run: MachineRunView): string => `${run.state} #${run.visits[run.state] ?? 1}`
+
+/** `implement #2 · asking`: where a run is, and its status once it is not at work. */
+const runDoing = (run: MachineRunView): string =>
+  [runAt(run), RUN_STATUS_WORD[run.status]].filter((part) => part.length > 0).join(" · ")
+
+/** The open pane's detail line for a run row. */
+const runDetailLabel = (run: MachineRunView, now: number): string =>
+  [runDoing(run), `started ${formatAge(now - run.createdAt)} ago`, "enter opens its page"].join(
+    "  ·  ",
+  )
+
+/** The details column's lines for a run row: its machine, its glyph and where it is, its age. */
+const runDetailLines = (
+  run: MachineRunView,
+  mark: RunMark,
+  now: number,
+): ReadonlyArray<ReadonlyArray<DetailRun>> => [
+  [{ text: `${run.machine} run`, tone: "name" }],
+  [
+    { text: mark.glyph, tone: "glyph" },
+    { text: ` ${runDoing(run)}`, tone: "plain" },
+  ],
+  [{ text: `started ${formatAge(now - run.createdAt)} ago`, tone: "muted" }],
+  [{ text: run.run, tone: "muted" }],
+]
+
+/** A visit's outcome and where the run went: `accepted → verify`, `→ review`. */
+const visitOutcome = (visit: StateVisit): string => {
+  const outcome = visit.outcome ?? ""
+  if (Predicate.isUndefined(visit.to)) return outcome
+  return [outcome, `→ ${visit.to}`].filter((part) => part.length > 0).join(" ")
+}
+
+/** The priced rounds' cost; blank when none was priced. */
+const visitCost = (visit: StateVisit): string => {
+  if (visit.priced === 0) return ""
+  return formatCost(visit.costUsd)
+}
+
+/** What the run's priced rounds cost, over every visit. */
+const runCost = (page: MachineRunPage): Option.Option<number> => {
+  const priced = page.trail.filter((visit) => visit.priced > 0)
+  if (priced.length === 0) return Option.none()
+  return Option.some(priced.reduce((sum, visit) => sum + visit.costUsd, 0))
+}
+
+/** "1 visit", not "1 visits". */
+const formatVisits = (count: number): string => {
+  if (count === 1) return "1 visit"
+  return `${count} visits`
+}
+
+/**
+ * The page's title: `Run track · asking · 6 visits · 7 rounds · $0.42 ·
+ * 4m`. Its status is blank while it works; the cost shows once a round was
+ * priced; the age counts from its start.
+ */
+const runPageTitle = (page: MachineRunPage, now: number): string =>
+  [
+    `Run ${page.machine}`,
+    RUN_STATUS_WORD[page.status],
+    formatVisits(page.trail.length),
+    formatRounds(page.trail.reduce((sum, visit) => sum + visit.rounds, 0)),
+    ...Option.toArray(Option.map(runCost(page), formatCost)),
+    formatAge(now - page.createdAt),
+  ]
+    .filter((part) => part.length > 0)
+    .join(" · ")
+
+/**
+ * The detail line for the visit under the cursor: its rounds, a dead last
+ * round, its cost, how long it took, and whether Enter opens a thread.
+ */
+const visitDetailLabel = (visit: StateVisit, threadListed: boolean, now: number): string => {
+  const parts = [`${visit.state} #${visit.visit}`]
+  if (visit.rounds > 0) parts.push(formatRounds(visit.rounds))
+  if (visit.dead) parts.push("last round dead")
+  const cost = visitCost(visit)
+  if (cost.length > 0) parts.push(cost)
+  const took = Option.match(Option.fromUndefinedOr(visit.endedAt), {
+    onNone: () => `for ${formatDuration(now - visit.at, "compact")}`,
+    onSome: (endedAt) => `took ${formatDuration(endedAt - visit.at, "compact")}`,
+  })
+  parts.push(took)
+  if (threadListed) parts.push("enter opens its thread")
+  return parts.join("  ·  ")
+}
+
+/** The second Ctrl+X's warning on a run page. */
+const STOP_PROMPT = "ctrl+x again to stop this run"
+
+/**
+ * A run's page: one row per state visit, oldest first, with its model, its
+ * outcome and where the run went, its cost and its age. Enter on a visit
+ * opens its round's thread; a double Ctrl+X stops an active run; Esc or ←
+ * goes back to the list.
+ */
+function RunPage(props: {
+  readonly run: RunId
+  readonly controller: AgentsController
+  readonly models: () => ReadonlyArray<Model>
+  readonly onBack: () => void
+  /** Open a round's thread, by its row in the listing. */
+  readonly onOpen: (row: AgentRowEntry) => void
+}) {
+  const { theme } = useTheme()
+  const { rowWidth, sectionWidth } = usePickerGeometry()
+  const tick = useSpinnerClock()
+  // A first Ctrl+X arms the stop; the second stops, any other key disarms.
+  const [armed, setArmed] = createSignal(false)
+  const page = () => Option.filter(props.controller.runs.page(), (value) => value.run === props.run)
+  const now = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
+  const frame = () => workingIconFrame(tick())
+  const active = () => Option.exists(page(), isActiveRun)
+
+  // A visit's round thread opens by its row in the listing, the row a
+  // session pick opens: a thread's row is on its newest session.
+  const threadRow = (visit: StateVisit): Option.Option<AgentRowEntry> =>
+    Option.flatMap(Option.fromUndefinedOr(visit.thread), (thread) =>
+      Option.fromUndefinedOr(
+        props.controller.rows().find((row) => threadOf(row) === thread || holds(row, thread)),
+      ),
+    )
+
+  /**
+   * `<marker><glyph> state #n · model · outcome → to` on the left, the
+   * cost and the age against the right edge. The open visit carries the
+   * marker; a narrow row drops the model before it cuts the outcome, and
+   * a very narrow one drops the cost.
+   */
+  const visitRuns = (visit: StateVisit, run: MachineRunPage): ReadonlyArray<TextRun<RowTone>> => {
+    const age = formatAge(now() - visit.at)
+    const cost = visitCost(visit)
+    const right =
+      [[cost, age].filter((part) => part.length > 0).join("  "), age].find(
+        (column) => textWidth(column) <= Math.max(0, rowWidth() - 4 - NAME_ROOM),
+      ) ?? age
+    const model = Option.match(Option.fromUndefinedOr(visit.model), {
+      onNone: () => "",
+      onSome: (id) => modelIdName(id, props.models()),
+    })
+    const outcome = visitOutcome(visit)
+    const room = Math.floor(Math.max(0, rowWidth() - textWidth(right) - 2) / 2)
+    const withModel = [model, outcome].filter((part) => part.length > 0).join(" · ")
+    const doing = [withModel, outcome].find((text) => textWidth(text) <= room) ?? withModel
+    return paneRow(
+      {
+        lead: currentMarker(isOpenVisit(visit)),
+        glyph: `${visitMark(visit, run, now(), frame()).glyph} `,
+      },
+      `${visit.state} #${visit.visit}`,
+      doing,
+      right,
+      rowWidth(),
+    )
+  }
+
+  const rows = (): ReadonlyArray<SelectListRow<StateVisit>> =>
+    Option.match(page(), {
+      onNone: () => [],
+      onSome: (run) =>
+        run.trail.map((visit) =>
+          selectable(visit, (selected, id) => {
+            const runColor = (kind: RowTone) => {
+              if (kind === "glyph")
+                return runToneColor(theme, visitMark(visit, run, now(), frame()).tone, selected())
+              if (selected()) return theme.selectedListItemText
+              if (kind === "name") return theme.info
+              return theme.textMuted
+            }
+            const background = () => {
+              if (selected()) return theme.primary
+              return "transparent"
+            }
+            return (
+              <box id={id} backgroundColor={background()} paddingLeft={1}>
+                <text wrapMode="none" truncate>
+                  <ToneRuns runs={visitRuns(visit, run)} color={runColor} />
+                </text>
+              </box>
+            )
+          }),
+        ),
+    })
+
+  // The visit under the cursor, for the detail line.
+  const [cursor, setCursor] = createSignal(Option.none<StateVisit>())
+  // A re-read builds new visits; the cursor follows the state and its visit.
+  const cursorVisit = () =>
+    Option.flatMap(cursor(), (visit) =>
+      Option.flatMap(page(), (run) =>
+        Option.fromUndefinedOr(
+          run.trail.find((entry) => entry.state === visit.state && entry.visit === visit.visit),
+        ),
+      ),
+    )
+
+  const armOrStop = (): boolean => {
+    if (!active()) return true
+    if (armed()) {
+      setArmed(false)
+      props.controller.runs.stop(props.run)
+      return true
+    }
+    setArmed(true)
+    return true
+  }
+
+  const openVisit = (visit: StateVisit) =>
+    Option.match(threadRow(visit), { onNone: () => {}, onSome: props.onOpen })
+
+  // Enter shows only on a visit whose round thread is listed: a command's visit opens nothing.
+  const keys = () => [
+    KeyHints.move,
+    ...Option.toArray(
+      Option.liftPredicate(keyHint("enter", "thread"), () =>
+        Option.isSome(Option.flatMap(cursorVisit(), threadRow)),
+      ),
+    ),
+    ...Option.toArray(Option.liftPredicate(keyHint("ctrl+x", "stop"), active)),
+    KeyHints.back,
+  ]
+
+  return (
+    <PickerFrame
+      title={Option.match(page(), {
+        onNone: () => "Run",
+        onSome: (run) => truncate(runPageTitle(run, now()), Math.max(1, sectionWidth() - 2)),
+      })}
+      keys={keys()}
+      detail={Option.map(cursorVisit(), (visit) =>
+        visitDetailLabel(visit, Option.isSome(threadRow(visit)), now()),
+      )}
+      error={Option.orElse(
+        Option.liftPredicate(STOP_PROMPT, () => armed() && active()),
+        props.controller.runs.error,
+      )}
+    >
+      <SelectList
+        id="run-page"
+        open
+        rows={rows}
+        rowKey={(visit) => `${visit.state}#${visit.visit}`}
+        // The page opens on the visit the run is on, else its last.
+        sticky={(visits) => {
+          const open = visits.findIndex(isOpenVisit)
+          if (open >= 0) return Option.some(open)
+          return Option.some(Math.max(0, visits.length - 1))
+        }}
+        onCursor={setCursor}
+        extraKeys={(event, selected) => {
+          if (event.ctrl === true && event.name === "x") return armOrStop()
+          const wasArmed = armed()
+          setArmed(false)
+          if (event.name === "escape" && wasArmed) return true
+          if (event.name === "left") {
+            props.onBack()
+            return true
+          }
+          if (event.name === "right") {
+            Option.match(selected, { onNone: () => {}, onSome: openVisit })
+            return true
+          }
+          return false
+        }}
+        loading={() => Option.isNone(page())}
+        onSelect={openVisit}
+        onDismiss={props.onBack}
+      />
+    </PickerFrame>
+  )
+}
+
 export function AgentsPane(props: {
   open: boolean
   onClose: () => void
@@ -1316,12 +1846,27 @@ export function AgentsPane(props: {
     return theme.textMuted
   }
 
-  // The selected row, for the details column: the list reports its cursor.
-  const [cursor, setCursor] = createSignal(Option.none<AgentRowEntry>())
-  const onCursor = (row: Option.Option<AgentRowEntry>) => {
-    setCursor(row)
-    props.controller.select(row)
+  // The selected entry, for the details column: the list reports its cursor.
+  const [cursor, setCursor] = createSignal(Option.none<PaneEntry>())
+  const onCursor = (entry: Option.Option<PaneEntry>) => {
+    setCursor(entry)
+    props.controller.select(Option.flatMap(entry, entryRow))
   }
+
+  // The list's entries: the thread's machine runs, then the sessions.
+  const entries = (): ReadonlyArray<PaneEntry> => [
+    ...props.controller.runs.list().map(runEntry),
+    ...visible().map(agentEntry),
+  ]
+
+  // Enter on a session switches to it; on a run, opens its page.
+  const choose = (entry: PaneEntry): void =>
+    PaneEntry.match(entry, {
+      Agent: ({ row }) => props.onSelect(row),
+      // The page unmounts the list, and the list's cleanup clears its typed
+      // filter: the page reads the whole listing, which holds each round's thread.
+      Run: ({ run }) => props.controller.runs.view(Option.some(run.run)),
+    })
 
   // First Ctrl+X arms the selected row; the second deletes it. The shell's own
   // loop is never a target: the pane would be deleting the session it lives on.
@@ -1349,86 +1894,143 @@ export function AgentsPane(props: {
       listWidth(),
       props.models(),
     )
-    const width = Math.max(0, listWidth() - textWidth(right) - 2)
-    const lead = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}`
-    const glyph = `${glyphFor(glyphSection(row, selected, props.controller.detail()))} `
-    const parts = rowParts(
-      `${lead}${glyph}`,
+    return paneRow(
+      {
+        lead: `${currentMarker(isCurrent(row))}${indentFor(row.depth)}`,
+        glyph: `${glyphFor(glyphSection(row, selected, props.controller.detail()))} `,
+      },
       nameFor(row),
       activityFor(row, selected, props.controller.detail(), props.place),
-      width,
+      right,
+      listWidth(),
     )
-    const left = truncateRuns<RowTone>(
-      [
-        { text: lead, tone: "muted" },
-        { text: glyph, tone: "glyph" },
-        { text: parts.name, tone: "name" },
-        { text: parts.doing, tone: "muted" },
-      ],
-      width,
-    )
-    const used = left.reduce((sum, run) => sum + textWidth(run.text), 0)
-    const pad = " ".repeat(Math.max(0, width - used) + 2)
-    return [...left, { text: `${pad}${right}`, tone: "muted" }]
   }
 
   const armedColor = (row: AgentRowEntry) =>
     Option.liftPredicate(theme.error, () => Option.contains(armed(), row.sessionId))
 
-  /** The list's rows: a heading opens each section; a tree sits under one. */
-  const rows = (): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
+  /**
+   * A run's row: `<glyph> machine · state #n`, its age against the right
+   * edge, in the session rows' columns.
+   */
+  const runRowRuns = (run: MachineRunView): ReadonlyArray<TextRun<RowTone>> => {
+    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+    return paneRow(
+      {
+        lead: currentMarker(false),
+        glyph: `${runMark(run, now, workingIconFrame(tick())).glyph} `,
+      },
+      run.machine,
+      runDoing(run),
+      formatAge(now - run.createdAt),
+      listWidth(),
+    )
+  }
+
+  const runRow = (run: MachineRunView): SelectListRow<PaneEntry> =>
+    selectable(runEntry(run), (selected, id) => {
+      const background = () => {
+        if (selected()) return theme.primary
+        return "transparent"
+      }
+      const runColor = (kind: RowTone) => {
+        if (kind === "glyph") {
+          const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+          return runToneColor(theme, runMark(run, now, "").tone, selected())
+        }
+        if (selected()) return theme.selectedListItemText
+        if (kind === "name") return theme.info
+        return theme.textMuted
+      }
+      return (
+        <box id={id} backgroundColor={background()} paddingLeft={1}>
+          <text wrapMode="none" truncate>
+            <ToneRuns runs={runRowRuns(run)} color={runColor} />
+          </text>
+        </box>
+      )
+    })
+
+  /** The list's rows: a heading opens the runs and each section; a tree sits under one. */
+  const rows = (): ReadonlyArray<SelectListRow<PaneEntry>> =>
     groupedRows(
-      visible(),
-      (row) => row.listedUnder,
+      entries(),
+      entryGroup,
       (first, count) =>
-        decoration<AgentRowEntry>(() => (
+        decoration<PaneEntry>(() => (
           <box paddingLeft={1}>
             <text style={{ fg: theme.textMuted }}>
-              {sectionHeading(
-                first.listedUnder,
-                count,
-                visible().filter((row) => row.listedUnder === first.listedUnder),
-              )}
+              {PaneEntry.match(first, {
+                Agent: ({ row: head }) =>
+                  sectionHeading(
+                    head.listedUnder,
+                    count,
+                    visible().filter((row) => row.listedUnder === head.listedUnder),
+                  ),
+                Run: () => `Runs (${count})`,
+              })}
             </text>
           </box>
         )),
-      (row) =>
-        selectable(row, (selected, id) => {
-          const background = () => {
-            if (selected()) return theme.primary
-            return "transparent"
-          }
-          const section = () => glyphSection(row, selected(), props.controller.detail())
-          // An armed row is one warning: every run in `error`.
-          const tone = (color: ReturnType<typeof mutedFor>) =>
-            Option.getOrElse(armedColor(row), () => color)
-          const runColor = (kind: RowTone) => {
-            if (kind === "glyph") return tone(glyphColorFor(section(), selected()))
-            if (kind === "name") return tone(nameColorFor(row, selected()))
-            return tone(mutedFor(selected()))
-          }
-          return (
-            <box id={id} backgroundColor={background()} paddingLeft={1}>
-              {/* One row, one line: the time is right-aligned into the budget, so
-                  an overflowing label is cut rather than wrapped under it, the
-                  way the autocomplete popup and the thread rows clamp theirs. */}
-              <text wrapMode="none" truncate style={{ fg: tone(theme.text) }}>
-                <ToneRuns runs={rowRuns(row, selected())} color={runColor} />
-              </text>
-            </box>
-          )
+      (entry) =>
+        PaneEntry.match(entry, {
+          Run: ({ run }) => runRow(run),
+          Agent: ({ row }) => agentRow(row),
         }),
     )
 
+  const agentRow = (row: AgentRowEntry): SelectListRow<PaneEntry> =>
+    selectable(agentEntry(row), (selected, id) => {
+      const background = () => {
+        if (selected()) return theme.primary
+        return "transparent"
+      }
+      const section = () => glyphSection(row, selected(), props.controller.detail())
+      // An armed row is one warning: every run in `error`.
+      const tone = (color: ReturnType<typeof mutedFor>) =>
+        Option.getOrElse(armedColor(row), () => color)
+      const runColor = (kind: RowTone) => {
+        if (kind === "glyph") return tone(glyphColorFor(section(), selected()))
+        if (kind === "name") return tone(nameColorFor(row, selected()))
+        return tone(mutedFor(selected()))
+      }
+      return (
+        <box id={id} backgroundColor={background()} paddingLeft={1}>
+          {/* One row, one line: the time is right-aligned into the budget, so
+                  an overflowing label is cut rather than wrapped under it, the
+                  way the autocomplete popup and the thread rows clamp theirs. */}
+          <text wrapMode="none" truncate style={{ fg: tone(theme.text) }}>
+            <ToneRuns runs={rowRuns(row, selected())} color={runColor} />
+          </text>
+        </box>
+      )
+    })
+
   /** Open on the loop the shell is already on. */
-  const sticky = (values: ReadonlyArray<AgentRowEntry>): Option.Option<number> =>
-    Option.some(Math.max(0, values.findIndex(isCurrent)))
+  const sticky = (values: ReadonlyArray<PaneEntry>): Option.Option<number> =>
+    Option.some(
+      Math.max(
+        0,
+        values.findIndex((entry) => Option.exists(entryRow(entry), isCurrent)),
+      ),
+    )
 
   // The row under the cursor as the latest listing shows it: a re-read
   // moves its state and activity while the cursor stays on it.
   const cursorRow = () =>
-    Option.flatMap(cursor(), (row) =>
+    Option.flatMap(Option.flatMap(cursor(), entryRow), (row) =>
       Option.fromUndefinedOr(visible().find((entry) => sameKey(entry, row))),
+    )
+  // The run under the cursor, as the latest listing shows it.
+  const cursorRun = () =>
+    Option.flatMap(cursor(), (entry) =>
+      PaneEntry.match(entry, {
+        Agent: () => Option.none<MachineRunView>(),
+        Run: ({ run }) =>
+          Option.fromUndefinedOr(
+            props.controller.runs.list().find((listed) => listed.run === run.run),
+          ),
+      }),
     )
   // The selected row's detail is the controller's, which it reads for that row alone.
   const cursorDetail = (row: AgentRowEntry) =>
@@ -1439,9 +2041,16 @@ export function AgentsPane(props: {
       onSome: (row) => glyphSection(row, true, cursorDetail(row)),
     })
   // The details column's lines for the row under the cursor.
-  const details = (answerLines: number) =>
+  const details = (answerLines: number): ReadonlyArray<ReadonlyArray<DetailRun>> =>
     Option.match(cursorRow(), {
-      onNone: () => [],
+      onNone: () =>
+        Option.match(cursorRun(), {
+          onNone: () => [],
+          onSome: (run) => {
+            const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+            return runDetailLines(run, runMark(run, now, workingIconFrame(tick())), now)
+          },
+        }),
       onSome: (row) =>
         detailLines(
           row,
@@ -1457,12 +2066,15 @@ export function AgentsPane(props: {
     })
   // Lines the list draws: its filter row, each row, and a heading per section.
   const listLines = () => {
-    const rows = visible()
-    if (rows.length === 0) return 2
-    const headings = rows.filter(
-      (row, index) => rows[index - 1]?.listedUnder !== row.listedUnder,
+    const listed = entries()
+    if (listed.length === 0) return 2
+    const headings = listed.filter((entry, index) =>
+      Option.match(Option.fromUndefinedOr(listed[index - 1]), {
+        onNone: () => true,
+        onSome: (previous) => entryGroup(previous) !== entryGroup(entry),
+      }),
     ).length
-    return 1 + rows.length + headings
+    return 1 + listed.length + headings
   }
   // A wide pane asks for the rows its taller column needs: the list's, or
   // the details' with the whole answer head. The frame keeps its own caps.
@@ -1492,91 +2104,120 @@ export function AgentsPane(props: {
 
   return (
     <Show when={props.open}>
-      {/* A heading opens each section, so the pane draws more lines than it
-          has rows. Under 100 columns the frame adds the detail line under
-          them; from 100 the details column stands beside the list instead. */}
-      <PickerFrame
-        title={paneTitle(visible())}
-        keys={[KeyHints.move, KeyHints.select, KeyHints.delete, KeyHints.close]}
-        height={Option.getOrUndefined(wideHeight())}
-        detail={Option.getOrUndefined(
-          Option.liftPredicate(
-            Option.liftPredicate(
-              Option.match(cursorRow(), {
-                onNone: () => "",
-                onSome: (row) => detailLabel(row, cursorDetail(row), props.models()),
-              }),
-              () => visible().length > 0,
-            ),
-            () => !wide(),
-          ),
-        )}
-        error={props.controller.error()}
-      >
-        {/* The list and the column share one row box that stays mounted, so
+      {/* A run's page takes the pane while it shows; Esc or ← brings the
+          list back. */}
+      <Show
+        when={Option.getOrUndefined(props.controller.runs.viewing())}
+        keyed
+        fallback={
+          // A heading opens each section, so the pane draws more lines than it
+          // has rows. Under 100 columns the frame adds the detail line under
+          // them; from 100 the details column stands beside the list instead.
+          <PickerFrame
+            title={paneTitle(visible())}
+            keys={[KeyHints.move, KeyHints.select, KeyHints.delete, KeyHints.close]}
+            height={Option.getOrUndefined(wideHeight())}
+            detail={Option.getOrUndefined(
+              Option.liftPredicate(
+                Option.liftPredicate(
+                  Option.match(cursorRow(), {
+                    onNone: () =>
+                      Option.match(cursorRun(), {
+                        onNone: () => "",
+                        onSome: (run) =>
+                          runDetailLabel(run, DateTime.toEpochMillis(DateTime.nowUnsafe())),
+                      }),
+                    onSome: (row) => detailLabel(row, cursorDetail(row), props.models()),
+                  }),
+                  () => entries().length > 0,
+                ),
+                () => !wide(),
+              ),
+            )}
+            error={props.controller.error()}
+          >
+            {/* The list and the column share one row box that stays mounted, so
             a resize across the threshold redraws the column alone and the
             list keeps its cursor and filter. */}
-        <box flexDirection="row" flexGrow={1}>
-          <box flexDirection="column" flexGrow={1} flexShrink={1}>
-            <SelectList
-              id="agents"
-              open={props.open}
-              rows={rows}
-              rowKey={(row) => `${row.sessionId}/${row.branchId}`}
-              filter={{ onQueryChange: props.controller.refresh }}
-              sticky={sticky}
-              // One detail read per selection, not per keystroke batch: the
-              // controller ignores a repeat of the row it is already fetching.
-              onCursor={onCursor}
-              extraKeys={(event, selected) => {
-                if (event.name === "escape" && Option.isSome(armed())) {
-                  setArmed(Option.none())
-                  return true
-                }
-                if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
-                setArmed(Option.none())
-                // The arrows the palette uses between levels: ← leaves the pane for
-                // the composer, → opens the agent under the cursor as ↵ does.
-                if (event.name === "left") {
-                  props.onClose()
-                  return true
-                }
-                if (event.name === "right") {
-                  Option.match(selected, { onNone: () => {}, onSome: props.onSelect })
-                  return true
-                }
-                return false
-              }}
-              loading={props.controller.loading}
-              onSelect={props.onSelect}
-              onDismiss={props.onClose}
-            />
-          </box>
-          <Show when={wide()}>
-            <box
-              flexDirection="column"
-              flexShrink={0}
-              width={columnWidth()}
-              border={["left"]}
-              borderColor={theme.border}
-              paddingLeft={1}
-              paddingRight={1}
-              overflow="hidden"
-            >
-              <For each={columnLines()}>
-                {(runs) => (
-                  <text wrapMode="none" height={1} flexShrink={0}>
-                    <ToneRuns
-                      runs={fitRuns(runs, detailTextWidth())}
-                      color={(tone) => columnColor(tone, cursorSection())}
-                    />
-                  </text>
-                )}
-              </For>
+            <box flexDirection="row" flexGrow={1}>
+              <box flexDirection="column" flexGrow={1} flexShrink={1}>
+                <SelectList
+                  id="agents"
+                  open={props.open}
+                  rows={rows}
+                  rowKey={(entry) =>
+                    PaneEntry.match(entry, {
+                      Agent: ({ row }) => `${row.sessionId}/${row.branchId}`,
+                      Run: ({ run }) => `run ${run.run}`,
+                    })
+                  }
+                  filter={{ onQueryChange: props.controller.refresh }}
+                  sticky={sticky}
+                  // One detail read per selection, not per keystroke batch: the
+                  // controller ignores a repeat of the row it is already fetching.
+                  onCursor={onCursor}
+                  extraKeys={(event, selected) => {
+                    if (event.name === "escape" && Option.isSome(armed())) {
+                      setArmed(Option.none())
+                      return true
+                    }
+                    if (event.ctrl === true && event.name === "x")
+                      return armOrDelete(Option.flatMap(selected, entryRow))
+                    setArmed(Option.none())
+                    // The arrows the palette uses between levels: ← leaves the pane for
+                    // the composer, → opens the entry under the cursor as ↵ does.
+                    if (event.name === "left") {
+                      props.onClose()
+                      return true
+                    }
+                    if (event.name === "right") {
+                      Option.match(selected, { onNone: () => {}, onSome: choose })
+                      return true
+                    }
+                    return false
+                  }}
+                  loading={props.controller.loading}
+                  onSelect={choose}
+                  onDismiss={props.onClose}
+                />
+              </box>
+              <Show when={wide()}>
+                <box
+                  flexDirection="column"
+                  flexShrink={0}
+                  width={columnWidth()}
+                  border={["left"]}
+                  borderColor={theme.border}
+                  paddingLeft={1}
+                  paddingRight={1}
+                  overflow="hidden"
+                >
+                  <For each={columnLines()}>
+                    {(runs) => (
+                      <text wrapMode="none" height={1} flexShrink={0}>
+                        <ToneRuns
+                          runs={fitRuns(runs, detailTextWidth())}
+                          color={(tone) => columnColor(tone, cursorSection())}
+                        />
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </Show>
             </box>
-          </Show>
-        </box>
-      </PickerFrame>
+          </PickerFrame>
+        }
+      >
+        {(run) => (
+          <RunPage
+            run={run}
+            controller={props.controller}
+            models={props.models}
+            onBack={() => props.controller.runs.view(Option.none())}
+            onOpen={props.onSelect}
+          />
+        )}
+      </Show>
     </Show>
   )
 }
@@ -1594,15 +2235,32 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         ),
       (key) =>
         transport.agentDetail(key).pipe(Effect.mapError((error) => ({ message: String(error) }))),
-      // A session that is no round thread, or a run the caller does not
-      // own, has no quality to show.
-      (key) =>
-        transport
-          .request(ref(MachinesRpc.Quality), { session: key.sessionId })
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<ModelQuality> => [])),
+      {
+        // A session that is no round thread, or a run the caller does not
+        // own, has no quality to show.
+        quality: (key) =>
+          transport
+            .request(ref(MachinesRpc.Quality), { session: key.sessionId })
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<ModelQuality> => [])),
+        // A server with no machines extension lists no runs.
+        runs: (session) =>
+          transport
+            .request(ref(MachinesRpc.Runs), {}, session)
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<MachineRunView> => [])),
+        page: (run) =>
+          transport
+            .request(ref(MachinesRpc.Status), { run })
+            .pipe(Effect.mapError((error) => ({ message: error.message }))),
+        stop: (run) =>
+          transport.request(ref(MachinesRpc.Stop), { run }).pipe(
+            Effect.asVoid,
+            Effect.mapError((error) => ({ message: error.message })),
+          ),
+      },
     )
     const openPane = () => {
       shell.pane.open(AGENTS_PANE)
+      controller.runs.view(Option.none())
       controller.refresh("")
     }
 

@@ -1006,7 +1006,12 @@ describe("Herdr integration", () => {
             firstPrompt: Option.none(),
             lastAnswer: Option.none(),
           }),
-        () => Effect.succeed([]),
+        {
+          quality: () => Effect.succeed([]),
+          runs: () => Effect.succeed([]),
+          page: () => Effect.never,
+          stop: () => Effect.void,
+        },
       ).pipe(Effect.provideContext(context))
       controller.refresh("")
       yield* waitUntil(

@@ -37,7 +37,7 @@ export {
   forkQuestionText,
   type ForkView as ForkViewType,
 } from "./btw.js"
-export { AgentsViewRpc, type AgentRowEntry, type ListAgentsInput } from "./agents-view.js"
+export { AgentsViewRpc, AgentRowEntry, type ListAgentsInput } from "./agents-view.js"
 export {
   WAKE_EXTENSION_ID,
   WAKE_MESSAGE_TYPE,
@@ -67,4 +67,4 @@ export {
   threadRoundText,
 } from "./threads.js"
 export { WorkspacePlace } from "./workspaces.js"
-export { type MachineRunView, MachinesRpc, ModelQuality } from "./machines.js"
+export { MachineRunPage, MachineRunView, MachinesRpc, ModelQuality } from "./machines.js"

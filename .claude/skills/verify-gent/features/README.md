@@ -40,6 +40,7 @@ Name user paths, screen text, keys, commands and observable results. Keep source
 - [Shell mode](shell-mode.md): `!` commands, their output and exit, sent to the model.
 - [Asks](asks.md): a background question, its footer row and the `/answer` form.
 - [Sessions](sessions.md): the Sessions pane by `/sessions`, the palette and the `left` key, its filter, switching sessions.
+- [Run page](run-page.md): a machine run's row in the Sessions pane, its page of state visits, narrow, Enter to a round's thread, the double Ctrl+X stop.
 - [Lanes band](lanes.md): free lanes and active machine runs under the status row, at rest, with a run, narrow, and `gent ctl lanes`.
 - [Banked resets](banked-resets.md): the resets each account holds, on the lanes band and in `gent ctl lanes`, at rest and narrow.
 - [Lanes peer](lanes-peer.md): the peer machine's row on the lanes band and in `gent ctl lanes`: its runs, silence and links down, at rest and narrow.

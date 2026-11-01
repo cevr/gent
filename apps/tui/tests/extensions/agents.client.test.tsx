@@ -18,6 +18,7 @@ import {
   type AgentRowEntry,
   BTW_EXTENSION_ID,
   type ListAgentsInput,
+  MachineRunPage,
   ModelQuality,
   SESSION_TOOLS_EXTENSION_ID,
   threadRoundText,
@@ -101,8 +102,23 @@ const detail = (omittedMessages: number): ExtensionAgentDetail => ({
   lastAnswer: Option.none(),
 })
 
-/** A server with no round threads: each quality read finds none. */
-const noQuality = () => Effect.succeed([])
+/** A server with no round threads and no runs: each quality read finds none, the runs read lists none. */
+const noMachines = {
+  quality: () => Effect.succeed([]),
+  runs: () => Effect.succeed([]),
+  page: () => Effect.never,
+  stop: () => Effect.void,
+}
+
+/** A pane controller's runs while the thread has none: the list shows, no page. */
+const noRuns = {
+  list: () => [],
+  viewing: () => Option.none(),
+  page: () => Option.none(),
+  error: () => Option.none(),
+  view: () => {},
+  stop: () => {},
+}
 
 describe("Agents controller detail", () => {
   it.scopedLive("ignores a reply for a row the reader already moved off", () =>
@@ -124,7 +140,7 @@ describe("Agents controller detail", () => {
               onNone: () => Effect.never,
               onSome: (gate) => Deferred.await(gate),
             }),
-          noQuality,
+          noMachines,
         ),
       )
 
@@ -154,7 +170,7 @@ describe("Agents controller detail", () => {
         makeAgentsController(
           () => Effect.succeed([]),
           () => Deferred.await(gate),
-          noQuality,
+          noMachines,
         ),
       )
 
@@ -181,7 +197,7 @@ describe("Agents controller reload", () => {
             return Effect.succeed([])
           },
           () => Effect.never,
-          noQuality,
+          noMachines,
         ),
         {
           currentSession: () => ({
@@ -216,7 +232,7 @@ describe("Agents controller listing scope", () => {
               return Effect.succeed([])
             },
             () => Effect.never,
-            noQuality,
+            noMachines,
           ),
           {
             currentSession: () => ({
@@ -251,7 +267,7 @@ describe("Agents controller stored rows", () => {
             asked.push(key.sessionId)
             return Effect.succeed(detail(1))
           },
-          noQuality,
+          noMachines,
         ),
       )
       controller.select(Option.some(row("stored", false)))
@@ -291,7 +307,7 @@ describe("Agents pane refresh while open", () => {
         makeAgentsController(
           () => Effect.sync(listed),
           () => Effect.sync(() => ({ ...detail(turns), status })),
-          noQuality,
+          noMachines,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => parentKey, shell: { pane } },
       )
@@ -340,7 +356,7 @@ describe("Agents pane refresh while open", () => {
               return listed()
             }),
           () => Effect.succeed(detail(1)),
-          noQuality,
+          noMachines,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => parentKey },
       )
@@ -383,7 +399,7 @@ describe("Agents pane refresh while open", () => {
               detailReads += 1
               return detail(detailReads)
             }),
-          noQuality,
+          noMachines,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => parentKey, shell: { pane } },
       )
@@ -441,7 +457,7 @@ describe("Agents pane refresh while open", () => {
                   lastAnswer: Option.some(`step ${detailReads}`),
                 }
               }),
-            noQuality,
+            noMachines,
           ).pipe(Effect.provideService(Clock.Clock, clock)),
           { currentSession: () => parentKey, shell: { pane } },
         )
@@ -507,7 +523,7 @@ describe("Agents pane refresh while open", () => {
                 return detailInFlight
               },
             ),
-          noQuality,
+          noMachines,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => parentKey, shell: { pane } },
       )
@@ -552,7 +568,7 @@ describe("Agents pane refresh while open", () => {
               return Effect.succeed([])
             },
             () => Effect.never,
-            noQuality,
+            noMachines,
           ).pipe(Effect.provideService(Clock.Clock, clock)),
           {
             currentSession: () => parentKey,
@@ -647,6 +663,7 @@ describe("Agents pane navigation", () => {
             refresh: () => {},
             reload: () => {},
             quality: () => [],
+            runs: noRuns,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -689,6 +706,7 @@ describe("Agents pane navigation", () => {
             refresh: (query) => queries.push(query),
             reload: () => {},
             quality: () => [],
+            runs: noRuns,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -742,6 +760,7 @@ describe("Agents pane navigation", () => {
               refresh: () => {},
               reload: () => {},
               quality: () => [],
+              runs: noRuns,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -803,6 +822,7 @@ describe("Agents pane navigation", () => {
             reload: () => {},
             detail,
             quality: () => [],
+            runs: noRuns,
             done: () => [],
             select: (selection) => {
               Option.match(selection, {
@@ -868,6 +888,7 @@ describe("Agents pane navigation", () => {
             refresh: () => {},
             reload: () => {},
             quality: () => [],
+            runs: noRuns,
             detail: () =>
               Option.some({
                 status: "Running",
@@ -914,6 +935,7 @@ describe("Agents pane navigation", () => {
             refresh: () => {},
             reload: () => {},
             quality: () => [],
+            runs: noRuns,
             detail: () =>
               Option.some({
                 status: "WaitingForInteraction",
@@ -955,6 +977,7 @@ describe("Agents pane navigation", () => {
             refresh: () => {},
             reload: () => {},
             quality: () => [],
+            runs: noRuns,
             detail: () => Option.some(detail(1)),
             select: () => {},
             done: () => [],
@@ -1022,6 +1045,7 @@ describe("Agents pane delete", () => {
             refresh: () => {},
             reload: () => {},
             quality: () => [],
+            runs: noRuns,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -1043,6 +1067,415 @@ describe("Agents pane delete", () => {
       expect(deleted).toEqual(["doomed"])
       expect(renderFrame(setup)).not.toContain("ctrl+x again")
     }),
+  )
+})
+
+// ── machine runs ────────────────────────────────────────────────────────────
+
+describe("agents pane machine runs", () => {
+  const SONNET = new Model({
+    id: ModelId.make("anthropic/claude-sonnet-5-5"),
+    name: "Claude Sonnet 5.5",
+    provider: ProviderId.make("anthropic"),
+  })
+  const MINUTE = 60_000
+  const RUN = "run-00000000000000a1"
+
+  /**
+   * A `track` run on its second implement visit: implement handed off to
+   * review, review sent it back. Each visit's round ran on a thread the
+   * listing holds: the implementer's under a later session of its thread.
+   */
+  const trackRun = (now: number, status: string): MachineRunPage =>
+    Schema.decodeUnknownSync(MachineRunPage)({
+      run: RUN,
+      machine: "track",
+      state: "implement",
+      status,
+      visits: { implement: 2, review: 1 },
+      createdAt: now - 9 * MINUTE,
+      steps: [],
+      quality: [],
+      trail: [
+        {
+          state: "implement",
+          visit: 1,
+          at: now - 9 * MINUTE,
+          endedAt: now - 6 * MINUTE,
+          thread: "impl-thread",
+          model: "anthropic/claude-sonnet-5-5",
+          rounds: 1,
+          priced: 1,
+          costUsd: 0.12,
+          dead: false,
+          outcome: "done",
+          to: "review",
+        },
+        {
+          state: "review",
+          visit: 1,
+          at: now - 6 * MINUTE,
+          endedAt: now - 4 * MINUTE,
+          thread: "review-thread",
+          model: "openai/gpt-6-mini",
+          rounds: 2,
+          priced: 2,
+          costUsd: 0.05,
+          dead: false,
+          outcome: "changes",
+          to: "implement",
+        },
+        {
+          state: "implement",
+          visit: 2,
+          at: now - 4 * MINUTE,
+          thread: "impl-thread",
+          model: "anthropic/claude-sonnet-5-5",
+          rounds: 1,
+          priced: 0,
+          costUsd: 0,
+          dead: false,
+        },
+      ],
+    })
+
+  /** The round threads' rows: the implementer's thread moved to a later session. */
+  const threadRows: ReadonlyArray<AgentRowEntry> = [
+    { ...rowPane("impl-session", "Implementer", 0), thread: SessionId.make("impl-thread") },
+    rowPane("review-thread", "Reviewer", 0),
+  ]
+
+  /**
+   * The pane over a controller that lists `page`'s run and shows its page
+   * once viewed, with what the pane asked of it.
+   */
+  const runsPane = (page: MachineRunPage, size: { width: number; height: number }) =>
+    Effect.gen(function* () {
+      const viewed: Array<Option.Option<string>> = []
+      const stopped: Array<string> = []
+      const opened: Array<string> = []
+      const refreshed: Array<string> = []
+      const [viewing, setViewing] = createSignal(Option.none<MachineRunPage["run"]>())
+      const setup = yield* renderScoped(
+        () => (
+          <AgentsPane
+            models={() => [SONNET]}
+            place={PLACE}
+            open={true}
+            controller={{
+              rows: () => threadRows,
+              current: () => ELSEWHERE,
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: (query) => refreshed.push(query),
+              reload: () => {},
+              quality: () => [],
+              runs: {
+                list: () => [page],
+                viewing,
+                page: () => Option.map(viewing(), () => page),
+                error: () => Option.none(),
+                view: (run) => {
+                  viewed.push(run)
+                  setViewing(run)
+                },
+                stop: (run) => stopped.push(run),
+              },
+              detail: () => Option.none(),
+              select: () => {},
+              done: () => [],
+              open: () => true,
+            }}
+            onSelect={(row) => opened.push(row.sessionId)}
+            onDelete={() => {}}
+            onClose={() => {}}
+          />
+        ),
+        size,
+      )
+      return { setup, viewed, stopped, opened, refreshed }
+    })
+
+  /** The pane opened on the run's page: the list's first row is the run, and Enter opens it. */
+  const pageOpen = (page: MachineRunPage, size: { width: number; height: number }) =>
+    Effect.gen(function* () {
+      const pane = yield* runsPane(page, size)
+      yield* waitForFrame(pane.setup, (frame) => frame.includes("Runs (1)"), "runs section")
+      pane.setup.mockInput.pressEnter()
+      yield* waitForFrame(pane.setup, (frame) => frame.includes("Run track"), "run page")
+      return pane
+    })
+
+  it.scopedLive(
+    "the list shows the thread's runs above its sessions; Enter opens a run's page",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const { setup, viewed, refreshed } = yield* runsPane(trackRun(now, "running"), {
+          width: 80,
+          height: 40,
+        })
+        yield* waitForFrame(setup, (frame) => frame.includes("Runs (1)"), "runs section")
+        const lines = renderFrame(setup).split("\n")
+        const heading = lines.findIndex((line) => line.includes("Runs (1)"))
+        const runLine = lines.findIndex((line) => line.includes("track · implement #2"))
+        const sessions = lines.findIndex((line) => line.includes("Inactive (2)"))
+        expect(heading).toBeGreaterThanOrEqual(0)
+        expect(runLine).toBeGreaterThan(heading)
+        expect(sessions).toBeGreaterThan(runLine)
+        expect(lines[runLine]).toContain("9m")
+        // The cursor starts on the run: its detail line says what Enter does.
+        expect(renderFrame(setup)).toContain("enter opens its page")
+
+        const before = refreshed.length
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => frame.includes("Run track"), "run page")
+        expect(viewed).toEqual([Option.some(RUN)])
+        // The page's listing is the whole one: it holds each round's thread.
+        expect(refreshed.slice(before)).toEqual([""])
+      }),
+  )
+
+  it.scopedLive(
+    "the page draws each visit with its model, outcome, cost and age, the run's totals above",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const { setup } = yield* pageOpen(trackRun(now, "running"), { width: 80, height: 40 })
+        const wide = renderFrame(setup)
+        expect(wide).toContain("Run track · 3 visits · 4 rounds · $0.17 · 9m")
+        const lines = wide.split("\n")
+        const visitLine = (text: string) => lines.find((line) => line.includes(text)) ?? ""
+        const first = visitLine("implement #1")
+        expect(first).toContain("Claude Sonnet 5.5 · done → review")
+        expect(first).toMatch(/\$0\.12\s+9m\s*$/)
+        const review = visitLine("review #1")
+        expect(review).toContain("gpt-6-mini · changes → implement")
+        expect(review).toMatch(/\$0\.05\s+6m\s*$/)
+        // The open visit carries the marker and no cost: none of its rounds is priced yet.
+        const open = visitLine("implement #2")
+        expect(open).toContain("› ")
+        expect(open).not.toContain("$")
+        expect(open).toMatch(/4m\s*$/)
+        expect(first).not.toContain("› ")
+        // The cursor opens on the open visit, and Enter opens its round's thread.
+        expect(wide).toMatch(
+          /implement #2 {2}· {2}1 round {2}· {2}for 4m \d+s {2}· {2}enter opens its thread/,
+        )
+        expect(wide).toContain("ctrl+x stop")
+
+        // Narrow, each visit keeps its age on its own line.
+        setup.resize(58, 24)
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.split("\n").every((line) => textWidth(line) <= 58),
+          "narrow run page",
+        )
+        const narrow = renderFrame(setup).split("\n")
+        for (const [visit, age] of [
+          ["implement #1", "9m"],
+          ["review #1", "6m"],
+          ["implement #2", "4m"],
+        ] as const) {
+          const line = narrow.find((entry) => entry.includes(visit)) ?? ""
+          expect(line).toMatch(new RegExp(`${age}\\s*$`))
+        }
+        // The model goes before the verdict is cut: each ended visit keeps where it went.
+        expect(narrow.some((line) => line.includes("implement #1 · done → review"))).toBe(true)
+        expect(narrow.some((line) => line.includes("review #1 · changes → implement"))).toBe(true)
+        expect(narrow.some((line) => line.includes("Run track · 3 visits"))).toBe(true)
+      }),
+  )
+
+  it.scopedLive("Enter on a visit opens its round's thread by the thread's listed row", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const { setup, opened } = yield* pageOpen(trackRun(now, "running"), {
+        width: 80,
+        height: 40,
+      })
+      // The open visit's thread is listed under a later session.
+      setup.mockInput.pressEnter()
+      yield* waitUntil(() => opened.length === 1, "implement thread opened")
+      expect(opened).toEqual(["impl-session"])
+
+      setup.mockInput.pressArrow("up")
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("review #1  ·  2 rounds"),
+        "review visit",
+      )
+      setup.mockInput.pressArrow("right")
+      yield* waitUntil(() => opened.length === 2, "review thread opened")
+      expect(opened).toEqual(["impl-session", "review-thread"])
+    }),
+  )
+
+  it.scopedLive("Enter is offered only on a visit whose round thread is listed", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const track = trackRun(now, "running")
+      // The review round's thread is gone from the listing.
+      const page: MachineRunPage = {
+        ...track,
+        trail: track.trail.map((visit) => {
+          if (visit.state !== "review") return visit
+          return { ...visit, thread: SessionId.make("gone-thread") }
+        }),
+      }
+      const { setup, opened } = yield* pageOpen(page, { width: 80, height: 40 })
+      expect(renderFrame(setup)).toContain("enter thread")
+
+      setup.mockInput.pressArrow("up")
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("review #1  ·  2 rounds"),
+        "review visit",
+      )
+      const frame = renderFrame(setup)
+      expect(frame).not.toContain("enter thread")
+      expect(frame).not.toContain("enter opens its thread")
+      setup.mockInput.pressEnter()
+      setup.mockInput.pressArrow("down")
+      yield* waitForFrame(setup, (next) => next.includes("enter thread"), "implement visit")
+      expect(opened).toEqual([])
+    }),
+  )
+
+  it.scopedLive("a double Ctrl+X stops an active run once; another key disarms the first", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const { setup, stopped } = yield* pageOpen(trackRun(now, "running"), {
+        width: 80,
+        height: 40,
+      })
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("ctrl+x again to stop this run"),
+        "armed",
+      )
+      expect(stopped).toEqual([])
+
+      // A move disarms: the next Ctrl+X only arms again.
+      setup.mockInput.pressArrow("up")
+      yield* waitForFrame(setup, (frame) => !frame.includes("ctrl+x again"), "disarmed")
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("ctrl+x again to stop this run"),
+        "re-armed",
+      )
+      expect(stopped).toEqual([])
+
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitUntil(() => stopped.length > 0, "stop asked")
+      yield* waitForFrame(setup, (frame) => !frame.includes("ctrl+x again"), "prompt cleared")
+      expect(stopped).toEqual([RUN])
+    }),
+  )
+
+  it.scopedLive("an ended run's page offers no stop, and Ctrl+X asks none", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const { setup, stopped } = yield* pageOpen(trackRun(now, "stopped"), {
+        width: 80,
+        height: 40,
+      })
+      expect(renderFrame(setup)).toContain("Run track · stopped · 3 visits")
+      expect(renderFrame(setup)).not.toContain("ctrl+x stop")
+      setup.mockInput.pressKey("x", { ctrl: true })
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).not.toContain("ctrl+x again")
+      expect(stopped).toEqual([])
+    }),
+  )
+
+  it.scopedLive("Escape goes back to the list; an armed stop's Escape only disarms", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const { setup, viewed } = yield* pageOpen(trackRun(now, "running"), {
+        width: 80,
+        height: 40,
+      })
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again"), "armed")
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => !frame.includes("ctrl+x again"), "disarmed")
+      expect(viewed).toEqual([Option.some(RUN)])
+
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => frame.includes("Runs (1)"), "back on the list")
+      expect(viewed).toEqual([Option.some(RUN), Option.none()])
+    }),
+  )
+})
+
+describe("Agents controller machine runs", () => {
+  const page = Schema.decodeSync(MachineRunPage)({
+    run: "run-00000000000000b2",
+    machine: "track",
+    state: "review",
+    status: "running",
+    visits: { review: 1 },
+    createdAt: 0,
+    steps: [],
+    quality: [],
+    trail: [],
+  })
+
+  it.scopedLive(
+    "the open pane reads the thread's runs; a viewed run's page reads, and a stop reads again",
+    () =>
+      Effect.gen(function* () {
+        const key = { sessionId: SessionId.make("main"), branchId: BranchId.make("main-branch") }
+        const asked: Array<string> = []
+        const pane = makePaneSlot()
+        // The poll stays still: each read below is one the test asked for.
+        const clock = yield* TestClock.make()
+        const controller = yield* provideClientServices(
+          makeAgentsController(
+            () => Effect.succeed([row("main")]),
+            () => Effect.succeed(detail(0)),
+            {
+              quality: () => Effect.succeed([]),
+              runs: (session) =>
+                Effect.sync(() => {
+                  asked.push(`runs ${session.sessionId}`)
+                  return [page]
+                }),
+              page: (run) =>
+                Effect.sync(() => {
+                  asked.push(`page ${run}`)
+                  return page
+                }),
+              stop: (run) => Effect.sync(() => asked.push(`stop ${run}`)),
+            },
+          ).pipe(Effect.provideService(Clock.Clock, clock)),
+          { currentSession: () => key, shell: { pane } },
+        )
+        // The closed pane's tray lists no runs.
+        yield* waitUntil(() => controller.rows().length === 1, "tray listing")
+        expect(asked).toEqual([])
+        expect(controller.runs.list()).toEqual([])
+
+        pane.open("agents.pane")
+        controller.refresh("")
+        yield* waitUntil(() => controller.runs.list().length === 1, "runs listed")
+        expect(asked).toEqual(["runs main"])
+
+        controller.runs.view(Option.some(page.run))
+        yield* waitUntil(() => Option.isSome(controller.runs.page()), "page read")
+        expect(asked).toEqual(["runs main", `page ${page.run}`])
+
+        controller.runs.stop(page.run)
+        yield* waitUntil(() => asked.length >= 5, "stop, then the listing and the page again")
+        expect(asked.slice(2)).toEqual([`stop ${page.run}`, "runs main", `page ${page.run}`])
+
+        controller.runs.view(Option.none())
+        expect(controller.runs.page()).toEqual(Option.none())
+      }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -1072,7 +1505,7 @@ describe("Agents pane reopen", () => {
             asked.push(key.sessionId)
             return Effect.succeed({ ...detail(turns()), status: "Idle" })
           },
-          noQuality,
+          noMachines,
         ),
         {
           currentSession: () => ({ sessionId: live.sessionId, branchId: live.branchId }),
@@ -1143,6 +1576,7 @@ describe("Agents pane framing", () => {
                 refresh: () => {},
                 reload: () => {},
                 quality: () => [],
+                runs: noRuns,
                 detail: () =>
                   Option.some({
                     status: "Idle",
@@ -1212,6 +1646,7 @@ describe("Agents pane framing", () => {
               refresh: () => {},
               reload: () => {},
               quality: () => [],
+              runs: noRuns,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1265,6 +1700,7 @@ describe("Agents pane framing", () => {
               refresh: () => {},
               reload: () => {},
               quality: () => [],
+              runs: noRuns,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1324,6 +1760,7 @@ describe("Agents pane framing", () => {
               refresh: () => {},
               reload: () => {},
               quality: () => [],
+              runs: noRuns,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1406,6 +1843,7 @@ describe("agents pane rows", () => {
             refresh: () => {},
             reload: () => {},
             quality: () => [],
+            runs: noRuns,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -1636,6 +2074,7 @@ describe("agents pane command center", () => {
                 refresh: () => {},
                 reload: () => {},
                 quality: () => quality,
+                runs: noRuns,
                 detail: () => detail,
                 select: () => {},
                 done: () => [],
@@ -2141,6 +2580,7 @@ describe("agents pane counts and detail", () => {
               refresh: () => {},
               reload: () => {},
               quality: () => [],
+              runs: noRuns,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -2175,6 +2615,7 @@ describe("idle middle parent", () => {
     refresh: () => {},
     reload: () => {},
     quality: () => [],
+    runs: noRuns,
     detail: () => Option.none(),
     select: () => {},
     done: () => [],
@@ -2238,6 +2679,7 @@ describe("thread rows", () => {
     refresh: () => {},
     reload: () => {},
     quality: () => [],
+    runs: noRuns,
     detail: () => Option.none(),
     select: () => {},
     done: () => [],
@@ -2539,11 +2981,14 @@ describe("agents pane quality read", () => {
               return [worker]
             }),
           () => Effect.succeed(detail(1)),
-          (key) =>
-            Effect.sync(() => {
-              asked.push(key.sessionId)
-              return []
-            }),
+          {
+            ...noMachines,
+            quality: (key) =>
+              Effect.sync(() => {
+                asked.push(key.sessionId)
+                return []
+              }),
+          },
         ),
         {
           currentSession: () => here,
@@ -2630,7 +3075,7 @@ describe("done threads", () => {
               Effect.map(() => listed(input)),
             ),
           () => Effect.succeed(detail(1)),
-          noQuality,
+          noMachines,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         {
           currentSession: here,
@@ -2894,6 +3339,7 @@ describe("done threads", () => {
               refresh: () => {},
               reload: () => {},
               quality: () => [],
+              runs: noRuns,
               detail: () => Option.none(),
               select: () => {},
               done: () => [finished],
@@ -3019,6 +3465,7 @@ describe("Subagent tray", () => {
               },
               reload: () => {},
               quality: () => [],
+              runs: noRuns,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -3079,6 +3526,7 @@ describe("Subagent tray", () => {
                   refresh: () => {},
                   reload: () => {},
                   quality: () => [],
+                  runs: noRuns,
                   detail: () => Option.none(),
                   select: () => {},
                   done: () => [],
@@ -3136,6 +3584,7 @@ describe("Subagent tray", () => {
                 refresh: () => {},
                 reload: () => {},
                 quality: () => [],
+                runs: noRuns,
                 detail: () => Option.none(),
                 select: () => {},
                 done: () => done,
@@ -3188,6 +3637,7 @@ describe("Subagent tray", () => {
               refresh: () => {},
               reload: () => {},
               quality: () => [],
+              runs: noRuns,
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -3216,6 +3666,7 @@ describe("Subagent tray", () => {
             refresh: () => {},
             reload: () => {},
             quality: () => [],
+            runs: noRuns,
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -3262,7 +3713,7 @@ describe("Agents controller across a session switch", () => {
         makeAgentsController(
           () => Deferred.await(gate),
           () => Effect.never,
-          noQuality,
+          noMachines,
         ),
         { currentSession: () => active },
       )
@@ -3296,7 +3747,7 @@ describe("Agents controller across a session switch", () => {
               onSome: (gate) => Deferred.await(gate),
             }),
           () => Effect.never,
-          noQuality,
+          noMachines,
         ),
         { currentSession: () => active },
       )
@@ -3324,7 +3775,7 @@ describe("Agents controller across a session switch", () => {
         makeAgentsController(
           () => Deferred.await(gate),
           () => Effect.never,
-          noQuality,
+          noMachines,
         ),
         { currentSession: () => active },
       )
@@ -3393,7 +3844,7 @@ describe("Descendant activity", () => {
         const controller = yield* makeAgentsController(
           fetch,
           () => Effect.succeed(detail(0)),
-          noQuality,
+          noMachines,
         ).pipe(
           Effect.provideService(
             Clock.Clock,
@@ -3704,7 +4155,7 @@ describe("Descendant activity", () => {
               return Deferred.await(complete)
             },
             () => Effect.never,
-            noQuality,
+            noMachines,
           ).pipe(Effect.provideService(Clock.Clock, clock)),
           {
             currentSession: () => parent,

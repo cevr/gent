@@ -647,6 +647,66 @@ describe("a machine run", () => {
       expect(moves(yield* home.sql(stepsOf(run)))).toEqual([...TRACK_MOVES, "decide→done"])
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
+
+  it.live(
+    "the run page reads every state visit and stops the run through the client requests",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels(trackWorker)
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer: machineModels(models),
+          storagePath: `${home.home}/gent.db`,
+          cwd: home.cwd,
+          home: home.home,
+        })
+        const owner = { sessionId, branchId }
+        const run = decodeRunId(yield* startRun(client, owner, TRACK, "track", { spec: "S" }))
+        yield* askDetails(client, owner, 1)
+        const page = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), { run })
+        // A visit per state entry, oldest first: how each ended and where the run went.
+        expect(
+          page.trail.map((visit) => [
+            `${visit.state}#${visit.visit}`,
+            visit.rounds,
+            visit.outcome ?? "",
+            visit.to ?? "",
+          ]),
+        ).toEqual([
+          ["implement#1", 1, "", "review"],
+          ["review#1", 1, "changes", "implement"],
+          ["implement#2", 1, "", "review"],
+          ["review#2", 1, "accepted", "verify"],
+          ["verify#1", 0, "pass", "decide"],
+          ["decide#1", 0, "", ""],
+        ])
+        // A round's visit names the thread it ran on, as the run's own receipts do.
+        const threads = roundThreads(yield* home.sql(stepsOf(run)))
+        const [implementer, reviewer] = threads
+        expect(
+          page.trail
+            .flatMap((visit) => Option.toArray(Option.fromUndefinedOr(visit.thread)))
+            .map(String),
+        ).toEqual([implementer, reviewer, implementer, reviewer].map(String))
+        expect(page.trail.filter((visit) => Predicate.isUndefined(visit.endedAt))).toHaveLength(1)
+        // Only the owner's thread stops it; a stop of a stopped run answers again.
+        const stopRef = ref(MachinesRpc.Stop)
+        const stranger = yield* client.session.create({ cwd: home.cwd })
+        const refused = yield* machinesRequest(client, stranger, stopRef, { run }).pipe(Effect.flip)
+        expect(String(refused)).toContain("belongs to another thread")
+        expect(yield* machinesRequest(client, owner, stopRef, { run })).toEqual({
+          run,
+          status: "stopped",
+        })
+        expect(yield* machinesRequest(client, owner, stopRef, { run })).toEqual({
+          run,
+          status: "stopped",
+        })
+        const stopped = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), { run })
+        expect(stopped.status).toBe("stopped")
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
 })
 
 // ── round ends while a driver waits ─────────────────────────────────────────

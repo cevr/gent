@@ -1075,6 +1075,13 @@ interface MachineStoreService {
     ReadonlyArray<{ readonly seq: number; readonly at: number; readonly step: MachineStep }>,
     MachineStorageError
   >
+  /** Every step of `run` its state visits are read from (`VISIT_TAGS`), oldest first. */
+  readonly visitSteps: (
+    run: RunId,
+  ) => Effect.Effect<
+    ReadonlyArray<{ readonly seq: number; readonly at: number; readonly step: MachineStep }>,
+    MachineStorageError
+  >
   /**
    * The model the newest round of `role` in `run` ran, as its `RoundEnded`
    * step keeps it: the round under review, whichever thread (a retry's, a
@@ -1292,6 +1299,19 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
               .toReversed()
           },
           Effect.mapError(storageError("Failed to read machine steps")),
+        ),
+        visitSteps: Effect.fn("MachineStore.visitSteps")(
+          function* (run) {
+            const rows = yield* sql`SELECT seq, at, step_json FROM machine_steps
+              WHERE run = ${run}
+                AND json_extract(step_json, '$._tag') IN (${sql.literal(
+                  VISIT_TAGS.map((tag) => `'${tag}'`).join(", "),
+                )})
+              ORDER BY seq ASC`
+            const decoded = yield* decodeStepRows(rows)
+            return decoded.map((row) => ({ seq: row.seq, at: row.at, step: row.step_json }))
+          },
+          Effect.mapError(storageError("Failed to read a run's visits")),
         ),
         lastRoundModel: Effect.fn("MachineStore.lastRoundModel")(
           function* (run, role) {
@@ -1661,6 +1681,16 @@ const foldSteps = (memo: RunMemo, steps: ReadonlyArray<MachineStep>): RunMemo =>
 
 /** The steps `foldStep` reads: a read of the memo loads only these. */
 const MEMO_TAGS = ["Dispatched", "Finished", "Granted", "Saved"] as const
+
+/** The steps `stateVisits` reads: a visit's start, its receipts, its rounds, its answer and its move. */
+const VISIT_TAGS = [
+  "Dispatched",
+  "Recorded",
+  "RoundEnded",
+  "Answered",
+  "Moved",
+  "Finished",
+] as const
 
 /** The choices an ask offers, by its reason and its state (the table in the design, B2). */
 const choicesOf = (
@@ -4227,7 +4257,8 @@ export const MachineAnswerTool = tool({
 
 const StepView = Schema.Struct({ seq: Schema.Int, at: Schema.Finite, step: MachineStep })
 
-const RunView = Schema.Struct({
+/** One run as `machine.list` and `MachinesRpc.Runs` show it, with no steps. */
+export const MachineRunView = Schema.Struct({
   run: RunId,
   machine: MachineName,
   state: StateName,
@@ -4237,8 +4268,9 @@ const RunView = Schema.Struct({
   error: Schema.optionalKey(Schema.String),
   createdAt: Schema.Finite,
 })
+export type MachineRunView = typeof MachineRunView.Type
 
-const runView = (run: Run): typeof RunView.Type => ({
+const runView = (run: Run): MachineRunView => ({
   run: run.run,
   machine: run.machine,
   state: run.state,
@@ -4394,7 +4426,7 @@ const STATUS_STEPS = 20
  * its last steps, and how each model fared in each state of its machine.
  */
 export const MachineRunStatus = Schema.Struct({
-  ...RunView.fields,
+  ...MachineRunView.fields,
   steps: Schema.Array(StepView),
   quality: Schema.Array(ModelQuality),
 })
@@ -4408,6 +4440,173 @@ const runStatus = Effect.fn("Machines.runStatus")(function* (params: typeof RunS
   const steps = yield* store.steps(run.run, STATUS_STEPS)
   const quality = qualityOf(yield* store.outcomesOf(run.machine))
   return { ...runView(run), steps, quality }
+})
+
+/**
+ * One visit of a state, as the TUI's run page draws it: when it began and
+ * ended, the thread and model of its newest round, its rounds and what the
+ * priced ones cost, and how it ended. `outcome`: the round's verdict, a
+ * check's `pass` or `fail`, a gate's `green` or `red`, an ask's answer, or
+ * `exhausted`; none while the visit is open and on a final state. `dead`:
+ * its newest round ended with no verdict. `to`: the state the run moved to
+ * from it.
+ */
+const StateVisit = Schema.Struct({
+  state: StateName,
+  visit: PositiveInt,
+  at: Schema.Finite,
+  endedAt: Schema.optionalKey(Schema.Finite),
+  thread: Schema.optionalKey(SessionId),
+  model: Schema.optionalKey(ModelId),
+  rounds: Count,
+  priced: Count,
+  costUsd: Schema.Finite,
+  dead: Schema.Boolean,
+  outcome: Schema.optionalKey(Schema.String),
+  to: Schema.optionalKey(StateName),
+})
+type StateVisit = typeof StateVisit.Type
+
+/** A visit while its steps are folded in. */
+interface VisitTally {
+  readonly state: StateName
+  readonly visit: number
+  readonly at: number
+  endedAt: Option.Option<number>
+  thread: Option.Option<SessionId>
+  model: Option.Option<ModelId>
+  rounds: number
+  priced: number
+  costUsd: number
+  dead: boolean
+  outcome: Option.Option<string>
+  to: Option.Option<StateName>
+}
+
+/** A `Moved.by` that names the mechanism, not the key: the round's verdict or the ask's answer is the outcome. */
+const isMechanismMove = Schema.is(Schema.Literals(["verdict", "answer"]))
+
+/**
+ * Each state visit of a run, oldest first, from its steps (`VISIT_TAGS`).
+ * An action names its state and visit, so a retry, a rerun and a
+ * no-verdict ask stay in the visit they serve; a final state's `Finished`
+ * is its visit. A round, an answer and a move belong to the open visit.
+ */
+const stateVisits = (
+  steps: ReadonlyArray<{ readonly at: number; readonly step: MachineStep }>,
+): ReadonlyArray<StateVisit> => {
+  const visits: Array<VisitTally> = []
+  const byKey = new Map<string, VisitTally>()
+  let open = Option.none<VisitTally>()
+  const enter = (state: StateName, visit: number, at: number): VisitTally => {
+    const key = `${state}\u0000${visit}`
+    const found = byKey.get(key)
+    if (Predicate.isNotUndefined(found)) return found
+    const entry: VisitTally = {
+      state,
+      visit,
+      at,
+      endedAt: Option.none(),
+      thread: Option.none(),
+      model: Option.none(),
+      rounds: 0,
+      priced: 0,
+      costUsd: 0,
+      dead: false,
+      outcome: Option.none(),
+      to: Option.none(),
+    }
+    byKey.set(key, entry)
+    visits.push(entry)
+    return entry
+  }
+  const receipt = (entry: VisitTally, action: PendingAction): void => {
+    if (action._tag !== "Round") return
+    entry.thread = Option.orElse(Option.fromUndefinedOr(action.thread), () => entry.thread)
+    entry.model = Option.orElse(Option.fromUndefinedOr(action.model), () => entry.model)
+  }
+  for (const { at, step } of steps) {
+    switch (step._tag) {
+      case "Dispatched": {
+        const entry = enter(step.action.state, step.action.visit, at)
+        receipt(entry, step.action)
+        open = Option.some(entry)
+        break
+      }
+      case "Recorded":
+        receipt(enter(step.action.state, step.action.visit, at), step.action)
+        break
+      case "RoundEnded": {
+        const entry = Option.filter(open, (value) => value.state === step.state)
+        if (Option.isNone(entry)) break
+        const tally = entry.value
+        tally.rounds += 1
+        tally.dead = step.dead
+        tally.model = Option.orElse(Option.fromUndefinedOr(step.model), () => tally.model)
+        tally.outcome = Option.fromUndefinedOr(step.verdict)
+        if (Predicate.isNotUndefined(step.costUsd)) {
+          tally.priced += 1
+          tally.costUsd += step.costUsd
+        }
+        break
+      }
+      case "Answered":
+        if (Option.isSome(open)) open.value.outcome = Option.some(step.choice)
+        break
+      case "Moved": {
+        const entry = Option.filter(open, (value) => value.state === step.from)
+        if (Option.isSome(entry)) {
+          entry.value.to = Option.some(step.to)
+          entry.value.endedAt = Option.some(at)
+          if (!isMechanismMove(step.by)) entry.value.outcome = Option.some(step.by)
+        }
+        open = Option.none()
+        break
+      }
+      case "Finished": {
+        const visit = visits.filter((entry) => entry.state === step.state).length + 1
+        enter(step.state, visit, at).endedAt = Option.some(at)
+        open = Option.none()
+        break
+      }
+      default:
+        break
+    }
+  }
+  return visits.map((entry) => ({
+    state: entry.state,
+    visit: entry.visit,
+    at: entry.at,
+    rounds: entry.rounds,
+    priced: entry.priced,
+    costUsd: entry.costUsd,
+    dead: entry.dead,
+    ...omitUndefined({
+      endedAt: Option.getOrUndefined(entry.endedAt),
+      thread: Option.getOrUndefined(entry.thread),
+      model: Option.getOrUndefined(entry.model),
+      outcome: Option.getOrUndefined(entry.outcome),
+      to: Option.getOrUndefined(entry.to),
+    }),
+  }))
+}
+
+/**
+ * One run as the TUI's run page reads it through `MachinesRpc.Status`: what
+ * `machine.status` gives, and every visit of its states (`trail`). The
+ * model's tool leaves the trail out: its steps say the same.
+ */
+export const MachineRunPage = Schema.Struct({
+  ...MachineRunStatus.fields,
+  trail: Schema.Array(StateVisit),
+})
+export type MachineRunPage = typeof MachineRunPage.Type
+
+const runPage = Effect.fn("Machines.runPage")(function* (params: typeof RunStatusParams.Type) {
+  const store = yield* MachineStore
+  const status = yield* runStatus(params)
+  const trail = stateVisits(yield* store.visitSteps(status.run))
+  return { ...status, trail }
 })
 
 const ThreadQualityParams = Schema.Struct({ session: SessionId })
@@ -4453,30 +4652,40 @@ const ownedRuns = Effect.fn("Machines.ownedRuns")(function* () {
   return runs.map(runView)
 })
 
-/** One run as `machine.list` and `MachinesRpc.Runs` show it, with no steps. */
-export type MachineRunView = typeof RunView.Type
-
 /**
- * What a client outside any turn reads of runs (`gent ctl request`, the
- * TUI's band): the views `machine.status` and `machine.list` give, asked as
- * a session of the owner's thread.
+ * What a client outside any turn reads of runs and does to them (`gent ctl
+ * request`, the TUI's band and run page), asked as a session of the owner's
+ * thread: the views `machine.status` (with its trail) and `machine.list`
+ * give, and the stop `machine.stop` makes.
  */
 export const MachinesRpc = defineRequests(MACHINES_EXTENSION_ID, {
   Status: request({
     id: "run-status",
-    description: "Read one run your thread owns: its state, status, pending action and last steps",
+    description:
+      "Read one run your thread owns: its state, status, pending action, last steps and every state visit",
     answersDuringTurn: true,
     input: RunStatusParams,
-    output: MachineRunStatus,
+    output: MachineRunPage,
     resources: [MachineStoreResource],
-    execute: runStatus,
+    execute: runPage,
+  }),
+  // The store's commit is the stop's own lock, as `machine.stop`'s in a turn.
+  Stop: request({
+    id: "run-stop",
+    description:
+      "Stop a run your thread owns: its open round's thread is stopped and its command is killed",
+    answersDuringTurn: true,
+    input: RunStatusParams,
+    output: Schema.Struct({ run: RunId, status: Schema.Literal("stopped") }),
+    resources: [MachineStoreResource],
+    execute: (params) => stopRun(params.run),
   }),
   Runs: request({
     id: "run-list",
     description: "List the runs your thread started, newest first",
     answersDuringTurn: true,
     input: Schema.Struct({}),
-    output: Schema.Array(RunView),
+    output: Schema.Array(MachineRunView),
     resources: [MachineStoreResource],
     execute: () => ownedRuns(),
   }),
@@ -4499,7 +4708,7 @@ const MachineListTool = tool({
   description: "List the runs your thread started, newest first.",
   promptSnippet: "List your machine runs",
   params: Tool.EmptyParams,
-  output: Schema.Array(RunView),
+  output: Schema.Array(MachineRunView),
   execute: () => ownedRuns(),
 })
 
@@ -4572,7 +4781,13 @@ export const MachinesExtension = defineExtension({
       MachineListTool,
       MachineStopTool,
     )
-    yield* host.register("request", MachinesRpc.Status, MachinesRpc.Runs, MachinesRpc.Quality)
+    yield* host.register(
+      "request",
+      MachinesRpc.Status,
+      MachinesRpc.Stop,
+      MachinesRpc.Runs,
+      MachinesRpc.Quality,
+    )
     yield* host.on("wakeDue", (input) => runDue(input))
     yield* host.on("loopOpen", () => repairHost().pipe(logFailure("machines.repair.failed")))
     yield* host.on("sessionDeleted", ({ sessionId }) =>
