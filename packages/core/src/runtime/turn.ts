@@ -1985,6 +1985,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
     }),
     project: (cwd) => configService.project(cwd),
     awaitLane: (message) => placement.awaitLane(message),
+    waiting: (message) => placement.queued(message),
     cancel: (message) => placement.freeReservation(message),
     hold: (message) => placement.holdReservation(message),
     lanes,

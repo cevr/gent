@@ -7261,6 +7261,28 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect("queued reads a start waiting in its queue, and none admitted or gone", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      expect(yield* askLane(placement, Option.none(), "fill-1")).toBe("admitted")
+      expect(yield* askLane(placement, Option.none(), "fill-2")).toBe("admitted")
+      expect(yield* askLane(placement, Option.none(), "waits")).toBe("queued")
+      expect(yield* askLane(placement, Option.none(), "leaves")).toBe("queued")
+      expect(yield* placement.queued("fill-1")).toBe(false)
+      expect(yield* placement.queued("waits")).toBe(true)
+      expect(yield* placement.queued("never-asked")).toBe(false)
+      yield* placement.freeReservation("leaves")
+      expect(yield* placement.queued("leaves")).toBe(false)
+      // The reads changed nothing: the waiter still heads the queue.
+      yield* placement.freeReservation("fill-1")
+      expect(yield* askLane(placement, Option.none(), "waits")).toBe("admitted")
+      expect(yield* placement.queued("waits")).toBe(false)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("a lane end grants the head of the queue with no clock advance", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()

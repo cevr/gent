@@ -3983,6 +3983,8 @@ interface CredentialPlacementService {
    * queue for good.
    */
   readonly awaitLane: (key: string) => Effect.Effect<boolean, LaneUnavailable>
+  /** Whether the start under `key` waits in its queue now; it reads and changes nothing. */
+  readonly queued: (key: string) => Effect.Effect<boolean>
   /**
    * The end of the Sabbath the session's run is in now, when its turn holds
    * a lane a start was admitted to (a thread's round, a child's run): such a
@@ -6842,6 +6844,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       return yield* Effect.fromResult(answer.outcome)
     }),
     awaitLane: (key: string) => awaitLane(key),
+    queued: (key: string) => locked(() => waiting.has(key)),
     sabbathStop: Effect.fn("CredentialPlacement.sabbathStop")(function* (sessionId: SessionId) {
       const now = yield* Clock.currentTimeMillis
       return yield* locked(() =>

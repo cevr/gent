@@ -299,6 +299,10 @@ const PendingAction = Schema.TaggedUnion({
    * a new thread, as a usage limit's rerun does. `model`: the model the
    * thread's session runs, read when it is admitted. `configRole`: the
    * config role the round ran, a state's switch or its thread role's own.
+   * `queuedOn` and `queuedAt`: no choice of its pick had a lane, so the
+   * round waits in the lane queue of that model since then; past
+   * `PATIENCE` it moves to another maker's choice (`roundPatience`).
+   * `avoid`: the makers patience moved it off, which its pick leaves out.
    */
   Round: {
     state: StateName,
@@ -311,6 +315,9 @@ const PendingAction = Schema.TaggedUnion({
     configRole: Schema.optionalKey(Schema.String),
     notBefore: Schema.optionalKey(Schema.Finite),
     fresh: Schema.optionalKey(Schema.Boolean),
+    queuedOn: Schema.optionalKey(ModelId),
+    queuedAt: Schema.optionalKey(Schema.Finite),
+    avoid: Schema.optionalKey(Schema.Array(Schema.String)),
   },
   /**
    * `launch` is stored before the spawn, so a later server finds the
@@ -428,6 +435,11 @@ const MachineStep = Schema.TaggedUnion({
     until: Schema.Finite,
     reason: Schema.Literals(["lane", "quota", "sabbath", "integration"]),
   },
+  /**
+   * The pending round waited `PATIENCE` in the lane queue of `model`: it
+   * left that queue and picks again with every choice of `maker` left out.
+   */
+  Repicked: { state: StateName, model: ModelId, maker: Schema.String },
   Delivered: { askId: AskId },
   Answered: { askId: AskId, choice: Verdict, note: Schema.optionalKey(Schema.String) },
   /** The value a state's visit left: templates read it as `{{<state>.*}}` and `{{all.<state>}}`. */
@@ -942,6 +954,7 @@ const stateOfStep = (step: MachineStep, fallback: StateName): StateName => {
     case "CommandEnded":
     case "Interrupted":
     case "Waiting":
+    case "Repicked":
     case "Finished":
     case "Saved":
     case "Granted":
@@ -2645,11 +2658,22 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   // Read back: a start again under its key finds the thread the first start made.
   const ran = yield* threads.model(thread).pipe(Effect.mapError(threadFault))
   const round = yield* threads.sendRound(action.key)
+  // No choice had a lane: the round waits in its model's queue from now.
+  const queuedOn = Option.map(
+    Option.filter(pick, (chosen) => chosen.queued),
+    (chosen) => chosen.model,
+  )
+  const queuedAt = yield* Effect.transposeOption(Option.as(queuedOn, Clock.currentTimeMillis))
   const recorded = PendingAction.cases.Round.make({
     ...action,
     thread,
     round,
-    ...omitUndefined({ model: Option.getOrUndefined(ran), configRole: role.role }),
+    ...omitUndefined({
+      model: Option.getOrUndefined(ran),
+      configRole: role.role,
+      queuedOn: Option.getOrUndefined(queuedOn),
+      queuedAt: Option.getOrUndefined(queuedAt),
+    }),
   })
   // A retry's or a rerun's thread is the round's own; a fresh state's
   // replaces the role's thread.
@@ -2906,21 +2930,18 @@ const againstMaker = Effect.fn("Machines.againstMaker")(function* (run: Run, aga
 })
 
 /**
- * The choices of thread role `name`'s config role, in the order its round
- * tries them: the role's own order, or with `rank: "cheapest"` by
- * `efficientOrder` over the machine's ended runs, here being the run's
- * project and its input's `domain` (a weight is the provider's fitted one,
- * `accounts.lanes`, 1 until fitted). Of a role `against` another, a choice
- * of that role's maker or of no known maker drops. Fails when the config
- * names no such role, or no choice is left: a wait would never end.
+ * The choices thread role `name`'s config role leaves its round, in the
+ * role's own order: of a role `against` another, a choice of that role's
+ * maker or of no known maker drops, and so does one of a maker in `avoid`
+ * (patience moved the round off it). Fails when the config names no such
+ * role; none left is the caller's to read.
  */
-const roleOrder = Effect.fn("Machines.roleOrder")(function* (
+const roleChoices = Effect.fn("Machines.roleChoices")(function* (
   run: Run,
   name: RoleName,
   configRole: string,
   against: Option.Option<RoleName>,
-  /** The thread role's own config role, which a round from before switches ran. */
-  own: string,
+  avoid: ReadonlyArray<string>,
 ) {
   const ctx = yield* ExtensionContext
   const resolved = yield* ctx.Accounts.role(run.cwd, configRole).pipe(
@@ -2937,14 +2958,42 @@ const roleOrder = Effect.fn("Machines.roleOrder")(function* (
   })
   const choices = resolved.value.choices.filter(
     (choice) =>
-      Option.isNone(maker) || Option.exists(choice.maker, (each) => !Option.contains(maker, each)),
+      (Option.isNone(maker) ||
+        Option.exists(choice.maker, (each) => !Option.contains(maker, each))) &&
+      !Option.exists(choice.maker, (each) => avoid.includes(each)),
   )
+  return { role: resolved.value, maker, choices }
+})
+
+/**
+ * The choices of thread role `name`'s config role, in the order its round
+ * tries them (`roleChoices`): the role's own order, or with `rank:
+ * "cheapest"` by `efficientOrder` over the machine's ended runs, here being
+ * the run's project and its input's `domain` (a weight is the provider's
+ * fitted one, `accounts.lanes`, 1 until fitted). Fails when the config names
+ * no such role, or no choice is left: a wait would never end.
+ */
+const roleOrder = Effect.fn("Machines.roleOrder")(function* (
+  run: Run,
+  name: RoleName,
+  configRole: string,
+  against: Option.Option<RoleName>,
+  /** The thread role's own config role, which a round from before switches ran. */
+  own: string,
+  avoid: ReadonlyArray<string>,
+) {
+  const ctx = yield* ExtensionContext
+  const { role, maker, choices } = yield* roleChoices(run, name, configRole, against, avoid)
   if (choices.length === 0) {
-    const unresolved = resolved.value.unresolved.map(
-      (choice) => `${choice.provider} ${choice.family}`,
-    )
+    const unresolved = role.unresolved.map((choice) => `${choice.provider} ${choice.family}`)
     const reasons = [
       ...Option.toArray(Option.map(maker, (each) => `none of another maker than ${each}`)),
+      ...Option.toArray(
+        Option.map(
+          Option.liftPredicate(avoid, (list) => list.length > 0),
+          (list) => `none of a maker other than ${list.join(", ")}, which patience left`,
+        ),
+      ),
       ...Option.toArray(
         Option.map(
           Option.liftPredicate(unresolved, (list) => list.length > 0),
@@ -2956,7 +3005,7 @@ const roleOrder = Effect.fn("Machines.roleOrder")(function* (
       message: `${name} has no model to run in the role ${configRole}: ${reasons.join("; ") || "no choice"}`,
     })
   }
-  if (Option.isNone(resolved.value.rank)) return choices
+  if (Option.isNone(role.rank)) return choices
   const store = yield* MachineStore
   const runs = rankedRuns(yield* store.endedRunsOf(run.machine, RANK_RUNS))
   const report = yield* ctx.Accounts.lanes
@@ -2984,7 +3033,7 @@ const roleOrder = Effect.fn("Machines.roleOrder")(function* (
  * when all are refused (spent, or in the owner's Sabbath). Each admission under the key gives
  * the last one's lane or place up. A pick whose commit loses keeps its
  * lane until the hold lapses (2 minutes): another driver may send under
- * the same key, so none cancels it.
+ * the same key, so none cancels it. `queued`: the pick left the key waiting.
  */
 const freeModel = Effect.fn("Machines.freeModel")(function* (
   run: Run,
@@ -3015,7 +3064,7 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
       const refused = answer.failure
       if (!Option.exists(soonest, (earlier) => earlier.retryAt <= refused.retryAt))
         soonest = Option.some(refused)
-    } else if (answer.success._tag === "Admitted") return Result.succeed(modelId)
+    } else if (answer.success._tag === "Admitted") return Result.succeed({ modelId, queued: false })
     else waiting.push(modelId)
   }
   const first = Option.fromUndefinedOr(waiting[0])
@@ -3031,7 +3080,7 @@ const freeModel = Effect.fn("Machines.freeModel")(function* (
   // The last try left the key on another model: it waits on the first again.
   const queued = yield* admit(first.value)
   if (Result.isFailure(queued)) return Result.fail(queued.failure)
-  return Result.succeed(first.value)
+  return Result.succeed({ modelId: first.value, queued: queued.success._tag !== "Admitted" })
 })
 
 /**
@@ -3061,12 +3110,20 @@ const rolePick = Effect.fn("Machines.rolePick")(function* (
         readonly model: ModelId
         readonly effort: ReasoningEffort
         readonly keep: boolean
+        readonly queued: boolean
       }>(),
     )
   }
   const threads = yield* threadsOf
   const own = (yield* definitionOf(run)).threads[name]?.role ?? role.role
-  const order = yield* roleOrder(run, name, role.role, Option.fromUndefinedOr(role.against), own)
+  const order = yield* roleOrder(
+    run,
+    name,
+    role.role,
+    Option.fromUndefinedOr(role.against),
+    own,
+    action.avoid ?? [],
+  )
   const models = order.map((choice) => choice.model)
   const keptRun = yield* Option.match(kept, {
     onNone: () => Effect.succeedNone,
@@ -3089,10 +3146,15 @@ const rolePick = Effect.fn("Machines.rolePick")(function* (
     ...models.filter((model) => !Option.contains(first, model)),
   ]
   const free = yield* freeModel(run, action, role, tried)
-  return Result.map(free, (model) =>
+  return Result.map(free, ({ modelId, queued }) =>
     Option.map(
-      Option.fromUndefinedOr(order.find((choice) => choice.model === model)),
-      (choice) => ({ model, effort: choice.effort, keep: Option.contains(first, model) }),
+      Option.fromUndefinedOr(order.find((choice) => choice.model === modelId)),
+      (choice) => ({
+        model: modelId,
+        effort: choice.effort,
+        keep: Option.contains(first, modelId),
+        queued,
+      }),
     ),
   )
 })
@@ -3132,6 +3194,90 @@ const roundBill = (
   })
 }
 
+/** How long a round waits in a lane queue before it moves to another maker. */
+const PATIENCE = Duration.minutes(10)
+
+/**
+ * Waits for an open round's end, with patience for one its pick left
+ * queued (`queuedOn`): until `PATIENCE` has passed, at most the time left;
+ * past it, while the round still waits in that queue
+ * (`Threads.laneQueued`), it moves when its role has a choice of a maker
+ * other than `queuedOn`'s and the ones it left before. The move commits a
+ * new pending round under a new key that leaves that maker out, and a
+ * `Repicked` step, then stops the queued round, which leaves its queue; the
+ * new round's pick starts its own thread. With no such choice, or once its
+ * lane came, it waits for its end as any round.
+ */
+const awaitPatiently = Effect.fn("Machines.awaitPatiently")(function* (
+  run: Run,
+  state: ThreadState,
+  action: RoundAction,
+  roundId: string,
+  signals: Signals,
+) {
+  const waits = (within = Option.none<Duration.Duration>()) =>
+    awaitSignal(signals, {
+      ends: true,
+      ...omitUndefined({ within: Option.getOrUndefined(within) }),
+    })
+  if (Predicate.isUndefined(action.queuedOn) || Predicate.isUndefined(action.queuedAt)) {
+    return yield* waits()
+  }
+  const queuedOn = action.queuedOn
+  const left = action.queuedAt + Duration.toMillis(PATIENCE) - (yield* Clock.currentTimeMillis)
+  if (left > 0) return yield* waits(Option.some(Duration.millis(left)))
+  const threads = yield* threadsOf
+  if (!(yield* threads.laneQueued(roundId))) return yield* waits()
+  const ctx = yield* ExtensionContext
+  const maker = yield* ctx.Accounts.maker(run.cwd, queuedOn).pipe(
+    Effect.mapError((error) => new MachineFault({ message: error.message })),
+  )
+  if (Option.isNone(maker)) return yield* waits()
+  const definition = yield* definitionOf(run)
+  const role = switchedRole(
+    definition.threads[state.thread] ?? {},
+    state,
+    templateScope(run, action.visit),
+  )
+  if (Predicate.isUndefined(role.role)) return yield* waits()
+  const avoid = [...(action.avoid ?? []), maker.value]
+  const { choices } = yield* roleChoices(
+    run,
+    state.thread,
+    role.role,
+    Option.fromUndefinedOr(role.against),
+    avoid,
+  )
+  if (choices.length === 0) return yield* waits()
+  // The key is the `Repicked` step's seq: unique in the run.
+  const next = PendingAction.cases.Round.make({
+    state: action.state,
+    visit: action.visit,
+    key: `machine:${run.run}:${run.seq + 1}`,
+    attempt: action.attempt,
+    avoid,
+    ...omitUndefined({ fresh: action.fresh }),
+  })
+  yield* Effect.logInfo("machines.round.repicked").pipe(
+    Effect.annotateLogs({ run: run.run, state: action.state, model: queuedOn, maker: maker.value }),
+  )
+  const committed = yield* commitMove(run, { ...run, pending: Option.some(next) }, [
+    MachineStep.cases.Repicked.make({ state: action.state, model: queuedOn, maker: maker.value }),
+  ])
+  if (Option.isSome(committed) && Predicate.isNotUndefined(action.thread)) {
+    // The queued round leaves its queue; it never ran, so it ends unanswered.
+    yield* threads
+      .stop(action.thread, Option.some(`machine-patience:${action.key}`))
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("machines.thread.stop.failed").pipe(
+            Effect.annotateLogs({ run: run.run, cause: Cause.pretty(cause) }),
+          ),
+        ),
+      )
+  }
+})
+
 /**
  * Waits for the pending round's end, then takes its receipt: a verdict moves
  * the run, a dead worker runs the round once more on a new thread, and a
@@ -3160,9 +3306,10 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
   const view = found.value
   if (view.status === "open") {
     // Open, stopped from outside or not: the worker's turn still runs (a
-    // stopped turn may hold out in an uninterruptible tool). Its end, which
-    // Threads publishes whether the round was stopped or not, decides.
-    yield* awaitSignal(signals, { ends: true })
+    // stopped turn may hold out in an uninterruptible tool), or it waits
+    // for its lane. Its end, which Threads publishes whether the round was
+    // stopped or not, decides; a lane wait past patience moves it.
+    yield* awaitPatiently(run, state, action, roundId, signals)
     return
   }
   const name = action.state

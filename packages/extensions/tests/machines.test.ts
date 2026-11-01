@@ -358,6 +358,7 @@ const StepView = Schema.Struct({
   askId: Schema.optionalKey(Schema.String),
   round: Schema.optionalKey(Schema.String),
   model: Schema.optionalKey(Schema.String),
+  maker: Schema.optionalKey(Schema.String),
   costUsd: Schema.optionalKey(Schema.Finite),
   role: Schema.optionalKey(Schema.String),
   configRole: Schema.optionalKey(Schema.String),
@@ -3645,6 +3646,186 @@ describe("a config role's round", () => {
         ])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
+  )
+})
+
+// ── a round's patience in its lane queue ────────────────────────────────────
+
+/** Sol's family as the `work` account serves it: another maker's model on Opus's pool. */
+const HOSTED_SOL = ModelId.make("anthropic/gpt-6.1-sol")
+
+/** One price for every model: each run counts as one mean run of the pool. */
+const PATIENT_PRICE = { input: 27_778, output: 27_778 }
+
+/** Opus of Anthropic and the hosted Sol of OpenAI, on one account, and the owner's model. */
+const PATIENT_MODELS = [
+  Model.make({ ...anthropicModel(OPUS, PATIENT_PRICE), maker: "anthropic" }),
+  Model.make({ ...anthropicModel(HOSTED_SOL, PATIENT_PRICE), maker: "openai" }),
+  Model.make({ ...anthropicModel(TEST_MODEL_ID, PATIENT_PRICE), family: "owner" }),
+]
+
+/** One round of config role `pair`, its say naming `state`, then the end. */
+const pairOnce = (name: string, state: string): Schema.Json => ({
+  name,
+  threads: { worker: { role: "pair" } },
+  start: state,
+  states: {
+    [state]: { kind: "thread", thread: "worker", say: `STATE ${state} {{visit}}`, next: "done" },
+    done: { kind: "final" },
+  },
+})
+
+/** The week of `work` at `utilization`, resetting 20 hours after `now`. */
+const weekAt = (now: number, utilization: number): ReadonlyArray<QuotaReading> => [
+  { window: "7d", utilization, resetAt: now + 20 * HOUR, rejected: false },
+]
+
+/**
+ * The `work` account with one lane, its config role `pair` listing
+ * `models` in order, and a `hold` run whose round takes that lane and
+ * holds it until `holdEnds` opens. A `patient` round's worker answers once
+ * `patientEnds` opens.
+ */
+const oneLaneHeld = (pair: ReadonlyArray<ModelId>) =>
+  Effect.gen(function* () {
+    const home = yield* restartableHome
+    const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+    const holdEnds = yield* Deferred.make<boolean>()
+    const patientEnds = yield* Deferred.make<boolean>()
+    const models = yield* makeModels((round) => {
+      const answer = billed(`${round.state} ${round.visit} done`)
+      if (round.state === "hold") return Effect.as(Deferred.await(holdEnds), answer)
+      return Effect.as(Deferred.await(patientEnds), answer)
+    }, quotaOwner(readings))
+    const { client } = yield* createRpcClient(
+      home.layerFor(machineModels(models), tieredAccount({ pair }, PATIENT_MODELS)),
+    )
+    const owner = ownerOf(yield* client.session.create({}))
+    // The week moves a point over the owner's two steps: about 1.3 runs to its reset, one lane.
+    const now = yield* Clock.currentTimeMillis
+    yield* Ref.set(readings, weekAt(now, 0.1))
+    yield* callOn(client, owner, [["machine.list", "list-before", {}]])
+    yield* Ref.set(readings, weekAt(now, 0.11))
+    yield* callOn(client, owner, [["machine.list", "list-after", {}]])
+    expect((yield* client.accounts.lanes()).providers[0]?.capacity).toBe(1)
+    const hold = yield* startRunOn(client, owner, pairOnce("hold", "hold"), "hold")
+    yield* waitFor(
+      Ref.get(models.calls),
+      (calls) => calls.includes("hold:1"),
+      10_000,
+      "the hold round took the lane",
+    )
+    return { home, client, owner, models, holdEnds, patientEnds, hold }
+  })
+
+/** The run's `Repicked` steps: the model each left and its maker. */
+const repicksOf = (steps: ReadonlyArray<typeof StepView.Type>) =>
+  steps.flatMap((step) => {
+    if (step._tag !== "Repicked") return []
+    return [{ state: step.state, model: step.model, maker: step.maker }]
+  })
+
+describe("a round's patience in its lane queue", () => {
+  it.live(
+    "a round queued past ten minutes moves to another maker's model on a new thread",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL])
+        const { home, client, owner, models } = rig
+        yield* Deferred.succeed(rig.patientEnds, true)
+        // The pool's one lane is the hold round's: both choices queue, on Opus first.
+        const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => roundThreads(steps).length === 1,
+          10_000,
+          "the patient round queued on its thread",
+        )
+        // Nine minutes on, it still waits for Opus.
+        yield* TestClock.adjust(Duration.minutes(9))
+        yield* settle
+        expect(repicksOf(yield* home.sql(stepsOf(run)))).toEqual([])
+        expect(yield* Ref.get(models.calls)).toEqual(["hold:1"])
+        // Past ten, it leaves Opus's queue and picks again with Anthropic's models left out.
+        yield* TestClock.adjust(Duration.seconds(61))
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => roundThreads(steps).length === 2,
+          10_000,
+          "the round picked again",
+        )
+        // The hold round ends: its lane goes to the hosted Sol round.
+        yield* Deferred.succeed(rig.holdEnds, true)
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(repicksOf(steps)).toEqual([{ state: "patient", model: OPUS, maker: "anthropic" }])
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([HOSTED_SOL])
+        const [queued, moved] = roundThreads(steps)
+        expect(moved).not.toBe(queued)
+        expect(yield* Ref.get(models.calls)).toEqual(["hold:1", "patient:1"])
+        const held = yield* home.sql(stepsOf(rig.hold))
+        expect(roundsRan(held).map((round) => round.model)).toEqual([OPUS])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live("a round with no model of another maker keeps its place past ten minutes", () =>
+    Effect.gen(function* () {
+      const rig = yield* oneLaneHeld([OPUS])
+      const { home, client, owner, models } = rig
+      yield* Deferred.succeed(rig.patientEnds, true)
+      const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
+      yield* waitFor(
+        home.sql(stepsOf(run)),
+        (steps) => roundThreads(steps).length === 1,
+        10_000,
+        "the patient round queued on its thread",
+      )
+      yield* TestClock.adjust(Duration.minutes(11))
+      yield* settle
+      yield* TestClock.adjust(Duration.minutes(5))
+      yield* settle
+      expect(repicksOf(yield* home.sql(stepsOf(run)))).toEqual([])
+      expect(yield* Ref.get(models.calls)).toEqual(["hold:1"])
+      // Its lane comes when the hold round ends: it runs on Opus, on its own thread.
+      yield* Deferred.succeed(rig.holdEnds, true)
+      yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
+      const steps = yield* home.sql(stepsOf(run))
+      expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS])
+      expect(roundThreads(steps)).toHaveLength(1)
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+
+  it.live("a queued round that got its lane is not moved past ten minutes", () =>
+    Effect.gen(function* () {
+      const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL])
+      const { home, client, owner, models } = rig
+      const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
+      yield* waitFor(
+        home.sql(stepsOf(run)),
+        (steps) => roundThreads(steps).length === 1,
+        10_000,
+        "the patient round queued on its thread",
+      )
+      // Five minutes on, the hold round ends: the patient round takes the lane and runs.
+      yield* TestClock.adjust(Duration.minutes(5))
+      yield* Deferred.succeed(rig.holdEnds, true)
+      yield* waitFor(
+        Ref.get(models.calls),
+        (calls) => calls.includes("patient:1"),
+        10_000,
+        "the patient round runs",
+      )
+      // It still runs past ten minutes: it stays on Opus.
+      yield* TestClock.adjust(Duration.minutes(10))
+      yield* settle
+      expect(repicksOf(yield* home.sql(stepsOf(run)))).toEqual([])
+      yield* Deferred.succeed(rig.patientEnds, true)
+      yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
+      const steps = yield* home.sql(stepsOf(run))
+      expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS])
+      expect(roundThreads(steps)).toHaveLength(1)
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
   )
 })
 

@@ -1,7 +1,7 @@
 # Patience and the lone worker (queue row 39)
 
-Status: commit 1 (core admission) built 2026-10-31; commit 2 (machine
-patience) follows.
+Status: done 2026-10-31. Commit 1 (core admission) `69c8a4386`, its
+review fix `aa184e8bd`; commit 2 (machine patience) follows them.
 
 ## What the owner asked
 
@@ -55,7 +55,8 @@ learnings 13 and 14):
    picks again with every choice of that model's maker left out; the
    round's new thread starts on the next choice of another maker, queued or
    admitted. With no such choice, it keeps its place. A pick that moved
-   records a `Waiting`-like step (`patience`), so the status shows why.
+   records a `Repicked` step (the model and maker it left), so the status
+   shows why; the new round's `avoid` keeps the makers it left.
 
 ## Decided questions
 

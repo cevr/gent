@@ -1488,6 +1488,12 @@ export interface ExtensionAccountsService {
    */
   readonly awaitLane: (message: MessageId) => Effect.Effect<boolean, LaneUnavailable>
   /**
+   * Whether the start queued for `message` still waits in its queue for a
+   * lane: false once it holds one, or it left the queue (granted, cancelled,
+   * refused). It reads and changes nothing.
+   */
+  readonly waiting: (message: MessageId) => Effect.Effect<boolean>
+  /**
    * The model role `name` as the config of `cwd` names it, resolved over the
    * models that cwd's profile lists. None when the config names no such role.
    */

@@ -294,6 +294,7 @@ const testExtensionExtensions = (): ExtensionExtensionsService => ({
 const testExtensionAccounts = (): ExtensionAccountsService => ({
   admit: () => Effect.succeed(LaneAdmission.cases.Admitted.make({})),
   awaitLane: () => Effect.succeed(true),
+  waiting: () => Effect.succeed(false),
   role: () => Effect.succeedNone,
   maker: () => Effect.succeedNone,
   project: (cwd) => Effect.succeed(cwd),

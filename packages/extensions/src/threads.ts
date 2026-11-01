@@ -3151,6 +3151,15 @@ const makeThreads = (rounds: ThreadRoundsService) => {
     round: (round: string) => readRound(round).pipe(withRounds),
     /** The round with this id, none when no send admitted it. */
     findRound: (round: string) => findRound(round).pipe(withRounds),
+    /**
+     * Whether the round still waits in its lane's queue: sent, but no lane
+     * granted yet. False once its turn has a lane, or it left the queue.
+     */
+    laneQueued: (round: string) =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        return yield* ctx.Accounts.waiting(roundMessageId(round))
+      }),
     /** The model the thread's current session runs, as its turns resolve it (`Session.getModel`). */
     model: (thread: string) =>
       Effect.gen(function* () {
