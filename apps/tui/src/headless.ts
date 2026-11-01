@@ -22,11 +22,11 @@ import {
   type SessionId,
   GentConnectionError,
   type GentNamespacedClient,
+  ToolOperationReceipts,
   unseenText,
   userMessageIdForRequest,
 } from "@gent/core/protocol"
 import {
-  CellOperationReceipts,
   formatGenericToolText,
   parseBashOutput,
   toolArgSummary,
@@ -118,7 +118,7 @@ const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
   return `[tool ${status}: bash${exit}]\n${renderedOutput}`
 }
 
-const decodeReceipts = Schema.decodeUnknownOption(CellOperationReceipts)
+const decodeReceipts = Schema.decodeUnknownOption(ToolOperationReceipts)
 
 const receiptGlyph = (outcome: "succeeded" | "failed" | "incomplete") => {
   if (outcome === "succeeded") return "✓"
@@ -141,7 +141,7 @@ const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall, place) => {
   const lines: string[] = [`[tool ${status}: cell]`]
   let receipts = Option.match(decodeReceipts(parsed.value), {
     onNone: () => [],
-    onSome: (value) => value.operations ?? [],
+    onSome: (value) => value.operations,
   })
   if (toolCall.operationsPrinted === true) receipts = []
   for (const receipt of receipts) {

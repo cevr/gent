@@ -17,6 +17,7 @@ import {
   type TurnRetry,
   type TurnUsage,
 } from "@gent/core/extensions/api"
+import { ToolOperationReceipts } from "@gent/core/extensions/branch-tools"
 
 type TurnCompleted = Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>
 const isSynchronized = (event: AgentEvent) => event._tag === "StreamSynchronized"
@@ -161,19 +162,10 @@ export const ChildToolLine = Schema.Struct({
 type ChildToolLine = typeof ChildToolLine.Type
 
 /**
- * The receipts a saved cell result carries under `operations`, read
- * leniently. The cell extension writes them (`CellOperationReceipt`).
+ * The receipts a saved cell result carries. The cell extension writes them
+ * (`withToolOperationReceipts`); core owns the shape (`ToolOperationReceipts`).
  */
-const CellReceipts = Schema.Struct({
-  operations: Schema.Array(
-    Schema.Struct({
-      tool: Schema.String,
-      outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
-      summary: Schema.String,
-    }),
-  ),
-})
-const decodeCellReceipts = Schema.decodeUnknownOption(CellReceipts)
+const decodeCellReceipts = Schema.decodeUnknownOption(ToolOperationReceipts)
 
 const receiptStatus = (outcome: "succeeded" | "failed" | "incomplete"): ChildToolLine["status"] => {
   if (outcome === "succeeded") return "completed"

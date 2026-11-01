@@ -3780,6 +3780,87 @@ describe("AI transcript projection", () => {
     expect(bounded.result).not.toHaveProperty("operations")
   })
 
+  test("an operations item with a key a receipt lacks is not a receipt: the result reaches the model byte for byte", () => {
+    const stored = {
+      display: "fetched",
+      operations: [
+        {
+          toolCallId: `mcp:${"a".repeat(64)}`,
+          tool: "fetch",
+          outcome: "succeeded",
+          summary: "200 OK",
+          url: "https://example.test/report",
+        },
+      ],
+    }
+    const part = Prompt.toolResultPart({
+      id: ToolCallId.make("tc-mcp-operations"),
+      name: "mcp.fixture.fetch",
+      isFailure: false,
+      providerExecuted: false,
+      result: stored,
+    })
+    const seen = boundToolResultForModel(part)
+    expect(encodeWire(Schema.decodeUnknownSync(Schema.Json)(seen.result))).toBe(encodeWire(stored))
+  })
+
+  test("a stored result over the bound whose view fits goes out whole, with no locator", () => {
+    const receipts = Array.from({ length: 30 }, (_, index) => ({
+      toolCallId: `cell:${String(index).padStart(64, "0")}`,
+      tool: "read",
+      outcome: "succeeded",
+      summary: `src/module-${index}/index.ts · 40 lines`,
+    }))
+    const display = "x".repeat(maximumModelToolResultChars - 1_000)
+    const stored = { display, operations: receipts }
+    expect(encodeWire(stored).length).toBeGreaterThan(maximumModelToolResultChars)
+    const seen = boundToolResultForModel(
+      Prompt.toolResultPart({
+        id: ToolCallId.make("tc-view-fits"),
+        name: "cell",
+        isFailure: false,
+        providerExecuted: false,
+        result: stored,
+      }),
+    ).result
+    // The bound reads the view: it fits, so nothing is cut and nothing says so.
+    expect(seen).toEqual({ display, succeededOperations: 30 })
+  })
+
+  test("a result with receipts cut as JSON text is a window on the stored text context.read pages", () => {
+    const receipt = (index: number, outcome: string) => ({
+      toolCallId: `cell:${String(index).padStart(64, "0")}`,
+      tool: "glob",
+      outcome,
+      summary: `${index} files`,
+    })
+    // Many short strings: no string cut fits, so the result is cut as JSON text.
+    const files = Array.from({ length: 600 }, (_, index) => `src/module-${index}/index.ts`)
+    const operations = [receipt(1, "succeeded"), receipt(2, "failed"), receipt(3, "succeeded")]
+    const stored = { files, operations }
+    const storedText = encodeWire(stored)
+    const bounded = Schema.decodeUnknownSync(BoundedToolResultText)(
+      boundToolResultForModel(
+        Prompt.toolResultPart({
+          id: ToolCallId.make("tc-text-receipts"),
+          name: "cell",
+          isFailure: false,
+          providerExecuted: false,
+          result: stored,
+        }),
+      ).result,
+    )
+    const [head = "", tail = ""] = bounded.text.split(
+      /\n\n\.\.\. \[\d+ characters truncated\] \.\.\.\n\n/,
+    )
+    expect(bounded.totalChars).toBe(storedText.length)
+    expect(head.length + bounded.omittedChars + tail.length).toBe(bounded.totalChars)
+    expect(storedText.startsWith(head)).toBe(true)
+    expect(storedText.endsWith(tail)).toBe(true)
+    // The tail ends the stored text, so it carries every receipt, as a read does.
+    expect(tail).toContain(encodeWire(operations))
+  })
+
   test("the whole bounded result the model sees, paging fields included, fits the bound", () => {
     let nested: Schema.Json = { level: 0 }
     for (let level = 1; level < 800; level += 1) nested = { level, next: nested }

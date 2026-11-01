@@ -19,6 +19,8 @@ export { AuthAuthorization, AuthProviderInfo } from "./runtime/provider.js"
 export { AgentEvent, EventEnvelope, InteractionPresented, unseenText } from "./domain/event.js"
 // A request's reply on the wire, and its decode by the request's output schema.
 export { decodeRequestReply, RequestReply } from "./domain/capability.js"
+// The inner-call receipts a saved result carries (a cell's `operations`).
+export { ToolOperationReceipts } from "./domain/capability.js"
 // One decision schema; the client names its type `ApprovalResult`.
 export {
   ApprovalDecisionSchema,

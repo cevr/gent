@@ -731,7 +731,9 @@ describe("runHeadless", () => {
           output: Option.some(
             encodeCellOutput({
               display: "ok",
-              operations: [{ tool: "read", outcome: "succeeded", summary: "12 lines" }],
+              operations: [
+                { toolCallId: "op-read", tool: "read", outcome: "succeeded", summary: "12 lines" },
+              ],
             }),
           ),
           summary: Option.none(),
@@ -800,7 +802,9 @@ describe("runHeadless", () => {
             toolName: "cell",
             output: encodeCellOutput({
               display: "ok",
-              operations: [{ tool: "read", outcome: "succeeded", summary: "1 line" }],
+              operations: [
+                { toolCallId: "op-read", tool: "read", outcome: "succeeded", summary: "1 line" },
+              ],
             }),
           }),
           completed(),

@@ -5,11 +5,17 @@ import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext 
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { useClient } from "./client"
 import { GutterText, NoToolCallIdentity, ToolCallIdentityProvider, ToolFrame } from "./ui"
-import { formatHeadTail, headTail, lineCount, OutputCut, splitLines } from "@gent/core/protocol"
+import {
+  formatHeadTail,
+  headTail,
+  lineCount,
+  OutputCut,
+  splitLines,
+  ToolOperationReceipts,
+} from "@gent/core/protocol"
 import {
   type ActivityOperation,
   callOutcome,
-  CellOperationReceipts,
   decodeToolOutput,
   countNoun,
   decodeToolOutputOption,
@@ -893,10 +899,10 @@ export const cellOperations = (
       return callOperation(operation, place)
     })
   }
-  return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
+  return Option.match(decodeToolOutputOption(ToolOperationReceipts, call.output), {
     onNone: () => [],
     onSome: (value) =>
-      (value.operations ?? []).map((operation): ActivityOperation => {
+      value.operations.map((operation): ActivityOperation => {
         const receipt = { tool: operation.tool, outcome: operation.outcome, detail: "" }
         if (operation.outcome !== "failed") return receipt
         // A failed receipt's summary says why: its failure row draws it.
@@ -939,9 +945,9 @@ function CellToolRenderer(props: ToolRendererProps) {
     [],
   )
   const receipts = createMemo((): ReadonlyArray<OperationLine> =>
-    Option.match(decodeToolOutputOption(CellOperationReceipts, props.toolCall.output), {
+    Option.match(decodeToolOutputOption(ToolOperationReceipts, props.toolCall.output), {
       onNone: () => [],
-      onSome: (value) => value.operations ?? [],
+      onSome: (value) => value.operations,
     }),
   )
 

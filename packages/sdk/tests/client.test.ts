@@ -19,7 +19,13 @@ import {
 } from "@gent/core/test-utils"
 import { SessionStorage } from "@gent/core/host"
 import { Gent } from "../src/client"
-import { Session, SessionId, dateFromMillis, messagePartsText } from "@gent/core/protocol"
+import {
+  Session,
+  SessionId,
+  ToolOperationReceipts,
+  dateFromMillis,
+  messagePartsText,
+} from "@gent/core/protocol"
 
 // ── server options ──────────────────────────────────────────────────────────
 
@@ -254,11 +260,6 @@ describe("Gent.server workspace isolation", () => {
   )
 })
 
-/** The op receipts a cell result carries. */
-const CellReceipts = Schema.Struct({
-  operations: Schema.Array(Schema.Struct({ tool: Schema.String, summary: Schema.String })),
-})
-
 describe("Gent.provider.mock tool scenario", () => {
   it.live(
     "a message asking for debug tools runs real tools over several steps, then answers",
@@ -299,7 +300,7 @@ describe("Gent.provider.mock tool scenario", () => {
             .flatMap((message) => message.parts)
             .flatMap((part) => {
               if (part.type !== "tool-result") return []
-              return Option.match(Schema.decodeUnknownOption(CellReceipts)(part.result), {
+              return Option.match(Schema.decodeUnknownOption(ToolOperationReceipts)(part.result), {
                 onNone: () => [],
                 onSome: (receipts) => receipts.operations,
               })

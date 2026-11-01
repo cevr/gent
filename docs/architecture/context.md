@@ -157,7 +157,16 @@
   Before the bound, a succeeded result's succeeded inner-call receipts leave
   the view as a `succeededOperations` count (`operationReceiptsForModel`,
   `domain/capability.ts`; `cell.md` has why); `totalChars` counts the stored
-  text, every receipt included, which is what `context.read` pages.
+  text, every receipt included, which is what `context.read` pages. The
+  bound reads the view, so a stored result over 8,000 characters whose view
+  fits goes out whole, with no locator. Only exact receipts leave: an
+  `operations` item with a key a receipt does not have (an MCP result's
+  `url`, say) makes the result reach the model byte for byte. A result cut
+  as JSON text is cut from the stored text, not the view, so its numbers
+  page exactly: the head starts at offset 0, the tail ends at `totalChars`,
+  and head + `omittedChars` + tail is `totalChars`; that tail carries the
+  stored receipts, succeeded ones included. In a structured cut,
+  `omittedChars` counts the string characters cut from the view.
   Context pressure drops before compaction ever runs.
 - The cell subsumes host tools the Bun runtime already provides: `fetch` for
   network reads and `bun:sqlite` on the data directory's `data.db` for past sessions. No

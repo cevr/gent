@@ -211,6 +211,20 @@ const largestFitting = (
 }
 
 /**
+ * The JSON text of the stored result, the text `context.read` pages. The view
+ * is the stored part itself when it leaves nothing out, so its text is reused.
+ */
+const storedResultText = (
+  part: Prompt.ToolResultPart,
+  view: Prompt.ToolResultPart,
+  viewText: string,
+): string => {
+  if (view === part) return viewText
+  // The view decoded from the stored result, so the stored result encodes.
+  return Option.getOrElse(encodeToolResultJson(part.result), () => viewText)
+}
+
+/**
  * One stored tool result as the model sees it: its receipts as the model
  * reads them (`operationReceiptsForModel`), then bound, with a locator for
  * the rest, so the bound spends its room on what the model reads. The stored
@@ -224,7 +238,13 @@ const largestFitting = (
  * does an unbounded result. `omittedChars` counts the string characters cut.
  * A result whose strings cannot carry the cut (many short strings, or bulk
  * that is not string: numbers, keys, nesting) is cut as JSON text in `text`
- * instead, which the provider then encodes a second time.
+ * instead, which the provider then encodes a second time. That text is a
+ * window on the stored text `context.read` pages, receipts included: its
+ * head starts at offset 0, its tail ends at `totalChars`, and head +
+ * `omittedChars` + tail is `totalChars`, so a read at the head's length
+ * continues it. A cut of the view's text, shorter by the receipts it leaves
+ * out, would not add up to `totalChars`, and its tail would not end the
+ * stored text.
  */
 export const boundToolResultForModel = (
   part: Prompt.ToolResultPart,
@@ -233,12 +253,10 @@ export const boundToolResultForModel = (
   const view = operationReceiptsForModel(part)
   const encoded = encodeToolResultJson(view.result)
   if (Option.isNone(encoded) || encoded.value.length <= maxChars) return view
+  const stored = storedResultText(part, view, encoded.value)
   const locator = {
     truncated: true,
-    totalChars: Option.getOrElse(
-      Option.map(encodeToolResultJson(part.result), (stored) => stored.length),
-      () => encoded.value.length,
-    ),
+    totalChars: stored.length,
     read: `context.read("${part.id}", { offset, limit })`,
   }
   const structured = Option.flatMap(decodeToolResultJson(view.result), (value) =>
@@ -249,7 +267,7 @@ export const boundToolResultForModel = (
     })),
   )
   const asText = (size: number): Schema.Json => {
-    const bounded = headTailChars(encoded.value, size)
+    const bounded = headTailChars(stored, size)
     return { ...locator, omittedChars: bounded.omittedChars, text: bounded.text }
   }
   return Prompt.toolResultPart({

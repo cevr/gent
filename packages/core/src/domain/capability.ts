@@ -692,11 +692,27 @@ export type ToolOperationReceipt = typeof ToolOperationReceipt.Type
 /** The saved result's field that holds its receipts. */
 const OPERATION_RECEIPTS_KEY = "operations"
 
+/**
+ * The receipts a saved result carries, as every reader of the stored result
+ * (the TUI, the round-end row) decodes them; the result's other fields pass.
+ */
+export const ToolOperationReceipts = Schema.Struct({
+  [OPERATION_RECEIPTS_KEY]: Schema.Array(ToolOperationReceipt),
+})
+
 /** The model view's field that counts the succeeded receipts it leaves out. */
 const SUCCEEDED_OPERATIONS_KEY = "succeededOperations"
 
 const encodeOperationReceipts = Schema.encodeSync(Schema.Array(ToolOperationReceipt))
-const decodeOperationReceipts = Schema.decodeUnknownOption(Schema.Array(ToolOperationReceipt))
+/**
+ * Exact receipts only: an item with a key a receipt does not have is some
+ * other tool's `operations` (an MCP result, say), which the view must not
+ * reshape, since a decode that drops the key would drop its value.
+ */
+const decodeExactOperationReceipts = Schema.decodeUnknownOption(
+  Schema.Array(ToolOperationReceipt),
+  { onExcessProperty: "error" },
+)
 const decodeResultObject = Schema.decodeUnknownOption(Schema.JsonObject)
 
 /** `value` with `receipts` under the receipts field, last. */
@@ -714,7 +730,8 @@ export const withToolOperationReceipts = (
  * its calls ran. Failed and incomplete receipts stay whole, their ids
  * included for `context.read`. A failed call keeps every receipt: what acted
  * before it failed is the record the model reconciles without a replay. A
- * result whose receipts do not decode stays as it is.
+ * result whose `operations` are not exact receipts, each with a receipt's
+ * keys and no other, stays as it is, byte for byte.
  *
  * Decided by: a pure function of the stored part, applied to every request,
  * so an earlier result reads the same bytes in each later request and the
@@ -725,7 +742,7 @@ export const operationReceiptsForModel = (part: Prompt.ToolResultPart): Prompt.T
   if (part.isFailure) return part
   const value = decodeResultObject(part.result)
   if (Option.isNone(value)) return part
-  const receipts = decodeOperationReceipts(value.value[OPERATION_RECEIPTS_KEY])
+  const receipts = decodeExactOperationReceipts(value.value[OPERATION_RECEIPTS_KEY])
   if (Option.isNone(receipts)) return part
   const kept = receipts.value.filter((receipt) => receipt.outcome !== "succeeded")
   const succeeded = receipts.value.length - kept.length

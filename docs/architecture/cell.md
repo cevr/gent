@@ -156,7 +156,8 @@ Inner calls a cell admits publish the ordinary tool events with a
 receipts (`toolCallId`, `tool`, `outcome`, `summary`) to the saved cell result whenever a cell
 made inner calls, so the transcript keeps effects visible after reload. Core
 owns the receipt shape (`ToolOperationReceipt`, `withToolOperationReceipts` in
-`domain/capability.ts`) and the model's view of it
+`domain/capability.ts`; readers of a stored result decode
+`ToolOperationReceipts`, from `branch-tools` or `protocol`) and the model's view of it
 (`operationReceiptsForModel`, applied in `boundToolResultForModel`): a cell
 that succeeded shows the model its failed and incomplete receipts whole and
 counts the rest as `succeededOperations`, because the model's own code already

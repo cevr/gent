@@ -1334,23 +1334,6 @@ export const latestReasoningHeading = (
  */
 type ActivityOutcome = "succeeded" | "failed" | "cancelled" | "incomplete" | "running"
 
-/**
- * The inner-call receipts a saved cell result carries under `operations`.
- * The one TUI reading of the shape the cell writes: every client draws them
- * where the branch has no events for the ops (a fork).
- */
-export const CellOperationReceipts = Schema.Struct({
-  operations: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        tool: Schema.String,
-        outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
-        summary: Schema.String,
-      }),
-    ),
-  ),
-})
-
 /** The lines an edit adds and removes. */
 interface DiffCount {
   readonly added: number
