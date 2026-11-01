@@ -1,5 +1,6 @@
 import { Permits } from "../runtime/permits.js"
 import {
+  Clock,
   type Context,
   DateTime,
   Duration,
@@ -1337,6 +1338,8 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     account: Option.getOrUndefined(
       sessionAccount(Option.fromUndefinedOr(session.admission), snapshotState.metrics),
     ),
+    // Read last, as the reply leaves: the clock its receipts were stamped by.
+    serverNow: yield* Clock.currentTimeMillis,
   })
 })
 

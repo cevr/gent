@@ -145,7 +145,22 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   ticks on the spinner clock that blinks the glyph, and only a running row
   reads that clock. The start time comes from the live feed, or from the
   snapshot while a call runs (`startedAt` on a running `ToolInteraction` and
-  its running ops), so a reloaded TUI counts from the real start. A narrow
+  its running ops), so a reloaded TUI counts from the real start. Both are
+  the envelope's server time, live or replayed, and a `--connect` client's
+  clock can read minutes off the server's: the timer never subtracts a
+  server time from this client's clock. The snapshot reply carries the
+  server's `serverNow`; the feed takes its own clock as the reply lands and
+  keeps the difference as the connection's one offset
+  (`serverClockOffset`). A row reads the server's now as this clock plus the
+  offset, so `startedAt` and every other server time stay in the server's
+  frame, with one conversion. The live line's turn count does the reverse
+  at the same point: the runtime's `startedAtMs` minus the offset is its
+  start on this clock. A per-snapshot "server now, advanced by a local tick"
+  is the same arithmetic anchored at the same reply; one offset on the
+  connection serves every reader, and a later reply measures it again. The
+  offset is off by the reply's one-way latency, under a second on a sound
+  link. A server that sends no time gives no offset, and a running row then
+  shows no timer, never one off by the skew. A narrow
   running row cuts its subject to keep its timer (`headBeside`), as a failure
   row keeps its outcome word: the live line already names the running call,
   and drops the turn time first. Inside a cell's body a run of one tool's

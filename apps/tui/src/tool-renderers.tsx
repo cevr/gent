@@ -61,7 +61,8 @@ export interface ToolCall {
   operations?: ToolCall[]
   /**
    * Envelope time of the started receipt: from the live feed, or from the
-   * snapshot while the call runs. A running row's timer counts from it.
+   * snapshot while the call runs. It is the server's time: a running row's
+   * timer counts from it against the server's now, never this client's clock.
    */
   startedAt?: number
   /** Wall time from the started receipt to the terminal receipt. */

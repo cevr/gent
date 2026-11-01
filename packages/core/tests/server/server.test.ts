@@ -2,6 +2,7 @@ import { test } from "bun:test"
 import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import {
   Cause,
+  Clock,
   Context,
   Deferred,
   Effect,
@@ -724,6 +725,24 @@ describe("session queries", () => {
           ).toBe(true)
         }).pipe(Effect.timeout("4 seconds")),
       ),
+  )
+
+  it.live("getSessionSnapshot carries the server's time as it answers, over the wire", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient("clock reply")
+        const created = yield* client.session.create({ cwd: testCwd })
+        const before = yield* Clock.currentTimeMillis
+        const snapshot = yield* client.session.getSnapshot({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+        })
+        const after = yield* Clock.currentTimeMillis
+        // The clock its envelopes stamp: a client reads every server time against it.
+        expect(snapshot.serverNow).toBeGreaterThanOrEqual(before)
+        expect(snapshot.serverNow).toBeLessThanOrEqual(after)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
 
   it.live("getSessionSnapshot surfaces actor state failures instead of reporting idle", () =>

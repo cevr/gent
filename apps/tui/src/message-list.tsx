@@ -1359,7 +1359,7 @@ function ToolCallGroup(props: {
   fullDetail: boolean
 }) {
   const { theme } = useTheme()
-  const { pathPlace } = useClient()
+  const { pathPlace, serverClockOffset } = useClient()
   const dimensions = useTerminalDimensions()
   const activity = createMemo(() => props.calls.map((call) => toActivityCall(call, pathPlace())))
   // A cut call (the turn's interrupt, the cell's cancel) is no failure.
@@ -1373,11 +1373,14 @@ function ToolCallGroup(props: {
   const running = () => props.calls.some((call) => call.status === "running")
   const tick = useSpinnerClock()
   // A running row's timer reads the spinner clock: no clock of its own, and a
-  // settled row never subscribes, so history rows stay still.
+  // settled row never subscribes, so history rows stay still. A call's start
+  // is the server's time, so the row reads the server's now: this clock plus
+  // the connection's offset. No offset (a server that sends no time) shows no
+  // timer, never one off by the skew.
   const clockWhile = (runs: boolean): Option.Option<number> => {
     if (!runs) return Option.none()
     tick()
-    return Option.some(currentMillis())
+    return Option.map(serverClockOffset(), (offset) => currentMillis() + offset)
   }
   // A call that failed is the group's failure; ops that failed inside a cell
   // that recovered, or a command that exited nonzero, are a warning; the

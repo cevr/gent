@@ -66,6 +66,7 @@ import {
   type ComponentProps,
   createSignal,
   For,
+  type JSX,
   mergeProps,
   onCleanup,
   Show,
@@ -76,7 +77,14 @@ import type { DisclosureLevel } from "../src/extensions/client-facets"
 import { useTheme } from "../src/theme"
 // oxlint-disable-next-line gent/declared-workspace-imports -- the gamut live-check driver is in no workspace; its wait is checked on this renderer's frames
 import { isSettled, WAIT_START, waitStep } from "../../../testbeds/gamut/gamut"
-import { FrameClicks, ToolCallIdentityProvider, ToolFrame } from "../src/ui"
+import {
+  FrameClicks,
+  SpinnerClockContext,
+  ToolCallIdentityProvider,
+  ToolFrame,
+  useSpinnerClock,
+} from "../src/ui"
+import { useClient } from "../src/client"
 import {
   BUILTIN_TOOL_RENDERERS,
   FoldOperationsProvider,
@@ -633,6 +641,28 @@ const compactionMessage = (): ListMessage =>
       },
     },
   })
+
+/**
+ * Children behind a connection whose server clock reads `skewMs` ahead of
+ * this one, as the session feed measures it when a snapshot lands.
+ */
+function OnServerClock(props: { readonly skewMs: number; readonly children: JSX.Element }) {
+  const now = currentMillis()
+  useClient().measureServerClock(Option.some(now + props.skewMs), now)
+  return props.children
+}
+
+/** Children on the spinner clock, with `onRead` called on each read of its tick. */
+function CountingClock(props: { readonly onRead: () => void; readonly children: JSX.Element }) {
+  const tick = useSpinnerClock()
+  const counted = () => {
+    props.onRead()
+    return tick()
+  }
+  return (
+    <SpinnerClockContext.Provider value={counted}>{props.children}</SpinnerClockContext.Provider>
+  )
+}
 
 function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: boolean }) {
   const renderers = useToolRenderers()
@@ -7419,7 +7449,11 @@ describe("collapse ladder", () => {
   ]
   const draw = (items: SessionItem[], disclosure: DisclosureLevel, width: number) =>
     renderScoped(
-      () => <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />,
+      () => (
+        <OnServerClock skewMs={0}>
+          <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />
+        </OnServerClock>
+      ),
       { width, height: 60 },
     ).pipe(Effect.map(renderFrame))
   const lines = (frame: string) => frame.split("\n").map((line) => line.trimEnd())
@@ -8117,9 +8151,13 @@ describe("collapse ladder", () => {
     }),
   )
 
-  /** A running cell running `command`: the cell started `cellMs` ago, its op `opMs` ago. */
-  const timedCell = (command: string, cellMs: number, opMs: number): SessionItem => {
-    const now = currentMillis()
+  /**
+   * A running cell running `command` on a server whose clock reads `skewMs`
+   * ahead of this one: the cell started `cellMs` ago, its op `opMs` ago, on
+   * the server's clock, as the live feed stamps them from their envelopes.
+   */
+  const timedCell = (command: string, cellMs: number, opMs: number, skewMs = 0): SessionItem => {
+    const serverNow = currentMillis() + skewMs
     return assistantToolMessage("timed", {
       id: "timed-cell",
       toolName: "cell",
@@ -8127,108 +8165,30 @@ describe("collapse ladder", () => {
       input: { code: `await tools.bash({ command: '${command}' })` },
       summary: absent,
       output: absent,
-      startedAt: now - cellMs,
+      startedAt: serverNow - cellMs,
       operations: [
-        { ...op("timed-op", "bash", { command }, ""), status: "running", startedAt: now - opMs },
+        {
+          ...op("timed-op", "bash", { command }, ""),
+          status: "running",
+          startedAt: serverNow - opMs,
+        },
       ],
     })
   }
-  /** The whole seconds a row's timer reads, from `· 41s` or `· running 1m 2s  #id`. */
-  const timerSeconds = (row: string): number => {
-    const match = /(?:(\d+)m )?(\d+)s(?: +#\S+)?$/.exec(row)
-    return Number(match?.[1] ?? 0) * 60 + Number(match?.[2] ?? Number.NaN)
-  }
-  const rowWith = (frame: string, text: string) =>
-    lines(frame).find((line) => line.includes(text)) ?? ""
-
-  it.scopedLive("a running row counts its time on the spinner clock, at preview and full", () =>
-    Effect.gen(function* () {
-      const items = [timedCell("sleep 60", 90_000, 41_000)]
-      const setup = yield* renderScoped(
-        () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
-        { width: 100, height: 20 },
-      )
-      const first = yield* waitForFrame(
-        setup,
-        (frame) => /└ Running sleep 60 · \d+s$/m.test(lines(frame).join("\n")),
-        "the running row's timer",
-      )
-      const row = rowWith(first, "Running sleep 60")
-      expect(row).toMatch(/^ {2}└ Running sleep 60 · 4[1-3]s$/)
-      // The next tick of the clock that blinks the bullet moves the timer on.
-      yield* waitForFrame(
-        setup,
-        (frame) => timerSeconds(rowWith(frame, "Running sleep 60")) > timerSeconds(row),
-        "the timer to move on",
-        3_000,
-      )
-      // Full opens the cell's own row: it counts from the cell's start.
-      const full = yield* draw(items, "full", 100)
-      expect(rowWith(full, "#timed-cell")).toMatch(
-        /^ {2}└ cell .* · running 1m 3[0-2]s +#timed-cell$/,
-      )
-    }),
-  )
-
-  it.scopedLive("a settled row keeps its duration and draws no timer", () =>
-    Effect.gen(function* () {
-      const now = currentMillis()
-      const settled = assistantToolMessage("timed-done", {
-        id: "done-cell",
-        toolName: "cell",
-        status: "completed",
-        input: { code: "await tools.bash({ command: 'sleep 60' })" },
-        summary: absent,
-        output: encodeJson({ display: "", bindings: [], truncated: false }),
-        // The live feed keeps the start time on a call that settled.
-        startedAt: now - 61_000,
-        durationMs: 1_234,
-        operations: [
-          {
-            ...op("done-op", "bash", { command: "sleep 60" }, bashOutput("", "", 0)),
-            startedAt: now - 60_000,
-            durationMs: 1_000,
-          },
-        ],
-      })
-      const preview = yield* draw([settled], "preview", 100)
-      expect(groupRows(preview)[0]).toBe("  └ Ran sleep 60")
-      const full = yield* draw([settled], "full", 100)
-      const row = rowWith(full, "#done-cell")
-      expect(row).toMatch(/ · 1\.2s +#done-cell$/)
-      expect(row).not.toContain("running")
-    }),
-  )
-
-  it.scopedLive("a narrow running row cuts its subject to keep its timer", () =>
-    Effect.gen(function* () {
-      const command = "sleep 60 && bun run test --filter tui"
-      const items = [timedCell(command, 90_000, 41_000)]
-      for (const width of [50, 40]) {
-        const preview = yield* draw(items, "preview", width)
-        const row = rowWith(preview, "Running sleep")
-        expect(row).toMatch(/^ {2}└ Running sleep 60 .*… · 4[1-3]s$/)
-        expect(row.length).toBeLessThanOrEqual(width - 1)
-        const full = yield* draw(items, "full", width)
-        const cellRow = rowWith(full, "#timed-cell")
-        expect(cellRow).toMatch(/^ {2}└ cell .*… · running 1m 3[0-2]s +#timed-cell$/)
-        // The id sits at the row's right edge; the words and the id keep the last column free.
-        expect(cellRow.replace(/ +#/, " #").length).toBeLessThanOrEqual(width - 1)
-        expect(lines(preview).every((line) => line.length <= width - 1)).toBe(true)
-      }
-    }),
-  )
-
-  it.scopedLive("a reloaded running call counts from its stored start receipt", () =>
+  /**
+   * A running cell as a resume builds it: projected from the stored start
+   * receipts the server stamped `cellMs` and `opMs` before its now.
+   */
+  const reloadedCell = (cellMs: number, opMs: number, skewMs = 0) =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-timed")
       const branchId = BranchId.make("branch-timed")
       const cell = ToolCallId.make("reloaded-cell")
-      const now = currentMillis()
+      const serverNow = currentMillis() + skewMs
       const events = [
         EventEnvelope.make({
           id: EventId.make(1),
-          createdAt: now - 90_000,
+          createdAt: serverNow - cellMs,
           event: AgentEvent.cases.ToolCallStarted.make({
             sessionId,
             branchId,
@@ -8238,7 +8198,7 @@ describe("collapse ladder", () => {
         }),
         EventEnvelope.make({
           id: EventId.make(2),
-          createdAt: now - 41_000,
+          createdAt: serverNow - opMs,
           event: AgentEvent.cases.ToolCallStarted.make({
             sessionId,
             branchId,
@@ -8273,12 +8233,186 @@ describe("collapse ladder", () => {
       if (Option.isNone(interaction)) return yield* Effect.die("no projected cell")
       // As the session view builds a call from the snapshot.
       const { operations, ...call } = interaction.value
-      const items = [
-        assistantToolMessage("reloaded", {
-          ...call,
-          operations: (operations ?? []).map((operation) => ({ ...operation })),
-        }),
-      ]
+      const item: SessionItem = assistantToolMessage("reloaded", {
+        ...call,
+        operations: (operations ?? []).map((operation) => ({ ...operation })),
+      })
+      return item
+    })
+  /** The whole seconds a row's timer reads, from `· 41s` or `· running 1m 2s  #id`. */
+  const timerSeconds = (row: string): number => {
+    const match = /(?:(\d+)m )?(\d+)s(?: +#\S+)?$/.exec(row)
+    return Number(match?.[1] ?? 0) * 60 + Number(match?.[2] ?? Number.NaN)
+  }
+  const rowWith = (frame: string, text: string) =>
+    lines(frame).find((line) => line.includes(text)) ?? ""
+  /**
+   * The row holding `text` as its timer first draws, and again once the next
+   * tick of the spinner clock has moved the timer on.
+   */
+  const timerRun = (items: SessionItem[], disclosure: DisclosureLevel, text: string, skewMs = 0) =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(
+        () => (
+          <OnServerClock skewMs={skewMs}>
+            <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />
+          </OnServerClock>
+        ),
+        { width: 100, height: 20 },
+      )
+      const first = rowWith(
+        yield* waitForFrame(
+          setup,
+          (frame) => Number.isFinite(timerSeconds(rowWith(frame, text))),
+          `the timer on ${text}`,
+        ),
+        text,
+      )
+      const later = rowWith(
+        yield* waitForFrame(
+          setup,
+          (frame) => timerSeconds(rowWith(frame, text)) > timerSeconds(first),
+          `the timer on ${text} to move on`,
+          3_000,
+        ),
+        text,
+      )
+      return { first, later }
+    })
+
+  it.scopedLive("a running row counts its time on the spinner clock, at preview and full", () =>
+    Effect.gen(function* () {
+      const items = [timedCell("sleep 60", 90_000, 41_000)]
+      const preview = yield* timerRun(items, "preview", "Running sleep 60")
+      expect(preview.first).toMatch(/^ {2}└ Running sleep 60 · 4[1-3]s$/)
+      expect(preview.later).toMatch(/^ {2}└ Running sleep 60 · 4[2-4]s$/)
+      // Full opens the cell's own row: it counts from the cell's start, and moves on too.
+      const full = yield* timerRun(items, "full", "#timed-cell")
+      expect(full.first).toMatch(/^ {2}└ cell .* · running 1m 3[0-2]s +#timed-cell$/)
+      expect(full.later).toMatch(/^ {2}└ cell .* · running 1m 3[1-3]s +#timed-cell$/)
+    }),
+  )
+
+  // A server's times against this client's clock would hide the timer of a
+  // client behind the server and add the skew on a client ahead of it.
+  for (const [where, skewMs] of [
+    ["behind", 120_000],
+    ["ahead of", -120_000],
+  ] as const) {
+    it.scopedLive(`a client two minutes ${where} the server counts a live call from 10s`, () =>
+      Effect.gen(function* () {
+        const items = [timedCell("sleep 60", 10_000, 10_000, skewMs)]
+        const preview = yield* timerRun(items, "preview", "Running sleep 60", skewMs)
+        expect(preview.first).toMatch(/^ {2}└ Running sleep 60 · 1[0-2]s$/)
+        expect(preview.later).toMatch(/^ {2}└ Running sleep 60 · 1[1-3]s$/)
+        const full = yield* timerRun(items, "full", "#timed-cell", skewMs)
+        expect(full.first).toMatch(/ · running 1[0-2]s +#timed-cell$/)
+        expect(full.later).toMatch(/ · running 1[1-3]s +#timed-cell$/)
+      }),
+    )
+
+    it.scopedLive(`a client two minutes ${where} the server counts a resumed call from 10s`, () =>
+      Effect.gen(function* () {
+        const items = [yield* reloadedCell(10_000, 10_000, skewMs)]
+        const preview = yield* timerRun(items, "preview", "Running sleep 60", skewMs)
+        expect(preview.first).toMatch(/^ {2}└ Running sleep 60 · 1[0-2]s$/)
+        expect(preview.later).toMatch(/^ {2}└ Running sleep 60 · 1[1-3]s$/)
+        const full = yield* timerRun(items, "full", "#reloaded-cell", skewMs)
+        expect(full.first).toMatch(/ · running 1[0-2]s +#reloaded-cell$/)
+        expect(full.later).toMatch(/ · running 1[1-3]s +#reloaded-cell$/)
+      }),
+    )
+  }
+
+  it.scopedLive("a server that sends no time draws no timer on a running row", () =>
+    Effect.gen(function* () {
+      const items = [timedCell("sleep 60", 90_000, 41_000)]
+      // No `OnServerClock`: the connection has no server time to read.
+      const preview = yield* renderScoped(
+        () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
+        { width: 100, height: 20 },
+      ).pipe(Effect.map(renderFrame))
+      expect(rowWith(preview, "Running sleep 60")).toBe("  └ Running sleep 60")
+    }),
+  )
+
+  it.scopedLive("a settled row keeps its duration and draws no timer", () =>
+    Effect.gen(function* () {
+      const now = currentMillis()
+      const settled = assistantToolMessage("timed-done", {
+        id: "done-cell",
+        toolName: "cell",
+        status: "completed",
+        input: { code: "await tools.bash({ command: 'sleep 60' })" },
+        summary: absent,
+        output: encodeJson({ display: "", bindings: [], truncated: false }),
+        // The live feed keeps the start time on a call that settled.
+        startedAt: now - 61_000,
+        durationMs: 1_234,
+        operations: [
+          {
+            ...op("done-op", "bash", { command: "sleep 60" }, bashOutput("", "", 0)),
+            startedAt: now - 60_000,
+            durationMs: 1_000,
+          },
+        ],
+      })
+      const preview = yield* draw([settled], "preview", 100)
+      expect(groupRows(preview)[0]).toBe("  └ Ran sleep 60")
+      const full = yield* draw([settled], "full", 100)
+      const row = rowWith(full, "#done-cell")
+      expect(row).toMatch(/ · 1\.2s +#done-cell$/)
+      expect(row).not.toContain("running")
+      // A settled row never reads the spinner clock, so a tick draws it again
+      // nowhere; the running row beside it reads the clock on every tick.
+      let settledReads = 0
+      let runningReads = 0
+      const setup = yield* renderScoped(
+        () => (
+          <OnServerClock skewMs={0}>
+            <CountingClock onRead={() => (settledReads += 1)}>
+              <MessageList items={[settled]} disclosure="preview" syntaxStyle={syntaxStyle} />
+              <MessageList items={[settled]} disclosure="full" syntaxStyle={syntaxStyle} />
+            </CountingClock>
+            <CountingClock onRead={() => (runningReads += 1)}>
+              <MessageList
+                items={[timedCell("sleep 60", 90_000, 41_000)]}
+                disclosure="full"
+                syntaxStyle={syntaxStyle}
+              />
+            </CountingClock>
+          </OnServerClock>
+        ),
+        { width: 100, height: 40 },
+      )
+      const mounted = runningReads
+      yield* waitForFrame(setup, () => runningReads >= mounted + 5, "five ticks of the running row")
+      expect(settledReads).toBe(0)
+    }),
+  )
+
+  it.scopedLive("a narrow running row cuts its subject to keep its timer", () =>
+    Effect.gen(function* () {
+      const command = "sleep 60 && bun run test --filter tui"
+      const items = [timedCell(command, 90_000, 41_000)]
+      for (const width of [50, 40]) {
+        const preview = yield* draw(items, "preview", width)
+        const row = rowWith(preview, "Running sleep")
+        expect(row).toMatch(/^ {2}└ Running sleep 60 .*… · 4[1-3]s$/)
+        expect(row.length).toBeLessThanOrEqual(width - 1)
+        const full = yield* draw(items, "full", width)
+        const cellRow = rowWith(full, "#timed-cell")
+        expect(cellRow).toMatch(/^ {2}└ cell .*… · running 1m 3[0-2]s +#timed-cell$/)
+        // The id sits at the row's right edge; the words and the id keep the last column free.
+        expect(cellRow.replace(/ +#/, " #").length).toBeLessThanOrEqual(width - 1)
+        expect(lines(preview).every((line) => line.length <= width - 1)).toBe(true)
+      }
+    }),
+  )
+
+  it.scopedLive("a reloaded running call counts from its stored start receipt", () =>
+    Effect.gen(function* () {
+      const items = [yield* reloadedCell(90_000, 41_000)]
       const preview = yield* draw(items, "preview", 100)
       expect(rowWith(preview, "Running sleep 60")).toMatch(/^ {2}└ Running sleep 60 · 4[1-3]s$/)
       const full = yield* draw(items, "full", 100)

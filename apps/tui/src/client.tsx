@@ -473,6 +473,23 @@ interface ClientTransportValue {
   /** None clears the issue. */
   setConnectionIssue: (issue: Option.Option<string>) => void
 
+  /**
+   * The server's clock less this one, in milliseconds, as the last snapshot
+   * measured it (`measureServerClock`). A server time (a running call's
+   * `startedAt`, the runtime's `startedAtMs`) never meets this clock
+   * directly: `now + offset` is this clock's now on the server's, and
+   * `at - offset` is a server time on this clock. None before the first
+   * snapshot, and from a server that sends no time: then no age shows.
+   */
+  serverClockOffset: () => Option.Option<number>
+  /**
+   * Take the server's clock from a reply: `serverNow` the server's time as it
+   * sent the snapshot, `receivedAt` this clock's as the reply landed. A
+   * reply with no server time clears the offset. The reply's trip is the
+   * error, a few milliseconds on a local link.
+   */
+  measureServerClock: (serverNow: Option.Option<number>, receivedAt: number) => void
+
   // Extension state-change pulse subscription. Fires once per
   // `ExtensionStateChanged` event seen on the active session for each
   // registered subscriber. The pulse carries no payload — consumers
@@ -877,6 +894,18 @@ export function ClientProvider(props: ClientProviderProps) {
   }
   const clearConnectionIssue = (): void => {
     setConnectionIssueState(Option.none())
+  }
+  // The connection's server clock less this one. Equal values keep their
+  // readers still: a reconnect that measures the same offset moves no timer.
+  const [serverClockOffset, setServerClockOffset] = createSignal<Option.Option<number>>(
+    Option.none(),
+    { equals: Equal.equals },
+  )
+  const measureServerClock: ClientTransportValue["measureServerClock"] = (
+    serverNow,
+    receivedAt,
+  ) => {
+    setServerClockOffset(Option.map(serverNow, (server) => server - receivedAt))
   }
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
@@ -1315,6 +1344,8 @@ export function ClientProvider(props: ClientProviderProps) {
     extensionHealth,
     connectionIssue,
     setConnectionIssue,
+    serverClockOffset,
+    measureServerClock,
     onExtensionStateChanged: eventHub.onExtensionStateChanged,
     onSessionEvent: eventHub.onSessionEvent,
     resetSessionEvents: eventHub.resetSessionEvents,

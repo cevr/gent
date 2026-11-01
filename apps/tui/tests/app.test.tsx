@@ -7132,120 +7132,134 @@ describe("TUI renderer surfaces", () => {
       }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.scopedLive(
-    "the live line counts the whole turn through its tool calls and an ask, and the next turn starts again",
-    () =>
-      Effect.gen(function* () {
-        const clock = yield* TestClock.make()
-        const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
-        const sessionId = SessionId.make("session-timer")
-        const branchId = BranchId.make("branch-timer")
-        const running = SessionRuntimeStateSchema.cases.Running.make({
-          startedAtMs: 0,
-          queue: emptyQueueSnapshot(),
-        })
-        const runtimes = yield* Queue.unbounded<{
-          readonly _tag: "Running" | "WaitingForInteraction"
-          readonly startedAtMs: number
-          readonly queue: typeof running.queue
-        }>()
-        const events = yield* Queue.unbounded<EventEnvelope>()
-        const { setup } = yield* mountApp({
-          runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
-          client: {
-            session: {
-              getSnapshot: () =>
-                Effect.succeed({
-                  sessionId,
-                  branchId,
-                  messages: [],
-                  lastEventId: nullValue,
-                  reasoningLevel: absent,
-                  agent: AgentName.make("main"),
-                  runtime: running,
-                  metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-                }),
-              watchRuntime: () => Stream.concat(Stream.make(running), Stream.fromQueue(runtimes)),
-              events: () => Stream.fromQueue(events),
+  // The runtime's start is the server's time: a client whose clock reads two
+  // minutes off the server's counts the same as one in step with it.
+  for (const [where, skewMs] of [
+    ["in step with", 0],
+    ["two minutes behind", 120_000],
+    ["two minutes ahead of", -120_000],
+  ] as const) {
+    it.scopedLive(
+      `the live line counts the whole turn through its tool calls and an ask, and the next turn starts again, on a client ${where} the server`,
+      () =>
+        Effect.gen(function* () {
+          const clock = yield* TestClock.make()
+          const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+          const sessionId = SessionId.make("session-timer")
+          const branchId = BranchId.make("branch-timer")
+          const running = SessionRuntimeStateSchema.cases.Running.make({
+            startedAtMs: skewMs,
+            queue: emptyQueueSnapshot(),
+          })
+          const runtimes = yield* Queue.unbounded<{
+            readonly _tag: "Running" | "WaitingForInteraction"
+            readonly startedAtMs: number
+            readonly queue: typeof running.queue
+          }>()
+          const events = yield* Queue.unbounded<EventEnvelope>()
+          const { setup } = yield* mountApp({
+            runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
+            client: {
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed({
+                    sessionId,
+                    branchId,
+                    messages: [],
+                    lastEventId: nullValue,
+                    reasoningLevel: absent,
+                    agent: AgentName.make("main"),
+                    runtime: running,
+                    metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+                    // The test clock reads 0 as the reply lands.
+                    serverNow: skewMs,
+                  }),
+                watchRuntime: () => Stream.concat(Stream.make(running), Stream.fromQueue(runtimes)),
+                events: () => Stream.fromQueue(events),
+              },
             },
-          },
-          initialSession: sessionNamed(sessionId, branchId, "Timer"),
-        })
-        const event = (id: number, agentEvent: AgentEvent) =>
-          Queue.offer(
-            events,
-            EventEnvelope.make({ id: EventId.make(id), createdAt: id, event: agentEvent }),
+            initialSession: sessionNamed(sessionId, branchId, "Timer"),
+          })
+          const event = (id: number, agentEvent: AgentEvent) =>
+            Queue.offer(
+              events,
+              EventEnvelope.make({ id: EventId.make(id), createdAt: id, event: agentEvent }),
+            )
+          // No answer text yet: the model thinks.
+          yield* waitForFrame(setup, (next) => next.includes("✻ Thinking ·"), "the turn")
+          yield* clock.adjust(Duration.seconds(4))
+          yield* waitForFrame(setup, (next) => next.includes("✻ Thinking (4s)"), "4s in")
+          // A tool call changes the phase word, not the count.
+          yield* event(
+            1,
+            AgentEvent.cases.ToolCallStarted.make({
+              sessionId,
+              branchId,
+              toolCallId: ToolCallId.make("timer-call"),
+              toolName: "bash",
+              input: { command: "TIMER-TOOL" },
+            }),
           )
-        // No answer text yet: the model thinks.
-        yield* waitForFrame(setup, (next) => next.includes("✻ Thinking ·"), "the turn")
-        yield* clock.adjust(Duration.seconds(4))
-        yield* waitForFrame(setup, (next) => next.includes("✻ Thinking (4s)"), "4s in")
-        // A tool call changes the phase word, not the count.
-        yield* event(
-          1,
-          AgentEvent.cases.ToolCallStarted.make({
-            sessionId,
-            branchId,
-            toolCallId: ToolCallId.make("timer-call"),
-            toolName: "bash",
-            input: { command: "TIMER-TOOL" },
-          }),
-        )
-        yield* waitForFrame(
-          setup,
-          (next) => next.includes("✻ Running TIMER-TOOL (4s)") && !next.includes("Thinking"),
-          "the tool keeps the count",
-        )
-        yield* clock.adjust(Duration.seconds(3))
-        yield* waitForFrame(setup, (next) => next.includes("✻ Running TIMER-TOOL (7s)"), "7s in")
-        yield* event(
-          2,
-          AgentEvent.cases.ToolCallSucceeded.make({
-            sessionId,
-            branchId,
-            toolCallId: ToolCallId.make("timer-call"),
-            toolName: "bash",
-            summary: "done",
-            output: "{}",
-          }),
-        )
-        yield* waitForFrame(setup, (next) => next.includes("✻ Thinking (7s)"), "back to the turn")
-        // Answer text streams: the model generates.
-        yield* event(
-          3,
-          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 0, chunk: "ANSWER" }),
-        )
-        yield* waitForFrame(setup, (next) => next.includes("✻ Generating (7s)"), "the answer")
-        // An ask inside the turn: the same turn, the same count.
-        yield* Queue.offer(
-          runtimes,
-          SessionRuntimeStateSchema.cases.WaitingForInteraction.make({
-            startedAtMs: running.startedAtMs,
-            queue: running.queue,
-          }),
-        )
-        yield* waitForFrame(
-          setup,
-          (next) => next.includes("✻ Waiting for your answer (7s)"),
-          "the ask",
-        )
-        // The next turn counts from its own start.
-        yield* Queue.offer(
-          runtimes,
-          SessionRuntimeStateSchema.cases.Running.make({
-            startedAtMs: clock.currentTimeMillisUnsafe(),
-            queue: running.queue,
-          }),
-        )
-        yield* waitForFrame(
-          setup,
-          (next) => next.includes("✻ Generating ·") && !next.includes("(7s)"),
-          "the next turn",
-        )
-        yield* clock.adjust(Duration.seconds(2))
-        yield* waitForFrame(setup, (next) => next.includes("✻ Generating (2s)"), "2s into the next")
-      }).pipe(Effect.timeout("10 seconds")),
-  )
+          yield* waitForFrame(
+            setup,
+            (next) => next.includes("✻ Running TIMER-TOOL (4s)") && !next.includes("Thinking"),
+            "the tool keeps the count",
+          )
+          yield* clock.adjust(Duration.seconds(3))
+          yield* waitForFrame(setup, (next) => next.includes("✻ Running TIMER-TOOL (7s)"), "7s in")
+          yield* event(
+            2,
+            AgentEvent.cases.ToolCallSucceeded.make({
+              sessionId,
+              branchId,
+              toolCallId: ToolCallId.make("timer-call"),
+              toolName: "bash",
+              summary: "done",
+              output: "{}",
+            }),
+          )
+          yield* waitForFrame(setup, (next) => next.includes("✻ Thinking (7s)"), "back to the turn")
+          // Answer text streams: the model generates.
+          yield* event(
+            3,
+            AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 0, chunk: "ANSWER" }),
+          )
+          yield* waitForFrame(setup, (next) => next.includes("✻ Generating (7s)"), "the answer")
+          // An ask inside the turn: the same turn, the same count.
+          yield* Queue.offer(
+            runtimes,
+            SessionRuntimeStateSchema.cases.WaitingForInteraction.make({
+              startedAtMs: running.startedAtMs,
+              queue: running.queue,
+            }),
+          )
+          yield* waitForFrame(
+            setup,
+            (next) => next.includes("✻ Waiting for your answer (7s)"),
+            "the ask",
+          )
+          // The next turn counts from its own start.
+          yield* Queue.offer(
+            runtimes,
+            SessionRuntimeStateSchema.cases.Running.make({
+              startedAtMs: clock.currentTimeMillisUnsafe() + skewMs,
+              queue: running.queue,
+            }),
+          )
+          yield* waitForFrame(
+            setup,
+            (next) => next.includes("✻ Generating ·") && !next.includes("(7s)"),
+            "the next turn",
+          )
+          yield* clock.adjust(Duration.seconds(2))
+          yield* waitForFrame(
+            setup,
+            (next) => next.includes("✻ Generating (2s)"),
+            "2s into the next",
+          )
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
 
   it.scopedLive(
     "a pending retry is the live line's phase and counts down; the transcript draws no row for it",
@@ -7274,6 +7288,7 @@ describe("TUI renderer surfaces", () => {
                   agent: AgentName.make("main"),
                   runtime: running,
                   metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+                  serverNow: 0,
                 }),
               watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
               events: () => Stream.fromQueue(events),
@@ -7377,6 +7392,7 @@ describe("TUI renderer surfaces", () => {
                     onSome: (turnModelAttempts) => ({ turnModelAttempts }),
                   }),
                 },
+                serverNow: 0,
               }),
             watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
             events: () => Stream.fromQueue(events),

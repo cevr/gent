@@ -42,7 +42,8 @@ import type { DisclosureLevel, MessageRowProps } from "./extensions/client-facet
 
 // ── spinner clock ───────────────────────────────────────────────────────────
 
-const SpinnerClockContext = createContext<Accessor<number>>()
+/** The tick accessor `SpinnerClockProvider` supplies; a test supplies its own to count reads. */
+export const SpinnerClockContext = createContext<Accessor<number>>()
 
 /**
  * The 60 ms clock every spinner and pending-retry row reads. One clock for

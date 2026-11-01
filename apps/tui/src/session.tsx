@@ -1937,6 +1937,7 @@ type SessionFeedClient = Pick<
   | "runtime"
   | "log"
   | "setConnectionIssue"
+  | "measureServerClock"
   | "waitForTransportReady"
   | "applySessionRuntime"
   | "applySessionSnapshot"
@@ -2422,11 +2423,13 @@ export function useSessionFeed(
   }
   /**
    * Every event that needs no streaming state: a message, a turn boundary, a
-   * tool start, or a transcript notice.
+   * tool start, or a transcript notice. `occurredAt` is the envelope's
+   * server time, live or replayed: a tool call's start keeps it, so its timer
+   * reads the same on a live feed and on a resume.
    */
   const applySettledEvent = (
     event: AgentEvent,
-    receivedAt: number,
+    occurredAt: number,
     stampedAt: number,
     live: boolean,
   ) => {
@@ -2458,7 +2461,7 @@ export function useSessionFeed(
 
       case "ToolCallStarted":
         setRunningCalls((calls) => startCall(calls, event, client.pathPlace()))
-        startToolCall(setStore, event, receivedAt)
+        startToolCall(setStore, event, occurredAt)
         return
 
       case "ProviderRetrying":
@@ -2717,6 +2720,9 @@ export function useSessionFeed(
                 sessionId: session,
                 branchId: branch,
               })
+              // The reply's server time against ours as it lands: every age
+              // of a server time reads through it.
+              const receivedAt = yield* Clock.currentTimeMillis
               // Pending interactions hydrate on session entry from
               // event-stream replay via the `after` cursor below.
 
@@ -2727,6 +2733,7 @@ export function useSessionFeed(
               })
 
               yield* Effect.sync(() => {
+                client.measureServerClock(Option.fromUndefinedOr(snapshot.serverNow), receivedAt)
                 client.applySessionSnapshot(snapshot)
                 callbacks.onRuntime(snapshot.runtime)
                 applySnapshotMessages(snapshot.messages)
@@ -3473,7 +3480,7 @@ export function createSessionController(props: {
   interface RunningShell {
     readonly command: string
     readonly stop: Deferred.Deferred<void>
-    /** When it began, on the runtime's clock: outside a turn the timer counts from it. */
+    /** When it began, on this client's clock: outside a turn the timer counts from it. */
     readonly startedAt: number
   }
   const [runningShells, setRunningShells] = createSignal<ReadonlyArray<RunningShell>>([])
@@ -3519,10 +3526,15 @@ export function createSessionController(props: {
   // runtime's `startedAtMs`, the start its "Worked for" total counts from, so
   // a new step or a tool call inside the turn changes the phase word and keeps
   // the count; a `!cmd` outside a turn from its own start. No start (idle, or
-  // a turn whose runtime has not arrived yet) shows no count.
+  // a turn whose runtime has not arrived yet) shows no count. The start is on
+  // this clock: the turn's is a server time, read through the server clock
+  // offset (none from a server that sends no time); a `!cmd` runs here.
   const timerStart = createMemo(
     (): Option.Option<number> => {
-      if (client.isStreaming()) return Option.map(controllerState().turn, (turn) => turn.startedAt)
+      if (client.isStreaming())
+        return Option.flatMap(controllerState().turn, (turn) =>
+          Option.map(client.serverClockOffset(), (offset) => turn.startedAt - offset),
+        )
       return Option.map(Option.fromUndefinedOr(runningShells().at(-1)), (shell) => shell.startedAt)
     },
     Option.none(),
@@ -3570,7 +3582,8 @@ export function createSessionController(props: {
     ),
   )
   // The retry counts down on the clock its row was stamped by, which the
-  // timer reads each second: the turn's start plus the time it has run.
+  // timer reads each second: the turn's start plus the time it has run, both
+  // on this clock.
   const retryPhase = (retry: Extract<SessionEvent, { _tag: "retrying" }>): string =>
     getSessionEventLabel(
       retry,

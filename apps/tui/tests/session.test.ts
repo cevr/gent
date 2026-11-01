@@ -93,6 +93,7 @@ import { waitUntil, waitUntilAdvancing } from "./helpers-boundary"
 import * as Prompt from "effect/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
+  currentMillis,
   getSessionEventLabel,
   type Message as FeedMessage,
   messageToolCalls,
@@ -1445,6 +1446,7 @@ const feedClientStub = (
 ): FeedClient => ({
   log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
   setConnectionIssue: () => {},
+  measureServerClock: () => {},
   waitForTransportReady: Effect.void,
   applySessionRuntime: () => {},
   applySessionSnapshot: () => {},
@@ -2618,6 +2620,80 @@ describe("useSessionFeed", () => {
           Effect.sync(() => {
             const cell = Option.getOrUndefined(cellOf())
             expect(cell?.operations?.map((operation) => operation.status)).toEqual(["error"])
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.live("a live call keeps its server start, and the snapshot's server time sets the clock", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-server-clock")
+      const branchId = BranchId.make("branch-feed-server-clock")
+      const cellId = ToolCallId.make("tool-call-server-clock-cell")
+      const opId = ToolCallId.make("tool-call-server-clock-op")
+      // The server's clock runs two minutes ahead of this one.
+      const serverNow = currentMillis() + 120_000
+      const measured: Array<readonly [Option.Option<number>, number]> = []
+      const { cellOf, dispose } = openFeed({
+        snapshot: SessionSnapshot.make({ ...snapshotFor(sessionId, branchId), serverNow }),
+        client: {
+          measureServerClock: (now, receivedAt) => {
+            measured.push([now, receivedAt])
+          },
+        },
+        events: [
+          makeEnvelope(
+            1,
+            AgentEvent.cases.StreamStarted.make({
+              model: ModelId.make("anthropic/claude-sonnet-5"),
+              messageId: MessageId.make("msg"),
+              step: 1,
+              sessionId,
+              branchId,
+            }),
+          ),
+          ...stepEndEnvelopes(sessionId, branchId, cellId, 2),
+          makeEnvelope(
+            4,
+            AgentEvent.cases.ToolCallStarted.make({
+              sessionId,
+              branchId,
+              toolCallId: cellId,
+              toolName: "cell",
+              input: { code: "await tools.bash({command: 'sleep 60'})" },
+            }),
+            serverNow - 10_000,
+          ),
+          makeEnvelope(
+            5,
+            AgentEvent.cases.ToolCallStarted.make({
+              sessionId,
+              branchId,
+              toolCallId: opId,
+              toolName: "bash",
+              input: { command: "sleep 60" },
+              parentToolCallId: cellId,
+            }),
+            serverNow - 4_000,
+          ),
+        ],
+      })
+      yield* waitUntil(() =>
+        Option.exists(cellOf(), (cell) => Predicate.isNumber(cell.operations?.[0]?.startedAt)),
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            // The live start is the envelope's server time, as a resume reads it.
+            const cell = Option.getOrUndefined(cellOf())
+            expect(cell?.startedAt).toBe(serverNow - 10_000)
+            expect(cell?.operations?.[0]?.startedAt).toBe(serverNow - 4_000)
+            // The server's time from the snapshot, against this clock as the reply landed.
+            expect(measured.length).toBe(1)
+            const [now, receivedAt] = measured[0] ?? [Option.none(), Number.NaN]
+            expect(now).toEqual(Option.some(serverNow))
+            expect(Math.abs(currentMillis() - receivedAt)).toBeLessThan(10_000)
           }),
         ),
         Effect.ensuring(Effect.sync(dispose)),
