@@ -119,9 +119,11 @@ describe("gamut model families", () => {
     for (const [name, named] of Object.entries(PRESETS)) {
       const resolved = resolvePreset(named, catalog)
       for (const role of [resolved.orchestrator, resolved.worker, resolved.reviewer]) {
-        expect(role.modelId, name).toMatch(/^(anthropic\/claude|openai\/gpt)-/)
+        expect(role.modelId, name).toMatch(
+          /^(anthropic\/claude|openai\/gpt|opencode-go\/(glm|deepseek))-/,
+        )
         expect(role.reasoningEffort, name).not.toBe("")
-        expect(role.family?.family, name).toMatch(/^(claude|gpt)-[a-z]+$/)
+        expect(role.family?.family, name).toMatch(/^(claude-[a-z]+|gpt-[a-z]+|glm|deepseek-flash)$/)
       }
       for (const role of resolved.reviewers ?? []) {
         expect(role.reasoningEffort, name).not.toBe("")
@@ -199,6 +201,27 @@ describe("gamut preset config", () => {
     expect(providers("haiku")).toEqual([
       ["opencode-go", "opencode-go"],
       ["opencode-go", "opencode-go"],
+    ])
+  })
+
+  test("the glm-deepseek preset runs no Anthropic or OpenAI model, and reviews on the maker it does not implement with", () => {
+    const resolved = resolvePreset(PRESETS["glm-deepseek"]!, catalog)
+    const config = Schema.decodeSync(Schema.fromJsonString(UserConfig))(presetConfigJson(resolved))
+    const families = (role: string) =>
+      (config.roles?.[role]?.models ?? []).map((model) => `${model.provider}/${model.family}`)
+    expect(families("reviewer")).toEqual(["opencode-go/glm", "opencode-go/deepseek-flash"])
+    expect(families("deep-reviewer")).toEqual(families("reviewer"))
+    expect(families("planner")).toEqual(["opencode-go/glm"])
+    expect(families("implementor")).toEqual(["opencode-go/deepseek-flash"])
+    const role = Schema.Struct({ model: Schema.String })
+    const { agents } = Schema.decodeSync(
+      Schema.fromJsonString(
+        Schema.Struct({ agents: Schema.Struct({ main: role, delegate: role }) }),
+      ),
+    )(presetConfigJson(resolved))
+    expect([agents.main.model, agents.delegate.model]).toEqual([
+      "opencode-go/glm-5.3",
+      "opencode-go/deepseek-v4.1-flash",
     ])
   })
 

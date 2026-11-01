@@ -138,6 +138,14 @@ export const PRESETS: Record<string, Preset> = {
     worker: slot("openai/luna", "max"),
     reviewer: slot("anthropic/opus", "high"),
   },
+  // No Anthropic or OpenAI model: both makers on the OpenCode Go plan. GLM
+  // orchestrates, plans and reviews; DeepSeek flash implements, so each
+  // review runs on the other maker.
+  "glm-deepseek": {
+    orchestrator: slot("opencode-go/glm", "high"),
+    worker: slot("opencode-go/deepseek-flash", "high"),
+    reviewer: slot("opencode-go/glm", "high"),
+  },
   // The one preset an Anthropic live check may spend the owner's accounts
   // on. Its reviews go to another maker on the OpenCode Go plan, so an
   // orchestrate run can start.

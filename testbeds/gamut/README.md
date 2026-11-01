@@ -49,6 +49,9 @@ preset's reviewer and worker come from different makers: `mixed` and
 (`reviewers`): `haiku` reviews on OpenCode Go's newest GLM, then its
 newest DeepSeek flash, both at `high`, and runs every other role on
 Haiku. Its first review choice is also the roster's second opinion.
+`glm-deepseek` runs no Anthropic or OpenAI model: GLM orchestrates, plans
+and reviews, and DeepSeek flash implements, both on the OpenCode Go plan, so
+it needs no TeamClaude.
 
 The TUI takes from the caller only its terminal basics (`PATH`, `SHELL`,
 `USER`, `LOGNAME`, `TMPDIR`, `LANG`) and the proxy variables
