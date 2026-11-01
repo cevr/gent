@@ -19,10 +19,46 @@ import {
   WorkflowsExtension,
 } from "../src/workflows.js"
 import { e2ePreset } from "./helpers/test-preset"
+import { type BranchId, messagePartsText, type SessionId } from "@gent/core/protocol"
 
 const WORKFLOWS_EXTENSION_ID = WorkflowsExtension.manifest.id
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
+
+/** A scripted model that answers each of `turns` recipe turns with one line. */
+const recipeModel = (turns: number) =>
+  LanguageModelLayers.sequence(
+    Array.from({ length: turns }, (_, index) => textStep(`recipe ${index + 1} done`)),
+  )
+
+/**
+ * The recipes the branch received, in order: each command's request returns
+ * once its recipe is queued (a request waits for a running turn to end), and
+ * each recipe runs its own turn. Waits until `count` turns ran.
+ */
+const recipesOf = (
+  client: Effect.Success<ReturnType<typeof createRpcHarness>>["client"],
+  place: { readonly sessionId: SessionId; readonly branchId: BranchId },
+  count: number,
+) =>
+  Effect.gen(function* () {
+    const ran = yield* waitFor(
+      client.session.getSnapshot(place),
+      (current) =>
+        current.runtime._tag === "Idle" &&
+        current.messages.filter((message) => message.role === "user").length >= count &&
+        current.messages.some((message) =>
+          message.parts.some(
+            (part) => part.type === "text" && part.text === `recipe ${count} done`,
+          ),
+        ),
+      10_000,
+      `${count} recipe turns`,
+    )
+    return ran.messages
+      .filter((message) => message.role === "user")
+      .map((message) => messagePartsText(message.parts))
+  })
 
 describe("WorkflowsExtension via RPC", () => {
   it.scopedLive(
@@ -34,7 +70,6 @@ describe("WorkflowsExtension via RPC", () => {
         const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-saved-plan-" })
         const content = "Saved plan survives later requests.\n".repeat(100)
         const steps: SequenceStep[] = [
-          textStep("READY"),
           textStep("save"),
           textStep("export"),
           textStep("Saved"),
@@ -50,9 +85,16 @@ describe("WorkflowsExtension via RPC", () => {
         const planPath = path.join(cwd, ".gent", "results", sessionId, branchId, "plan.md")
         const exportPath = path.join(cwd, "export.md")
         // Set the external model's scripted replies before its first request.
-        steps[1] = toolCallStep("write", { path: planPath, content, atomic: true })
-        steps[2] = toolCallStep("write", { path: exportPath, content, atomic: true })
-        steps[4] = toolCallStep("read", { path: planPath })
+        steps[0] = toolCallStep("write", { path: planPath, content, atomic: true })
+        steps[1] = toolCallStep("write", { path: exportPath, content, atomic: true })
+        steps[3] = toolCallStep("read", { path: planPath })
+        // The command is the new session's first message: its recipe starts the turn at once.
+        const completion = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
         yield* client.extension.request({
           sessionId,
           branchId,
@@ -60,19 +102,11 @@ describe("WorkflowsExtension via RPC", () => {
           capabilityId: "plan-command",
           input: "prepare a plan and export it",
         })
-        const queue = yield* client.queue.get({ sessionId, branchId })
-        expect(queue.followUp[0]?.content).toContain(planPath)
-        expect(queue.followUp[0]?.content).toContain(
-          "export a separate copy after the canonical save",
-        )
-        const completion = yield* client.session.events({ sessionId, branchId }).pipe(
-          Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
-          Stream.take(2),
-          Stream.runCollect,
-          Effect.forkScoped,
-        )
-        yield* client.message.send({ sessionId, branchId, content: "READY" })
         yield* Fiber.join(completion)
+        const recipe = (yield* client.session.getSnapshot({ sessionId, branchId })).messages
+          .map((message) => messagePartsText(message.parts))
+          .find((text) => text.includes(planPath))
+        expect(recipe).toContain("export a separate copy after the canonical save")
         expect(yield* fs.readFileString(planPath)).toBe(content)
         expect(yield* fs.readFileString(exportPath)).toBe(content)
         const readResult = yield* client.session.events({ sessionId, branchId }).pipe(
@@ -96,7 +130,7 @@ describe("WorkflowsExtension via RPC", () => {
         if (readEvent?.event._tag === "ToolCallSucceeded") {
           expect(readEvent.event.output).toContain("Saved plan survives later requests.")
         }
-        yield* controls.waitForCall(5)
+        yield* controls.waitForCall(4)
         yield* controls.assertDone
         expect(yield* fs.readFileString(planPath)).toBe(content)
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
@@ -104,11 +138,11 @@ describe("WorkflowsExtension via RPC", () => {
   )
 
   it.live(
-    "slash commands are listed and each /plan queues its own recipe over host tools",
+    "slash commands are listed and each /plan runs its own recipe",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const { layer: providerLayer } = yield* recipeModel(2)
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
             providerLayer,
@@ -144,11 +178,11 @@ describe("WorkflowsExtension via RPC", () => {
             })
           }
 
-          // The recipe is a queued follow-up; it runs as the next turn.
-          const queue = yield* client.queue.get({ sessionId, branchId })
-          expect(queue.followUp).toHaveLength(2)
-          expect(queue.followUp[1]?.content).toContain("then the second task")
-          const content = queue.followUp[0]?.content ?? ""
+          // Each recipe runs as its own turn, in order.
+          const recipes = yield* recipesOf(client, { sessionId, branchId }, 2)
+          expect(recipes).toHaveLength(2)
+          expect(recipes[1]).toContain("then the second task")
+          const content = recipes[0] ?? ""
           expect(content).toContain("implement caching")
           expect(content).toContain(`/.gent/results/${sessionId}/${branchId}/plan.md`)
           expect(content).toContain("atomic: true")
@@ -163,7 +197,7 @@ describe("WorkflowsExtension via RPC", () => {
     "routes each workflow and keeps saved-plan lookup separate from planning",
     () =>
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { layer: providerLayer } = yield* recipeModel(6)
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...e2ePreset,
           providerLayer,
@@ -186,11 +220,9 @@ describe("WorkflowsExtension via RPC", () => {
             input,
           })
         }
-        const { followUp } = yield* client.queue.get({ sessionId, branchId })
-        expect(followUp).toHaveLength(6)
-        const [review, audit, counsel, research, handoff, savedPlan] = followUp.map(
-          (item) => item.content,
-        )
+        const recipes = yield* recipesOf(client, { sessionId, branchId }, 6)
+        expect(recipes).toHaveLength(6)
+        const [review, audit, counsel, research, handoff, savedPlan] = recipes
         expect(review).toContain("Review: inspect the fixture\n")
         expect(review).toContain("Do not edit source files")
         expect(audit).toContain("Audit: inspect the fixture\n")
@@ -209,13 +241,13 @@ describe("WorkflowsExtension via RPC", () => {
   )
 
   it.scopedLive(
-    "/orchestrate writes the shipped machine, keeps a project's own, and queues its outcome prompt",
+    "/orchestrate writes the shipped machine, keeps a project's own, and runs its outcome prompt",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-orchestrate-" })
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { layer: providerLayer } = yield* recipeModel(3)
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...e2ePreset,
           providerLayer,
@@ -250,8 +282,7 @@ describe("WorkflowsExtension via RPC", () => {
         expect(unreadable._tag).toBe("Failure")
         expect(yield* fs.readFileString(machineFile)).toBe(own)
         yield* orchestrate("")
-        const { followUp } = yield* client.queue.get({ sessionId, branchId })
-        const [shipped, kept, empty] = followUp.map((item) => item.content)
+        const [shipped, kept, empty] = yield* recipesOf(client, { sessionId, branchId }, 3)
         expect(shipped).toContain("Orchestrate: plans/next.md\n")
         expect(shipped).toContain(`/.gent/results/${sessionId}/${branchId}/orchestrate/plan.md`)
         expect(shipped).toContain("write no product code")

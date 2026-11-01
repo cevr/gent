@@ -337,6 +337,11 @@ const resultPath = Effect.fn("Workflows.resultPath")(function* (
   return yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(resolved)
 })
 
+/**
+ * Queues a command's recipe as the branch's next turn. It wakes the loop: a
+ * new session's first message can be the command, and a queued line with no
+ * history behind it would wait for the user's next message.
+ */
 const queuePrompt = Effect.fn("Workflows.queuePrompt")(function* (id: string, content: string) {
   const ctx = yield* ExtensionContext
   const crypto = yield* Crypto.Crypto
@@ -344,6 +349,7 @@ const queuePrompt = Effect.fn("Workflows.queuePrompt")(function* (id: string, co
     delivery: "queue",
     sourceId: `${id}:${yield* crypto.randomUUIDv7()}`,
     content,
+    wake: true,
   })
 })
 
