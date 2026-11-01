@@ -68,12 +68,12 @@ owns stderr: a failed run prints one line, an answered run prints one
 
 `gent auth` signs in with no TUI: over SSH, on a workbox, in a script. Each
 call starts its own server with state in memory: it opens no database and no
-lock under the data directory. It writes the credential store every gent on
+lock under the data directory (its logs still go there). It writes the credential store every gent on
 the machine reads (`~/.gent/auth`, or `GENT_AUTH_DIRECTORY`) and, for a new
 label, the user config's `authOrder`, so a running gent uses the sign-in at its
-next turn. Stdout is one JSON line. The sign-in page, the instructions and the
-prompt go to stderr. The key or the code comes in on stdin. A failure is one
-line on stderr and exit 1.
+next turn. Stdout is one JSON line. The sign-in page, the instructions, the
+prompts and the warnings go to stderr. The key or the code comes in on stdin. A
+failure is one line on stderr and exit 1.
 
 ```bash
 # Each provider's credentials and order, and the methods `login` takes (`SignIns`)
@@ -85,7 +85,7 @@ gent auth login anthropic --method "Sign in to a Claude account" --slot work
 # A key from a script; a method's prompts are answered with --input key=value
 printf %s "$KEY" | gent auth login openai --method "Manually enter API key"
 
-# Remove one credential (`SignedOut`)
+# Remove one credential and its place in the order (`SignedOut`)
 gent auth logout anthropic --slot work
 ```
 
@@ -94,11 +94,19 @@ gent auth logout anthropic --slot work
   credential alone is not offered for a named label.
 - `--slot` is the label: 1 to 32 of `a-z`, `0-9`, `_` and `-`. The default is
   the default credential.
-- A `code` sign-in waits for the pasted code. An `auto` sign-in waits for the
-  browser and takes a pasted code too, whichever comes first.
+- A key typed on a terminal is not shown. A piped key is stdin's first line.
+- A `code` sign-in waits for the pasted code. A refused code is shown on stderr,
+  and the next line is tried. An `auto` sign-in waits for the browser and takes
+  pasted codes too: the first to sign in wins, and a browser wait that runs out
+  fails the call.
 - `SignedIn` names the provider, the label and the method. A new label goes
-  last in the order, as `/auth` puts it, and `authOrder` holds the order
-  written. A label signed in again keeps its place, and no order is written.
+  last in the order as it stands when the sign-in ends, as `/auth` puts it, and
+  `authOrder` holds the order written. A label signed in again, or one the
+  order names already, keeps its place, and no order is written. An order
+  write a project config refuses is a warning: the credential stays stored.
+- `logout` takes the label out of the order, and `authOrder` holds the order
+  written. An order the removal would empty stays as it is, with a warning:
+  the default would serve alone, and it can be a billed environment key.
 - A closed stdin before an answer fails and stores nothing.
 
 ## gent ctl

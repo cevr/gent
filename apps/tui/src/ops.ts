@@ -1,6 +1,7 @@
 import {
   type AuthAuthorization,
   AuthMethod,
+  type AuthPrompt,
   AuthProviderInfo,
   authMethodAppliesTo,
   Branch,
@@ -32,8 +33,11 @@ import {
   Path,
   type PlatformError,
   Predicate,
+  Queue,
+  Redacted,
   Runtime,
   Schema,
+  type Scope,
   Stdio,
   Stream,
 } from "effect"
@@ -54,7 +58,7 @@ import {
   SessionStorage,
 } from "@gent/core/host"
 import * as Prompt from "effect/ai/Prompt"
-import { Argument, Command, Flag } from "effect/cli"
+import { Argument, Command, Flag, Prompt as CliPrompt } from "effect/cli"
 import {
   FetchHttpClient,
   HttpClient,
@@ -1215,11 +1219,12 @@ export const storage = Command.make("storage", {}, () =>
 //
 // `gent auth` signs in with no TUI: over SSH, in a script, on a workbox. It
 // starts its own server with state in memory, so it never opens the data
-// directory's database or lock. The credential store is the one every gent on
-// the machine shares (`~/.gent/auth`, or `GENT_AUTH_DIRECTORY`), and the order
-// goes to the user config, so a running gent reads both at its next turn.
-// Stdout carries one JSON line; the link, the instructions and the prompt go to
-// stderr, and the key or the code comes in on stdin.
+// directory's database or lock (its logs still go there). The credential store
+// is the one every gent on the machine shares (`~/.gent/auth`, or
+// `GENT_AUTH_DIRECTORY`), and the order goes to the user config, so a running
+// gent reads both at its next turn. Stdout carries one JSON line; the link, the
+// instructions, the prompts and the warnings go to stderr, and the key or the
+// code comes in on stdin.
 
 class AuthCliFailed extends Schema.TaggedError<AuthCliFailed, { readonly brand: unique symbol }>()(
   "AuthCliFailed",
@@ -1250,33 +1255,56 @@ export const AuthCliResult = Schema.TaggedUnion({
     method: Schema.String,
     authOrder: Schema.optional(Schema.Array(CredentialSlot)),
   },
-  /** `logout`: the credential is removed. */
-  SignedOut: { provider: Schema.String, slot: CredentialSlot },
+  /** `logout`: the credential is removed; `authOrder` is the order written without its label. */
+  SignedOut: {
+    provider: Schema.String,
+    slot: CredentialSlot,
+    authOrder: Schema.optional(Schema.Array(CredentialSlot)),
+  },
 })
 export type AuthCliResult = typeof AuthCliResult.Type
 
 const encodeAuthCliResult = Schema.encodeEffect(Schema.fromJsonString(AuthCliResult))
 
+/** `text` on stderr. A stderr that refuses a write is a defect: no report could reach the user. */
 const sayOnStderr = (text: string) =>
   Effect.gen(function* () {
     const stdio = yield* Stdio.Stdio
     yield* Stream.make(text).pipe(Stream.run(stdio.stderr()))
-  })
+  }).pipe(Effect.orDie)
 
-/** The first line on stdin, trimmed; none when stdin closes before a line that holds text. */
-const readStdinLine = Effect.gen(function* () {
+/**
+ * stdin's lines, trimmed, the empty ones left out, in order: `next` takes one,
+ * none once stdin closes. stdin is read from the first `next` on.
+ */
+const stdinLines = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio
-  const line = yield* stdio.stdin.pipe(
-    Stream.decodeText(),
-    Stream.splitLines,
-    Stream.map((each) => each.trim()),
-    Stream.filter((each) => each.length > 0),
-    Stream.runHead,
+  const lines = yield* Effect.cached(
+    Stream.toQueue(
+      stdio.stdin.pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.map((each) => each.trim()),
+        Stream.filter((each) => each.length > 0),
+      ),
+      { capacity: "unbounded" },
+    ),
   )
   // A terminal ends the prompt's line with the typed Enter; piped input does not.
-  if (!(yield* stdio.stdinIsTerminal)) yield* sayOnStderr("\n")
-  return line
-}).pipe(Effect.mapError(authFailure))
+  const endLine = Effect.flatMap(stdio.stdinIsTerminal, (terminal) => {
+    if (terminal) return Effect.void
+    return sayOnStderr("\n")
+  })
+  const next = Effect.flatMap(lines, (queue) => Queue.take(queue)).pipe(
+    Effect.asSome,
+    Effect.catchIf(Cause.isDone, () => Effect.succeedNone),
+    Effect.tap(() => endLine),
+    Effect.mapError(authFailure),
+  )
+  return { next }
+})
+
+type StdinLines = Effect.Success<typeof stdinLines>
 
 /** The session `gent auth` runs its calls in: the auth RPCs read its profile. */
 const authSession = (client: GentNamespacedClient, cwd: string) =>
@@ -1314,7 +1342,11 @@ const pickMethod = (
   methods: Readonly<Record<string, ReadonlyArray<AuthMethod>>>,
   request: SignInRequest,
 ) => {
-  const offered = (methods[request.provider] ?? []).flatMap((method, index) => {
+  const listed = Option.getOrElse(
+    Option.fromUndefinedOr(methods[request.provider]),
+    (): ReadonlyArray<AuthMethod> => [],
+  )
+  const offered = listed.flatMap((method, index) => {
     if (!authMethodAppliesTo(method, request.slot)) return []
     return [{ index, method }]
   })
@@ -1345,15 +1377,23 @@ const pickMethod = (
 
 /** The method's prompt answers, or the failure that names a missing or unknown one. */
 const promptAnswers = (method: AuthMethod, inputs: Readonly<Record<string, string>>) => {
-  const prompts = method.prompts ?? []
+  const prompts = Option.getOrElse(
+    Option.fromUndefinedOr(method.prompts),
+    (): ReadonlyArray<AuthPrompt> => [],
+  )
   const unknown = Object.keys(inputs).filter((key) => !prompts.some((each) => each.key === key))
   const missing = prompts.filter(
-    (prompt) => prompt.optional !== true && (inputs[prompt.key] ?? "").trim().length === 0,
+    (prompt) =>
+      prompt.optional !== true &&
+      !Option.exists(
+        Option.fromUndefinedOr(inputs[prompt.key]),
+        (answer) => answer.trim().length > 0,
+      ),
   )
   if (unknown.length > 0) {
     return Effect.fail(
       new AuthCliFailed({
-        message: `"${method.label}" asks no ${unknown.join(", ")}; it asks ${prompts.map((each) => each.key).join(", ") || "nothing"}`,
+        message: `"${method.label}" asks no ${unknown.join(", ")}; it asks ${prompts.map((each) => each.key).join(", ") || "nothing"} (a prompt whose variable is set is not asked)`,
       }),
     )
   }
@@ -1378,27 +1418,37 @@ const promptAnswers = (method: AuthMethod, inputs: Readonly<Record<string, strin
   )
 }
 
+/** `id`'s catalog entry. */
+const providerEntry = (providers: ReadonlyArray<AuthProviderInfo>, id: string) =>
+  Arr.findFirst(providers, (entry) => entry.provider === id)
+
+/** The order a turn walks `provider`'s credentials in: its `authOrder`, else the default alone. */
+const orderOf = (provider: Option.Option<AuthProviderInfo>): ReadonlyArray<CredentialSlot> =>
+  Option.getOrElse(
+    Option.flatMap(provider, (entry) => Option.fromUndefinedOr(entry.authOrder)),
+    (): ReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT],
+  )
+
 /**
  * The order to write once `slot` signs in, as `/auth` writes it: a new label
  * goes last; a label that held a credential keeps its place, or its absence
- * (none). `provider` is the catalog entry read before the sign-in.
+ * (none), and so does one the order already names. `before` is the catalog
+ * entry read before the sign-in, `after` the one read once it is stored: a
+ * sign-in can take minutes, and the order may change meanwhile.
  */
 const orderAfterSignIn = (
-  provider: Option.Option<AuthProviderInfo>,
+  before: Option.Option<AuthProviderInfo>,
+  after: Option.Option<AuthProviderInfo>,
   slot: CredentialSlot,
 ): Option.Option<ReadonlyArray<CredentialSlot>> => {
   if (slot === DEFAULT_CREDENTIAL_SLOT) return Option.none()
-  const held = Option.exists(provider, (entry) =>
-    (entry.credentials ?? []).some((credential) => credential.slot === slot),
+  const held = Option.exists(before, (entry) =>
+    Option.exists(Option.fromUndefinedOr(entry.credentials), (credentials) =>
+      credentials.some((credential) => credential.slot === slot),
+    ),
   )
-  if (held) return Option.none()
-  const order = Option.match(
-    Option.flatMapNullishOr(provider, (entry) => entry.authOrder),
-    {
-      onNone: (): ReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT],
-      onSome: (current) => current,
-    },
-  )
+  const order = orderOf(after)
+  if (held || order.includes(slot)) return Option.none()
   return Option.some([...order, slot])
 }
 
@@ -1414,15 +1464,14 @@ export const signIn = (
   request: SignInRequest,
 ) =>
   Effect.gen(function* () {
+    const stdin = yield* stdinLines
     const providers = yield* client.auth.listProviders({ sessionId })
     const { index, method } = yield* pickMethod(
       yield* client.auth.listMethods({ sessionId }),
       request,
     )
     const inputs = yield* promptAnswers(method, request.inputs)
-    const before = Option.fromUndefinedOr(
-      providers.find((entry) => entry.provider === request.provider),
-    )
+    const before = providerEntry(providers, request.provider)
     const slot = Option.liftPredicate(request.slot, (given) => given !== DEFAULT_CREDENTIAL_SLOT)
     const target = {
       provider: request.provider,
@@ -1430,7 +1479,7 @@ export const signIn = (
       ...omitUndefined({ slot: Option.getOrUndefined(slot) }),
     }
     if (method.type === "api") {
-      const key = yield* stdinAnswer(`Paste the ${method.label} for ${request.provider}: `)
+      const key = yield* secretAnswer(stdin, `Paste the ${method.label} for ${request.provider}: `)
       yield* client.auth.setKey({
         ...target,
         key,
@@ -1442,21 +1491,20 @@ export const signIn = (
         method: index,
         ...omitUndefined({ inputs: Option.getOrUndefined(inputs) }),
       })
-      yield* completeAuthorization(client, {
+      yield* completeAuthorization(client, stdin, {
         sessionId,
         provider: request.provider,
         method: index,
         authorization: Option.fromNullishOr(authorization),
       })
     }
-    const order = orderAfterSignIn(before, request.slot)
-    if (Option.isSome(order)) {
-      yield* client.auth.setOrder({
-        provider: request.provider,
-        order: [...order.value],
-        sessionId,
-      })
-    }
+    const after = providerEntry(yield* client.auth.listProviders({ sessionId }), request.provider)
+    const order = yield* writeOrder(
+      client,
+      sessionId,
+      request.provider,
+      orderAfterSignIn(before, after, request.slot),
+    )
     return AuthCliResult.cases.SignedIn.make({
       provider: request.provider,
       slot: request.slot,
@@ -1465,17 +1513,91 @@ export const signIn = (
     })
   }).pipe(Effect.mapError(authFailure))
 
+/**
+ * Write `order` as `provider`'s `authOrder`; the order written, or none. The
+ * credential is stored by now, so a refused write (a project entry that wins
+ * over the user config) is a warning on stderr, not a failed call.
+ */
+const writeOrder = (
+  client: GentNamespacedClient,
+  sessionId: SessionId,
+  provider: string,
+  order: Option.Option<ReadonlyArray<CredentialSlot>>,
+) =>
+  Option.match(order, {
+    onNone: () => Effect.succeedNone,
+    onSome: (next) =>
+      client.auth.setOrder({ provider, order: [...next], sessionId }).pipe(
+        Effect.as(Option.some(next)),
+        Effect.catch((error) =>
+          sayOnStderr(`Warning: the order was not written: ${authFailure(error).message}\n`).pipe(
+            Effect.as(Option.none<ReadonlyArray<CredentialSlot>>()),
+          ),
+        ),
+      ),
+  })
+
 /** The prompt on stderr, then the answer on stdin; a closed stdin fails. */
-const stdinAnswer = (prompt: string) =>
+const stdinAnswer = (stdin: StdinLines, prompt: string) =>
   Effect.gen(function* () {
     yield* sayOnStderr(prompt)
-    return yield* Effect.fromOption(yield* readStdinLine).pipe(
+    return yield* Effect.fromOption(yield* stdin.next).pipe(
       Effect.mapError(() => new AuthCliFailed({ message: "stdin closed with no answer" })),
     )
   })
 
+/**
+ * A key: typed on a terminal, it is not shown, and its prompt draws on stderr;
+ * piped, it is stdin's first line.
+ */
+const secretAnswer = (stdin: StdinLines, prompt: string) =>
+  Effect.gen(function* () {
+    const stdio = yield* Stdio.Stdio
+    if (!(yield* stdio.stdinIsTerminal)) return yield* stdinAnswer(stdin, prompt)
+    const terminal = yield* Terminal.Terminal
+    const display = (text: string) =>
+      sayOnStderr(text).pipe(Effect.provideService(Stdio.Stdio, stdio))
+    const typed = yield* CliPrompt.run(CliPrompt.Hidden({ message: prompt.trim() })).pipe(
+      Effect.provideService(Terminal.Terminal, Terminal.make({ ...terminal, display })),
+      Effect.mapError(() => new AuthCliFailed({ message: "the sign-in was cancelled" })),
+    )
+    const key = Redacted.value(typed).trim()
+    if (key.length === 0) return yield* new AuthCliFailed({ message: "no key was typed" })
+    return key
+  })
+
+/**
+ * Pasted codes, one per line, until one signs in: a refused code is shown on
+ * stderr and the next line is tried. A closed stdin runs `closed` with the last
+ * refusal, if any.
+ */
+const pasteUntilSignedIn = <E, R>(
+  stdin: StdinLines,
+  submit: (code: string) => Effect.Effect<void, AuthCliFailed>,
+  closed: (refused: Option.Option<AuthCliFailed>) => Effect.Effect<void, E, R>,
+) => {
+  const attempt = (
+    refused: Option.Option<AuthCliFailed>,
+  ): Effect.Effect<void, AuthCliFailed | E, R | Stdio.Stdio | Scope.Scope> =>
+    Effect.flatMap(stdin.next, (line) =>
+      Option.match(line, {
+        onNone: () => closed(refused),
+        onSome: (code) =>
+          submit(code).pipe(
+            Effect.catch((error) =>
+              sayOnStderr(`${error.message}\nPaste code: `).pipe(
+                Effect.andThen(Effect.suspend(() => attempt(Option.some(error)))),
+              ),
+            ),
+          ),
+      }),
+    )
+  return attempt(Option.none())
+}
+
 const completeAuthorization = (
   client: GentNamespacedClient,
+  stdin: StdinLines,
   input: {
     readonly sessionId: SessionId
     readonly provider: string
@@ -1496,25 +1618,32 @@ const completeAuthorization = (
       method: input.method,
       authorizationId: authorization.authorizationId,
     }
+    const submit = (code: string) =>
+      client.auth.callback({ ...base, code }).pipe(Effect.mapError(authFailure))
     const notes = Option.match(Option.fromUndefinedOr(authorization.instructions), {
       onNone: () => "",
       onSome: (text) => `${text}\n`,
     })
     const page = `Open this page to sign in:\n${authorization.url}\n${notes}`
     if (authorization.method === "code") {
-      const code = yield* stdinAnswer(`${page}Paste code: `)
-      yield* client.auth.callback({ ...base, code })
-      return
+      yield* sayOnStderr(`${page}Paste code: `)
+      return yield* pasteUntilSignedIn(stdin, submit, (refused) =>
+        Effect.fail(
+          Option.getOrElse(
+            refused,
+            () => new AuthCliFailed({ message: "stdin closed with no answer" }),
+          ),
+        ),
+      )
     }
-    // `auto`: the browser leg and a pasted code race; the server takes the first.
+    // `auto`: the browser leg and the pasted codes race, and the first to end
+    // ends the sign-in: a browser leg that fails (its wait ran out) fails it.
+    // A refused code only asks for the next; a closed stdin leaves the browser.
     yield* sayOnStderr(`${page}Waiting for the browser; or paste the code: `)
-    const pasted = Effect.flatMap(readStdinLine, (line) =>
-      Option.match(line, {
-        onNone: () => Effect.never,
-        onSome: (code) => client.auth.callback({ ...base, code }),
-      }),
+    yield* Effect.raceFirst(
+      client.auth.callback(base).pipe(Effect.mapError(authFailure)),
+      pasteUntilSignedIn(stdin, submit, () => Effect.never),
     )
-    yield* Effect.race(client.auth.callback(base), pasted)
   })
 
 const printAuthResult = (result: AuthCliResult) =>
@@ -1593,21 +1722,51 @@ const authLogin = Command.make(
   ]),
 )
 
+/**
+ * `gent auth logout`: the credential goes, and its place in the order with it,
+ * as `/auth` removes it. An order the removal would empty stays as it is: the
+ * default would serve alone, and it can be a billed environment key.
+ */
+export const signOut = (
+  client: GentNamespacedClient,
+  sessionId: SessionId,
+  request: { readonly provider: string; readonly slot: CredentialSlot },
+) =>
+  Effect.gen(function* () {
+    const order = orderOf(
+      providerEntry(yield* client.auth.listProviders({ sessionId }), request.provider),
+    )
+    const keeps = order.filter((slot) => slot !== request.slot)
+    const inOrder = request.slot !== DEFAULT_CREDENTIAL_SLOT && keeps.length < order.length
+    yield* client.auth.deleteKey({
+      provider: request.provider,
+      sessionId,
+      ...omitUndefined({
+        slot: Option.getOrUndefined(
+          Option.liftPredicate(request.slot, (given) => given !== DEFAULT_CREDENTIAL_SLOT),
+        ),
+      }),
+    })
+    if (inOrder && keeps.length === 0) {
+      yield* sayOnStderr(
+        `Warning: nothing serves ${request.provider} now; sign ${request.slot} in again, or name the default in its authOrder\n`,
+      )
+    }
+    const written = yield* writeOrder(
+      client,
+      sessionId,
+      request.provider,
+      Option.liftPredicate(keeps, () => inOrder && keeps.length > 0),
+    )
+    return AuthCliResult.cases.SignedOut.make({
+      ...request,
+      ...omitUndefined({ authOrder: Option.getOrUndefined(written) }),
+    })
+  }).pipe(Effect.mapError(authFailure))
+
 const authLogout = Command.make("logout", { provider: providerArgument, slot: slotFlag }, (input) =>
-  authCall((client, sessionId) =>
-    client.auth
-      .deleteKey({
-        provider: input.provider,
-        sessionId,
-        ...omitUndefined({
-          slot: Option.getOrUndefined(
-            Option.liftPredicate(input.slot, (given) => given !== DEFAULT_CREDENTIAL_SLOT),
-          ),
-        }),
-      })
-      .pipe(Effect.as(AuthCliResult.cases.SignedOut.make(input)), Effect.mapError(authFailure)),
-  ),
-).pipe(Command.withDescription("Remove a stored credential"))
+  authCall((client, sessionId) => signOut(client, sessionId, input)),
+).pipe(Command.withDescription("Remove a stored credential, and its place in the order"))
 
 export const auth = Command.make("auth", {}, () =>
   Console.log("Usage: gent auth <list|login|logout>"),

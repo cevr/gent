@@ -5,7 +5,7 @@ import {
   makeTempDirectoryScoped,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunFileSystem, BunPath, BunServices } from "@effect/platform-bun"
 import {
   AuthMethod,
   defineExtension,
@@ -15,20 +15,25 @@ import {
 } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
 import {
+  type Cause,
   ConfigProvider,
+  Deferred,
   Console,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Logger,
   Option,
   Path,
   Predicate,
+  Queue,
   Schema,
   Sink,
   Stdio,
   Stream,
+  Terminal,
 } from "effect"
 import { MinimumLogLevel } from "effect/References"
 import {
@@ -59,6 +64,7 @@ import {
   resumableSessions,
   seedDebugSession,
   signIn,
+  signOut,
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { SqlClient } from "effect/sql"
@@ -836,7 +842,8 @@ const GOOD_CODE = "good-code"
 /**
  * A driver whose sign-ins end only with `GOOD_CODE`: a `code` method, an
  * `auto` one whose browser leg never answers, a key with a required
- * prompt, and a method for the default credential alone. Each test names its own provider: the file's home, and so its user
+ * prompt, an `auto` one whose browser wait runs out, and a method for the
+ * default credential alone. Each test names its own provider: the file's home, and so its user
  * config, is shared by every test here.
  */
 const fakeSignIn = (id: string) =>
@@ -844,7 +851,7 @@ const fakeSignIn = (id: string) =>
     id: `test-${id}`,
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
-      const flows = ["code", "auto"] as const
+      const flows = ["code", "auto", "code", "auto"] as const
       yield* host.register("modelDriver", {
         id,
         name: "Fake sign-in",
@@ -857,6 +864,8 @@ const fakeSignIn = (id: string) =>
               label: "API key",
               prompts: [{ key: "region", label: "Region" }],
             }),
+            // A browser wait that runs out, as one does over SSH.
+            AuthMethod.make({ type: "oauth", label: "Lapsed browser" }),
             // Offered for the default credential only, as a CLI's own login is.
             AuthMethod.make({ type: "oauth", label: "Default only", credentialTarget: "default" }),
           ],
@@ -866,8 +875,10 @@ const fakeSignIn = (id: string) =>
               method: flows[methodIndex] ?? "code",
               instructions: "Sign in, then paste the code.",
             }),
-          callback: ({ code, persist }) => {
-            // The browser leg (no code) never answers: only a pasted code ends it.
+          callback: ({ code, persist, methodIndex }) => {
+            // The browser leg (no code) never answers, or runs out: only a pasted code ends it.
+            if (Predicate.isUndefined(code) && methodIndex === 3)
+              return Effect.fail(new ProviderAuthError({ message: "the browser wait ran out" }))
             if (Predicate.isUndefined(code)) return Effect.never
             if (code !== GOOD_CODE)
               return Effect.fail(new ProviderAuthError({ message: "wrong code" }))
@@ -900,12 +911,46 @@ const signInServer = (id: string) =>
   })
 
 /** Piped stdin holding `text`; stderr goes to `reported.stderr`. */
-const pipedStdin = (text: string) =>
-  Stdio.layerTest({
-    stdin: Stream.make(new TextEncoder().encode(text)),
-    stdinIsTerminal: Effect.succeed(false),
-    stderr: () => captureTo("stderr"),
-  })
+/**
+ * A terminal whose user types `typed`, then Enter, and nothing more; what it
+ * draws is lost. Only a key typed on a terminal reads it.
+ */
+const typingTerminal = (typed: string) =>
+  Layer.succeed(
+    Terminal.Terminal,
+    Terminal.make({
+      columns: Effect.succeed(80),
+      rows: Effect.succeed(24),
+      readInput: Effect.gen(function* () {
+        const queue = yield* Queue.unbounded<Terminal.UserInput, Cause.Done>()
+        const key = (name: string) => ({ name, ctrl: false, meta: false, shift: false })
+        for (const char of typed) {
+          yield* Queue.offer(queue, { input: Option.some(char), key: key(char) })
+        }
+        yield* Queue.offer(queue, { input: Option.none(), key: key("enter") })
+        return queue
+      }),
+      readLine: Effect.never,
+      display: () => Effect.void,
+    }),
+  )
+
+/** The services a sign-in reads: stdin from `stdin`, stderr into `reported.stderr`. */
+const signInIo = (stdin: Stream.Stream<Uint8Array>, options: { readonly typed?: string } = {}) =>
+  Layer.mergeAll(
+    BunFileSystem.layer,
+    BunPath.layer,
+    typingTerminal(options.typed ?? ""),
+    Stdio.layerTest({
+      stdin,
+      stdinIsTerminal: Effect.succeed(Predicate.isNotUndefined(options.typed)),
+      stdout: () => captureTo("stdout"),
+      stderr: () => captureTo("stderr"),
+    }),
+  )
+
+/** Piped stdin holding `text`. */
+const pipedStdin = (text: string) => signInIo(Stream.make(new TextEncoder().encode(text)))
 
 /**
  * `id`'s credentials as `auth list` prints them. A provider with its default
@@ -954,6 +999,18 @@ describe("gent auth", () => {
           expect(reported.stderr).toBe(
             "Open this page to sign in:\nhttps://sign-in.invalid/0\nSign in, then paste the code.\nPaste code: \n",
           )
+          // A refused code asks for the next one.
+          reported.stderr = ""
+          const retried = yield* signIn(client, sessionId, request).pipe(
+            Effect.provide(pipedStdin(`bad-code\n${GOOD_CODE}\n`)),
+          )
+          expect(retried.slot).toBe(WORK)
+          expect(reported.stderr).toContain("Paste code: \nwrong code\nPaste code: \n")
+          const refusedOnly = yield* signIn(client, sessionId, request).pipe(
+            Effect.provide(pipedStdin("bad-code\n")),
+            Effect.flip,
+          )
+          expect(refusedOnly.message).toBe("wrong code")
           // Signed in again, the label keeps its place: no order is written.
           const again = yield* signIn(client, sessionId, request).pipe(
             Effect.provide(pipedStdin(`${GOOD_CODE}\n`)),
@@ -965,7 +1022,7 @@ describe("gent auth", () => {
             method: Option.some("Default only"),
           }).pipe(Effect.provide(pipedStdin(`${GOOD_CODE}\n`)), Effect.flip)
           expect(refused.message).toBe(
-            'name the method with --method, one of "Paste a code", "Browser", "API key"',
+            'name the method with --method, one of "Paste a code", "Browser", "API key", "Lapsed browser"',
           )
           const listed = yield* listSignIns(client, sessionId)
           expect(credentialsOf(listed.providers, "fake-code")).toContainEqual({
@@ -980,25 +1037,27 @@ describe("gent auth", () => {
       ),
   )
 
-  it.live("an auto sign-in takes a pasted code while the browser wait runs", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { client, sessionId } = yield* signInServer("fake-auto")
-        const signedIn = yield* signIn(client, sessionId, {
-          provider: "fake-auto",
-          slot: WORK,
-          method: Option.some("browser"),
-          inputs: {},
-        }).pipe(Effect.provide(pipedStdin(`${GOOD_CODE}\n`)))
-        expect(signedIn.method).toBe("Browser")
-        const listed = yield* listSignIns(client, sessionId)
-        expect(credentialsOf(listed.providers, "fake-auto")).toContainEqual({
-          slot: WORK,
-          hasKey: true,
-          authType: "oauth",
-        })
-      }).pipe(Effect.timeout("10 seconds")),
-    ),
+  it.live(
+    "an auto sign-in takes a pasted code while the browser wait runs, after a refused one",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client, sessionId } = yield* signInServer("fake-auto")
+          const signedIn = yield* signIn(client, sessionId, {
+            provider: "fake-auto",
+            slot: WORK,
+            method: Option.some("browser"),
+            inputs: {},
+          }).pipe(Effect.provide(pipedStdin(`bad-code\n${GOOD_CODE}\n`)))
+          expect(signedIn.method).toBe("Browser")
+          const listed = yield* listSignIns(client, sessionId)
+          expect(credentialsOf(listed.providers, "fake-auto")).toContainEqual({
+            slot: WORK,
+            hasKey: true,
+            authType: "oauth",
+          })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
   )
 
   it.live("a key sign-in reads the key from stdin and asks for each prompt's answer", () =>
@@ -1016,7 +1075,7 @@ describe("gent auth", () => {
           method: Option.none(),
         }).pipe(Effect.provide(pipedStdin("fake-key\n")), Effect.flip)
         expect(unnamed.message).toBe(
-          'name the method with --method, one of "Paste a code", "Browser", "API key", "Default only"',
+          'name the method with --method, one of "Paste a code", "Browser", "API key", "Lapsed browser", "Default only"',
         )
         const unanswered = yield* signIn(client, sessionId, request).pipe(
           Effect.provide(pipedStdin("fake-key\n")),
@@ -1034,6 +1093,133 @@ describe("gent auth", () => {
           hasKey: true,
           authType: "api",
         })
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("a key typed on a terminal is not shown, and its prompt draws on stderr", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* signInServer("fake-typed")
+        reported.stdout = ""
+        reported.stderr = ""
+        yield* signIn(client, sessionId, {
+          provider: "fake-typed",
+          slot: DEFAULT_CREDENTIAL_SLOT,
+          method: Option.some("API key"),
+          inputs: { region: "eu" },
+        }).pipe(Effect.provide(signInIo(Stream.empty, { typed: "typed-secret" })))
+        expect(reported.stdout).toBe("")
+        expect(reported.stderr).toContain("Paste the API key for fake-typed:")
+        expect(reported.stderr).not.toContain("typed-secret")
+        const listed = yield* listSignIns(client, sessionId)
+        expect(credentialsOf(listed.providers, "fake-typed")).toContainEqual({
+          slot: DEFAULT_CREDENTIAL_SLOT,
+          hasKey: true,
+          authType: "api",
+        })
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("a sign-out takes the label out of the order, so it can sign in again", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* signInServer("fake-out")
+        const request = {
+          provider: "fake-out",
+          slot: WORK,
+          method: Option.some("Paste a code"),
+          inputs: {},
+        }
+        yield* signIn(client, sessionId, request).pipe(Effect.provide(pipedStdin(`${GOOD_CODE}\n`)))
+        const out = yield* signOut(client, sessionId, { provider: "fake-out", slot: WORK }).pipe(
+          Effect.provide(pipedStdin("")),
+        )
+        expect(out.authOrder).toEqual([DEFAULT_CREDENTIAL_SLOT])
+        const back = yield* signIn(client, sessionId, request).pipe(
+          Effect.provide(pipedStdin(`${GOOD_CODE}\n`)),
+        )
+        expect(back.authOrder).toEqual([DEFAULT_CREDENTIAL_SLOT, WORK])
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("a new label joins the order as it stands once the sign-in ends", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* signInServer("fake-moved")
+        const reading = yield* Deferred.make<void>()
+        const paste = yield* Deferred.make<void>()
+        // stdin holds the code only once the order has moved under the sign-in.
+        const stdin = Stream.fromEffect(
+          Deferred.succeed(reading, void 0).pipe(
+            Effect.andThen(Deferred.await(paste)),
+            Effect.as(new TextEncoder().encode(`${GOOD_CODE}\n`)),
+          ),
+        )
+        const fiber = yield* signIn(client, sessionId, {
+          provider: "fake-moved",
+          slot: WORK,
+          method: Option.some("Paste a code"),
+          inputs: {},
+        }).pipe(Effect.provide(signInIo(stdin)), Effect.forkChild)
+        yield* Deferred.await(reading)
+        const moved = [CredentialSlot.make("second"), DEFAULT_CREDENTIAL_SLOT]
+        yield* client.auth.setOrder({ provider: "fake-moved", order: moved, sessionId })
+        yield* Deferred.succeed(paste, void 0)
+        const signedIn = yield* Fiber.join(fiber)
+        expect(signedIn.authOrder).toEqual([...moved, WORK])
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("an auto sign-in whose browser wait runs out fails, with stdin closed", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* signInServer("fake-lapsed")
+        const failed = yield* signIn(client, sessionId, {
+          provider: "fake-lapsed",
+          slot: WORK,
+          method: Option.some("Lapsed browser"),
+          inputs: {},
+        }).pipe(Effect.provide(pipedStdin("")), Effect.flip)
+        expect(failed.message).toBe("the browser wait ran out")
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("a label the order names by the time the sign-in ends keeps its place", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* signInServer("fake-named")
+        const reading = yield* Deferred.make<void>()
+        const paste = yield* Deferred.make<void>()
+        const stdin = Stream.fromEffect(
+          Deferred.succeed(reading, void 0).pipe(
+            Effect.andThen(Deferred.await(paste)),
+            Effect.as(new TextEncoder().encode(`${GOOD_CODE}\n`)),
+          ),
+        )
+        const fiber = yield* signIn(client, sessionId, {
+          provider: "fake-named",
+          slot: WORK,
+          method: Option.some("Paste a code"),
+          inputs: {},
+        }).pipe(Effect.provide(signInIo(stdin)), Effect.forkChild)
+        yield* Deferred.await(reading)
+        // The order names the label while its sign-in runs.
+        const named = [WORK, DEFAULT_CREDENTIAL_SLOT]
+        yield* client.auth.setOrder({ provider: "fake-named", order: named, sessionId })
+        reported.stderr = ""
+        yield* Deferred.succeed(paste, void 0)
+        const signedIn = yield* Fiber.join(fiber)
+        expect(signedIn.authOrder).toBeUndefined()
+        expect(reported.stderr).not.toContain("Warning")
+        const listed = yield* listSignIns(client, sessionId)
+        expect(
+          listed.providers.find((entry) => entry.provider === "fake-named")?.authOrder,
+        ).toEqual(named)
       }).pipe(Effect.timeout("10 seconds")),
     ),
   )
