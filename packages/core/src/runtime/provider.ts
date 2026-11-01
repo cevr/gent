@@ -91,6 +91,7 @@ import {
   type QuotaReading,
   SpendLimit,
   type RetryPolicy,
+  type HeldOAuthCredentials,
   type StoredOAuthCredentials,
   type VirtualModel,
 } from "../domain/driver.js"
@@ -1505,7 +1506,7 @@ const toProviderAuthInfo = (
     ...omitUndefined({ signedInAt: info.signedInAt, metadata: info.metadata }),
     update: <A, E>(
       f: (
-        stored: Option.Option<StoredOAuthCredentials>,
+        stored: Option.Option<HeldOAuthCredentials>,
       ) => Effect.Effect<readonly [A, Option.Option<StoredOAuthCredentials>], E>,
     ) =>
       authStore
@@ -1513,14 +1514,17 @@ const toProviderAuthInfo = (
           providerId,
           (current) =>
             Effect.map(
-              f(Option.flatMap(current, storedOAuthFields)),
+              f(Option.flatMap(current, heldOAuthFields)),
               (pair): readonly [A, Option.Option<AuthInfo>] => [
                 pair[0],
                 Option.map(pair[1], (fields) =>
                   authValue({
                     type: "oauth",
-                    ...fields,
+                    access: fields.access,
+                    refresh: fields.refresh,
+                    expires: fields.expires,
                     ...omitUndefined({
+                      accountId: fields.accountId,
                       metadata: Option.getOrUndefined(heldOAuthMetadata(current)),
                     }),
                   }),
@@ -1576,11 +1580,18 @@ const sourceRotationLock =
   }
 
 /** The OAuth fields of a stored credential; none for an API key. */
-const storedOAuthFields = (stored: AuthInfo): Option.Option<StoredOAuthCredentials> => {
+const heldOAuthFields = (stored: AuthInfo): Option.Option<HeldOAuthCredentials> => {
   if (stored.type !== "oauth") return Option.none()
-  const fields = { access: stored.access, refresh: stored.refresh, expires: stored.expires }
-  if (Predicate.isUndefined(stored.accountId)) return Option.some(fields)
-  return Option.some({ ...fields, accountId: stored.accountId })
+  return Option.some({
+    access: stored.access,
+    refresh: stored.refresh,
+    expires: stored.expires,
+    ...omitUndefined({
+      accountId: stored.accountId,
+      signedInAt: stored.signedInAt,
+      metadata: stored.metadata,
+    }),
+  })
 }
 
 /** The `metadata` of the OAuth record the store holds; none for an API key or a record without any. */

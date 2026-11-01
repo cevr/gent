@@ -36,6 +36,7 @@ import {
   omitUndefined,
   Model,
   type PendingRotation,
+  type HeldOAuthCredentials,
   type StoredOAuthCredentials,
   type UpdateStoredOAuth,
   QuarantinedRotation,
@@ -1149,6 +1150,10 @@ interface PendingSignIn {
   readonly startedAt: number
 }
 
+/** Whether a started sign-in is past `SIGN_IN_TTL` at `now`. */
+const signInExpired = (pending: PendingSignIn, now: number) =>
+  now - pending.startedAt > Duration.toMillis(SIGN_IN_TTL)
+
 /**
  * Run `claude -p .` so the CLI refreshes its own credentials. stdin is
  * closed so the CLI does not wait for piped input. It runs in the home
@@ -2090,7 +2095,15 @@ const toStoredClaude = (creds: ClaudeCredentials): StoredOAuthCredentials => ({
   expires: creds.expiresAt,
 })
 
-/** The gent auth store behind `update`, as the credential cache reads and writes it. */
+/**
+ * The gent auth store behind `update`, as the credential cache reads and
+ * writes it, for the one sign-in the request was bound to: under the store
+ * lock the label must still hold an account gent signed in to, stamped as
+ * that sign-in. A label renamed or signed in again while a request is in
+ * flight may hold a login another program keeps (a copy an older gent
+ * imported): its tokens are never read, refreshed or written, and the
+ * request fails `Unavailable`, so the next one resolves the label afresh.
+ */
 const ownedStore = (
   update: UpdateStoredOAuth,
   signedInAt: Option.Option<number>,
@@ -2101,14 +2114,32 @@ const ownedStore = (
       stored: Option.Option<ClaudeCredentials>,
     ) => Effect.Effect<readonly [A, Option.Option<ClaudeCredentials>], E>,
   ) =>
-    update((stored) =>
-      Effect.map(
-        f(Option.map(stored, fromStoredClaude)),
-        (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
-          pair[0],
-          Option.map(pair[1], toStoredClaude),
-        ],
-      ),
+    update(
+      (
+        stored,
+      ): Effect.Effect<
+        readonly [A, Option.Option<StoredOAuthCredentials>],
+        E | ProviderAuthError
+      > => {
+        const bound = (held: HeldOAuthCredentials) =>
+          isGentOwned(held) && held.signedInAt === Option.getOrUndefined(signedInAt)
+        if (Option.isSome(stored) && !bound(stored.value)) {
+          return Effect.fail(
+            new ProviderAuthError({
+              message:
+                "This label holds another sign-in now than the request was made for; the next request reads it",
+              credentialFailure: "Unavailable",
+            }),
+          )
+        }
+        return Effect.map(
+          f(Option.map(stored, fromStoredClaude)),
+          (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
+            pair[0],
+            Option.map(pair[1], toStoredClaude),
+          ],
+        )
+      },
     ),
   same: (a, b) => a.refreshToken === b.refreshToken,
 })
@@ -4417,6 +4448,10 @@ export const buildAnthropicModelDriver = (
               ),
             )
             const now = yield* Clock.currentTimeMillis
+            // A sign-in nobody finished leaves with the next one that starts.
+            for (const [id, pending] of pendingSignIns) {
+              if (signInExpired(pending, now)) pendingSignIns.delete(id)
+            }
             pendingSignIns.set(ctx.authorizationId, {
               verifier: begun.pkce.verifier,
               state: begun.state,
@@ -4551,10 +4586,7 @@ export const buildAnthropicModelDriver = (
             })
           const pending = Option.fromUndefinedOr(pendingSignIns.get(ctx.authorizationId))
           const now = yield* Clock.currentTimeMillis
-          if (
-            Option.isNone(pending) ||
-            now - pending.value.startedAt > Duration.toMillis(SIGN_IN_TTL)
-          ) {
+          if (Option.isNone(pending) || signInExpired(pending.value, now)) {
             pendingSignIns.delete(ctx.authorizationId)
             return yield* new ProviderAuthError({
               message: "This Claude sign-in expired or was never started: start it again in /auth",
@@ -4564,16 +4596,24 @@ export const buildAnthropicModelDriver = (
           // paste; one that parses spends it, since its code trades once.
           const grant = yield* parsePastedCode(ctx.code ?? "", pending.value.state)
           pendingSignIns.delete(ctx.authorizationId)
-          const creds = yield* exchangeClaudeCode(grant, pending.value.verifier).pipe(
-            Effect.provideContext(services),
+          // Once the endpoint spends the code, its tokens are the only copy:
+          // the trade and the store run to the end, bounded by the token
+          // POST's timeout and the store's lock wait, even when the caller
+          // stops waiting.
+          yield* Effect.uninterruptible(
+            exchangeClaudeCode(grant, pending.value.verifier).pipe(
+              Effect.provideContext(services),
+              Effect.flatMap((creds) =>
+                ctx.persist({
+                  type: "oauth",
+                  access: creds.accessToken,
+                  refresh: creds.refreshToken,
+                  expires: creds.expiresAt,
+                  metadata: GENT_OWNED,
+                }),
+              ),
+            ),
           )
-          yield* ctx.persist({
-            type: "oauth",
-            access: creds.accessToken,
-            refresh: creds.refreshToken,
-            expires: creds.expiresAt,
-            metadata: GENT_OWNED,
-          })
         }),
     },
   }

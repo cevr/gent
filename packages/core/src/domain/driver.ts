@@ -286,7 +286,7 @@ export interface ProviderHints {
  */
 export type UpdateStoredOAuth = <A, E>(
   f: (
-    stored: Option.Option<StoredOAuthCredentials>,
+    stored: Option.Option<HeldOAuthCredentials>,
   ) => Effect.Effect<readonly [A, Option.Option<StoredOAuthCredentials>], E>,
 ) => Effect.Effect<A, E | ProviderAuthError>
 
@@ -440,6 +440,19 @@ export interface StoredOAuthCredentials {
   readonly refresh: string
   readonly expires: number
   readonly accountId?: string
+}
+
+/**
+ * The OAuth credential a label holds, as `UpdateStoredOAuth` reads it under
+ * the store lock: its tokens, the stamp of the sign-in it holds now, and the
+ * metadata that sign-in stored. A driver that serves only one kind of sign-in
+ * on a label checks them there, so a label renamed or signed in again while a
+ * request is in flight never hands it another sign-in's tokens. A write keeps
+ * the record's stamp and metadata whatever `f` returns.
+ */
+export interface HeldOAuthCredentials extends StoredOAuthCredentials {
+  readonly signedInAt?: number
+  readonly metadata?: AuthMetadata
 }
 
 /** Persist auth credentials — handed by `authorizeProvider` and `completeProviderAuth`

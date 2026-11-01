@@ -117,6 +117,7 @@ export type {
   LockSourceRotation,
   SourceRotation,
   StoredOAuthCredentials,
+  HeldOAuthCredentials,
   UpdateStoredOAuth,
 } from "../domain/driver.js"
 export {

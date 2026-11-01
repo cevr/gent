@@ -91,6 +91,7 @@ import {
   ProviderAuthInfo,
   type LockSourceRotation,
   type PendingRotation,
+  type HeldOAuthCredentials,
   type StoredOAuthCredentials,
   type TurnNotice,
   type UpdateStoredOAuth,
@@ -6843,25 +6844,45 @@ const decodeExchangeBody = Schema.decodeUnknownSync(
 const ACCOUNT_SLOT = CredentialSlot.make("work")
 
 /**
- * gent's credential store for one owned slot, as `Auth` keeps it: `update`
- * runs under one lock and writes what it returns; `writes` is every record
- * it stored, oldest first.
+ * gent's credential store for one label, as `Auth` keeps it: `update` reads
+ * the record and runs `f` under one lock, writes the tokens `f` returns and
+ * keeps the record's stamp and metadata. `writes` is every record it stored,
+ * oldest first; `replace` puts another sign-in under the label, as a rename
+ * or a second sign-in does.
  */
-const ownedRecord = (initial: StoredOAuthCredentials) => {
-  let stored = Option.some(initial)
+const ownedRecord = (
+  tokens: StoredOAuthCredentials,
+  signIn: { readonly signedInAt?: number; readonly metadata?: Record<string, string> } = {
+    signedInAt: 1,
+    metadata: { owner: "gent" },
+  },
+) => {
+  let held: Option.Option<HeldOAuthCredentials> = Option.some({ ...tokens, ...signIn })
   const writes: Array<StoredOAuthCredentials> = []
   const lock = Semaphore.makeUnsafe(1)
   const update: UpdateStoredOAuth = (f) =>
-    Effect.flatMap(f(stored), ([value, next]) =>
-      Effect.sync(() => {
-        if (Option.isSome(next)) {
-          stored = next
-          writes.push(next.value)
-        }
-        return value
-      }),
+    Effect.suspend(() =>
+      Effect.flatMap(f(held), ([value, next]) =>
+        Effect.sync(() => {
+          if (Option.isSome(next)) {
+            const kept = Option.match(held, {
+              onNone: () => ({}),
+              onSome: (record) => ({ signedInAt: record.signedInAt, metadata: record.metadata }),
+            })
+            held = Option.some({ ...next.value, ...kept })
+            writes.push(next.value)
+          }
+          return value
+        }),
+      ),
     ).pipe(lock.withPermits(1))
-  return { update, writes, current: () => stored }
+  return {
+    update,
+    writes,
+    replace: (next: HeldOAuthCredentials) => {
+      held = Option.some(next)
+    },
+  }
 }
 
 /** The sign-in an owned slot stores: gent's owner mark, read through `update`. */
@@ -6874,17 +6895,54 @@ const ownedSignIn = (record: ReturnType<typeof ownedRecord>, signedInAt = 1): Pr
     lockSourceRotation: processStore.lockSourceRotation,
   })
 
+/** Start a sign-in on `driver`'s Claude account method; its context, URL, state, and what it stored. */
+const startSignIn = (driver: LinkedDriver, authorizationId = "sign-in-1") =>
+  Effect.gen(function* () {
+    const auth = driver.auth
+    if (
+      Predicate.isUndefined(auth) ||
+      Predicate.isUndefined(auth.authorize) ||
+      Predicate.isUndefined(auth.callback)
+    )
+      return yield* Effect.die("no sign-in")
+    const authorize = auth.authorize
+    const persisted: Array<Parameters<Parameters<typeof authorize>[0]["persist"]>[0]> = []
+    const context: Parameters<typeof authorize>[0] = {
+      sessionId: SessionId.make("sign-in"),
+      methodIndex: auth.methods.findIndex((entry) => entry.label === "Sign in to a Claude account"),
+      authorizationId,
+      slot: ACCOUNT_SLOT,
+      persist: (record) =>
+        Effect.sync(() => {
+          persisted.push(record)
+        }),
+    }
+    const started = yield* authorize(context)
+    if (Option.isNone(started)) return yield* Effect.die("no authorization")
+    const url = new URL(started.value.url)
+    return {
+      auth,
+      callback: auth.callback,
+      context,
+      started: started.value,
+      url,
+      state: url.searchParams.get("state") ?? "",
+      persisted,
+    }
+  })
+
 /** The token endpoint trading a sign-in's code: one account's tokens, and a happy reply elsewhere. */
+const SIGNED_IN_REPLY = {
+  status: 200,
+  body: encodeExternalJson({
+    access_token: "fake-signed-in-access",
+    refresh_token: "fake-signed-in-refresh",
+    expires_in: 3600,
+  }),
+}
 const exchangeEndpoint: FakeResponder = (request) => {
   if (request.url !== EXCHANGE_URL) return anthropicHappyResponse()
-  return {
-    status: 200,
-    body: encodeExternalJson({
-      access_token: "fake-signed-in-access",
-      refresh_token: "fake-signed-in-refresh",
-      expires_in: 3600,
-    }),
-  }
+  return SIGNED_IN_REPLY
 }
 
 describe("Claude account sign-in", () => {
@@ -6894,33 +6952,10 @@ describe("Claude account sign-in", () => {
       Effect.gen(function* () {
         const keychain = fakeKeychain([])
         const driver = yield* linkedDriver("darwin", keychain.spawner)
-        const auth = driver.auth
-        if (
-          Predicate.isUndefined(auth) ||
-          Predicate.isUndefined(auth.authorize) ||
-          Predicate.isUndefined(auth.callback)
-        )
-          return yield* Effect.die("no sign-in")
-        const method = auth.methods.findIndex(
-          (entry) => entry.label === "Sign in to a Claude account",
-        )
-        expect(auth.methods[method]?.credentialTarget).toBe("named")
-        const persisted: Array<Parameters<Parameters<typeof authorize>[0]["persist"]>[0]> = []
-        const authorize = auth.authorize
-        const context: Parameters<typeof authorize>[0] = {
-          sessionId: SessionId.make("sign-in"),
-          methodIndex: method,
-          authorizationId: "sign-in-1",
-          slot: ACCOUNT_SLOT,
-          persist: (record) =>
-            Effect.sync(() => {
-              persisted.push(record)
-            }),
-        }
-        const started = yield* authorize(context)
-        if (Option.isNone(started)) return yield* Effect.die("no authorization")
-        expect(started.value.method).toBe("code")
-        const url = new URL(started.value.url)
+        const { auth, callback, context, started, url, state, persisted } =
+          yield* startSignIn(driver)
+        expect(auth.methods[context.methodIndex]?.credentialTarget).toBe("named")
+        expect(started.method).toBe("code")
         expect(`${url.origin}${url.pathname}`).toBe("https://claude.ai/oauth/authorize")
         expect(url.searchParams.get("client_id")).toBe("9d1c250a-e61b-44d9-88ed-5944d1962f5e")
         expect(url.searchParams.get("redirect_uri")).toBe(
@@ -6928,17 +6963,14 @@ describe("Claude account sign-in", () => {
         )
         expect(url.searchParams.get("scope")).toContain("user:inference")
         expect(url.searchParams.get("code_challenge_method")).toBe("S256")
-        const state = url.searchParams.get("state") ?? ""
         expect(state.length).toBeGreaterThan(20)
         // A paste from another sign-in is refused and leaves this one open.
-        const stale = yield* Effect.flip(
-          auth.callback({ ...context, code: "fake-code#another-state" }),
-        )
+        const stale = yield* Effect.flip(callback({ ...context, code: "fake-code#another-state" }))
         expect(stale.message).toContain("another sign-in")
         const fetches = makeFakeFetchState()
-        yield* auth
-          .callback({ ...context, code: ` fake-code#${state} ` })
-          .pipe(Effect.provide(fakeFetchLayer(fetches, exchangeEndpoint)))
+        yield* callback({ ...context, code: ` fake-code#${state} ` }).pipe(
+          Effect.provide(fakeFetchLayer(fetches, exchangeEndpoint)),
+        )
         const exchanges = fetches.captured.filter((request) => request.url === EXCHANGE_URL)
         expect(exchanges.length).toBe(1)
         const body = decodeExchangeBody(exchanges[0]?.body ?? "{}")
@@ -6967,9 +6999,9 @@ describe("Claude account sign-in", () => {
         ])
         // The code traded once: the sign-in is spent.
         const again = yield* Effect.flip(
-          auth
-            .callback({ ...context, code: `fake-code#${state}` })
-            .pipe(Effect.provide(fakeFetchLayer(makeFakeFetchState(), exchangeEndpoint))),
+          callback({ ...context, code: `fake-code#${state}` }).pipe(
+            Effect.provide(fakeFetchLayer(makeFakeFetchState(), exchangeEndpoint)),
+          ),
         )
         expect(again.message).toContain("start it again")
         // No keychain, no Claude Code login is read or written.
@@ -7017,11 +7049,10 @@ describe("Claude account sign-in", () => {
         expect(served.authorization).toBe("Bearer fake-owned-access")
         expect(served.refreshTokens).toEqual([])
         expect(fresh.writes).toEqual([])
-        const expired = ownedRecord({
-          access: "fake-expired-access",
-          refresh: "fake-expired-refresh",
-          expires: 0,
-        })
+        const expired = ownedRecord(
+          { access: "fake-expired-access", refresh: "fake-expired-refresh", expires: 0 },
+          { signedInAt: 2, metadata: { owner: "gent" } },
+        )
         const sent = yield* sendThrough(driver, ownedSignIn(expired, 2), rotatingEndpoint())
         expect(sent.refreshTokens).toEqual(["fake-expired-refresh"])
         expect(sent.authorization).toBe("Bearer fake-rotated-access")
@@ -7036,11 +7067,10 @@ describe("Claude account sign-in", () => {
     () =>
       Effect.gen(function* () {
         const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
-        const record = ownedRecord({
-          access: "fake-copy",
-          refresh: "fake-copy-refresh",
-          expires: 0,
-        })
+        const record = ownedRecord(
+          { access: "fake-copy", refresh: "fake-copy-refresh", expires: 0 },
+          { signedInAt: 1 },
+        )
         const failure = yield* resolveFailure(
           driver,
           ProviderAuthInfo.cases.Oauth.make({
@@ -7055,6 +7085,115 @@ describe("Claude account sign-in", () => {
         )
         expect(record.writes).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("Claude account sign-in — races", () => {
+  it.scopedLive(
+    "a label that holds another sign-in under the lock than the request was made for is never read or refreshed",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+        for (const other of [
+          // A copy an older gent imported, renamed into the label.
+          { signedInAt: 5 },
+          // The label signed in again since the request was made.
+          { signedInAt: 5, metadata: { owner: "gent" } },
+        ]) {
+          const record = ownedRecord(
+            { access: "fake-bound-access", refresh: "fake-bound-refresh", expires: 0 },
+            { signedInAt: 1, metadata: { owner: "gent" } },
+          )
+          const signIn = ownedSignIn(record, 1)
+          record.replace({
+            access: "fake-other-access",
+            refresh: "fake-other-refresh",
+            expires: 0,
+            ...other,
+          })
+          const fetches = makeFakeFetchState()
+          const failure = yield* Effect.flip(
+            driver
+              .resolveModel("claude-opus-4-6", signIn)
+              .pipe(Effect.provide(fakeFetchLayer(fetches, rotatingEndpoint()))),
+          )
+          expect(Schema.is(ProviderAuthError)(failure)).toBe(true)
+          expect(failure).toMatchObject({ credentialFailure: "Unavailable" })
+          expect(fetches.captured.filter((request) => request.url === TOKEN_URL)).toEqual([])
+          expect(record.writes).toEqual([])
+        }
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "two profiles refreshing one expired account at once spend its refresh token once",
+    () =>
+      Effect.gen(function* () {
+        const record = ownedRecord({
+          access: "fake-expired-access",
+          refresh: "fake-expired-refresh",
+          expires: 0,
+        })
+        const endpoint = numberedEndpoint()
+        const first = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+        const second = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+        const sent = yield* Effect.all(
+          [
+            sendThrough(first, ownedSignIn(record), endpoint.respond),
+            sendThrough(second, ownedSignIn(record), endpoint.respond),
+          ],
+          { concurrency: 2 },
+        )
+        expect(sent.map((one) => one.authorization)).toEqual([
+          "Bearer fake-rotated-1-access",
+          "Bearer fake-rotated-1-access",
+        ])
+        expect(sent.flatMap((one) => one.refreshTokens)).toEqual(["fake-expired-refresh"])
+        expect(record.writes.map((write) => write.refresh)).toEqual(["fake-rotated-1-refresh"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a caller that stops waiting after the endpoint spent the code still gets the tokens stored",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+        const { callback, context, state, persisted } = yield* startSignIn(driver)
+        const reached = yield* Deferred.make<void>()
+        const slowExchange: FakeResponder = () =>
+          Deferred.done(reached, Exit.void).pipe(
+            Effect.andThen(Effect.sleep("100 millis")),
+            Effect.as(SIGNED_IN_REPLY),
+          )
+        const fiber = yield* callback({ ...context, code: `fake-code#${state}` }).pipe(
+          Effect.provide(fakeFetchLayer(makeFakeFetchState(), slowExchange)),
+          Effect.forkChild,
+        )
+        yield* Deferred.await(reached)
+        yield* Fiber.interrupt(fiber)
+        expect(persisted).toMatchObject([{ type: "oauth", refresh: "fake-signed-in-refresh" }])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scoped("a started sign-in lasts 10 minutes", () =>
+    Effect.gen(function* () {
+      const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+      const late = yield* startSignIn(driver, "late")
+      const onTime = yield* startSignIn(driver, "on-time")
+      yield* TestClock.adjust("9 minutes")
+      yield* onTime
+        .callback({ ...onTime.context, code: `fake-code#${onTime.state}` })
+        .pipe(Effect.provide(fakeFetchLayer(makeFakeFetchState(), exchangeEndpoint)))
+      expect(onTime.persisted.length).toBe(1)
+      yield* TestClock.adjust("2 minutes")
+      const expired = yield* Effect.flip(
+        late
+          .callback({ ...late.context, code: `fake-code#${late.state}` })
+          .pipe(Effect.provide(fakeFetchLayer(makeFakeFetchState(), exchangeEndpoint))),
+      )
+      expect(expired.message).toContain("expired")
+      expect(late.persisted).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 })
 
