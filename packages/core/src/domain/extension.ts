@@ -1494,6 +1494,13 @@ export interface ExtensionAccountsService {
    */
   readonly waiting: (message: MessageId) => Effect.Effect<boolean>
   /**
+   * Takes the start queued for `message` out of its queue, if it still
+   * waits there: true when it did, so no grant can reach it after; false
+   * when it holds a lane already (granted or admitted) or is gone. One
+   * decision under the queue's lock, so a grant and a withdrawal never both win.
+   */
+  readonly withdraw: (message: MessageId) => Effect.Effect<boolean>
+  /**
    * The model role `name` as the config of `cwd` names it, resolved over the
    * models that cwd's profile lists. None when the config names no such role.
    */

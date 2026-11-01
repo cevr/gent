@@ -7283,6 +7283,32 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect("withdraw takes a waiter out of its queue for good, and leaves a held lane", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      expect(yield* askLane(placement, Option.none(), "fill-1")).toBe("admitted")
+      expect(yield* askLane(placement, Option.none(), "fill-2")).toBe("admitted")
+      expect(yield* askLane(placement, Option.none(), "withdrawn")).toBe("queued")
+      expect(yield* askLane(placement, Option.none(), "behind")).toBe("queued")
+      const awaiting = yield* Effect.forkChild(placement.awaitLane("withdrawn"), {
+        startImmediately: true,
+      })
+      // A start that holds its lane, or no start, is not withdrawn.
+      expect(yield* placement.withdraw("fill-1")).toBe(false)
+      expect(yield* placement.withdraw("never-asked")).toBe(false)
+      expect(yield* placement.withdraw("withdrawn")).toBe(true)
+      expect(yield* placement.withdraw("withdrawn")).toBe(false)
+      // Its reader hears it holds nothing; the lane that frees goes to the one behind it.
+      expect(yield* Fiber.join(awaiting)).toBe(false)
+      yield* placement.freeReservation("fill-1")
+      expect(yield* placement.queued("behind")).toBe(false)
+      expect(yield* askLane(placement, Option.none(), "behind")).toBe("admitted")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("a lane end grants the head of the queue with no clock advance", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()

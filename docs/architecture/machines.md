@@ -81,10 +81,16 @@
     in its lane queue (`Round.queuedOn`, `queuedAt`). Ten minutes on
     (`PATIENCE`), still queued (`Threads.laneQueued`, `Accounts.waiting`),
     it moves when its role has a choice of another maker than that
-    model's and the ones it left before (`avoid`): a `Repicked` step
-    commits a new round that picks with those makers left out, on a new
-    thread, and the queued round is stopped, which takes it out of the
-    queue. With no such choice, or once its lane came, it keeps its place. Every `RoundEnded`
+    model's and the ones it left before (`avoid`). The move commits that
+    maker as the round's `leaving` first, then the queue decides
+    (`Threads.withdrawQueued`, `Accounts.withdraw`, under the queue's lock):
+    a round withdrawn (marked stopped before the queue decides, so it never
+    runs) is replaced by a new round, with a `Repicked` step, that picks
+    with those makers left out, on a new thread; a round its grant reached
+    first keeps its place and runs. A restart, or a step that died, finishes
+    a `leaving` round the same way, and a stopped one counts as withdrawn.
+    A retry or a rerun of the visit keeps `avoid`; a new visit starts
+    without it. With no such choice, or once its lane came, it keeps its place. Every `RoundEnded`
     step keeps the role, the thread's model, and the turn's `costUsd` and
     tokens; `Finished` keeps whether its state accepts. Quality is
     shown, not picked on: `machine.status` and `MachinesRpc.Quality` (by a

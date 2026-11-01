@@ -5,6 +5,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Exit,
   Fiber,
   FileSystem,
   Layer,
@@ -17,6 +18,7 @@ import {
   Sink,
   References,
   Schema,
+  Scope,
   Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
@@ -165,7 +167,20 @@ const usageLimited = () =>
     }),
   )
 
-type WorkerStream = ReturnType<typeof billed> | ReturnType<typeof usageLimited>
+/** A worker step the provider refuses for good: the round dies with no retry time. */
+const refusedStep = () =>
+  Stream.fail(
+    AiError.make({
+      module: "Test",
+      method: "streamText",
+      reason: new AiError.ContentPolicyError({ description: "refused" }),
+    }),
+  )
+
+type WorkerStream =
+  | ReturnType<typeof billed>
+  | ReturnType<typeof usageLimited>
+  | ReturnType<typeof refusedStep>
 
 interface MachineModels {
   /** Each worker round's first model call appends `<state>:<visit>`, outside any database. */
@@ -1695,6 +1710,28 @@ const machinesWithContext = (change: (ctx: ExtensionContextService) => Extension
               handler(input).pipe(Effect.updateService(ExtensionContext, change)),
             )
           },
+        }),
+      )
+    }),
+  })
+
+/**
+ * The machines extension with its runtime facade changed in every hook,
+ * clock fires included: a server that starts with it runs the drivers its
+ * runs' records arm on the changed facade.
+ */
+const machinesUnderFacade = (change: (ctx: ExtensionContextService) => ExtensionContextService) =>
+  defineExtension({
+    id: MachinesExtension.manifest.id,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* MachinesExtension.setup.pipe(
+        Effect.provideService(ExtensionHost, {
+          ...host,
+          on: (kind, handler) =>
+            host.on(kind, (input) =>
+              handler(input).pipe(Effect.updateService(ExtensionContext, change)),
+            ),
         }),
       )
     }),
@@ -3680,26 +3717,74 @@ const weekAt = (now: number, utilization: number): ReadonlyArray<QuotaReading> =
   { window: "7d", utilization, resetAt: now + 20 * HOUR, rejected: false },
 ]
 
+interface OneLaneOptions {
+  /** The worker of the patient round's `call`th model call, from 1; billed by default. */
+  readonly patient?: (call: number) => WorkerStream
+}
+
 /**
  * The `work` account with one lane, its config role `pair` listing
  * `models` in order, and a `hold` run whose round takes that lane and
  * holds it until `holdEnds` opens. A `patient` round's worker answers once
  * `patientEnds` opens.
  */
-const oneLaneHeld = (pair: ReadonlyArray<ModelId>) =>
+const oneLaneHeld = (pair: ReadonlyArray<ModelId>, options: OneLaneOptions = {}) =>
   Effect.gen(function* () {
     const home = yield* restartableHome
     const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
     const holdEnds = yield* Deferred.make<boolean>()
     const patientEnds = yield* Deferred.make<boolean>()
+    const patientCalls = yield* Ref.make(0)
     const models = yield* makeModels((round) => {
       const answer = billed(`${round.state} ${round.visit} done`)
       if (round.state === "hold") return Effect.as(Deferred.await(holdEnds), answer)
-      return Effect.as(Deferred.await(patientEnds), answer)
+      return Effect.gen(function* () {
+        yield* Deferred.await(patientEnds)
+        if (acted(round.prompt)) return answer
+        const call = yield* Ref.updateAndGet(patientCalls, (count) => count + 1)
+        return options.patient?.(call) ?? answer
+      })
     }, quotaOwner(readings))
-    const { client } = yield* createRpcClient(
-      home.layerFor(machineModels(models), tieredAccount({ pair }, PATIENT_MODELS)),
+    const account = tieredAccount({ pair }, PATIENT_MODELS)
+    const serverWith = (extensionInputs: typeof e2ePreset.extensionInputs) =>
+      createE2ELayer({
+        ...e2ePreset,
+        ...account,
+        extensionInputs,
+        providerLayer: machineModels(models),
+        storagePath: `${home.home}/gent.db`,
+        cwd: home.cwd,
+        home: home.home,
+      })
+    // The first server lives until `restart` closes it.
+    const firstServer = yield* Scope.make()
+    const { client } = yield* createRpcClient(serverWith(e2ePreset.extensionInputs)).pipe(
+      Effect.provideService(Scope.Scope, firstServer),
     )
+    /**
+     * Stops the first server and starts a second on the same database, its
+     * machines' facade changed (with the hold round's gate in reach): the
+     * runs' records arm their drivers on it.
+     */
+    const restart = (
+      change: (
+        ctx: ExtensionContextService,
+        holdEnds: Deferred.Deferred<boolean>,
+      ) => ExtensionContextService,
+    ) =>
+      Effect.gen(function* () {
+        yield* Scope.close(firstServer, Exit.void)
+        const changed = machinesUnderFacade((ctx) => change(ctx, holdEnds))
+        const second = yield* createRpcClient(
+          serverWith(
+            e2ePreset.extensionInputs.map((extension) => {
+              if (extension.manifest.id === changed.manifest.id) return changed
+              return extension
+            }),
+          ),
+        )
+        return second.client
+      })
     const owner = ownerOf(yield* client.session.create({}))
     // The week moves a point over the owner's two steps: about 1.3 runs to its reset, one lane.
     const now = yield* Clock.currentTimeMillis
@@ -3715,7 +3800,7 @@ const oneLaneHeld = (pair: ReadonlyArray<ModelId>) =>
       10_000,
       "the hold round took the lane",
     )
-    return { home, client, owner, models, holdEnds, patientEnds, hold }
+    return { home, client, owner, models, holdEnds, patientEnds, hold, restart }
   })
 
 /** The run's `Repicked` steps: the model each left and its maker. */
@@ -3795,6 +3880,146 @@ describe("a round's patience in its lane queue", () => {
       expect(roundThreads(steps)).toHaveLength(1)
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
   )
+
+  it.live(
+    "a round whose grant comes between the queue read and the move keeps its place and runs",
+    () =>
+      Effect.gen(function* () {
+        const raced = yield* Ref.make(false)
+        const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL])
+        const { home, client, owner } = rig
+        yield* Deferred.succeed(rig.patientEnds, true)
+        const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => roundThreads(steps).length === 1,
+          10_000,
+          "the patient round queued on its thread",
+        )
+        yield* rig.restart((ctx, holdEnds) => ({
+          ...ctx,
+          Accounts: {
+            ...ctx.Accounts,
+            // The first read past patience says queued, though the hold round
+            // ended and the grant reached the round before the machine moves.
+            waiting: (message) =>
+              Effect.gen(function* () {
+                const queued = yield* ctx.Accounts.waiting(message)
+                if (!queued || (yield* Ref.getAndSet(raced, true))) return queued
+                yield* Deferred.succeed(holdEnds, true)
+                yield* waitFor(
+                  ctx.Accounts.waiting(message),
+                  (still) => !still,
+                  10_000,
+                  "the grant reached the round",
+                ).pipe(Effect.orDie)
+                return true
+              }),
+          },
+        }))
+        yield* TestClock.adjust(Duration.seconds(601))
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
+        expect(yield* Ref.get(raced)).toBe(true)
+        const steps = yield* home.sql(stepsOf(run))
+        expect(repicksOf(steps)).toEqual([])
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS])
+        expect(roundThreads(steps)).toHaveLength(1)
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a step that dies after the queue let the round go finishes the move when it runs again",
+    () =>
+      Effect.gen(function* () {
+        const died = yield* Ref.make(false)
+        const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL])
+        const { home, client, owner, models } = rig
+        yield* Deferred.succeed(rig.patientEnds, true)
+        const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => roundThreads(steps).length === 1,
+          10_000,
+          "the patient round queued on its thread",
+        )
+        yield* rig.restart((ctx) => ({
+          ...ctx,
+          Accounts: {
+            ...ctx.Accounts,
+            // The first withdrawal takes the round out of its queue, then its step dies.
+            withdraw: (message) =>
+              Effect.gen(function* () {
+                const withdrawn = yield* ctx.Accounts.withdraw(message)
+                if (yield* Ref.getAndSet(died, true)) return withdrawn
+                return yield* Effect.die("the step died after the withdrawal")
+              }),
+          },
+        }))
+        yield* TestClock.adjust(Duration.seconds(601))
+        yield* waitFor(Ref.get(died), (done) => done, 10_000, "the step died")
+        // The step runs again after its retry delay and finishes the move.
+        yield* TestClock.adjust(Duration.seconds(2))
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => roundThreads(steps).length === 2,
+          10_000,
+          "the round picked again",
+        )
+        yield* Deferred.succeed(rig.holdEnds, true)
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(repicksOf(steps)).toEqual([{ state: "patient", model: OPUS, maker: "anthropic" }])
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([HOSTED_SOL])
+        // The hold round's cut turn ran again after the restart; Opus's queued round never ran.
+        expect(yield* Ref.get(models.calls)).toEqual(["hold:1", "hold:1", "patient:1"])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  for (const { name, fails, wait } of [
+    { name: "a usage limit's rerun", fails: usageLimited, wait: Duration.seconds(61) },
+    { name: "a dead round's retry", fails: refusedStep, wait: Duration.seconds(0) },
+  ]) {
+    it.live(`${name} keeps the makers patience left`, () =>
+      Effect.gen(function* () {
+        const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL], {
+          patient: (call) => {
+            if (call === 1) return fails()
+            return billed("patient done")
+          },
+        })
+        const { home, client, owner } = rig
+        yield* Deferred.succeed(rig.patientEnds, true)
+        const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => roundThreads(steps).length === 1,
+          10_000,
+          "the patient round queued on its thread",
+        )
+        yield* TestClock.adjust(Duration.seconds(601))
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => roundThreads(steps).length === 2,
+          10_000,
+          "the round picked again",
+        )
+        // The lane frees: the hosted Sol round runs and fails; Opus has a lane now.
+        yield* Deferred.succeed(rig.holdEnds, true)
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => roundsRan(steps).length === 1,
+          10_000,
+          "the hosted Sol round ended",
+        )
+        yield* TestClock.adjust(wait)
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([HOSTED_SOL, HOSTED_SOL])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    )
+  }
 
   it.live("a queued round that got its lane is not moved past ten minutes", () =>
     Effect.gen(function* () {

@@ -3986,6 +3986,12 @@ interface CredentialPlacementService {
   /** Whether the start under `key` waits in its queue now; it reads and changes nothing. */
   readonly queued: (key: string) => Effect.Effect<boolean>
   /**
+   * Takes the start under `key` out of its queue when it still waits there
+   * (true), so no later grant reaches it; false when it holds a lane or is
+   * gone. One decision under the lock: a grant and a withdrawal never both win.
+   */
+  readonly withdraw: (key: string) => Effect.Effect<boolean>
+  /**
    * The end of the Sabbath the session's run is in now, when its turn holds
    * a lane a start was admitted to (a thread's round, a child's run): such a
    * run goes on in no Sabbath, so its turn stops before its next request,
@@ -6845,6 +6851,18 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }),
     awaitLane: (key: string) => awaitLane(key),
     queued: (key: string) => locked(() => waiting.has(key)),
+    withdraw: Effect.fn("CredentialPlacement.withdraw")(function* (key: string) {
+      const now = yield* Clock.currentTimeMillis
+      // A waiter that leaves serves the queue, as a free does.
+      const left = yield* locked(() => {
+        if (!waiting.has(key)) return Option.none<ReturnType<typeof serve>>()
+        leaveQueue(key, Effect.void)
+        return Option.some(serve(now))
+      })
+      if (Option.isNone(left)) return false
+      yield* afterServe(left.value)
+      return true
+    }),
     sabbathStop: Effect.fn("CredentialPlacement.sabbathStop")(function* (sessionId: SessionId) {
       const now = yield* Clock.currentTimeMillis
       return yield* locked(() =>

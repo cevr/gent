@@ -507,6 +507,8 @@ interface ThreadRoundsService {
    */
   readonly endRound: (round: string, end: RoundEnd) => Effect.Effect<void, ThreadStorageError>
   readonly markStopped: (round: string, at: number) => Effect.Effect<void, ThreadStorageError>
+  /** Clears the stop `markStopped` set at `at`, and no other. */
+  readonly unmarkStopped: (round: string, at: number) => Effect.Effect<void, ThreadStorageError>
   /** The open `starter` rounds one starter thread sent that nothing has stopped yet. */
   readonly stopCandidates: (
     starterThread: SessionId,
@@ -579,6 +581,13 @@ interface ThreadRoundsService {
    * session it guards are one step, so a start past the cap makes no session.
    */
   readonly admissions: Semaphore.Semaphore
+  /**
+   * One lane decision at a time between a queued round's waiter and a
+   * withdrawal (`withdrawQueued`): the waiter reads its round under it once
+   * its grant wait answers, so a round withdrawn from its queue is read
+   * stopped, never asked for again. In memory, as the queue is.
+   */
+  readonly withdrawals: Semaphore.Semaphore
   /**
    * Counts a start with a task as running while it prepares its workspace,
    * until the scope closes or its round is claimed. In memory, as a lane's
@@ -711,6 +720,7 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
       const sql = yield* SqlClient.SqlClient
       const ended = yield* PubSub.unbounded<RoundEnded>()
       const admissions = yield* Semaphore.make(1)
+      const withdrawals = yield* Semaphore.make(1)
       /**
        * round → the starter thread of a start that is preparing its workspace,
        * and how many calls under the round's key prepare it: the last one out
@@ -959,6 +969,16 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
           Effect.mapError(storageError("Failed to mark the round stopped")),
         ),
 
+        unmarkStopped: Effect.fn("ThreadRounds.unmarkStopped")(
+          function* (round, at) {
+            yield* sql`
+              UPDATE thread_rounds SET stopped_at = NULL
+              WHERE round = ${round} AND stopped_at = ${at}
+            `
+          },
+          Effect.mapError(storageError("Failed to clear the round's stop")),
+        ),
+
         saveWakeTarget: Effect.fn("ThreadRounds.saveWakeTarget")(
           function* (round, place, replacing) {
             // `IS` compares a NULL as a value: a writer that saw no target, or
@@ -1023,6 +1043,7 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
 
         ended,
         admissions,
+        withdrawals,
         waitLane: (round, wait) =>
           Effect.asVoid(FiberMap.run(waiters, round, wait, { onlyIfMissing: true })),
         prepare: (round, starterThread) =>
@@ -1796,8 +1817,9 @@ const awaitRoundLane = Effect.fn("Threads.awaitRoundLane")(function* (
   const message = roundMessageId(round.round)
   let granted = yield* Effect.result(ctx.Accounts.awaitLane(message))
   for (;;) {
+    // Read after any withdrawal that took the round out of its queue settled.
     const open = Option.filter(
-      yield* rounds.round(round.round),
+      yield* Semaphore.withPermit(rounds.withdrawals, rounds.round(round.round)),
       (found) => Predicate.isNull(found.ended_at) && Predicate.isNull(found.stopped_at),
     )
     if (Option.isNone(open)) return yield* cancelLane(round.round)
@@ -2485,6 +2507,40 @@ const admitLane = Effect.fn("Threads.admitLane")(function* (roundId: string, lan
   })
 })
 
+/**
+ * Takes an open round that waits in its lane queue out of that queue and
+ * closes it unrun: true when it did. The queue decides under its own lock
+ * (`Accounts.withdraw`): a round its grant reached first is not withdrawn
+ * (false), and one withdrawn gets no grant after. Under `withdrawals`, which
+ * its waiter reads it under, the round is marked stopped before the queue
+ * decides, and the mark is cleared only when its grant won: a crash at any
+ * point leaves it either stopped (its waiter leaves, a restart's reconcile
+ * ends it, never asks for its lane again) or running. Its end wakes nobody.
+ */
+const withdrawQueued = Effect.fn("Threads.withdrawQueued")(function* (roundId: string) {
+  const ctx = yield* ExtensionContext
+  const rounds = yield* ThreadRounds
+  const withdrawn = yield* Semaphore.withPermit(
+    rounds.withdrawals,
+    Effect.gen(function* () {
+      const open = Option.filter(
+        yield* rounds.round(roundId),
+        (found) => Predicate.isNull(found.ended_at) && Predicate.isNull(found.stopped_at),
+      )
+      if (Option.isNone(open)) return Option.none<RoundRow>()
+      const at = yield* Clock.currentTimeMillis
+      yield* rounds.markStopped(roundId, at)
+      if (yield* ctx.Accounts.withdraw(roundMessageId(roundId))) return open
+      yield* rounds.unmarkStopped(roundId, at)
+      return Option.none<RoundRow>()
+    }),
+  )
+  if (Option.isNone(withdrawn)) return false
+  const current = Option.getOrElse(yield* rounds.round(roundId), () => withdrawn.value)
+  if (Predicate.isNull(current.ended_at)) yield* endRound(current, stoppedOutcome)
+  return true
+})
+
 /** The round will not run: the lane its admission took frees now, not when its hold lapses. */
 const cancelLane = Effect.fn("Threads.cancelLane")(function* (roundId: string) {
   const ctx = yield* ExtensionContext
@@ -3160,6 +3216,8 @@ const makeThreads = (rounds: ThreadRoundsService) => {
         const ctx = yield* ExtensionContext
         return yield* ctx.Accounts.waiting(roundMessageId(round))
       }),
+    /** Takes a round still in its lane queue out of it and closes it unrun (`withdrawQueued`). */
+    withdrawQueued: (round: string) => withdrawQueued(round).pipe(withRounds),
     /** The model the thread's current session runs, as its turns resolve it (`Session.getModel`). */
     model: (thread: string) =>
       Effect.gen(function* () {

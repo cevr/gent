@@ -302,7 +302,10 @@ const PendingAction = Schema.TaggedUnion({
    * `queuedOn` and `queuedAt`: no choice of its pick had a lane, so the
    * round waits in the lane queue of that model since then; past
    * `PATIENCE` it moves to another maker's choice (`roundPatience`).
-   * `avoid`: the makers patience moved it off, which its pick leaves out.
+   * `avoid`: the makers patience moved it off, which its pick leaves out;
+   * a retry or a rerun of the same visit keeps them, a new visit starts
+   * with none. `leaving`: patience is moving it off `maker`'s `model`, a
+   * move a restart finishes (`settleLeaving`).
    */
   Round: {
     state: StateName,
@@ -318,6 +321,7 @@ const PendingAction = Schema.TaggedUnion({
     queuedOn: Schema.optionalKey(ModelId),
     queuedAt: Schema.optionalKey(Schema.Finite),
     avoid: Schema.optionalKey(Schema.Array(Schema.String)),
+    leaving: Schema.optionalKey(Schema.Struct({ maker: Schema.String, model: ModelId })),
   },
   /**
    * `launch` is stored before the spawn, so a later server finds the
@@ -3202,11 +3206,10 @@ const PATIENCE = Duration.minutes(10)
  * queued (`queuedOn`): until `PATIENCE` has passed, at most the time left;
  * past it, while the round still waits in that queue
  * (`Threads.laneQueued`), it moves when its role has a choice of a maker
- * other than `queuedOn`'s and the ones it left before. The move commits a
- * new pending round under a new key that leaves that maker out, and a
- * `Repicked` step, then stops the queued round, which leaves its queue; the
- * new round's pick starts its own thread. With no such choice, or once its
- * lane came, it waits for its end as any round.
+ * other than `queuedOn`'s and the ones it left before. The move first
+ * commits that maker as the round's `leaving`, so a restart finishes it
+ * (`settleLeaving`). With no such choice, or once its lane came, it waits
+ * for its end as any round.
  */
 const awaitPatiently = Effect.fn("Machines.awaitPatiently")(function* (
   run: Run,
@@ -3233,49 +3236,87 @@ const awaitPatiently = Effect.fn("Machines.awaitPatiently")(function* (
     Effect.mapError((error) => new MachineFault({ message: error.message })),
   )
   if (Option.isNone(maker)) return yield* waits()
+  const choices = yield* choicesWithout(run, state, action, maker.value)
+  if (choices.length === 0) return yield* waits()
+  const leaving = PendingAction.cases.Round.make({
+    ...action,
+    leaving: { maker: maker.value, model: queuedOn },
+  })
+  const committed = yield* commitMove(run, { ...run, pending: Option.some(leaving) }, [])
+  if (Option.isNone(committed)) return
+  yield* settleLeaving(committed.value, leaving, roundId)
+})
+
+/** The choices the round's role has with `maker` and the makers it left before out. */
+const choicesWithout = Effect.fn("Machines.choicesWithout")(function* (
+  run: Run,
+  state: ThreadState,
+  action: RoundAction,
+  maker: string,
+) {
   const definition = yield* definitionOf(run)
   const role = switchedRole(
     definition.threads[state.thread] ?? {},
     state,
     templateScope(run, action.visit),
   )
-  if (Predicate.isUndefined(role.role)) return yield* waits()
-  const avoid = [...(action.avoid ?? []), maker.value]
+  if (Predicate.isUndefined(role.role)) return []
   const { choices } = yield* roleChoices(
     run,
     state.thread,
     role.role,
     Option.fromUndefinedOr(role.against),
-    avoid,
+    [...(action.avoid ?? []), maker],
   )
-  if (choices.length === 0) return yield* waits()
+  return choices
+})
+
+/**
+ * Finishes a move off the maker the round is `leaving`, now or after a
+ * restart. The queue decides (`Threads.withdrawQueued`): a round taken out
+ * of it, or found stopped (a withdrawal before a restart), moves: a new
+ * pending round under a new key leaves that maker out (`avoid`), with a
+ * `Repicked` step, and its pick starts its own thread. A round whose grant
+ * came first keeps its place: `leaving` is dropped and it runs. The
+ * withdrawn round was marked stopped before the move, so it never runs.
+ */
+const settleLeaving = Effect.fn("Machines.settleLeaving")(function* (
+  run: Run,
+  action: RoundAction,
+  roundId: string,
+) {
+  const threads = yield* threadsOf
+  if (Predicate.isUndefined(action.leaving)) return
+  const { maker, model } = action.leaving
+  let withdrawn = yield* threads.withdrawQueued(roundId)
+  if (!withdrawn) {
+    const view = yield* threads.findRound(roundId).pipe(Effect.mapError(threadFault))
+    withdrawn = Option.exists(view, (found) => found.stopped)
+  }
+  if (!withdrawn) {
+    const { leaving: _leaving, ...kept } = action
+    yield* commitMove(
+      run,
+      { ...run, pending: Option.some(PendingAction.cases.Round.make(kept)) },
+      [],
+    )
+    return
+  }
   // The key is the `Repicked` step's seq: unique in the run.
   const next = PendingAction.cases.Round.make({
     state: action.state,
     visit: action.visit,
     key: `machine:${run.run}:${run.seq + 1}`,
     attempt: action.attempt,
-    avoid,
+    avoid: [...(action.avoid ?? []), maker],
     ...omitUndefined({ fresh: action.fresh }),
   })
   yield* Effect.logInfo("machines.round.repicked").pipe(
-    Effect.annotateLogs({ run: run.run, state: action.state, model: queuedOn, maker: maker.value }),
+    Effect.annotateLogs({ run: run.run, state: action.state, model, maker }),
   )
-  const committed = yield* commitMove(run, { ...run, pending: Option.some(next) }, [
-    MachineStep.cases.Repicked.make({ state: action.state, model: queuedOn, maker: maker.value }),
+  yield* commitMove(run, { ...run, pending: Option.some(next) }, [
+    MachineStep.cases.Repicked.make({ state: action.state, model, maker }),
   ])
-  if (Option.isSome(committed) && Predicate.isNotUndefined(action.thread)) {
-    // The queued round leaves its queue; it never ran, so it ends unanswered.
-    yield* threads
-      .stop(action.thread, Option.some(`machine-patience:${action.key}`))
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("machines.thread.stop.failed").pipe(
-            Effect.annotateLogs({ run: run.run, cause: Cause.pretty(cause) }),
-          ),
-        ),
-      )
-  }
 })
 
 /**
@@ -3304,6 +3345,8 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
     return yield* dispatchRound(run, state, action, signals)
   }
   const view = found.value
+  // A move off a maker in flight (a restart between its two commits) settles first.
+  if (Predicate.isNotUndefined(action.leaving)) return yield* settleLeaving(run, action, roundId)
   if (view.status === "open") {
     // Open, stopped from outside or not: the worker's turn still runs (a
     // stopped turn may hold out in an uninterruptible tool), or it waits
@@ -3341,6 +3384,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
       key: `machine:${run.run}:${run.seq + 2}`,
       attempt: action.attempt,
       fresh: true,
+      ...omitUndefined({ avoid: action.avoid }),
     })
     let reason: "quota" | "sabbath" = "quota"
     if (view.sabbath === true) reason = "sabbath"
@@ -3383,6 +3427,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
       visit: action.visit,
       key: `${action.key}:retry`,
       attempt: 2,
+      ...omitUndefined({ avoid: action.avoid }),
     })
     yield* commitMove(run, { ...run, pending: Option.some(retry) }, [ended])
     return
