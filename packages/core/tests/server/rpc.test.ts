@@ -4801,6 +4801,84 @@ describe("namespaced client", () => {
 })
 
 describe("AccountsRpcs", () => {
+  it.live("the server reads each pool account's quota windows at start, before any step", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const a = CredentialSlot.make("a")
+        const b = CredentialSlot.make("b")
+        const resetAt = 1_800_000_000_000
+        const used = new Map([
+          [a, 0.1],
+          [b, 0.5],
+        ])
+        const quotaDrivers: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/quota-drivers") },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: {
+            modelDrivers: [
+              {
+                id: "plan",
+                name: "Plan",
+                resolveModel: () => Effect.succeed(stubModel),
+                readQuota: (authInfo) =>
+                  Effect.succeed([
+                    {
+                      window: "7d",
+                      utilization: used.get(authInfo.slot ?? a) ?? 0,
+                      resetAt,
+                      rejected: false,
+                    },
+                  ]),
+              },
+            ],
+          },
+        }
+        const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+        yield* auth.set("plan", AuthApi.make({ type: "api", key: "fake-a" }), a)
+        yield* auth.set("plan", AuthApi.make({ type: "api", key: "fake-b" }), b)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensions: [quotaDrivers],
+            authLayer: Layer.succeed(Auth, auth),
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({
+                model: TEST_MODEL_ID,
+                providers: { plan: { authOrder: [a, b], authSpread: [a, b] } },
+              }),
+            ),
+          }),
+        )
+        const read = Effect.map(client.accounts.lanes(), ({ providers }) =>
+          providers.flatMap((lanes) =>
+            lanes.accounts.flatMap((account) =>
+              account.windows.map((window) => ({
+                provider: lanes.provider,
+                slot: account.slot,
+                window: window.window,
+                utilization: window.utilization,
+              })),
+            ),
+          ),
+        )
+        // The sweep runs on its own fiber: the server answers before it reads.
+        const windows = yield* waitFor(
+          read,
+          (current) => current.length === 2,
+          5_000,
+          "both pool accounts' weekly windows read",
+        )
+        expect(windows).toEqual([
+          { provider: "plan", slot: a, window: "7d", utilization: 0.1 },
+          { provider: "plan", slot: b, window: "7d", utilization: 0.5 },
+        ])
+      }),
+    ),
+  )
+
   it.live(
     "accounts.lanes reports the windows each step's response named on its account, and the fuel spent between them",
     () =>

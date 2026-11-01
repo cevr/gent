@@ -7088,6 +7088,189 @@ describe("Claude account sign-in", () => {
   )
 })
 
+// ── Claude plan quota reads ─────────────────────────────────────────────────
+
+const USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+const HOUR_MS = 3_600_000
+/** A usage answer: `utilization` in percent, `resets_at` in ISO 8601, as the endpoint sends them. */
+const usageReply = (usage: Record<string, unknown>) => ({
+  status: 200,
+  body: encodeExternalJson(usage),
+})
+/** The token endpoint rotates; the usage endpoint answers `usage`. */
+const usageEndpoint =
+  (usage: (call: number) => { readonly status: number; readonly body: string }): FakeResponder =>
+  (request, call) => {
+    if (request.url === TOKEN_URL) return rotatingEndpoint()(request, call)
+    return usage(call)
+  }
+
+/** `driver`'s quota read of `authInfo` over a fake fetch: its exit and every request it sent. */
+const readQuotaThrough = (
+  driver: LinkedDriver,
+  authInfo: ProviderAuthInfo,
+  responder: FakeResponder,
+) =>
+  Effect.gen(function* () {
+    const readQuota = driver.readQuota
+    if (Predicate.isUndefined(readQuota)) return yield* Effect.die("no quota read")
+    const state = makeFakeFetchState()
+    const exit = yield* Effect.exit(
+      readQuota(authInfo).pipe(Effect.provide(fakeFetchLayer(state, responder))),
+    )
+    return { exit, captured: state.captured }
+  })
+
+describe("Claude plan quota", () => {
+  it.scopedLive(
+    "an owned sign-in reads both windows from the usage endpoint with its own token, and sends nothing else",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const record = ownedRecord({
+          access: "fake-owned-access",
+          refresh: "fake-owned-refresh",
+          expires: YEAR_2100,
+        })
+        const { exit, captured } = yield* readQuotaThrough(
+          driver,
+          ownedSignIn(record),
+          usageEndpoint(() =>
+            usageReply({
+              five_hour: { utilization: 42, resets_at: "2100-01-01T05:00:00Z" },
+              seven_day: { utilization: 100, resets_at: "2100-01-07T00:00:00.000+00:00" },
+            }),
+          ),
+        )
+        expect(exit).toEqual(
+          Exit.succeed([
+            { window: "5h", utilization: 0.42, resetAt: YEAR_2100 + 5 * HOUR_MS, rejected: false },
+            { window: "7d", utilization: 1, resetAt: YEAR_2100 + 144 * HOUR_MS, rejected: true },
+          ]),
+        )
+        // One read, of the usage endpoint alone: no message request spends quota.
+        expect(captured.map((request) => [request.method, request.url])).toEqual([
+          ["GET", USAGE_URL],
+        ])
+        expect(captured[0]?.headers).toMatchObject({
+          authorization: "Bearer fake-owned-access",
+          "anthropic-beta": "oauth-2025-04-20",
+          accept: "application/json",
+        })
+        expect(captured[0]?.headers["user-agent"]).toMatch(/^claude-cli\/.+ \(external, cli\)$/)
+        expect(record.writes).toEqual([])
+        expect(keychain.calls).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "an expired owned token refreshes into gent's store before the read, as a request's does",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const expired = ownedRecord(
+          { access: "fake-expired-access", refresh: "fake-expired-refresh", expires: 0 },
+          { signedInAt: 3, metadata: { owner: "gent" } },
+        )
+        const { exit, captured } = yield* readQuotaThrough(
+          driver,
+          ownedSignIn(expired, 3),
+          usageEndpoint(() =>
+            usageReply({ seven_day: { utilization: 10, resets_at: "2100-01-07T00:00:00Z" } }),
+          ),
+        )
+        expect(Exit.isSuccess(exit)).toBe(true)
+        expect(captured.map((request) => request.url)).toEqual([TOKEN_URL, USAGE_URL])
+        expect(captured.map(refreshTokenOf).slice(0, 1)).toEqual(["fake-expired-refresh"])
+        expect(captured[1]?.headers["authorization"]).toBe("Bearer fake-rotated-access")
+        expect(expired.writes.map((written) => written.refresh)).toEqual(["fake-rotated-refresh"])
+        expect(keychain.calls).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a plan with no five-hour window reads its week alone", () =>
+    Effect.gen(function* () {
+      const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+      const record = ownedRecord({
+        access: "fake-owned-access",
+        refresh: "fake-owned-refresh",
+        expires: YEAR_2100,
+      })
+      const { exit } = yield* readQuotaThrough(
+        driver,
+        ownedSignIn(record),
+        usageEndpoint(() =>
+          usageReply({
+            five_hour: externalWireNull,
+            seven_day: { utilization: 25.5, resets_at: "2100-01-07T00:00:00Z" },
+          }),
+        ),
+      )
+      expect(exit).toEqual(
+        Exit.succeed([
+          {
+            window: "7d",
+            utilization: 0.255,
+            resetAt: YEAR_2100 + 144 * HOUR_MS,
+            rejected: false,
+          },
+        ]),
+      )
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a refused or failed usage read fails with ProviderAuthError: a 401 retries once on a fresh token",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+        const failure = (status: number) =>
+          Effect.gen(function* () {
+            // Each status signs in anew: its token cache is its own.
+            const record = ownedRecord(
+              { access: "fake-owned-access", refresh: "fake-owned-refresh", expires: YEAR_2100 },
+              { signedInAt: status, metadata: { owner: "gent" } },
+            )
+            const { exit, captured } = yield* readQuotaThrough(
+              driver,
+              ownedSignIn(record, status),
+              usageEndpoint(() => ({ status, body: encodeExternalJson({ error: "refused" }) })),
+            )
+            const error = Option.flatMap(Exit.findErrorOption(exit), (found) =>
+              Option.liftPredicate(found, Schema.is(ProviderAuthError)),
+            )
+            return {
+              message: Option.map(error, (found) => found.message),
+              urls: captured.map((request) => request.url),
+            }
+          })
+        expect(yield* failure(401)).toEqual({
+          message: Option.some("Anthropic usage read failed: HTTP 401"),
+          urls: [USAGE_URL, TOKEN_URL, USAGE_URL],
+        })
+        expect(yield* failure(500)).toEqual({
+          message: Option.some("Anthropic usage read failed: HTTP 500"),
+          urls: [USAGE_URL],
+        })
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("an API-key sign-in reads no window and sends no request", () =>
+    Effect.gen(function* () {
+      const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+      const { exit, captured } = yield* readQuotaThrough(
+        driver,
+        makeApiAuthInfo("fake-api-key"),
+        () => usageReply({ seven_day: { utilization: 1, resets_at: "2100-01-07T00:00:00Z" } }),
+      )
+      expect(exit).toEqual(Exit.succeed([]))
+      expect(captured).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
 describe("Claude account sign-in — races", () => {
   it.scopedLive(
     "a label that holds another sign-in under the lock than the request was made for is never read or refreshed",

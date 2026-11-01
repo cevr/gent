@@ -1316,6 +1316,17 @@ export interface ModelDriverContribution {
    */
   readonly spendLimits?: (modelName: string) => ReadonlyArray<SpendLimit>
   /**
+   * The quota windows the account `authInfo` signs in to stands at, read
+   * from the provider without spending quota (Anthropic's usage endpoint).
+   * The server's pool sweep reads each pool account with it, so placement
+   * ranks an account no step has run on yet. A sign-in the provider meters
+   * no window for (an API key) reads none. Absent, the driver's accounts
+   * are read only from the answers to their requests.
+   */
+  readonly readQuota?: (
+    authInfo: ProviderAuthInfo,
+  ) => Effect.Effect<ReadonlyArray<QuotaReading>, ProviderAuthError>
+  /**
    * The price one request of `modelName` bills at, from the price the
    * catalog lists: a plan that prices a model by the request's input tokens
    * or by the hour it ran in (OpenCode Go) bills above the listed price.

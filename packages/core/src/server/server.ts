@@ -148,6 +148,7 @@ import {
   listAuthProviders,
   listCatalogProviders,
   makeExtensionModels,
+  sweepPoolQuotas,
   removeSignIn,
   renameSignIn,
   signInEntries,
@@ -2322,6 +2323,23 @@ export const createDependencies = (config: DependenciesConfig) => {
     ),
   )
 
+  // Each pool account's quota windows read at start and every 10 minutes,
+  // on their own fiber, through the launch cwd's profile: placement ranks
+  // an account no step has run on yet by them. No start waits for a read.
+  const poolQuotaSweepLive = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const cache = yield* SessionProfileCache
+      yield* Effect.forkScoped(
+        sweepPoolQuotas(
+          cache.resolve(config.cwd).pipe(
+            Effect.map((profile) => profile.registryService),
+            Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(config.cwd)),
+          ),
+        ),
+      )
+    }),
+  )
+
   // One graph, built bottom up: each level provides every level above it,
   // and each layer appears in it once, so each builds once. Effect memoizes
   // only leaf layers; a composite (`provide`, `merge`) builds once for every
@@ -2384,7 +2402,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Every cluster id fits what the client reads back: a client without
   // 64-bit reads (a Durable Object's) gets ids under 2^53.
   return Layer.provideMerge(
-    Layer.mergeAll(interactionRecoveryLive, branchWakeClockLive),
+    Layer.mergeAll(interactionRecoveryLive, branchWakeClockLive, poolQuotaSweepLive),
     actor,
   ).pipe(withClusterIdSpace)
 }

@@ -43,6 +43,7 @@ import {
   type SourceRotation,
   type ModelDriverContribution,
   ProviderAuthError,
+  type ProviderAuthInfo,
   type CredentialSlot,
   DEFAULT_CREDENTIAL_SLOT,
   type ProviderAuthorizationResult,
@@ -3419,6 +3420,115 @@ const unifiedQuota = (headers: Headers.Headers): ReadonlyArray<QuotaReading> =>
     },
   })
 
+/**
+ * Anthropic's usage endpoint: a Claude plan account's quota windows, read
+ * without spending quota (TeamClaude polls it, `fetchUsage`). It takes the
+ * account's OAuth access token and the OAuth beta, and answers per window
+ * `utilization` (a percent, 0 to 100) and `resets_at` (ISO 8601). A window
+ * the plan does not meter, or one with no reset, is null.
+ */
+const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+const OAUTH_USAGE_BETA = "oauth-2025-04-20"
+const UsageWindow = Schema.OptionFromOptionalNullOr(
+  Schema.Struct({
+    utilization: Schema.OptionFromOptionalNullOr(Schema.Finite),
+    resets_at: Schema.OptionFromOptionalNullOr(Schema.DateTimeUtcFromString),
+  }),
+)
+const OAuthUsage = Schema.Struct({ five_hour: UsageWindow, seven_day: UsageWindow })
+
+/** The windows the usage endpoint names, as gent names them. */
+const USAGE_WINDOWS = [
+  { window: "5h", key: "five_hour" },
+  { window: "7d", key: "seven_day" },
+] as const
+
+/**
+ * The quota windows a usage answer names: each window with a utilization and
+ * a reset, as the fraction used. A window used to its cap is rejected until
+ * its reset. An account whose plan has no 5-hour window reads none for it.
+ */
+const usageQuota = (usage: typeof OAuthUsage.Type): ReadonlyArray<QuotaReading> =>
+  USAGE_WINDOWS.flatMap(({ window, key }) =>
+    Option.toArray(
+      Option.flatMap(usage[key], (bucket) =>
+        Option.map(
+          Option.all({ percent: bucket.utilization, reset: bucket.resets_at }),
+          ({ percent, reset }) => ({
+            window,
+            utilization: percent / 100,
+            resetAt: DateTime.toEpochMillis(reset),
+            rejected: percent >= 100,
+          }),
+        ),
+      ),
+    ),
+  )
+
+/**
+ * Read the account `creds` signs in to from the usage endpoint. The token
+ * comes from the cache requests use, so a refresh runs under the store lock
+ * and an owned slot's checks hold. A 401 invalidates the token it sent and
+ * reads once more, as a request does (`authorizedClient`). Any other failure
+ * is a `ProviderAuthError`.
+ */
+const readOauthQuota = Effect.fn("anthropic.readOauthQuota")(function* (
+  creds: CredentialCache<ClaudeCredentials>,
+  services: AnthropicDriverServices,
+) {
+  const client = Context.get(services, HttpClient.HttpClient)
+  const userAgent = getUserAgent(Context.get(services, AnthropicPlatform).env)
+  const send = Effect.gen(function* () {
+    const credential = yield* creds.getFresh
+    const response = yield* client.execute(
+      HttpClientRequest.get(OAUTH_USAGE_URL).pipe(
+        HttpClientRequest.setHeaders({
+          authorization: `Bearer ${credential.accessToken}`,
+          "anthropic-beta": OAUTH_USAGE_BETA,
+          accept: "application/json",
+          "user-agent": userAgent,
+        }),
+      ),
+    )
+    return { credential, response }
+  })
+  const read = (response: HttpClientResponse.HttpClientResponse) =>
+    Effect.gen(function* () {
+      if (response.status !== 200) {
+        return yield* new ProviderAuthError({
+          message: `Anthropic usage read failed: HTTP ${response.status}`,
+        })
+      }
+      return usageQuota(yield* HttpClientResponse.schemaBodyJson(OAuthUsage)(response))
+    })
+  const answered = Effect.gen(function* () {
+    const first = yield* send
+    if (first.response.status !== 401) return yield* read(first.response)
+    yield* creds.invalidate(first.credential)
+    return yield* read((yield* send).response)
+  })
+  return yield* answered.pipe(
+    Effect.catchTags({
+      CredentialRefreshUnavailable: (cause) =>
+        Effect.fail(new ProviderAuthError({ message: cause.message, cause })),
+      HttpClientError: (cause) =>
+        Effect.fail(
+          new ProviderAuthError({
+            message: `Anthropic usage read failed: ${cause.message}`,
+            cause,
+          }),
+        ),
+      SchemaError: (cause) =>
+        Effect.fail(
+          new ProviderAuthError({
+            message: `Anthropic usage answer unreadable: ${cause.message}`,
+            cause,
+          }),
+        ),
+    }),
+  )
+})
+
 // ── rate-limit reset ──
 
 /** A limit's left count, and when it is full again (RFC 3339), as Anthropic's 429 headers name them. */
@@ -4301,6 +4411,21 @@ export const buildAnthropicModelDriver = (
       const linked = slotCell(slot, `${signIn.signedInAt ?? "unstamped"}\u0000${source.directory}`)
       return yield* makeLinkedCredentialCache(linked.cell, source, lock)
     }).pipe(Effect.provideContext(services))
+  /**
+   * The credential cache of a Claude plan sign-in, the one its requests and
+   * its quota reads share. The default slot is Claude Code's own account; a
+   * named slot is an account gent signed in to and holds, or the Claude Code
+   * directory it links.
+   */
+  const oauthCredentialCache = (
+    signIn: Extract<ProviderAuthInfo, { readonly _tag: "Oauth" }>,
+  ): Effect.Effect<CredentialCache<ClaudeCredentials>, ProviderAuthError> => {
+    const slot = signIn.slot ?? DEFAULT_CREDENTIAL_SLOT
+    if (slot === DEFAULT_CREDENTIAL_SLOT)
+      return buildLiveCredentialCache(credentialCellRef, services)
+    if (isGentOwned(signIn)) return buildOwnedCredentialCache(signIn, slot)
+    return buildLinkedCredentialCache(signIn, slot)
+  }
   return {
     id: "anthropic",
     name: "Anthropic",
@@ -4351,20 +4476,7 @@ export const buildAnthropicModelDriver = (
           // The credential cache is built over the extension-closure-owned
           // cell, so credential reuse survives. The credentials are checked before the
           // layer exists, so an expired sign-in fails with its own message.
-          // The default slot is Claude Code's own account; a named slot is
-          // an account gent signed in to and holds, or the Claude Code
-          // directory it links.
-          const slot = auth.value.slot ?? DEFAULT_CREDENTIAL_SLOT
-          let cacheEffect: Effect.Effect<
-            CredentialCache<ClaudeCredentials>,
-            ProviderAuthError
-          > = buildLiveCredentialCache(credentialCellRef, services)
-          if (slot !== DEFAULT_CREDENTIAL_SLOT && isGentOwned(auth.value)) {
-            cacheEffect = buildOwnedCredentialCache(auth.value, slot)
-          } else if (slot !== DEFAULT_CREDENTIAL_SLOT) {
-            cacheEffect = buildLinkedCredentialCache(auth.value, slot)
-          }
-          const creds = yield* cacheEffect
+          const creds = yield* oauthCredentialCache(auth.value)
           yield* checkCredentials(creds)
           return AiModel.make(
             "anthropic",
@@ -4401,6 +4513,14 @@ export const buildAnthropicModelDriver = (
           credentialFailure: "Unavailable",
         })
       }),
+    // A Claude plan sign-in reads its windows from the usage endpoint; an API
+    // key is metered by no window and reads none.
+    readQuota: (authInfo) => {
+      if (authInfo._tag !== "Oauth") return Effect.succeed([])
+      return Effect.flatMap(oauthCredentialCache(authInfo), (creds) =>
+        readOauthQuota(creds, services),
+      )
+    },
     auth: {
       methods: [
         AuthMethod.make({ type: "oauth", label: "Claude Code", credentialTarget: "default" }),

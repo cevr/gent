@@ -3766,8 +3766,8 @@ interface PlacementTable {
  * Where a run goes, as the pool walk its turn takes: the choice first, then
  * eligible accounts below their sustainable live load by weekly reset
  * (missing weekly readings last), then the others by score (those with no
- * room, sustainable 0, after those with some), then held
- * accounts in pool order. Equal resets or scores keep pool order.
+ * room, sustainable 0, after those with some; equal scores by weekly reset),
+ * then held accounts in pool order. Equal resets keep pool order.
  * `score = load / unit + live`, where a unit is the mean recorded price of a
  * session on the provider (`spent / sessions`; with no recorded price, or no
  * session counted, the score is the live sessions alone).
@@ -3791,6 +3791,15 @@ export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<
   // every other is at none too, whatever its score.
   const noRoom = (entry: PlacementSlot) => entry.sustainable === 0
   const paced = table.slots.some((entry) => Predicate.isNotUndefined(entry.sustainable))
+  // Infinity puts a missing weekly reading last. Equal resets (including two
+  // missing readings) keep pool order without subtracting infinities.
+  const byWeeklyReset = (left: PlacementSlot, right: PlacementSlot) => {
+    const leftReset = left.weeklyResetAt ?? Infinity
+    const rightReset = right.weeklyResetAt ?? Infinity
+    if (leftReset === rightReset) return 0
+    if (leftReset < rightReset) return -1
+    return 1
+  }
   const eligible = table.slots
     .filter((entry) => !entry.held)
     .sort((left, right) => {
@@ -3798,20 +3807,16 @@ export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<
       const rightUnder = underPace(right)
       if (leftUnder && !rightUnder) return -1
       if (!leftUnder && rightUnder) return 1
-      if (leftUnder && rightUnder) {
-        // Infinity puts a missing weekly reading last. Equal resets (including
-        // two missing readings) keep pool order without subtracting infinities.
-        const leftReset = left.weeklyResetAt ?? Infinity
-        const rightReset = right.weeklyResetAt ?? Infinity
-        if (leftReset === rightReset) return 0
-        if (leftReset < rightReset) return -1
-        return 1
-      }
+      if (leftUnder && rightUnder) return byWeeklyReset(left, right)
       const leftFull = noRoom(left)
       const rightFull = noRoom(right)
       if (!leftFull && rightFull) return -1
       if (leftFull && !rightFull) return 1
-      return score(left) - score(right)
+      // Equal scores (accounts no step has run on, read by the pool sweep
+      // before any rate is known) go by weekly reset too.
+      const byScore = score(left) - score(right)
+      if (byScore !== 0) return byScore
+      return byWeeklyReset(left, right)
     })
   const preferred = Option.flatMap(table.preferred, (slot) =>
     Option.fromUndefinedOr(eligible.find((entry) => entry.slot === slot)),
@@ -4488,7 +4493,11 @@ const weeklyPoolPace = (weeks: ReadonlyArray<PoolWeek>, open: (hours: number) =>
   return { sustainable: Math.max(floor, rolling), ceiling }
 }
 
-/** Short-window fuel opens only where the same account has weekly room. */
+/**
+ * Short-window fuel opens only where the same account has weekly room. An
+ * account that reads no five-hour window (a plan whose usage names none)
+ * adds its weekly room whole: no short window bounds it.
+ */
 const fiveHourPoolCeiling = (
   weeks: ReadonlyArray<PoolWeek>,
   now: number,
@@ -4498,7 +4507,10 @@ const fiveHourPoolCeiling = (
   let hasShort = false
   for (const week of weeks) {
     const short = week.account.windows.find((window) => isAccountWindow(window, "5h"))
-    if (Predicate.isUndefined(short)) continue
+    if (Predicate.isUndefined(short)) {
+      fuel += week.remaining
+      continue
+    }
     if (Predicate.isUndefined(short.fuelPerPct)) return Option.none()
     hasShort = true
     const { full, remaining } = quotaFuel(short, short.fuelPerPct)
@@ -7138,6 +7150,82 @@ export class CredentialPlacement extends Context.Service<
 
   static Memory = Layer.effect(CredentialPlacement, makeCredentialPlacement(Option.none()))
 }
+
+// ── pool quota sweep ────────────────────────────────────────────────────────
+
+/** How often the server reads every pool account's quota windows. */
+const POOL_QUOTA_SWEEP_INTERVAL = Duration.minutes(10)
+
+/**
+ * Read the quota windows of each account a sign-in's pool (`authSpread`)
+ * names, through its owner driver's `readQuota`, and note them on placement
+ * under the sign-in the store holds there now: placement ranks an account
+ * no step has run on yet by them. One account after another. A sign-in
+ * whose driver reads no quota or whose order cannot be read, and a label
+ * that holds no sign-in, are skipped. A failed read is logged and skipped;
+ * the other accounts still read.
+ */
+const readPoolQuotas = Effect.fn("CredentialPlacement.readPoolQuotas")(function* (
+  registry: ExtensionRegistryService,
+) {
+  const auth = yield* Auth
+  const placement = yield* CredentialPlacement
+  const drivers = registry.getResolved().modelDrivers
+  const config = yield* registry.providerConfig
+  const owners = new Set([...drivers.keys()].map((id) => credentialOwner(drivers, id)))
+  for (const owner of owners) {
+    const readQuota = drivers.get(owner)?.readQuota
+    if (Predicate.isUndefined(readQuota)) continue
+    const pool = yield* credentialOrder(drivers, config, owner).pipe(
+      Effect.map((order): ReadonlyArray<CredentialSlot> => Option.getOrElse(order.pool, () => [])),
+      Effect.orElseSucceed((): ReadonlyArray<CredentialSlot> => []),
+    )
+    for (const slot of pool) {
+      const failed = (error: string) =>
+        Effect.logWarning("credential-placement.quota-read.failed").pipe(
+          Effect.annotateLogs({ provider: owner, slot, error }),
+        )
+      yield* Effect.gen(function* () {
+        const stored = yield* storedCredential(auth, drivers, owner, slot)
+        if (Option.isNone(stored)) return
+        const { key, info } = stored.value
+        // Driver code: a defect fails this account's read alone.
+        const readings = yield* Effect.suspend(() =>
+          readQuota(toProviderAuthInfo(auth, key, info, slot)),
+        )
+        yield* placement.noteQuota({
+          provider: owner,
+          slot,
+          signedInAt: Option.fromUndefinedOr(info.signedInAt),
+          readings,
+        })
+      }).pipe(
+        Effect.catch((error) => failed(error.message)),
+        Effect.catchDefect((defect) => failed(causeMessage(defect))),
+      )
+    }
+  }
+})
+
+/**
+ * The server's pool sweep: `readPoolQuotas` over the registry `registryOf`
+ * leases, once now and then every 10 minutes, for as long as its fiber
+ * runs. A failed pass is logged; the next one runs on time.
+ */
+export const sweepPoolQuotas = <E>(
+  registryOf: Effect.Effect<ExtensionRegistryService, E, Scope.Scope>,
+) =>
+  registryOf.pipe(
+    Effect.flatMap(readPoolQuotas),
+    Effect.scoped,
+    Effect.catchCause((cause) =>
+      Effect.logWarning("credential-placement.quota-sweep.failed").pipe(
+        Effect.annotateLogs({ error: Cause.pretty(cause) }),
+      ),
+    ),
+    Effect.repeat(Schedule.spaced(POOL_QUOTA_SWEEP_INTERVAL)),
+    Effect.asVoid,
+  )
 
 // ── decision-model-resolver ─────────────────────────────────────────────────
 

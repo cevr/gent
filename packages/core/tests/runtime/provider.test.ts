@@ -71,6 +71,7 @@ import {
   placementLedgerFile,
   makeExtensionModels,
   rankPlacement,
+  sweepPoolQuotas,
   requestCredentialOrder,
   retryProviderCall,
   listModelCatalog,
@@ -5308,6 +5309,37 @@ describe("credential placement", () => {
   )
 
   bunTest(
+    "accounts of equal score with no known pace go by weekly reset, a missing reading last",
+    () => {
+      // No step ran: every score is 0, and the sweep read b's and c's weeks.
+      expect(
+        rankPlacement({
+          slots: [
+            row(a, 0, 0),
+            { ...row(b, 0, 0), weeklyResetAt: 200 },
+            { ...row(c, 0, 0), weeklyResetAt: 100 },
+          ],
+          spent: 0,
+          sessions: 0,
+          preferred: Option.none(),
+        }),
+      ).toEqual([c, b, a])
+      // A lower score still goes first, whatever its reset.
+      expect(
+        rankPlacement({
+          slots: [
+            { ...row(a, 0, 0), weeklyResetAt: 300 },
+            { ...row(b, 0, 1), weeklyResetAt: 100 },
+          ],
+          spent: 0,
+          sessions: 0,
+          preferred: Option.none(),
+        }),
+      ).toEqual([a, b])
+    },
+  )
+
+  bunTest(
     "an account at its paced load spills to the next weekly reset, then uses score above pace",
     () => {
       const slots = [
@@ -6224,6 +6256,113 @@ describe("account lanes", () => {
       // The uncapped rolling target (8.5257 M/h) would admit two.
       expect((yield* lanes([a, b])).capacity).toBe(1)
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "an account that reads no five-hour window is not capped by another account's five-hour window",
+    () =>
+      Effect.gen(function* () {
+        const { read, lanes, now } = yield* pacedAccounts()
+        // a's plan reads its week alone (`five_hour: null`).
+        yield* read(a, [{ window: "7d", utilization: 0.1, resetAt: now + 160 * HOUR }])
+        // b's five hours are at their 90% share: b carries no run now.
+        yield* read(b, [
+          { window: "7d", utilization: 0.1, resetAt: now + 160 * HOUR },
+          { window: "5h", utilization: 0.9, resetAt: now + 4 * HOUR },
+        ])
+        const alone = yield* lanes([a])
+        const both = yield* lanes([a, b])
+        const account = both.accounts.find((entry) => entry.slot === a)
+        // a's pace is its week's: no five-hour window bounds it.
+        expect(account?.sustainable).toBe(
+          account?.windows.find((window) => window.window === "7d")?.sustainable,
+        )
+        expect(alone.capacity).toBeGreaterThan(0)
+        // b's full five hours take nothing from a's weekly room.
+        expect(both.capacity).toBeGreaterThanOrEqual(alone.capacity ?? Infinity)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "the pool sweep reads each pool account at start and every 10 minutes, skips one that fails, and placement takes the soonest weekly reset before any step",
+    () =>
+      Effect.gen(function* () {
+        const { placement } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        const d = CredentialSlot.make("d")
+        const pool = [a, b, c, d] as const
+        // a's read fails; b, c and d read weeks that reset at +100h, +20h, +50h.
+        const weekResets = new Map([
+          [b, now + 100 * HOUR],
+          [c, now + 20 * HOUR],
+          [d, now + 50 * HOUR],
+        ])
+        const reads = yield* Ref.make<ReadonlyArray<Option.Option<CredentialSlot>>>([])
+        const driver: ModelDriverContribution = {
+          ...makeProvider("plan"),
+          readQuota: (authInfo) =>
+            Effect.gen(function* () {
+              const slot = Option.fromUndefinedOr(authInfo.slot)
+              yield* Ref.update(reads, (seen) => [...seen, slot])
+              const resetAt = Option.flatMap(slot, (read) =>
+                Option.fromUndefinedOr(weekResets.get(read)),
+              ).pipe(Option.getOrUndefined)
+              if (Predicate.isUndefined(resetAt))
+                return yield* new ProviderAuthError({ message: "usage read refused" })
+              return [{ window: "7d", utilization: 0, resetAt, rejected: false }]
+            }),
+        }
+        const resolved = resolveExtensions([makeExt("plan", [driver])])
+        const registry = ExtensionRegistry.of({
+          getResolved: () => resolved,
+          providerConfig: Effect.succeed({
+            providers: { plan: { authOrder: [...pool], authSpread: [...pool] } },
+          }),
+        })
+        const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+        for (const slot of pool)
+          yield* auth.set("plan", AuthApi.make({ type: "api", key: `fake-${slot}` }), slot)
+        // Before any read, an unused pool walks in config order.
+        const place = placement.place({
+          provider: "plan",
+          pool,
+          model: planModel,
+          sessionId: SessionId.make("placed"),
+          preferred: Option.none(),
+          starter: Option.none(),
+          left: new Set(),
+          ttlMs: Option.none(),
+        })
+        expect((yield* place)[0]).toBe(a)
+        yield* sweepPoolQuotas(Effect.succeed(registry)).pipe(
+          Effect.provideService(Auth, auth),
+          Effect.provideService(CredentialPlacement, placement),
+          Effect.forkScoped,
+        )
+        const readCount = (count: number) =>
+          Effect.gen(function* () {
+            while ((yield* Ref.get(reads)).length < count) yield* Effect.yieldNow
+          })
+        /** The weekly resets placement holds for b, c and d. */
+        const noted = Effect.map(placement.lanes(scopeOf([b, c, d]), Option.none()), (report) =>
+          report.providers
+            .find((lanes) => lanes.provider === "plan")
+            ?.accounts.flatMap((account) => account.windows.map((window) => window.resetAt)),
+        )
+        yield* readCount(4)
+        while ((yield* noted)?.length !== 3) yield* Effect.yieldNow
+        // a failed first; the sweep still read the rest, one after another.
+        expect(yield* Ref.get(reads)).toEqual(Arr.map(pool, Option.some))
+        // No step ran on any account: the soonest weekly reset goes first.
+        expect(yield* place).toEqual([c, d, b, a])
+        // The next pass waits 10 minutes.
+        yield* TestClock.adjust("9 minutes")
+        expect((yield* Ref.get(reads)).length).toBe(4)
+        yield* TestClock.adjust("1 minute")
+        yield* readCount(8)
+        expect((yield* Ref.get(reads)).slice(4)).toEqual(Arr.map(pool, Option.some))
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
   it.effect("with no quota readings a held account does not disable stage-0 warm preference", () =>
