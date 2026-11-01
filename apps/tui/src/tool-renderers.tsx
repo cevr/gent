@@ -59,7 +59,10 @@ export interface ToolCall {
    * receipts are the fallback.
    */
   operations?: ToolCall[]
-  /** Envelope time of the started receipt. Live feed only. */
+  /**
+   * Envelope time of the started receipt: from the live feed, or from the
+   * snapshot while the call runs. A running row's timer counts from it.
+   */
   startedAt?: number
   /** Wall time from the started receipt to the terminal receipt. */
   durationMs?: number

@@ -124,7 +124,7 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   `formatActivityRow`): `├ Read a.ts, b.ts +1` (the subjects that fit, then a
   count), `├ Edited x.ts +12 / -3` (the diff counts in the success and error
   colours), `└ Ran bun test · exit 1`, and the running op last as
-  `Running …`. A failed op never folds: each has its own row. A failed cell
+  `Running sleep 20 · 42s`. A failed op never folds: each has its own row. A failed cell
   adds its own row unless its error text is an op's error text. A cut call
   (the turn's interrupt, `reason: "Interrupted"`, or the cell's cancel, a
   `CellKernelError` whose reason is `cancelled`; `cutShort`) is no failure:
@@ -138,7 +138,17 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   a head that came and went would shrink the live tail and leave blank rows
   in native scrollback. A failed op has settled, so its head draws at once.
   Full opens a row per call with its renderer body and its line counts; only
-  there does a call show its `#id`. Inside a cell's body a run of one tool's
+  there does a call show its `#id`. A settled row ends with its duration
+  (`· 1.2s`); a running row ends with its live timer, `└ cell bash sleep 20 ·
+  running 42s`. The timer is the compact time since the call's started
+  receipt (`runningElapsed`, the live line's format), none under a second. It
+  ticks on the spinner clock that blinks the glyph, and only a running row
+  reads that clock. The start time comes from the live feed, or from the
+  snapshot while a call runs (`startedAt` on a running `ToolInteraction` and
+  its running ops), so a reloaded TUI counts from the real start. A narrow
+  running row cuts its subject to keep its timer (`headBeside`), as a failure
+  row keeps its outcome word: the live line already names the running call,
+  and drops the turn time first. Inside a cell's body a run of one tool's
   ops folds into one frame (`read 30 files`), its body a tight list, one
   row an op in its tool row's shape: `✓ src/a.ts · 3 lines`, the path once
   (`summaryAfterSubject` drops a receipt's lead that repeats the subject and

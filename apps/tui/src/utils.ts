@@ -90,6 +90,17 @@ export function truncate(value: string, width: number): string {
   return `${text}…`
 }
 
+/**
+ * A row's head cut so the `ending` after it fits `width` columns: the
+ * ending is the part the row exists to say (an outcome word, a live timer).
+ * The head never cuts below the width of `floor`, its verb; past that the
+ * drawer cuts the row from its end.
+ */
+export const headBeside = (head: string, floor: string, ending: string, width: number): string => {
+  if (textWidth(head + ending) <= width) return head
+  return truncate(head, Math.max(textWidth(floor), width - textWidth(ending)))
+}
+
 /** A piece of one line drawn in its own colour: `tone` names the colour, the drawer maps it. */
 export interface TextRun<Tone> {
   readonly text: string
@@ -428,6 +439,19 @@ export const formatDuration = (ms: number, style: DurationStyle): string =>
     Match.when("padded", () => padded(ms)),
     Match.when("precise", () => precise(ms)),
     Match.exhaustive,
+  )
+
+/**
+ * A running call's live timer at `now`: the compact time since its started
+ * receipt, `42s`, `1m 5s`, as the live line counts its turn. None without a
+ * start time, and under a second, where the count says nothing.
+ */
+export const runningElapsed = (startedAt: Option.Option<number>, now: number) =>
+  Option.flatMap(startedAt, (at) =>
+    Option.map(
+      Option.liftPredicate(now - at, (elapsed) => elapsed >= 1000),
+      (elapsed) => formatDuration(elapsed, "compact"),
+    ),
   )
 
 /** A clock field (0 to 59, a month, a day) as two digits. */
@@ -2003,7 +2027,8 @@ const failureWord = (operation: ActivityOperation): string => {
 /**
  * A row as text, in parts: the diff counts draw in their own colours after
  * the head, and the outcome word (`exit 1`, `failed`, `cancelled`,
- * `incomplete`) after ` · ` in its tone, none for a row that ran or runs.
+ * `incomplete`) after ` · ` in its tone, none for a row that ran. A running
+ * row ends with its live timer, muted.
  */
 interface ActivityRowText {
   readonly head: string
@@ -2011,14 +2036,23 @@ interface ActivityRowText {
   readonly ending: Option.Option<TextRun<ActivityTone>>
 }
 
+/** When a running row's op started: its call's started receipt, none for a saved receipt. */
+const rowStartedAt = (row: ActivityRow): Option.Option<number> =>
+  Option.flatMap(Option.fromUndefinedOr(row.operations.at(-1)?.source), (source) =>
+    Option.fromUndefinedOr(source.startedAt),
+  )
+
 /**
  * A row in past-tense words, fitted to `width` columns: `Read a.ts, b.ts +1`,
- * `Edited x.ts +12 / -3`, `Ran bun test · exit 1`, `Running bun test`. The
- * subjects that fit the width show, then `+N` counts the rest.
+ * `Edited x.ts +12 / -3`, `Ran bun test · exit 1`, `Running bun test · 42s`.
+ * The subjects that fit the width show, then `+N` counts the rest. A running
+ * row reads its timer at `now`, and a narrow one cuts its subject to keep the
+ * timer, as a failure row keeps its outcome word.
  */
 export function formatActivityRow(
   row: ActivityRow,
   width = Number.POSITIVE_INFINITY,
+  now: Option.Option<number> = Option.none(),
 ): ActivityRowText {
   const tense = toolVerbs(row.tool)
   let verb = tense[0]
@@ -2028,9 +2062,16 @@ export function formatActivityRow(
   if (row.outcome === "failed") word = row.operations.map(failureWord)[0] ?? "failed"
   if (row.outcome === "cancelled") word = "cancelled"
   if (row.outcome === "incomplete") word = "incomplete"
-  const ending = Option.map(
-    Option.liftPredicate(word, (text) => text.length > 0),
-    (text) => ({ text, tone: outcomeTone(row.outcome) }),
+  const timer = Option.flatMap(
+    Option.filter(now, () => row.outcome === "running"),
+    (at) => runningElapsed(rowStartedAt(row), at),
+  )
+  const ending = Option.orElse(
+    Option.map(
+      Option.liftPredicate(word, (text) => text.length > 0),
+      (text): TextRun<ActivityTone> => ({ text, tone: outcomeTone(row.outcome) }),
+    ),
+    () => Option.map(timer, (text): TextRun<ActivityTone> => ({ text, tone: "muted" })),
   )
   const diffWidth = Option.match(row.diff, {
     onNone: () => 0,
@@ -2050,7 +2091,15 @@ export function formatActivityRow(
   let kept = subjects.length
   while (kept > 1 && textWidth(listed(kept)) > room) kept -= 1
   if (subjects.length === 0) return { head: verb, diff: row.diff, ending }
-  return { head: `${verb} ${listed(kept)}`, diff: row.diff, ending }
+  const head = `${verb} ${listed(kept)}`
+  return Option.match(timer, {
+    onNone: () => ({ head, diff: row.diff, ending }),
+    onSome: (text) => ({
+      head: headBeside(head, verb, ` · ${text}`, width - diffWidth),
+      diff: row.diff,
+      ending,
+    }),
+  })
 }
 
 /** The narrowest reason a failure row still draws: a word start and the ellipsis. */
@@ -2085,11 +2134,7 @@ export function failureRowRuns(
       ...ending,
       { text: ` · ${truncate(reason, room)}`, tone: "muted" },
     ]
-  if (textWidth(head + outcome) <= width) return [{ text: head, tone: "muted" }, ...ending]
-  return [
-    { text: truncate(head, Math.max(textWidth(verb), width - textWidth(outcome))), tone: "muted" },
-    ...ending,
-  ]
+  return [{ text: headBeside(head, verb, outcome, width), tone: "muted" }, ...ending]
 }
 
 /** `+12 / -3` */

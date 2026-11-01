@@ -142,6 +142,12 @@ const ToolInteractionFields = {
   output: Schema.UndefinedOr(Schema.String),
   /** Wall time between the started and terminal receipts; absent while running or without receipts. */
   durationMs: Schema.UndefinedOr(Schema.Finite),
+  /**
+   * Envelope time of the started receipt, only while the call runs: a client
+   * that opens on a running call ticks its timer from it. Absent once the
+   * call settles, or without receipts.
+   */
+  startedAt: Schema.optional(Schema.Finite),
 }
 
 /**
@@ -986,8 +992,10 @@ const findResultForToolCall = (
 ): Option.Option<ToolResultState> =>
   Option.fromUndefinedOr(pairings.get(`${callMessageIndex}:${callPartIndex}`))
 
-/** What a branch's tool receipts add to its messages: durations, and the calls each cell admitted. */
+/** What a branch's tool receipts add to its messages: start times, durations, and the calls each cell admitted. */
 interface ToolCallReceipts {
+  /** Envelope time of each started receipt, keyed by `callKey`; a running call carries it. */
+  readonly started: ReadonlyMap<string, number>
   /** Keyed by `callKey`, like operations: a provider can reuse a call id across steps. */
   readonly durations: ReadonlyMap<string, number>
   /** Keyed by `callKey` of the admitting cell, in start order. */
@@ -1501,7 +1509,16 @@ interface OperationRaw {
   readonly output: string | undefined
   // oxlint-disable-next-line effect/noNullish -- Absent while running.
   readonly durationMs: number | undefined
+  /** Present only while the operation runs. */
+  readonly startedAt: Option.Option<number>
 }
+
+/** The `startedAt` field a running call carries; a settled call carries none. */
+const startedField = (startedAt: Option.Option<number>): { readonly startedAt?: number } =>
+  Option.match(startedAt, {
+    onNone: () => ({}),
+    onSome: (value) => ({ startedAt: value }),
+  })
 
 /**
  * One operation as the snapshot carries it: within `OPERATION_BUDGET` encoded
@@ -1521,6 +1538,7 @@ const fitOperation = (raw: OperationRaw): ToolOperation => {
     summary: raw.summary,
     output: absentField,
     durationMs: raw.durationMs,
+    ...startedField(raw.startedAt),
   }
   // `"input":` and `"output":` with their commas.
   const labels = encodeJson("input").length + encodeJson("output").length + 4
@@ -1544,7 +1562,11 @@ const fitOperation = (raw: OperationRaw): ToolOperation => {
   return { ...fixed, input, output, cuts }
 }
 
-const noReceipts: ToolCallReceipts = { durations: new Map(), operations: new Map() }
+const noReceipts: ToolCallReceipts = {
+  started: new Map(),
+  durations: new Map(),
+  operations: new Map(),
+}
 
 /**
  * One fold over a branch's tool receipts. A duration is the gap from a call's
@@ -1563,6 +1585,7 @@ interface OperationSlot {
 /** Place one admitted call under its cell. The snapshot carries what the collapsed op row draws; the full input and output stay on the branch. */
 const admitOperation = (
   event: ToolCallStarted,
+  startedAt: number,
   operations: Map<string, Array<ToolOperation>>,
   slots: Map<string, OperationSlot>,
 ): void => {
@@ -1582,6 +1605,7 @@ const admitOperation = (
       summary: absentField,
       output: absentField,
       durationMs: absentField,
+      startedAt: Option.some(startedAt),
     }),
   )
   operations.set(parent, siblings)
@@ -1599,7 +1623,7 @@ export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCall
         callKey(Option.fromUndefinedOr(event.assistantMessageId), event.toolCallId),
         envelope.createdAt,
       )
-      admitOperation(event, operations, slots)
+      admitOperation(event, envelope.createdAt, operations, slots)
       continue
     }
     if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") continue
@@ -1626,9 +1650,10 @@ export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCall
       ),
       output: event.output,
       durationMs,
+      startedAt: Option.none(),
     })
   }
-  return { durations, operations }
+  return { started, durations, operations }
 }
 
 /** A settled cell's operation with no terminal receipt ended with the cell: it failed, it is not running. */
@@ -1639,9 +1664,20 @@ const settledOperations = (
   if (parentStatus === "running") return operations
   return operations.map((operation) => {
     if (operation.status !== "running") return operation
-    return { ...operation, status: "error" }
+    const { startedAt: _settled, ...rest } = operation
+    return { ...rest, status: "error" }
   })
 }
+
+/** A receipt value for a call: keyed by its message, else by its id alone, as historical receipts are. */
+const receiptFor = (
+  values: ReadonlyMap<string, number>,
+  messageId: MessageId,
+  id: ToolCallId,
+): Option.Option<number> =>
+  Option.orElse(Option.fromUndefinedOr(values.get(callKey(Option.some(messageId), id))), () =>
+    Option.fromUndefinedOr(values.get(callKey(Option.none(), id))),
+  )
 
 const messagePartsToolInteractions = (
   messageId: MessageId,
@@ -1677,11 +1713,9 @@ const messagePartsToolInteractions = (
         input: toolCall.input,
         summary: Option.getOrUndefined(Option.map(result, (value) => value.summary)),
         output: Option.getOrUndefined(Option.map(result, (value) => value.output)),
-        durationMs: Option.getOrUndefined(
-          Option.orElse(
-            Option.fromUndefinedOr(receipts.durations.get(callKey(Option.some(messageId), id))),
-            () => Option.fromUndefinedOr(receipts.durations.get(callKey(Option.none(), id))),
-          ),
+        durationMs: Option.getOrUndefined(receiptFor(receipts.durations, messageId, id)),
+        ...startedField(
+          Option.filter(receiptFor(receipts.started, messageId, id), () => status === "running"),
         ),
         ...Option.match(operations, {
           onNone: () => ({}),

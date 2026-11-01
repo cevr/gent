@@ -534,6 +534,83 @@ describe("message part projection", () => {
     ])
   })
 
+  test("a running call and its running ops carry their start time; a settled one does not", () => {
+    const sessionId = SessionId.make("session-projection")
+    const branchId = BranchId.make("branch-projection")
+    const cell = ToolCallId.make("tc-running-cell")
+    const read = ToolCallId.make("tc-done-read")
+    const sleep = ToolCallId.make("tc-running-sleep")
+    const done = ToolCallId.make("tc-done-cell")
+    const envelope = (id: number, createdAt: number, event: AgentEvent) =>
+      EventEnvelope.make({ id: EventId.make(id), createdAt, event })
+    const started = (toolCallId: ToolCallId) =>
+      AgentEvent.cases.ToolCallStarted.make({ sessionId, branchId, toolCallId, toolName: "cell" })
+    const startedOp = (toolCallId: ToolCallId, toolName: string) =>
+      AgentEvent.cases.ToolCallStarted.make({
+        sessionId,
+        branchId,
+        toolCallId,
+        toolName,
+        parentToolCallId: cell,
+      })
+    const events = [
+      envelope(1, 900, started(done)),
+      envelope(
+        2,
+        950,
+        AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: done,
+          toolName: "cell",
+        }),
+      ),
+      envelope(3, 1_000, started(cell)),
+      envelope(4, 1_010, startedOp(read, "read")),
+      envelope(
+        5,
+        1_040,
+        AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: read,
+          toolName: "read",
+          parentToolCallId: cell,
+        }),
+      ),
+      envelope(6, 1_050, startedOp(sleep, "bash")),
+    ]
+    const call = (id: ToolCallId) =>
+      Prompt.toolCallPart({ id, name: "cell", params: { code: "1" }, providerExecuted: false })
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("a", "assistant", [call(done), call(cell)]),
+        makeMessage("t", "tool", [
+          Prompt.toolResultPart({
+            id: done,
+            name: "cell",
+            isFailure: false,
+            providerExecuted: false,
+            result: 1,
+          }),
+        ]),
+      ],
+      toolCallReceipts(events),
+    )
+    const [settled, running] = projected[0]?.toolInteractions ?? []
+    expect(settled?.status).toBe("completed")
+    expect(settled?.startedAt).toBeUndefined()
+    expect(running?.status).toBe("running")
+    // A client that opens on the running cell counts its timer from here.
+    expect(running?.startedAt).toBe(1_000)
+    expect(
+      running?.operations?.map((operation) => [operation.status, operation.startedAt]),
+    ).toEqual([
+      ["completed", absent],
+      ["running", 1_050],
+    ])
+  })
+
   test("a cell's operations come back from their stored receipts", () => {
     const sessionId = SessionId.make("session-projection")
     const branchId = BranchId.make("branch-projection")

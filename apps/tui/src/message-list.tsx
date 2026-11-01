@@ -15,7 +15,9 @@ import {
   formatRowCounts,
   formatUsageStats,
   getString,
+  headBeside,
   type PathPlace,
+  runningElapsed,
   toolArgSummary,
   parseBashOutput,
   plural,
@@ -1370,6 +1372,13 @@ function ToolCallGroup(props: {
     )
   const running = () => props.calls.some((call) => call.status === "running")
   const tick = useSpinnerClock()
+  // A running row's timer reads the spinner clock: no clock of its own, and a
+  // settled row never subscribes, so history rows stay still.
+  const clockWhile = (runs: boolean): Option.Option<number> => {
+    if (!runs) return Option.none()
+    tick()
+    return Option.some(currentMillis())
+  }
   // A call that failed is the group's failure; ops that failed inside a cell
   // that recovered, or a command that exited nonzero, are a warning; the
   // bullet blinks while a call runs.
@@ -1450,7 +1459,8 @@ function ToolCallGroup(props: {
         </For>
         <For each={toolRows()}>
           {(row, index) => {
-            const text = () => formatActivityRow(row, lineWidth())
+            const text = () =>
+              formatActivityRow(row, lineWidth(), clockWhile(row.outcome === "running"))
             return (
               <box flexDirection="column">
                 <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
@@ -1488,7 +1498,15 @@ function ToolCallGroup(props: {
                 return theme.textMuted
               }
               const status = () => {
-                if (call.status === "running") return " · running"
+                if (call.status === "running") {
+                  const timer = Option.flatMap(clockWhile(true), (now) =>
+                    runningElapsed(Option.fromUndefinedOr(call.startedAt), now),
+                  )
+                  return Option.match(timer, {
+                    onNone: () => " · running",
+                    onSome: (text) => ` · running ${text}`,
+                  })
+                }
                 if (Predicate.isNotUndefined(call.durationMs))
                   return ` · ${formatDuration(call.durationMs, "precise")}`
                 return ""
@@ -1513,6 +1531,17 @@ function ToolCallGroup(props: {
                 const text = rowCounts(call)
                 if (text.length === 0) return ""
                 return ` · ${text}`
+              }
+              const identity = () => ` #${formatToolCallIdentity(call.id)}`
+              // A running row cuts its label to keep its timer, as a preview
+              // row does; a settled row keeps its words and the drawer cuts its end.
+              const line = () => {
+                const name = `${connector(index(), props.calls.length)} ${call.toolName}`
+                const head = `${name} ${label()}${counts()}`
+                if (call.status !== "running") return head + status()
+                const width =
+                  dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN - textWidth(identity())
+                return headBeside(head, name, status(), width) + status()
               }
               // A blank line parts each open row from the last, as it parts
               // transcript blocks.
@@ -1539,13 +1568,10 @@ function ToolCallGroup(props: {
                             truncate
                             style={{ fg: color() }}
                           >
-                            {connector(index(), props.calls.length)} {call.toolName} {label()}
-                            {counts()}
-                            {status()}
+                            {line()}
                           </text>
                           <text flexShrink={0} wrapMode="none" style={{ fg: theme.textMuted }}>
-                            {" "}
-                            #{formatToolCallIdentity(call.id)}
+                            {identity()}
                           </text>
                         </box>
                         <ToolFrameBody>

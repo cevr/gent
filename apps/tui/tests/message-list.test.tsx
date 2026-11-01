@@ -8116,4 +8116,173 @@ describe("collapse ladder", () => {
       expect(frame).not.toMatch(/[◇◈◆]/)
     }),
   )
+
+  /** A running cell running `command`: the cell started `cellMs` ago, its op `opMs` ago. */
+  const timedCell = (command: string, cellMs: number, opMs: number): SessionItem => {
+    const now = currentMillis()
+    return assistantToolMessage("timed", {
+      id: "timed-cell",
+      toolName: "cell",
+      status: "running",
+      input: { code: `await tools.bash({ command: '${command}' })` },
+      summary: absent,
+      output: absent,
+      startedAt: now - cellMs,
+      operations: [
+        { ...op("timed-op", "bash", { command }, ""), status: "running", startedAt: now - opMs },
+      ],
+    })
+  }
+  /** The whole seconds a row's timer reads, from `· 41s` or `· running 1m 2s  #id`. */
+  const timerSeconds = (row: string): number => {
+    const match = /(?:(\d+)m )?(\d+)s(?: +#\S+)?$/.exec(row)
+    return Number(match?.[1] ?? 0) * 60 + Number(match?.[2] ?? Number.NaN)
+  }
+  const rowWith = (frame: string, text: string) =>
+    lines(frame).find((line) => line.includes(text)) ?? ""
+
+  it.scopedLive("a running row counts its time on the spinner clock, at preview and full", () =>
+    Effect.gen(function* () {
+      const items = [timedCell("sleep 60", 90_000, 41_000)]
+      const setup = yield* renderScoped(
+        () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
+        { width: 100, height: 20 },
+      )
+      const first = yield* waitForFrame(
+        setup,
+        (frame) => /└ Running sleep 60 · \d+s$/m.test(lines(frame).join("\n")),
+        "the running row's timer",
+      )
+      const row = rowWith(first, "Running sleep 60")
+      expect(row).toMatch(/^ {2}└ Running sleep 60 · 4[1-3]s$/)
+      // The next tick of the clock that blinks the bullet moves the timer on.
+      yield* waitForFrame(
+        setup,
+        (frame) => timerSeconds(rowWith(frame, "Running sleep 60")) > timerSeconds(row),
+        "the timer to move on",
+        3_000,
+      )
+      // Full opens the cell's own row: it counts from the cell's start.
+      const full = yield* draw(items, "full", 100)
+      expect(rowWith(full, "#timed-cell")).toMatch(
+        /^ {2}└ cell .* · running 1m 3[0-2]s +#timed-cell$/,
+      )
+    }),
+  )
+
+  it.scopedLive("a settled row keeps its duration and draws no timer", () =>
+    Effect.gen(function* () {
+      const now = currentMillis()
+      const settled = assistantToolMessage("timed-done", {
+        id: "done-cell",
+        toolName: "cell",
+        status: "completed",
+        input: { code: "await tools.bash({ command: 'sleep 60' })" },
+        summary: absent,
+        output: encodeJson({ display: "", bindings: [], truncated: false }),
+        // The live feed keeps the start time on a call that settled.
+        startedAt: now - 61_000,
+        durationMs: 1_234,
+        operations: [
+          {
+            ...op("done-op", "bash", { command: "sleep 60" }, bashOutput("", "", 0)),
+            startedAt: now - 60_000,
+            durationMs: 1_000,
+          },
+        ],
+      })
+      const preview = yield* draw([settled], "preview", 100)
+      expect(groupRows(preview)[0]).toBe("  └ Ran sleep 60")
+      const full = yield* draw([settled], "full", 100)
+      const row = rowWith(full, "#done-cell")
+      expect(row).toMatch(/ · 1\.2s +#done-cell$/)
+      expect(row).not.toContain("running")
+    }),
+  )
+
+  it.scopedLive("a narrow running row cuts its subject to keep its timer", () =>
+    Effect.gen(function* () {
+      const command = "sleep 60 && bun run test --filter tui"
+      const items = [timedCell(command, 90_000, 41_000)]
+      for (const width of [50, 40]) {
+        const preview = yield* draw(items, "preview", width)
+        const row = rowWith(preview, "Running sleep")
+        expect(row).toMatch(/^ {2}└ Running sleep 60 .*… · 4[1-3]s$/)
+        expect(row.length).toBeLessThanOrEqual(width - 1)
+        const full = yield* draw(items, "full", width)
+        const cellRow = rowWith(full, "#timed-cell")
+        expect(cellRow).toMatch(/^ {2}└ cell .*… · running 1m 3[0-2]s +#timed-cell$/)
+        // The id sits at the row's right edge; the words and the id keep the last column free.
+        expect(cellRow.replace(/ +#/, " #").length).toBeLessThanOrEqual(width - 1)
+        expect(lines(preview).every((line) => line.length <= width - 1)).toBe(true)
+      }
+    }),
+  )
+
+  it.scopedLive("a reloaded running call counts from its stored start receipt", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-timed")
+      const branchId = BranchId.make("branch-timed")
+      const cell = ToolCallId.make("reloaded-cell")
+      const now = currentMillis()
+      const events = [
+        EventEnvelope.make({
+          id: EventId.make(1),
+          createdAt: now - 90_000,
+          event: AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: cell,
+            toolName: "cell",
+          }),
+        }),
+        EventEnvelope.make({
+          id: EventId.make(2),
+          createdAt: now - 41_000,
+          event: AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make("reloaded-op"),
+            toolName: "bash",
+            input: { command: "sleep 60" },
+            parentToolCallId: cell,
+          }),
+        }),
+      ]
+      const [projected] = projectMessagesWithToolInteractions(
+        [
+          Message.cases.regular.make({
+            id: MessageId.make("reloaded"),
+            sessionId,
+            branchId,
+            role: "assistant",
+            parts: [
+              Prompt.toolCallPart({
+                id: cell,
+                name: "cell",
+                params: { code: "await tools.bash({ command: 'sleep 60' })" },
+                providerExecuted: false,
+              }),
+            ],
+            createdAt: dateFromMillis(0),
+          }),
+        ],
+        toolCallReceipts(events),
+      )
+      const interaction = Option.fromNullishOr(projected?.toolInteractions[0])
+      if (Option.isNone(interaction)) return yield* Effect.die("no projected cell")
+      // As the session view builds a call from the snapshot.
+      const { operations, ...call } = interaction.value
+      const items = [
+        assistantToolMessage("reloaded", {
+          ...call,
+          operations: (operations ?? []).map((operation) => ({ ...operation })),
+        }),
+      ]
+      const preview = yield* draw(items, "preview", 100)
+      expect(rowWith(preview, "Running sleep 60")).toMatch(/^ {2}└ Running sleep 60 · 4[1-3]s$/)
+      const full = yield* draw(items, "full", 100)
+      expect(rowWith(full, "#reloaded-cell")).toMatch(/ · running 1m 3[0-2]s +#reloaded-cell$/)
+    }),
+  )
 })

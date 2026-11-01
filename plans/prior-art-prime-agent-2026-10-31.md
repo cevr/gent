@@ -3,7 +3,7 @@
 Prime Agent (PA): `/Users/cvr/.cache/repo/primeintellect-ai/prime-agent` at `c6d4da9`. That is 69 commits after the `8aac869` that the last study read.
 gent: `/Users/cvr/Developer/personal/gent` at `899784b3d`.
 Prior study: `plans/prior-art-prime-agent-2026-10-22.md`. This study does not repeat its settled verdicts. Those verdicts cover round-end coalescing, the per-row model, effort and cost, the zero-count tray, and park-until-reset.
-Method: I read the source only. I did not run PA, gent or any model.
+Method: I read the source only. I did not run PA, gent or any model. Section D adds one live run of PA 0.10.2, on 2026-11-01.
 Labels: **measured** means I read it in source or commit text. **inferred** means it follows from the source but I did not run it. **guess** means I have no direct evidence.
 PA paths are relative to the PA root. gent paths are relative to the gent root.
 
@@ -115,6 +115,21 @@ PA paths are relative to the PA root. gent paths are relative to the gent root.
 
 ---
 
+## D. Live run, 2026-11-01
+
+Captures: `/private/tmp/claude-501/-Users-cvr-Developer-personal-gent/cabc8a65-8d57-48f2-b52e-16d1056d82d5/scratchpad/prime-live/caps/` (files `00` to `16`, 120x40 and 60x40). The scratch directory is temporary.
+
+- **Run.** prime-agent 0.10.2, the latest stable release. Model `openai-codex/gpt-6-luna` at thinking `max`. The run took 357 s. It made 9 sessions (1 root, 5 children, 3 grandchildren) and 67 steps. Tokens: 245,115 uncached input, 20,559 output, 1,280,128 cache read. All 15 fixture tests pass. measured.
+- **Not in 0.10.2.** The release is `ea9d960`. The live timer (b8591c5), the edit diffs (10f646d) and the newer factory page (407aa2b) landed after it. So did 8a912af, 98bf740, 69a826f, 6852cb0 and ec3feb6. measured. Without 8a912af the live root woke on every child message: the root session has 7 `custom_message` entries. measured.
+- **Time on a running call.** 0.10.2 shows a separate spinner line that names the stage (Thinking, Executing or Waiting) and counts tokens: `⠏ Executing · 23s · ↑ 13 tokens` (`06`), `⠙ Waiting · 5m 22s` (`14`). A tool row shows its duration only when it ends. measured.
+- **Factory panel (older than 407aa2b).** A panel docks above the composer and refreshes about every 2 s. It has one glyph row per state: `✓ tasks (task-list) done [entry]`, `● fix (2 run · 1 queued) (fix) running`, `◐ verify (verify) pending`. Edges draw as `│ ├▶ verify`, with `»` on the last edge that fired. The header reads `budget 57[s]/30m00s · 2/2 parallel · 1 settled · 1 transitions · 2 running · 1 queued`. measured (`02`, `04`, `16`). It differs from the source study of 407aa2b: Enter opens action rows (`▸ Stop the run`), not a child session; stop is an action row, not a double Ctrl+X; the arrows move between runs; the milestones showed only `finished`. measured (`03`). Child sessions open from the agents list, where `⚙ 1 factory run` nests under the root. measured (`09` to `12`).
+- **Queued strip.** `1 agent message queued` with `Option+↑ to browse and edit queued messages`. measured (`07` and `stream/0101-t337s.txt`).
+- **Composer bug.** PA's composer drops the second of two identical characters typed in a row: `small` became `smal`. measured. This is PA's bug, not a gent concern.
+- **Cues worth copying.** The spinner line names the stage and counts tokens. The activity tray expands on ↓ into one summary row per group (`01`). A child view has the footer `← manage  depth 1` (`12`). A run end is a one-row notice. measured.
+- **Avoid.** Rows cut with no ellipsis at 60 columns (`05`, `14`). A root that waits in repeated 30 s watch cells and wakes on each child message (`14`). measured.
+
+---
+
 ## Ranked candidates
 
 ### 1. Keep the cell receipts out of the model view
@@ -149,6 +164,7 @@ PA paths are relative to the PA root. gent paths are relative to the gent root.
 - **North star:** one interaction model (the row, the status line and the lanes band read the same clock).
 - **Evidence:** measured that gent shows only `· running` (`message-list.tsx:1491`); measured that PA ticks on the spinner repaint (b8591c5).
 - **Check first:** confirm that `startedAt` is set for live calls, not only for replayed ones. Run the verify-gent live check at normal and narrow widths. The label must not push the row past the width.
+- **Outcome (2026-11-01):** built as queue row 49 (design and tests there). Three departures from this shape. The format is gent's compact one (`42s`, `1m 5s`), as the live line and the agents pane show it, not `0:42`. The start time comes from the snapshot too (a `startedAt` receipt on a running call and its running ops), so a reloaded TUI counts from the true start; PA's `started_at` is a TUI-local instant, so a resumed PA TUI loses it. At a narrow width the subject is cut to keep the timer, as PA shrinks its preview to keep its timer. PA 0.10.2 (the latest stable release, `ea9d960`) does not have b8591c5: it shows the stage on a separate spinner line (`⠙ Waiting · 5m 22s`), and a row shows its duration only when it ends. measured (section D).
 
 ### 5. A run page inside the agents pane
 
@@ -157,6 +173,7 @@ PA paths are relative to the PA root. gent paths are relative to the gent root.
 - **North star:** one interaction model (one pane, one key grammar); lean core with extensions (all in `@gent/machines` and its client).
 - **Evidence:** measured that gent has only the one-line band (`machines.client.tsx:74-91`); measured that PA's page walks states and opens children (`factory_view.rs:1-26, 564-607`). This also covers candidate 6.
 - **Check first:** read `MachinesRpc.Status` to see that it carries each round's thread session id and `costUsd`. Ask whether `gent ctl status --run` already prints enough. If so, the page is only a view over it.
+- **Live run (2026-11-01):** PA 0.10.2 has an older factory panel, not the 407aa2b page. It docks above the composer, draws one glyph row per state with edges, and Enter opens action rows (`▸ Stop the run`), not a child session. Child sessions open from the agents list. measured (section D). The source study above stays the reference for the shape; the live panel adds the header counts and the `»` mark on the last edge that fired.
 
 ### 6. Cost grouped by machine run
 
