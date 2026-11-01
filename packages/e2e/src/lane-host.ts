@@ -5,8 +5,11 @@
  * `anthropic` sign-in `work`. The test ends it with SIGKILL, so no finalizer
  * runs and no ledger write follows, then starts it again over the same files.
  *
- * - `LH_START`: create a session and send it one message. Its turn's model
- *   call never ends in this process.
+ * - `LH_START`: create a worker session and start one admitted run on it,
+ *   as a thread round does: a starter session's request admits a lane
+ *   under the run's command id, then sends the worker the turn. Its model
+ *   call never ends in this process. An owner's own message would be no
+ *   load, so it could not show the lane.
  * - Absent, the host makes no client call until `<LH_DIR>/open` exists; then
  *   it reads the session `<LH_DIR>/session.json` names, which reopens its
  *   loop, and the cut turn runs again. That call answers once
@@ -30,8 +33,18 @@ import {
   Stream,
 } from "effect"
 import { BuiltinExtensions } from "@gent/extensions"
-import { CredentialSlot } from "@gent/core/extensions/api"
-import { BranchId, SessionId } from "@gent/core/protocol"
+import {
+  ActorCommandId,
+  CredentialSlot,
+  defineExtension,
+  defineRequests,
+  ExtensionContext,
+  ExtensionHost,
+  ExtensionId,
+  ref,
+  request,
+} from "@gent/core/extensions/api"
+import { BranchId, MessageId, SessionId } from "@gent/core/protocol"
 import {
   ConfigService,
   createE2ELayer,
@@ -45,6 +58,39 @@ import {
 } from "@gent/core/test-utils"
 
 const Started = Schema.fromJsonString(Schema.Struct({ sessionId: SessionId, branchId: BranchId }))
+
+/** The command id, and so the lane key, of the one admitted run. */
+const RUN_ID = "lane-host-run"
+
+/** Admits a lane for the run under its command id, then starts the worker's turn on it. */
+const LaneHostRequests = defineRequests(ExtensionId.make("lane-host"), {
+  StartRun: request({
+    id: "start-run",
+    description: "Admit one run's lane and start the worker's turn on it.",
+    input: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
+    output: Schema.Void,
+    execute: (worker) =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        yield* ctx.Accounts.admit({ message: MessageId.make(RUN_ID), cwd: ctx.cwd })
+        yield* ctx.Session.send({
+          delivery: "turn",
+          ...worker,
+          content: "work on it",
+          commandId: ActorCommandId.make(RUN_ID),
+          completion: "admission",
+        })
+      }),
+  }),
+})
+
+const laneHost = defineExtension({
+  id: "lane-host",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("request", LaneHostRequests.StartRun)
+  }),
+})
 
 /** A line the test waits on. */
 const event = (line: string) => Console.log(`LH ${line}`)
@@ -66,9 +112,10 @@ const program = Effect.gen(function* () {
   const { client } = yield* createRpcClient(
     createE2ELayer({
       agents: [],
-      extensionInputs: BuiltinExtensions.filter(
-        (extension) => extension.manifest.id !== "@gent/cell",
-      ),
+      extensionInputs: [
+        ...BuiltinExtensions.filter((extension) => extension.manifest.id !== "@gent/cell"),
+        laneHost,
+      ],
       providerLayer,
       configServiceLayer: ConfigService.Test(
         new UserConfig({
@@ -100,7 +147,15 @@ const program = Effect.gen(function* () {
       branchId: created.branchId,
     })
     yield* fs.writeFileString(`${dir}/session.json`, named)
-    yield* client.message.send({ ...created, content: "work on it" })
+    const starter = yield* client.session.create({ cwd: dir })
+    const startRun = ref(LaneHostRequests.StartRun)
+    yield* client.extension.request({
+      sessionId: starter.sessionId,
+      branchId: starter.branchId,
+      extensionId: startRun.extensionId,
+      capabilityId: startRun.capabilityId,
+      input: { sessionId: created.sessionId, branchId: created.branchId },
+    })
     yield* event("sent")
   } else {
     yield* waitFor(exists("open"), (open) => open, 60_000, "the test let the session open")

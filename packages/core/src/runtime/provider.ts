@@ -6867,27 +6867,31 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           Option.fromUndefinedOr(running.get(lane.sessionId)),
           (open) => open.provider === lane.provider,
         )
+        // What this open brings: its grant's Sabbath and starter, else the
+        // admitted lane it resumed. An open turn keeps its own first; a
+        // grant or a resume that joins the owner's open turn makes it a run,
+        // in the Sabbath and for the starter it brings.
+        const brought = Option.orElse(
+          Option.flatMap(admitted, (start) => start.sabbath),
+          () => Option.flatMap(lane.resumed, (resumed) => Option.fromUndefinedOr(resumed.sabbath)),
+        )
+        const joins = Option.isSome(admitted) || Option.isSome(lane.resumed)
         const sabbath = Option.match(before, {
-          onNone: () =>
-            Option.orElse(
-              Option.flatMap(admitted, (start) => start.sabbath),
-              () =>
-                Option.flatMap(lane.resumed, (resumed) => Option.fromUndefinedOr(resumed.sabbath)),
-            ),
-          onSome: (open) => open.sabbath,
+          onNone: () => brought,
+          onSome: (open) => Option.orElse(open.sabbath, () => brought),
         })
         const isRun = Option.match(before, {
-          onNone: () => Option.isSome(admitted) || Option.isSome(lane.resumed),
-          // A grant that joins the owner's open turn makes it a run.
-          onSome: (open) => open.admitted || Option.isSome(admitted),
+          onNone: () => joins,
+          onSome: (open) => open.admitted || joins,
         })
+        const starter = Option.flatMap(admitted, (start) => start.starter)
         running.set(lane.sessionId, {
           provider: lane.provider,
           scope: lane.scope.map((account) => account.slot),
           model: Option.some(lane.model),
           starter: Option.match(before, {
-            onNone: () => Option.flatMap(admitted, (start) => start.starter),
-            onSome: (open) => open.starter,
+            onNone: () => starter,
+            onSome: (open) => Option.orElse(open.starter, () => starter),
           }),
           sabbath,
           admitted: isRun,

@@ -7149,6 +7149,41 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect(
+    "a start that joins the owner's open turn still counts for its asker in the queue",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        const { placement } = fixture
+        yield* TestClock.adjust("1 hour")
+        // The account's window carries 2.6 runs: two plan runs.
+        yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+        const busy = Option.some(SessionId.make("busy-parent"))
+        const idle = Option.some(SessionId.make("idle-parent"))
+        const openOn = (key: string) =>
+          placement.openLane({
+            sessionId: SessionId.make("owner-session"),
+            key,
+            provider: "plan",
+            scope: [receiptOf(a)],
+            model: planModel,
+            resumed: Option.none(),
+          })
+        // The owner's turn runs; the busy parent's start joins it and makes it a run.
+        expect(yield* openOn("owner-turn")).toEqual(Option.none())
+        expect(yield* askLane(placement, busy, "busy-1")).toBe("admitted")
+        expect(yield* openOn("busy-1")).toEqual(Option.some({}))
+        expect(yield* askLane(placement, busy, "busy-2")).toBe("admitted")
+        // The busy parent asks first, but it holds two lanes and the idle one none.
+        expect(yield* askLane(placement, busy, "busy-3")).toBe("queued")
+        expect(yield* askLane(placement, idle, "idle-1")).toBe("queued")
+        // One lane frees: the busy parent still holds the joined turn's.
+        yield* placement.freeReservation("busy-2")
+        expect(yield* askLane(placement, idle, "idle-1")).toBe("admitted")
+        expect(yield* askLane(placement, busy, "busy-3")).toBe("queued")
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("inside equal held lanes, the queue serves the earliest request first", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()
@@ -7415,7 +7450,7 @@ describe("account lanes", () => {
   )
 
   it.effect(
-    "a turn's lane keeps its grant's Sabbath, else its open lane's, else the one it resumed with",
+    "a turn's lane keeps its grant's Sabbath, else its open lane's, else the one it resumed with, and a grant that joins the owner's turn brings its own",
     () =>
       Effect.gen(function* () {
         const fixture = yield* accounts()
@@ -7451,11 +7486,31 @@ describe("account lanes", () => {
           Option.some(EQUATOR),
         )
         expect(yield* open("owner", "own-turn", Option.none())).toEqual(Option.none())
+        expect(yield* open("bystander", "own-turn-2", Option.none())).toEqual(Option.none())
+        // The worker's turn ends and frees its lane. A grant that joins the
+        // owner's open turn makes it a run in the grant's Sabbath.
+        yield* placement.release(SessionId.make("worker"))
+        expect(
+          yield* askLane(placement, Option.none(), "owner-joined", planModel, Option.some(EQUATOR)),
+        ).toBe("admitted")
+        expect(yield* open("owner", "owner-joined", Option.none())).toEqual(Option.some(EQUATOR))
+        // After a restart, an admitted turn that resumes beside the owner's open
+        // turn of its session keeps its run and its Sabbath.
+        expect(yield* open("restarted", "owner-again", Option.none())).toEqual(Option.none())
+        expect(yield* open("restarted", "resumed-beside", Option.some(EQUATOR))).toEqual(
+          Option.some(EQUATOR),
+        )
         yield* TestClock.setTime(sabbath.start + MINUTE)
         expect(yield* placement.sabbathStop(SessionId.make("resumed"))).toEqual(
           Option.some(sabbath.end),
         )
-        expect(yield* placement.sabbathStop(SessionId.make("owner"))).toEqual(Option.none())
+        expect(yield* placement.sabbathStop(SessionId.make("owner"))).toEqual(
+          Option.some(sabbath.end),
+        )
+        expect(yield* placement.sabbathStop(SessionId.make("bystander"))).toEqual(Option.none())
+        expect(yield* placement.sabbathStop(SessionId.make("restarted"))).toEqual(
+          Option.some(sabbath.end),
+        )
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

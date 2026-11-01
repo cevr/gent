@@ -152,9 +152,12 @@ import {
 } from "../../src/test-utils/harness"
 import {
   defineExtension,
+  defineRequests,
   defineResource,
   ExtensionContext,
   ExtensionHost,
+  ref,
+  request,
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
@@ -9578,7 +9581,7 @@ describe("a virtual model no router serves", () => {
   )
 
   it.scopedLive(
-    "the auth gate takes the model the branch last ran on, not the default",
+    "the auth gate and an admitted turn's lane take the model the branch last ran on, not the default",
     () =>
       Effect.gen(function* () {
         const dbPath = `${yield* makeTempDirectoryScoped("gent-router-gone-")}/gent.db`
@@ -9588,15 +9591,45 @@ describe("a virtual model no router serves", () => {
           ids: ["served", "other"],
         })
         const resetAt = 1_800_000_000_000
-        const { layer } = yield* LanguageModelLayers.sequence([
+        const { layer, controls } = yield* LanguageModelLayers.sequence([
           {
             ...textStep("on other"),
             quota: [{ window: "5h", utilization: 0.25, resetAt, rejected: false }],
           },
-          textStep("still on other"),
+          { ...textStep("still on other"), gated: true },
         ])
+        // A request that takes a lane for a follow-up of its branch, then
+        // queues it: the follow-up's turn is an admitted run, which load counts.
+        const admitted = defineRequests(ExtensionId.make("@test/admitted-follow-up"), {
+          Queue: request({
+            id: "queue-admitted",
+            description: "Take a lane for a follow-up, then queue it",
+            input: Schema.Struct({ content: Schema.String }),
+            output: Schema.Void,
+            execute: ({ content }) =>
+              Effect.gen(function* () {
+                const ctx = yield* ExtensionContext
+                const sourceId = "admitted-third"
+                const message = followUpMessageIdForSource({
+                  workspaceId: workspaceIdForCwd(ctx.cwd),
+                  sessionId: ctx.sessionId,
+                  branchId: ctx.branchId,
+                  sourceId,
+                })
+                yield* ctx.Accounts.admit({ message, cwd: ctx.cwd })
+                yield* ctx.Session.send({ delivery: "queue", content, sourceId, wake: true })
+              }),
+          }),
+        })
+        const admittedProbe = defineExtension({
+          id: "@test/admitted-follow-up",
+          setup: Effect.gen(function* () {
+            yield* (yield* ExtensionHost).register("request", admitted.Queue)
+          }),
+        })
         const { client } = yield* processOn(dbPath, layer, [
           driversOnly(layer, ["served", "other"]),
+          admittedProbe,
         ])
         // The default is `served/light`; the branch last ran on `other/strong`.
         const providers = yield* client.auth.listProviders({ sessionId: run.sessionId })
@@ -9608,7 +9641,23 @@ describe("a virtual model no router serves", () => {
         const afterTurns = yield* recordBranchEvents(client, run)
         yield* client.message.send({ ...run, content: "second" })
         yield* afterTurns(2)
-        yield* client.message.send({ ...run, content: "third" })
+        const loadOn = (provider: string) =>
+          Effect.map(client.accounts.lanes(), ({ providers: lanes }) =>
+            lanes.filter((each) => each.provider === provider).map((each) => each.load),
+          )
+        // The owner's own turns are no load.
+        expect(yield* loadOn("other")).toEqual([0])
+        const queue = ref(admitted.Queue)
+        yield* client.extension.request({
+          ...run,
+          extensionId: queue.extensionId,
+          capabilityId: queue.capabilityId,
+          input: { content: "third" },
+        })
+        yield* controls.waitForCall(1)
+        // The admitted turn's lane opened on the provider the branch ran on.
+        expect(yield* loadOn("other")).toEqual([1])
+        yield* controls.emitAll(1)
         expect(stepModels(yield* afterTurns(3))).toEqual([OTHER_STRONG, OTHER_STRONG, OTHER_STRONG])
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
