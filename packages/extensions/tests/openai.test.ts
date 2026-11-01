@@ -58,6 +58,7 @@ import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { e2ePreset } from "./helpers/test-preset.js"
 import {
+  type CapturedRequest,
   type FakeClientState,
   fakeFetchLayer,
   type FakeFetchState,
@@ -1594,6 +1595,62 @@ const readPlanQuota = (authInfo: ProviderAuthInfo, responder: FakeResponder) =>
     )
     return { exit, captured: state.captured }
   })
+/**
+ * One label's record as core's auth store keeps it: the tokens and the stamp
+ * of the sign-in it holds. A refresh write keeps the stamp; `signInAgain`
+ * puts another sign-in on the label, as `/auth` does, under the same lock.
+ * `authInfo` is the credential a request or a sweep resolved for the first one.
+ */
+const makeStampedLabel = (signedInAt: number, tokens: StoredOAuthCredentials) => {
+  let held = { tokens, signedInAt }
+  const lock = Semaphore.makeUnsafe(1)
+  const update: UpdateStoredOAuth = (f) =>
+    Effect.gen(function* () {
+      const pair = yield* f(Option.some({ ...held.tokens, signedInAt: held.signedInAt }))
+      if (Option.isSome(pair[1])) held = { tokens: pair[1].value, signedInAt: held.signedInAt }
+      return pair[0]
+    }).pipe(lock.withPermits(1))
+  const signInAgain = (stamp: number, next: StoredOAuthCredentials) =>
+    Effect.sync(() => {
+      held = { tokens: next, signedInAt: stamp }
+    }).pipe(lock.withPermits(1))
+  const authInfo = ProviderAuthInfo.cases.Oauth.make({ update, signedInAt })
+  return { authInfo, signInAgain, read: () => held }
+}
+const FIRST_SIGN_IN: StoredOAuthCredentials = {
+  access: "first-access",
+  refresh: "first-refresh",
+  expires: FAR_FUTURE_MS,
+  accountId: "first-account",
+}
+const SECOND_SIGN_IN: StoredOAuthCredentials = {
+  access: "second-access",
+  refresh: "second-refresh",
+  expires: FAR_FUTURE_MS,
+  accountId: "second-account",
+}
+/** True when `request` carries the second sign-in's token or account. */
+const carriesSecondSignIn = (request: CapturedRequest) =>
+  request.headers["authorization"] === `Bearer ${SECOND_SIGN_IN.access}` ||
+  request.headers["chatgpt-account-id"] === SECOND_SIGN_IN.accountId ||
+  (request.body ?? "").includes(SECOND_SIGN_IN.refresh)
+/**
+ * A responder that holds the first call until the label is signed in again,
+ * then answers it 401; every later call gets `later`.
+ */
+const holdFirstCall =
+  (
+    started: Deferred.Deferred<void>,
+    release: Deferred.Deferred<void>,
+    later: FakeResponder,
+  ): FakeResponder =>
+  (request, call) => {
+    if (call > 0) return later(request, call)
+    return Deferred.succeed(started, void 0).pipe(
+      Effect.andThen(Deferred.await(release)),
+      Effect.as({ status: 401, body: "unauthorized" }),
+    )
+  }
 
 describe("ChatGPT plan quota", () => {
   it.live(
@@ -1630,31 +1687,46 @@ describe("ChatGPT plan quota", () => {
 
   it.live("the usage endpoint and the answer headers name a window alike", () =>
     Effect.gen(function* () {
-      const { exit } = yield* readPlanQuota(planSignIn("plan-access"), () =>
-        usageAnswer(planLimit(42.5, 12)),
-      )
-      const headers = yield* runOk(
+      // The endpoint states a window in seconds, the headers in whole minutes.
+      const bothPaths = (seconds: number, minutes: string) =>
         Effect.gen(function* () {
-          const client = yield* codexClientOver({
-            captured: [],
-            responder: () => ({
-              status: 200,
-              headers: {
-                "x-codex-primary-used-percent": "42.5",
-                "x-codex-primary-window-minutes": "300",
-                "x-codex-primary-reset-at": String(PLAN_FIVE_HOUR_RESET_S),
-                "x-codex-secondary-used-percent": "12",
-                "x-codex-secondary-window-minutes": "10080",
-                "x-codex-secondary-reset-at": String(PLAN_WEEK_RESET_S),
-              },
-              body: "{}",
+          const { exit } = yield* readPlanQuota(planSignIn("plan-access"), () =>
+            usageAnswer({
+              allowed: true,
+              limit_reached: false,
+              primary_window: usageWindow(42.5, seconds, PLAN_FIVE_HOUR_RESET_S),
+              secondary_window: usageWindow(12, 604_800, PLAN_WEEK_RESET_S),
             }),
-          })
-          return yield* captureProviderReport(postResponses(client))
-        }),
-      )
-      expect(headers.quota.length).toBe(2)
-      expect(exit).toEqual(Exit.succeed(headers.quota))
+          )
+          const headers = yield* runOk(
+            Effect.gen(function* () {
+              const client = yield* codexClientOver({
+                captured: [],
+                responder: () => ({
+                  status: 200,
+                  headers: {
+                    "x-codex-primary-used-percent": "42.5",
+                    "x-codex-primary-window-minutes": minutes,
+                    "x-codex-primary-reset-at": String(PLAN_FIVE_HOUR_RESET_S),
+                    "x-codex-secondary-used-percent": "12",
+                    "x-codex-secondary-window-minutes": "10080",
+                    "x-codex-secondary-reset-at": String(PLAN_WEEK_RESET_S),
+                  },
+                  body: "{}",
+                }),
+              })
+              return yield* captureProviderReport(postResponses(client))
+            }),
+          )
+          return { endpoint: exit, headers: headers.quota }
+        })
+      const fiveHour = yield* bothPaths(18_000, "300")
+      expect(fiveHour.headers.map((reading) => reading.window)).toEqual(["5h", "7d"])
+      expect(fiveHour.endpoint).toEqual(Exit.succeed(fiveHour.headers))
+      // A length one second past a whole minute rounds up, as Codex does.
+      const oddLength = yield* bothPaths(18_001, "301")
+      expect(oddLength.headers.map((reading) => reading.window)).toEqual(["301m", "7d"])
+      expect(oddLength.endpoint).toEqual(Exit.succeed(oddLength.headers))
     }),
   )
 
@@ -1733,6 +1805,35 @@ describe("ChatGPT plan quota", () => {
       expect(errorMessage(refused.exit)).toBe("ChatGPT usage read failed: HTTP 401")
       expect(refused.captured.filter((request) => request.url === WHAM_USAGE_URL).length).toBe(2)
     }),
+  )
+
+  it.live(
+    "a label signed in again while its read waits fails the read and never reads the new sign-in",
+    () =>
+      Effect.gen(function* () {
+        const label = makeStampedLabel(1, FIRST_SIGN_IN)
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const reading = yield* Effect.forkChild(
+          readPlanQuota(
+            label.authInfo,
+            holdFirstCall(started, release, () => usageAnswer(planLimit(42, 12))),
+          ),
+        )
+        yield* Deferred.await(started)
+        yield* label.signInAgain(2, SECOND_SIGN_IN)
+        yield* Deferred.succeed(release, void 0)
+        const { exit, captured } = yield* Fiber.join(reading)
+
+        // The sweep stamps a reading with the first sign-in: the second one's
+        // quota must not answer for it.
+        expect(errorMessage(exit)).toBe(
+          "This label holds another sign-in now than the request was made for; the next request reads it",
+        )
+        expect(captured.map((request) => request.url)).toEqual([WHAM_USAGE_URL])
+        expect(captured.some(carriesSecondSignIn)).toBe(false)
+        expect(label.read()).toEqual({ tokens: SECOND_SIGN_IN, signedInAt: 2 })
+      }),
   )
 
   it.live("a refused or unreadable answer fails the read with its cause", () =>
@@ -1928,12 +2029,11 @@ describe("OpenAI cache routing", () => {
         const { driver } = yield* makeDriver()
         const fetchState = makeFakeFetchState()
         const signIn = (access: string, signedInAt: number): ProviderAuthInfo =>
-          ProviderAuthInfo.cases.Oauth.make({
-            update: updateOf(
-              oauthInfo({ access, refresh: `${access}-refresh`, expires: FAR_FUTURE_MS }),
-            ),
-            signedInAt,
-          })
+          makeStampedLabel(signedInAt, {
+            access,
+            refresh: `${access}-refresh`,
+            expires: FAR_FUTURE_MS,
+          }).authInfo
         const first = signIn("fake-first", 1)
         // Another sign-in renamed into the same slot: another account.
         const replaced = signIn("fake-replaced", 2)
@@ -2103,12 +2203,11 @@ describe("OpenAI cache routing", () => {
     Effect.gen(function* () {
       const { driver } = yield* makeDriver()
       const signIn = (access: string, signedInAt: number): ProviderAuthInfo =>
-        ProviderAuthInfo.cases.Oauth.make({
-          update: updateOf(
-            oauthInfo({ access, refresh: `${access}-refresh`, expires: FAR_FUTURE_MS }),
-          ),
-          signedInAt,
-        })
+        makeStampedLabel(signedInAt, {
+          access,
+          refresh: `${access}-refresh`,
+          expires: FAR_FUTURE_MS,
+        }).authInfo
       const sent = (authInfo: ProviderAuthInfo) =>
         Effect.gen(function* () {
           const fetchState = makeFakeFetchState()
@@ -3502,6 +3601,40 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       expect(stored.refresh).toBe("new-refresh")
       expect(stored.accountId).toBe("new-account")
     }),
+  )
+
+  it.live(
+    "a label signed in again while a model request waits fails the request and never sends the new sign-in",
+    () =>
+      Effect.gen(function* () {
+        const label = makeStampedLabel(1, FIRST_SIGN_IN)
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const fetchState = makeFakeFetchState()
+        const fetchLayer = fakeFetchLayer(
+          fetchState,
+          holdFirstCall(started, release, () => openaiResponsesHappyResponse()),
+        )
+        const { driver } = yield* makeDriver()
+        const requesting = yield* Effect.gen(function* () {
+          const model = yield* driver.resolveModel("gpt-5.4", label.authInfo)
+          return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
+            Effect.provide(Layer.provideMerge(model, fetchLayer)),
+          )
+        }).pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit, Effect.forkChild)
+        yield* Deferred.await(started)
+        yield* label.signInAgain(2, SECOND_SIGN_IN)
+        yield* Deferred.succeed(release, void 0)
+        const exit = yield* Fiber.join(requesting)
+
+        expect(errorMessage(exit)).toMatch(
+          /This label holds another sign-in now than the request was made for/,
+        )
+        expect(fetchState.captured.map((request) => request.headers["authorization"])).toEqual([
+          `Bearer ${FIRST_SIGN_IN.access}`,
+        ])
+        expect(fetchState.captured.some(carriesSecondSignIn)).toBe(false)
+      }),
   )
 
   it.live("a sign-in after a revoked token works without a restart", () =>

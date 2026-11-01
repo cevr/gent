@@ -948,9 +948,13 @@ const toStored = (creds: OpenAICredentials): StoredOAuthCredentials => {
 }
 
 /**
- * The gent auth store behind `authInfo.update`. Every profile's cell reads
- * and refreshes through it, so a sign-in or a refresh in one profile is the
- * credential the others adopt.
+ * The gent auth store behind `authInfo.update`, for the one sign-in the
+ * request was bound to. Every profile's cell reads and refreshes through it,
+ * so a refresh in one profile is the credential the others adopt. Under the
+ * store lock the label must still hold that sign-in (its `signedInAt`
+ * stamp): a label renamed or signed in again while a request or a quota read
+ * is in flight never hands it the new sign-in's tokens. The request fails
+ * `Unavailable`, so the next one resolves the label afresh.
  */
 const openAIStore = (
   update: UpdateStoredOAuth,
@@ -962,14 +966,33 @@ const openAIStore = (
       stored: Option.Option<OpenAICredentials>,
     ) => Effect.Effect<readonly [A, Option.Option<OpenAICredentials>], E>,
   ) =>
-    update((stored) =>
-      Effect.map(
-        f(Option.map(stored, fromStored)),
-        (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
-          pair[0],
-          Option.map(pair[1], toStored),
-        ],
-      ),
+    update(
+      (
+        stored,
+      ): Effect.Effect<
+        readonly [A, Option.Option<StoredOAuthCredentials>],
+        E | ProviderAuthError
+      > => {
+        if (
+          Option.isSome(stored) &&
+          stored.value.signedInAt !== Option.getOrUndefined(signedInAt)
+        ) {
+          return Effect.fail(
+            new ProviderAuthError({
+              message:
+                "This label holds another sign-in now than the request was made for; the next request reads it",
+              credentialFailure: "Unavailable",
+            }),
+          )
+        }
+        return Effect.map(
+          f(Option.map(stored, fromStored)),
+          (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
+            pair[0],
+            Option.map(pair[1], toStored),
+          ],
+        )
+      },
     ),
   same: (a, b) => a.refresh === b.refresh,
 })
