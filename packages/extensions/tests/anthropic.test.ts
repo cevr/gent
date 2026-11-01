@@ -639,7 +639,7 @@ describe("keychainTransformClient — auth headers", () => {
       expect(statusOf(exit)).toBe(200)
       const headers = captured[0]!.headers
       expect(headers["x-app"]).toBe("cli")
-      expect(headers["user-agent"]).toMatch(/^claude-cli\/.+ \(external, cli\)$/)
+      expect(headers["user-agent"]).toBe("claude-cli/2.1.316 (external, cli)")
       expect(headers["anthropic-dangerous-direct-browser-access"]).toBe("true")
     }),
   )
@@ -1839,8 +1839,8 @@ describe("Anthropic cache warming", () => {
 /**
  * Recorded answers of a Claude plan, one file each: the status, the headers
  * (sanitized) and the windows gent reads from them. A file dropped in the
- * directory is one more case. `claude-code-2.1.306-allowed-warning.json`
- * holds the header names Claude Code 2.1.306 reads, with made-up values; the
+ * directory is one more case. `claude-code-2.1.316-allowed-warning.json`
+ * holds the header names Claude Code 2.1.316 reads, with made-up values; the
  * other cases vary it.
  */
 const QUOTA_FIXTURES = Effect.flatMap(Path.Path, (path) =>
@@ -1881,7 +1881,7 @@ const FIVE_HOUR_RESET_S = 1_800_000_000
 const SEVEN_DAY_RESET_S = 1_800_400_000
 /** The Claude Code header set with the account's `status` and `claim`. */
 const unifiedHeaders = (status: string, claim: string) =>
-  Effect.map(readQuotaFixture("claude-code-2.1.306-allowed-warning.json"), (fixture) =>
+  Effect.map(readQuotaFixture("claude-code-2.1.316-allowed-warning.json"), (fixture) =>
     Record.set(
       Record.set(fixture.headers, "anthropic-ratelimit-unified-status", status),
       "anthropic-ratelimit-unified-representative-claim",
@@ -2271,7 +2271,7 @@ const laterSystemBody = (
 ) => turnBody(modelName, authInfo, laterSystemPrompt(notices))
 
 const RECORDED_API_KEY_BODY = String.raw`{"model":"claude-sonnet-4-6","max_tokens":128000,"messages":[{"role":"user","content":[{"type":"text","text":"Read a.txt.","cache_control":null}]},{"role":"assistant","content":[{"type":"tool_use","id":"call_read","name":"read","input":{"path":"a.txt"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_read","content":"alpha","is_error":false,"cache_control":null}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nEarlier &amp; &lt;status&gt;\n</host-context-update>","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"Now summarize it.","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped &lt;children&gt; &amp; &lt;/host-context-update&gt;\n</host-context-update>","cache_control":null}]}],"system":[{"type":"text","text":"Stable instructions.","cache_control":{"type":"ephemeral","ttl":"1h"}}],"tools":[{"name":"read","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"description":"Read a file.","strict":true}],"tool_choice":{"type":"auto"}}`
-const RECORDED_CLAUDE_CODE_BODY = String.raw`{"model":"claude-sonnet-4-6","max_tokens":128000,"messages":[{"role":"user","content":[{"type":"text","text":"Stable instructions.","cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"Read a.txt.","cache_control":null}]},{"role":"assistant","content":[{"type":"tool_use","id":"call_read","name":"mcp_Read","input":{"path":"a.txt"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_read","content":"alpha","is_error":false,"cache_control":null}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nEarlier &amp; &lt;status&gt;\n</host-context-update>","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"Now summarize it.","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped &lt;children&gt; &amp; &lt;/host-context-update&gt;\n</host-context-update>","cache_control":null}]}],"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.280.b2d; cc_entrypoint=cli; cch=7ddec;"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],"tools":[{"name":"mcp_Read","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"description":"Read a file.","strict":true}],"tool_choice":{"type":"auto"}}`
+const RECORDED_CLAUDE_CODE_BODY = String.raw`{"model":"claude-sonnet-4-6","max_tokens":128000,"messages":[{"role":"user","content":[{"type":"text","text":"Stable instructions.","cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"Read a.txt.","cache_control":null}]},{"role":"assistant","content":[{"type":"tool_use","id":"call_read","name":"mcp_Read","input":{"path":"a.txt"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_read","content":"alpha","is_error":false,"cache_control":null}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nEarlier &amp; &lt;status&gt;\n</host-context-update>","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"Now summarize it.","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped &lt;children&gt; &amp; &lt;/host-context-update&gt;\n</host-context-update>","cache_control":null}]}],"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.316.6db; cc_entrypoint=cli; cch=7ddec;"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],"tools":[{"name":"mcp_Read","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"description":"Read a file.","strict":true}],"tool_choice":{"type":"auto"}}`
 
 const LaterSystemRequest = Schema.fromJsonString(
   Schema.Struct({
@@ -7166,7 +7166,8 @@ describe("Claude plan quota", () => {
           "anthropic-beta": "oauth-2025-04-20",
           accept: "application/json",
         })
-        expect(captured[0]?.headers["user-agent"]).toMatch(/^claude-cli\/.+ \(external, cli\)$/)
+        // The banked-resets block answers only a claude-cli of 2.1.280 or newer.
+        expect(captured[0]?.headers["user-agent"]).toBe("claude-cli/2.1.316 (external, cli)")
         expect(record.writes).toEqual([])
         expect(keychain.calls).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),

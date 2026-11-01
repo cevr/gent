@@ -165,9 +165,16 @@ interface ModelConfig {
  * Keep aligned with Claude Code's currently-advertised version + beta
  * set; reference at
  * `~/.cache/repo/griffinmartin/opencode-claude-auth/src/model-config.ts`.
+ *
+ * `ccVersion` is the newest Claude Code release whose wire shape gent
+ * matches. Its bundle (2.1.316, read 2026-11-01) sends the user agent
+ * `claude-cli/<version> (external, cli)`, the billing line
+ * `cc_version=<version>.<suffix>; cc_entrypoint=cli;` with `cch` and
+ * optional fields after it, the same suffix hash, and each base beta below.
+ * Raise it only after the same read of the newer bundle.
  */
 const MODEL_CONFIG: ModelConfig = {
-  ccVersion: "2.1.280",
+  ccVersion: "2.1.316",
   baseBetas: [
     "claude-code-20250219",
     "oauth-2025-04-20",
@@ -3364,8 +3371,8 @@ export const buildKeychainTransformClient = (
 // ── quota windows ──
 
 /**
- * A Claude plan's quota headers, as Claude Code 2.1.306 reads them (its
- * bundled reader, read 2026-10-21): per window `utilization` (the fraction
+ * A Claude plan's quota headers, as Claude Code 2.1.306 and 2.1.316 read them
+ * (their bundled readers, read 2026-10-21 and 2026-11-01): per window `utilization` (the fraction
  * of the window used, usually 0 to 1, above 1 past the limit) and `reset`
  * (epoch seconds); for the account, `status` (`allowed`, `allowed_warning`
  * or `rejected`), the window that limits it (`representative-claim`) and
@@ -3437,7 +3444,8 @@ const unifiedQuota = (headers: Headers.Headers): ReadonlyArray<QuotaReading> =>
  * each with `resets_left` and an `ends_at` (ISO 8601) it lapses at. The
  * endpoint withholds the block (`eligible: false`, an `ineligible_reason` of
  * `cli_version` or `surface`) from a client older than claude-cli 2.1.280 or
- * not Claude Code; gent sends that version (`MODEL_CONFIG.ccVersion`). A
+ * not Claude Code; gent's user agent names `MODEL_CONFIG.ccVersion`, above
+ * that floor. A
  * grant's id is the handle that spends a reset: gent never reads it, and no
  * request of gent's redeems one.
  */

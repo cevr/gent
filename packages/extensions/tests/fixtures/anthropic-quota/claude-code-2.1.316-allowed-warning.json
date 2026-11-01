@@ -1,5 +1,5 @@
 {
-  "source": "Header names as Claude Code 2.1.306's bundled reader reads them (read 2026-10-21); the values are made up. Resets are epoch seconds.",
+  "source": "Header names as Claude Code 2.1.316's bundled reader reads them (read 2026-11-01; 2.1.306 read the same names on 2026-10-21); the values are made up. Resets are epoch seconds.",
   "status": 200,
   "headers": {
     "anthropic-ratelimit-unified-status": "allowed_warning",
