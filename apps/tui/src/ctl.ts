@@ -28,6 +28,7 @@ import {
   messagePartsText,
   MessageId,
   ModelId,
+  PoolFacts,
   type ProjectedMessage,
   ProviderLanes,
   RequestReply,
@@ -421,6 +422,12 @@ export const CtlResult = Schema.TaggedUnion({
     providers: Schema.Array(ProviderLanes),
     sabbathEnd: Schema.optional(Schema.Finite),
   },
+  /**
+   * `pool`: the server's own pool facts now (`PoolFacts`): per provider its
+   * runs, per account its warm sessions, its spend since `boot` and its
+   * weekly reset. No session names them.
+   */
+  Pool: { server: Schema.String, ...PoolFacts.fields },
 })
 export type CtlResult = typeof CtlResult.Type
 
@@ -1379,19 +1386,87 @@ const lanes = Command.make(
   ]),
 )
 
+const encodePoolLine = Schema.encodeEffect(Schema.fromJsonString(PoolFacts))
+
+const pool = Command.make(
+  "pool",
+  {
+    connect: connectFlag,
+    follow: Flag.Boolean("follow").pipe(
+      Flag.withDescription(
+        "Print the facts as JSON lines until the server stops: now, at each change, and again every 30 s",
+      ),
+      Flag.withDefault(false),
+    ),
+  },
+  (input) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const flags = { connect: input.connect, cwd: Option.none<string>() }
+        if (!input.follow) {
+          return yield* ctlCall(flags, (connection) =>
+            connection.client.accounts.pool().pipe(
+              Stream.runHead,
+              Effect.mapError(rpcFailure),
+              Effect.flatMap((first) =>
+                Effect.fromOption(first).pipe(
+                  Effect.mapError(
+                    () => new CtlFailed({ message: "the server sent no pool facts" }),
+                  ),
+                ),
+              ),
+              Effect.map((facts) =>
+                CtlResult.cases.Pool.make({ server: connection.server, ...facts }),
+              ),
+            ),
+          )
+        }
+        // One whole facts value per line, as the server sends it: a reader keeps the last.
+        const connection = yield* connectCtl({ connect: input.connect, cwd: cwdOf(flags) })
+        const stdio = yield* Stdio.Stdio
+        yield* connection.client.accounts.pool().pipe(
+          Stream.mapError(rpcFailure),
+          Stream.mapEffect((facts) =>
+            encodePoolLine(facts).pipe(
+              Effect.mapError(
+                (error) => new CtlFailed({ message: `output encode: ${error.message}` }),
+              ),
+            ),
+          ),
+          Stream.map((line) => `${line}\n`),
+          Stream.run(stdio.stdout()),
+          Effect.catchIf(
+            (error) => !Schema.is(CtlError)(error),
+            (error) => Effect.fail(new CtlFailed({ message: `output: ${String(error)}` })),
+          ),
+        )
+      }),
+    ),
+).pipe(
+  Command.withDescription(
+    "Print the server's own pool facts: per provider its runs, per account its warm sessions, spend since start and weekly reset",
+  ),
+  Command.withExamples([
+    {
+      command: "gent ctl pool --follow",
+      description: "One JSON line now, one at each change, and one every 30 s",
+    },
+  ]),
+)
+
 /** `gent ctl`: the control CLI over a running server. */
 export const ctl = Command.make("ctl", {}, () =>
   Effect.gen(function* () {
     const stdio = yield* Stdio.Stdio
     yield* Stream.make(
-      "Usage: gent ctl <send|events|wait|snapshot|status|request|lanes> --help\n",
+      "Usage: gent ctl <send|events|wait|snapshot|status|request|lanes|pool> --help\n",
     ).pipe(Stream.run(stdio.stderr()))
   }),
 ).pipe(
   Command.withDescription(
     "Drive a running gent server: one JSON value per call; exit 3 no server, 4 not found, 124 wait timed out",
   ),
-  Command.withSubcommands([send, events, wait, snapshot, status, request, lanes]),
+  Command.withSubcommands([send, events, wait, snapshot, status, request, lanes, pool]),
 )
 
 // ── the process boundary ────────────────────────────────────────────────────

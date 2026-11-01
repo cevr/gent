@@ -11,6 +11,7 @@ export {
   type LaneWindow,
   LOGIN_LOSS_WORDS,
   type LoginLossReason,
+  PoolFacts,
   ProviderLanes,
   sameCredential,
 } from "./domain/driver.js"

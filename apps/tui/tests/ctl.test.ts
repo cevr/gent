@@ -6,7 +6,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
-import { decodeRequestReply, RequestReply } from "@gent/core/protocol"
+import { CredentialSlot, decodeRequestReply, PoolFacts, RequestReply } from "@gent/core/protocol"
 import {
   BunGentPlatformLive,
   makeTempDirectoryScoped,
@@ -25,6 +25,7 @@ import {
   Option,
   Ref,
   Runtime,
+  Schedule,
   Schema,
   Sink,
   Stdio,
@@ -42,15 +43,16 @@ interface CtlRun {
 /**
  * Run `gent ctl <args>` through its process boundary with `HOME` set to
  * `home`; collect its exit code and streams. `brokenStdout` makes a write to
- * stdout die, as a closed pipe can.
+ * stdout die, as a closed pipe can. `stdout` lets a test read stdout while
+ * the call still runs.
  */
 const runCtl = (
   home: string,
   args: ReadonlyArray<string>,
-  options: { readonly brokenStdout?: boolean } = {},
+  options: { readonly brokenStdout?: boolean; readonly stdout?: Ref.Ref<string> } = {},
 ) =>
   Effect.gen(function* () {
-    const out = yield* Ref.make("")
+    const out = options.stdout ?? (yield* Ref.make(""))
     const err = yield* Ref.make("")
     const capture = (into: Ref.Ref<string>) =>
       Sink.forEach((chunk: string | Uint8Array) => Ref.update(into, (text) => text + String(chunk)))
@@ -84,6 +86,8 @@ const runCtl = (
   })
 
 const decodeResult = Schema.decodeEffect(Schema.fromJsonString(CtlResult))
+const decodePoolLine = Schema.decodeEffect(Schema.fromJsonString(PoolFacts))
+const encodePoolLine = Schema.encodeEffect(Schema.fromJsonString(PoolFacts))
 
 /** The one JSON value a successful call printed, decoded as the result `tag` names. */
 const resultAs =
@@ -517,6 +521,74 @@ describe("gent ctl against a running server", () => {
               "lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%\nresets anthropic default 2\n",
             stderr: "",
           })
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "pool needs no session: one Pool value and exit 0, or with --follow bare PoolFacts lines that run on",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // A ledger with the account's weekly reading: its reset is the account's `week`.
+          const now = yield* Clock.currentTimeMillis
+          const weekEnd = now + 100 * 3_600_000
+          const seeded = yield* serveScratchHomeWith(
+            Option.some({
+              buckets: [],
+              readings: [
+                {
+                  provider: "anthropic",
+                  slot: "default",
+                  window: "7d",
+                  utilization: 0.3,
+                  resetAt: weekEnd,
+                  readAt: now - 60_000,
+                  rejected: false,
+                },
+              ],
+            }),
+          )
+          const printed = yield* runCtl(seeded.home, ["pool"])
+          // One JSON value, its providers one record per line.
+          expect(printed.stdout.split("\n").filter((row) => row.length > 0)).toHaveLength(3)
+          const facts = yield* resultAs("Pool")(printed)
+          expect(facts.server).toBe(seeded.server.url)
+          expect(facts.boot).toMatch(/^[0-9a-f]{16}$/)
+          expect(facts.providers).toEqual([
+            {
+              provider: "anthropic",
+              runs: [],
+              accounts: [
+                { slot: CredentialSlot.make("default"), live: [], spend: [], week: weekEnd },
+              ],
+            },
+          ])
+
+          // --follow: the same facts as one bare PoolFacts line, and the call runs on.
+          const out = yield* Ref.make("")
+          const follow = yield* runCtl(seeded.home, ["pool", "--follow"], { stdout: out }).pipe(
+            Effect.forkScoped,
+          )
+          const first = yield* Ref.get(out).pipe(
+            Effect.repeat({
+              until: (text) => text.includes("\n"),
+              schedule: Schedule.spaced("20 millis"),
+            }),
+            Effect.timeout("5 seconds"),
+          )
+          const line = first.slice(0, first.indexOf("\n"))
+          const decoded = yield* decodePoolLine(line)
+          expect(decoded).toEqual({ boot: facts.boot, seq: facts.seq, providers: facts.providers })
+          // No `_tag`, no server, no spaces: the line is the facts' own compact JSON.
+          expect(yield* encodePoolLine(decoded)).toBe(line)
+          expect(follow.pollUnsafe()).toBeUndefined()
+
+          // A reader that hung up: the write fails, and the call ends in one error line and exit 1.
+          const hungUp = yield* runCtl(seeded.home, ["pool", "--follow"], { brokenStdout: true })
+          expect(hungUp.code).toBe(CTL_EXIT.failed)
+          expect((yield* errorOf(hungUp))._tag).toBe("CtlFailed")
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,

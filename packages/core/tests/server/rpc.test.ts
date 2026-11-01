@@ -91,6 +91,7 @@ import { BunServices } from "@effect/platform-bun"
 import {
   AuthMethod,
   type ModelDriverContribution,
+  type PoolFacts,
   ProviderAuthError,
 } from "../../src/domain/driver.js"
 import {
@@ -4531,6 +4532,7 @@ describe("session profile lookup", () => {
       "driver.clear": "it writes the user config, which no session owns",
       "permits.list": "it reads server-wide permits, which no session owns",
       "accounts.lanes": "it reads the server's accounts, which no session owns",
+      "accounts.pool": "it reads the server's accounts, which no session owns",
       // Owner question: a required `sessionId` here is a wire change that is not additive.
       "message.list": "it reads a branch by its id; owner question",
     }
@@ -5220,6 +5222,103 @@ describe("AccountsRpcs", () => {
           // Read at once: nothing holds a lane, the reservation included.
           const { providers } = yield* client.accounts.lanes()
           expect(providers.map((lanes) => [lanes.provider, lanes.load])).toEqual([["anthropic", 0]])
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+  )
+
+  it.live(
+    "accounts.pool sends the server's pool facts: a line as a start is admitted, one as it frees, and the step's fuel",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const work = CredentialSlot.make("work")
+          const message = MessageId.make("pool-run")
+          // A tool admits a start, then cancels it: one run, then none.
+          const poolProbe = defineExtension({
+            id: "@test/pool-run",
+            setup: Effect.gen(function* () {
+              yield* (yield* ExtensionHost).register(
+                "tool",
+                tool({
+                  id: "pool_run",
+                  description: "Admit a start, then cancel it",
+                  params: Schema.Struct({}),
+                  output: Schema.Struct({}),
+                  execute: Effect.fn("PoolRun.execute")(function* () {
+                    const ctx = yield* ExtensionContext
+                    yield* ctx.Accounts.admit({ message, cwd: ctx.cwd })
+                    yield* ctx.Accounts.cancel(message)
+                    return {}
+                  }),
+                }),
+              )
+            }),
+          })
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            {
+              ...toolCallStep("pool_run", {}),
+              quota: [
+                { window: "5h", utilization: 0.25, resetAt: 1_800_000_000_000, rejected: false },
+              ],
+            },
+            textStep("done"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            extensionInputs: [...e2ePreset.extensionInputs, poolProbe],
+            providerLayer,
+            // $5 per million tokens: a tool step of 10 input and 20 output tokens is 30 fuel.
+            modelPricing: { input: 5, output: 5 },
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({
+                model: TEST_MODEL_ID,
+                providers: { anthropic: { authOrder: [work] } },
+              }),
+            ),
+          })
+          const lines = yield* Ref.make<ReadonlyArray<PoolFacts>>([])
+          yield* client.accounts.pool().pipe(
+            Stream.runForEach((facts) => Ref.update(lines, (sent) => [...sent, facts])),
+            Effect.forkScoped,
+          )
+          yield* waitFor(Ref.get(lines), (sent) => sent.length > 0, 5_000, "the first pool facts")
+          yield* client.message.send({ sessionId, branchId, content: "run in the pool" })
+          const runsOf = (facts: PoolFacts) =>
+            facts.providers.flatMap((provider) =>
+              provider.runs.map((run) => [provider.provider, run.accounts, run.count]),
+            )
+          const fuelOf = (facts: PoolFacts) =>
+            facts.providers.flatMap((provider) =>
+              provider.accounts.flatMap((account) =>
+                account.spend.map((spent) => [account.slot, spent.model, spent.fuel]),
+              ),
+            )
+          // The turn settles with both steps' fuel counted.
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle" && hasText(current.messages, "done"),
+            5_000,
+            "the pool turn settles",
+          )
+          const sent = yield* waitFor(
+            Ref.get(lines),
+            (current) => current.map(fuelOf).at(-1)?.[0]?.[2] === 41,
+            5_000,
+            "the pool facts with both steps' fuel",
+          )
+          const runLines = sent.map(runsOf)
+          expect(runLines).toContainEqual([["anthropic", [work], 1]])
+          // A later line has the run gone.
+          const admitted = runLines.findIndex((runs) => runs.length > 0)
+          expect(runLines.slice(admitted + 1)).toContainEqual([])
+          expect(runLines.at(-1)).toEqual([])
+          // One server start; `seq` rises line by line.
+          expect(new Set(sent.map((facts) => facts.boot)).size).toBe(1)
+          const seqs = sent.map((facts) => facts.seq)
+          expect(seqs).toEqual(seqs.toSorted((left, right) => left - right))
+          expect(new Set(seqs).size).toBe(seqs.length)
+          // The tool step's 30 fuel and the text step's 11.
+          expect(sent.map(fuelOf).at(-1)).toEqual([[work, TEST_MODEL_ID, 41]])
         }).pipe(Effect.timeout("8 seconds")),
       ),
   )

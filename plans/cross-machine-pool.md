@@ -203,22 +203,39 @@ cannot republish what it read.
 
 - `boot`: a random id per server start.
 - `seq`: a number that rises on each change.
-- per provider, per account label:
-  - `runs`: the admitted runs and grants on the account, counted per model
-    (the reader computes each run's share at its own weights, `runShare`);
-  - `live`: the cache-warm sessions on the account, per model;
-  - `fuel`: cumulative priced fuel per model since `boot`, never reset
-    inside a boot;
-  - `unpriced`: the count of unpriced requests since `boot`;
-  - `week`: the `resetAt` of the account's latest `7d` reading.
+- per provider:
+  - `runs`: the admitted runs and reserving grants, as `lanesHeld`
+    counts them (the owner's own turns left out), grouped by their sorted
+    account labels and model, each with its `count` (the reader computes
+    each run's share at its own weights, `runShare`). Built in step 1: the
+    code holds a run on a scope of labels, not on one account
+    (`running.scope`, `reserved.scope`), so a run is published with its
+    scope, and a reader counts it on a scope it overlaps, as `lanesHeld`
+    counts own runs (`scope.some`).
+  - per account label:
+    - `live`: the cache-warm sessions on the account, per model;
+    - `spend`: per model, the cumulative priced `fuel` and the count of
+      `unpriced` steps since `boot`, never reset inside a boot. Built in
+      step 1: unpriced is per model too, because an unpriced own step drops
+      only that model's segments and the account's own (`noteFuel`). A
+      report of a sign-in its label replaced since counts nothing, as for
+      own segments; the counts stay on the label they were counted on and
+      are not saved.
+    - `week`: the `resetAt` of the account's latest account-wide `7d`
+      reading.
 
-No time from the peer's clock is in the facts.
+No time from the peer's clock is in the facts. Schema: `PoolFacts`,
+packages/core/src/domain/driver.ts.
 
 ### The link
 
-- The server serves its facts as a stream: one line at each change and a
-  heartbeat every 30 s (guess). `gent ctl pool --follow` prints that stream
-  as JSON lines.
+- The server serves its facts as a stream (`accounts.pool`, built in step
+  1): the current facts, one line at each change, and a heartbeat after
+  30 s with no change (guess) that repeats the last facts under the same
+  `seq`. Each line is a whole snapshot, so a reader keeps the last one and
+  the reader is the same whichever machine starts the link. `gent ctl
+  pool --follow` prints that stream as bare `PoolFacts` JSON lines and
+  exits 1 when the connection drops; `gent ctl pool` prints the first.
 - The user file names the peer as a command (`pool.peer`, an argv array),
   for example `["ssh", "bite-workbox", "gent", "ctl", "pool", "--follow"]`
   on the Mac. A project file cannot set it, as with `extraUsage` and
@@ -242,15 +259,16 @@ No time from the peer's clock is in the facts.
   time is the check. The Mac's pool labels are 7 (measured, its user
   file); that the workbox uses the same labels is a guess, and the check
   catches it.
-- **Load (F1, F5).** `laneLoad` adds the peer's `runs` on accounts of the
-  scope. `loneStart` reads the pool load, so one lone start runs across
+- **Load (F1, F5).** `laneLoad` adds the peer's `runs` whose accounts
+  overlap the scope. `loneStart` reads the pool load, so one lone start runs across
   both machines, not one per machine.
 - **Ranking (F3).** `rankPlacement` adds the peer's `live` sessions to
   each account's live count.
 - **Fuel (F2).** On each line, the reader takes the rise of each
-  account's `fuel` since the last line and adds it to that account's open
-  segments, per model, as `noteFuel` does. A rise of `unpriced` drops those
-  segments, as an unpriced own request does. Fuel is conserved: a rise
+  account's `spend` `fuel` per model since the last line and adds it to
+  that account's open segments, as `noteFuel` does. A rise of a model's
+  `unpriced` drops that model's segments and the account's own, as an
+  unpriced own request does. Fuel is conserved: a rise
   that belongs to a segment that just closed lands in the next one, so the
   sums behind `fuelPerPct` stay right (inferred).
 - **Band (F7).** `accounts.lanes` reports the peer: its name, its runs per
@@ -297,7 +315,7 @@ Each commit passes `bun run gate` on its own. Each names the test that
 fails without its protection; prove it by disabling the protection and
 running the test (feedback: validate the regression test).
 
-1. **`feat(lanes): publish this server's own pool facts`.** The
+1. **Done: `feat(lanes): publish this server's own pool facts`.** The
    `PoolFacts` schema, the placement method that builds it from own state,
    the streaming RPC, and `gent ctl pool --follow`. No admission change.
    Tests (core/tests/runtime/provider.test.ts, apps/tui/tests/ctl.test.ts):
@@ -305,6 +323,10 @@ running the test (feedback: validate the regression test).
    priced step raises `fuel` by its fuel; an unpriced step raises
    `unpriced`; the stream sends a line on admit and on release. Each fails
    when its update is removed. Docs: lanes.md.
+   Built as: the RPC `accounts.pool` (also tested in
+   core/tests/server/rpc.test.ts), one-shot `gent ctl pool` beside
+   `--follow`, and the facts' shape above (runs per scope and model, spend
+   per model).
 2. **`feat(lanes): count the peer's runs and fuel in the pool`.** The
    `pool.peer` config (user file only), the reader fiber, `notePeer`, and
    load, lone start, ranking and fuel in one commit (F1 and F2 must land

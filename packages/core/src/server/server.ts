@@ -1898,6 +1898,9 @@ const RpcHandlers = GentRpcs.toLayer(
           )
         }).pipe(Effect.scoped),
 
+      // Own state alone: a server on another machine reads it to share the pool.
+      "accounts.pool": () => placement.pool,
+
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
           const session = yield* loadSession(sessionId)

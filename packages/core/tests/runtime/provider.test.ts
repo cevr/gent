@@ -40,6 +40,7 @@ import {
   type ModelDriverContribution,
   modelFromCatalog,
   type PendingRotation,
+  type PoolFacts,
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderResolution,
@@ -8508,6 +8509,120 @@ describe("account lanes", () => {
       expect(yield* stampsOf).toEqual(Option.some([2]))
     }).pipe(Effect.scoped),
   )
+
+  describe("pool facts", () => {
+    /** The facts the pool stream sends first: the placement's own, now. */
+    const factsOf = (placement: { readonly pool: Stream.Stream<PoolFacts> }) =>
+      Stream.runHead(placement.pool).pipe(Effect.flatMap(Effect.fromOption), Effect.orDie)
+    /** Each provider's runs, as `[provider, accounts, model, count]`. */
+    const runsOf = (facts: PoolFacts) =>
+      facts.providers.flatMap((provider) =>
+        provider.runs.map((run) => [provider.provider, run.accounts, run.model, run.count]),
+      )
+
+    it.effect("an admitted run is in the pool facts until its release", () =>
+      Effect.gen(function* () {
+        const { placement, admit } = yield* accounts()
+        const empty = yield* factsOf(placement)
+        expect(empty.providers).toEqual([])
+        // Admitted over [b, a]: the facts name its accounts sorted.
+        expect(yield* admit([b, a], "start")).toBe("admitted")
+        const granted = yield* factsOf(placement)
+        expect(runsOf(granted)).toEqual([["plan", [a, b], planModel, 1]])
+        // Its turn opens on the grant: the same run, now a turn.
+        yield* placement.openLane({
+          sessionId: runner,
+          key: "start",
+          provider: "plan",
+          scope: [receiptOf(b), receiptOf(a)],
+          model: planModel,
+          resumed: Option.none(),
+        })
+        expect(runsOf(yield* factsOf(placement))).toEqual([["plan", [a, b], planModel, 1]])
+        yield* placement.release(runner)
+        const released = yield* factsOf(placement)
+        expect(released.providers).toEqual([])
+        // One server start; each change raised `seq`.
+        expect(new Set([empty.boot, granted.boot, released.boot]).size).toBe(1)
+        expect(granted.seq).toBeGreaterThan(empty.seq)
+        expect(released.seq).toBeGreaterThan(granted.seq)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "a priced step raises its account's fuel on its model, an unpriced one the unpriced count",
+      () =>
+        Effect.gen(function* () {
+          const { placement, spend, read, place } = yield* accounts()
+          const mini = ModelId.make("plan/mini")
+          const now = yield* Clock.currentTimeMillis
+          // $1 is 200,000 fuel.
+          yield* spend(a, Option.some(1))
+          yield* spend(a, Option.some(0.5))
+          yield* spend(a, Option.none())
+          yield* spend(a, Option.some(2), usage, runner, mini)
+          yield* spend(b, Option.none(), usage, runner, mini)
+          yield* read(a, [
+            { window: "7d", utilization: 0.2, resetAt: now + 100 * HOUR },
+            { window: "5h", utilization: 0.1, resetAt: now + 2 * HOUR },
+            { window: "7d", utilization: 0.4, resetAt: now + 50 * HOUR, model: mini },
+          ])
+          // A placed session's cache is warm on the account it goes to.
+          const [warm] = yield* place("warm")
+          const facts = yield* factsOf(placement)
+          expect(facts.providers).toEqual([
+            {
+              provider: "plan",
+              runs: [],
+              accounts: [
+                {
+                  slot: a,
+                  live: Arr.filter([{ model: planModel, sessions: 1 }], () => warm === a),
+                  spend: [
+                    { model: mini, fuel: 400_000, unpriced: 0 },
+                    { model: planModel, fuel: 300_000, unpriced: 1 },
+                  ],
+                  // The account-wide weekly reading's reset, not the model's.
+                  week: now + 100 * HOUR,
+                },
+                {
+                  slot: b,
+                  live: Arr.filter([{ model: planModel, sessions: 1 }], () => warm === b),
+                  spend: [{ model: mini, fuel: 0, unpriced: 1 }],
+                },
+              ],
+            },
+          ])
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "the pool stream sends the facts, a line at each change, and the same facts after 30 s",
+      () =>
+        Effect.gen(function* () {
+          const { placement, admit } = yield* accounts()
+          const subscribed = yield* Deferred.make<boolean>()
+          const lines = yield* placement.pool.pipe(
+            Stream.tap(() => Deferred.succeed(subscribed, true)),
+            Stream.take(4),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* Deferred.await(subscribed)
+          expect(yield* admit([a], "start")).toBe("admitted")
+          yield* placement.freeReservation("start")
+          yield* TestClock.adjust("30 seconds")
+          const sent = yield* Fiber.join(lines)
+          expect(sent.map((line) => [line.seq, runsOf(line).length])).toEqual([
+            [0, 0],
+            [1, 1],
+            [2, 0],
+            // The heartbeat: nothing changed.
+            [2, 0],
+          ])
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+  })
 
   describe("lost logins", () => {
     /** A request on `account` failed as a lost login. */

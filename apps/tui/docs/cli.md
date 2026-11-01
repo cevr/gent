@@ -130,6 +130,8 @@ gent ctl status --run run-0123456789abcdef   # a machine run, as the machines ex
 gent ctl request --extension @gent/machines --id run-status --input '{"run":"run-0123456789abcdef"}'
 gent ctl lanes                              # the server's account lanes, no session
 gent ctl lanes --line                       # lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%
+gent ctl pool                               # this server's own pool facts, no session
+gent ctl pool --follow                      # the same facts as JSON lines until the server stops
 ```
 
 Without `--session`, a call names the newest conversation in `--cwd` (default:
@@ -169,6 +171,30 @@ credential), then a row `resets <provider> <slot> <count>, … · next lapses
 Codex's reset credits; a lapsed grant counts none, an account with none or
 out of the provider's `scope` is not named, and a count goes 30 minutes
 after the read that listed it). No free lane is data, not a failure: the call exits 0.
+
+`pool` names no session either. It prints `Pool`: the server's own pool
+facts (`accounts.pool`), the part of its lanes another machine on the same
+accounts reads (`plans/cross-machine-pool.md`). `boot` names this server
+start, `seq` rises at each change, and each provider holds its `runs` (the
+admitted runs and reserving grants, as `{ accounts, model?, count }`) and its
+`accounts`: per account its warm sessions per model (`live`), the fuel and the
+unpriced steps each model spent since `boot` (`spend`), and the reset of its
+weekly window (`week`, epoch ms, as the provider sent it). No facts hold a
+time of this machine's clock.
+
+```text
+{"_tag":"Pool","server":"http://127.0.0.1:55350/rpc","boot":"c1758aa2372ad90a","seq":1,"providers":[
+{"provider":"anthropic","runs":[],"accounts":[{"slot":"default","live":[],"spend":[],"week":1793904480307}]}
+]}
+```
+
+`pool --follow` prints the facts as JSON lines on stdout: one now, one at each
+change, and the same facts again after 30 s with no change. A line is one
+whole `PoolFacts` value with no `_tag` and no `server`, so a reader keeps the
+last line and needs no earlier one. It runs until the server stops or the
+connection drops, then prints one `CtlFailed` line on stderr and exits 1; a
+write to a closed stdout ends it the same way. The server waits up to 20 s
+for an open `--follow` connection as it stops.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 

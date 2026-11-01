@@ -917,6 +917,56 @@ export type LaneModel = typeof LaneModel.Type
 export const roundLanes = (lanes: number) => Math.round(lanes * 10) / 10
 export type ProviderLanes = typeof ProviderLanes.Type
 
+// ── Pool facts ──
+
+/**
+ * The runs that hold a lane on one set of accounts for one model: turns a
+ * start was admitted to, and starts admitted whose turn has not opened. A
+ * lane is held on the set its turns spend from, not on one account.
+ */
+const PoolRuns = Schema.Struct({
+  /** The accounts its turns spend from, sorted. */
+  accounts: Schema.Array(CredentialSlot),
+  /** The model its turns run; absent when its route named none. */
+  model: Schema.optionalKey(ModelId),
+  count: Schema.Int,
+})
+
+/** What one account holds and spent on this server. */
+const PoolAccount = Schema.Struct({
+  slot: CredentialSlot,
+  /** The sessions whose cache is warm on the account now, per model. */
+  live: Schema.Array(Schema.Struct({ model: ModelId, sessions: Schema.Int })),
+  /**
+   * Per model since `boot`: the priced fuel, and the count of requests that
+   * had no price. Neither falls while the server runs.
+   */
+  spend: Schema.Array(Schema.Struct({ model: ModelId, fuel: Schema.Finite, unpriced: Schema.Int })),
+  /** The reset of the account's latest account-wide `7d` reading: the provider's time. */
+  week: Schema.optionalKey(Schema.Finite),
+})
+
+/** One provider's runs and accounts on this server. */
+const PoolProvider = Schema.Struct({
+  provider: Schema.String,
+  runs: Schema.Array(PoolRuns),
+  accounts: Schema.Array(PoolAccount),
+})
+
+/**
+ * `accounts.pool`: this server's own pool facts, for a server on another
+ * machine that spends from the same accounts. `boot` is a random id per
+ * server start: the `spend` counts start again under a new one. `seq` rises
+ * on each change of `providers`. Own state only, and no time from this
+ * server's clock: `week` is the provider's.
+ */
+export const PoolFacts = Schema.Struct({
+  boot: Schema.String,
+  seq: Schema.Int,
+  providers: Schema.Array(PoolProvider),
+})
+export type PoolFacts = typeof PoolFacts.Type
+
 /**
  * A run refused a lane for good: the provider's quota windows carry no run
  * of its size until one resets (or a refusal's hold ends), even with none

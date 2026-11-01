@@ -33,6 +33,7 @@ import {
   CredentialOrder,
   DriverError,
   LaneReport,
+  PoolFacts,
   ProviderAuthError,
 } from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
@@ -695,6 +696,12 @@ class AuthRpcs extends RpcGroup.make(
 class AccountsRpcs extends RpcGroup.make(
   Rpc.make("lanes", {
     success: LaneReport,
+    error: GentRpcError,
+  }),
+  // This server's own pool facts: the current facts, then each change, and a heartbeat every 30 s.
+  Rpc.make("pool", {
+    success: PoolFacts,
+    stream: true,
     error: GentRpcError,
   }),
 ).prefix("accounts.") {}

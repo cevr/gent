@@ -8,6 +8,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Equal,
   Exit,
   Fiber,
   FileSystem,
@@ -25,6 +26,7 @@ import {
   Semaphore,
   Stream,
   Struct,
+  SubscriptionRef,
 } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { ModelCatalogSnapshotStorage, type TurnLane } from "../storage/storage.js"
@@ -87,6 +89,7 @@ import {
   LaneUnavailable,
   type LaneWindow,
   type LoginLossReason,
+  type PoolFacts,
   type ProviderLanes,
   type QuotaReading,
   liveResets,
@@ -3708,6 +3711,11 @@ const MODEL_FIT_PASSES = 20
  */
 const LANE_RESERVATION_MS = 2 * 60_000
 /**
+ * How often the pool facts stream sends the facts again when nothing
+ * changed, so a reader on another machine knows the link lives. A guess.
+ */
+const POOL_FACTS_HEARTBEAT = Duration.seconds(30)
+/**
  * When a run refused as spent checks again at the soonest, when no window
  * or hold names a later time. A guess.
  */
@@ -4088,6 +4096,12 @@ interface CredentialPlacementService {
     scopeOf: LaneScopeOf,
     sabbath: Option.Option<Sabbath>,
   ) => Effect.Effect<LaneReport>
+  /**
+   * This server's own pool facts (`PoolFacts`): the current facts first,
+   * then the facts at each change, and the same facts again after 30 s with
+   * no change. It never ends. Each value is whole: a reader keeps the last.
+   */
+  readonly pool: Stream.Stream<PoolFacts>
   /** Write the usage ledger now, when anything was recorded since the last write. */
   readonly flush: Effect.Effect<void>
 }
@@ -5236,6 +5250,21 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly fuel: Option.Option<number>
     }
   >()
+  /**
+   * provider, slot, model → what this server spent there since it started:
+   * the priced fuel, and the requests that had no price. The pool facts'
+   * `spend`: never lowered, never moved, never saved.
+   */
+  const spentSinceBoot = new Map<
+    string,
+    {
+      readonly provider: string
+      readonly slot: CredentialSlot
+      readonly model: ModelId
+      readonly fuel: number
+      readonly unpriced: number
+    }
+  >()
   /** provider → the burn its ended lanes measured. */
   const burns = new Map<string, LaneBurn>()
   /** provider, model → the burn its ended lanes of the model measured, for a model's own windows. */
@@ -5637,8 +5666,104 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    */
   let version = 0
   let written = 0
-  /** One read or change of the state at a time: a burst of placements reads each earlier one. */
-  const locked = <A>(body: () => A) => Effect.sync(body).pipe(lock.withPermits(1))
+  /**
+   * This server's own pool facts at `now`: per provider, the runs holding a
+   * lane (as `lanesHeld` counts them, no asker left out) grouped by their
+   * accounts and model, and per account its warm sessions, its spend since
+   * start and its weekly reset. Sorted, so two reads of one state are equal.
+   * Under the lock.
+   */
+  const poolProviders = (now: number): PoolFacts["providers"] => {
+    const runs = [
+      ...running.values().filter((run) => run.admitted),
+      ...reserved.values().filter((grant) => reserving(grant, now)),
+    ].map((run) => ({
+      provider: run.provider,
+      accounts: run.scope.toSorted(),
+      model: run.model,
+    }))
+    const warm = [
+      ...live.values().filter((entry) => !Option.exists(entry.until, (until) => until <= now)),
+    ]
+    const weeks = [...readings.values().filter((reading) => isAccountWindow(reading, "7d"))]
+    const spent = [...spentSinceBoot.values()]
+    const byModel = (left: { readonly model: ModelId }, right: { readonly model: ModelId }) =>
+      Order.String(left.model, right.model)
+    const providerNames = new Set([...runs, ...warm, ...weeks, ...spent].map((at) => at.provider))
+    return [...providerNames].toSorted().map((provider) => {
+      const own = <A extends { readonly provider: string }>(entries: ReadonlyArray<A>) =>
+        entries.filter((entry) => entry.provider === provider)
+      const grouped = new Map<string, PoolFacts["providers"][number]["runs"][number]>()
+      for (const run of own(runs)) {
+        const key = placementKey(
+          Option.getOrElse(run.model, () => ""),
+          ...run.accounts,
+        )
+        const count = grouped.get(key)?.count ?? 0
+        grouped.set(key, {
+          accounts: run.accounts,
+          ...omitUndefined({ model: Option.getOrUndefined(run.model) }),
+          count: count + 1,
+        })
+      }
+      const slots = new Set([...own(warm), ...own(weeks), ...own(spent)].map((at) => at.slot))
+      return {
+        provider,
+        runs: [...grouped.entries()]
+          .toSorted(([left], [right]) => Order.String(left, right))
+          .map(([, group]) => group),
+        accounts: [...slots].toSorted().map((slot) => {
+          const sessions = new Map<ModelId, number>()
+          for (const entry of own(warm))
+            if (entry.slot === slot) sessions.set(entry.model, (sessions.get(entry.model) ?? 0) + 1)
+          return {
+            slot,
+            live: [...sessions.entries()]
+              .map(([model, count]) => ({ model, sessions: count }))
+              .toSorted(byModel),
+            spend: own(spent)
+              .filter((entry) => entry.slot === slot)
+              .map(({ model, fuel, unpriced }) => ({ model, fuel, unpriced }))
+              .toSorted(byModel),
+            ...omitUndefined({
+              week: own(weeks).find((reading) => reading.slot === slot)?.resetAt,
+            }),
+          }
+        }),
+      }
+    })
+  }
+  /** A reader on another machine tells a restart, whose `spend` counts start again, by it. */
+  const boot = [
+    yield* Random.nextIntBetween(0, 0xffffffff),
+    yield* Random.nextIntBetween(0, 0xffffffff),
+  ]
+    .map((part) => part.toString(16).padStart(8, "0"))
+    .join("")
+  let facts: PoolFacts = { boot, seq: 0, providers: [] }
+  const factsRef = yield* SubscriptionRef.make(facts)
+  /**
+   * Builds the facts at the clock's now and publishes them when they
+   * differ from the last, under a higher `seq`. Whether they changed. Under
+   * the lock.
+   */
+  const publishFacts = Effect.flatMap(Clock.currentTimeMillis, (now) =>
+    Effect.suspend(() => {
+      const providers = poolProviders(now)
+      if (Equal.equals(providers, facts.providers)) return Effect.succeed(false)
+      facts = { boot, seq: facts.seq + 1, providers }
+      return Effect.as(SubscriptionRef.set(factsRef, facts), true)
+    }),
+  )
+  /**
+   * One read or change of the state at a time: a burst of placements reads
+   * each earlier one. Each publishes the pool facts it changed.
+   */
+  const locked = <A>(body: () => A) =>
+    Effect.sync(body).pipe(
+      Effect.tap(() => publishFacts),
+      lock.withPermits(1),
+    )
   const windowStart = (now: number) => Math.floor((now - PLACEMENT_WINDOW_MS) / PLACEMENT_BUCKET_MS)
   /**
    * Drops what the window no longer holds. A dropped bucket, reading or
@@ -7154,6 +7279,21 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           })
         const slot = reportedOn(spend.provider, spend.slot, spend.signedInAt)
         if (Option.isNone(slot)) return
+        const spentKey = placementKey(spend.provider, slot.value, spend.model)
+        const spentBefore = spentSinceBoot.get(spentKey) ?? {
+          provider: spend.provider,
+          slot: slot.value,
+          model: spend.model,
+          fuel: 0,
+          unpriced: 0,
+        }
+        spentSinceBoot.set(
+          spentKey,
+          Option.match(priced, {
+            onNone: () => ({ ...spentBefore, unpriced: spentBefore.unpriced + 1 }),
+            onSome: (cost) => ({ ...spentBefore, fuel: spentBefore.fuel + cost.fuel }),
+          }),
+        )
         for (const [key, open] of openSegments) {
           if (!key.startsWith(placementKey(spend.provider, slot.value, ""))) continue
           // Another model's spend never moves a model's window.
@@ -7227,6 +7367,26 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         }
       })
     }),
+    // A warm cache goes cold and a grant lapses with no call: the facts are
+    // built afresh as a reader joins and at each heartbeat.
+    pool: Stream.unwrap(
+      Effect.as(
+        lock.withPermits(1)(publishFacts),
+        Stream.merge(
+          SubscriptionRef.changes(factsRef),
+          Stream.tick(POOL_FACTS_HEARTBEAT).pipe(
+            Stream.drop(1),
+            // A change is sent by the changes above; the heartbeat repeats facts that did not change.
+            Stream.mapEffect(() =>
+              Effect.map(publishFacts, (changed) =>
+                Option.liftPredicate(facts, () => !changed),
+              ).pipe(lock.withPermits(1)),
+            ),
+            Stream.filterMap((line) => Result.fromOption(line, () => "changed")),
+          ),
+        ),
+      ),
+    ),
     flush: write,
   } satisfies CredentialPlacementService
 })
