@@ -62,6 +62,7 @@ import {
   retryAfterAt,
   type RunEffort,
   runProcess,
+  type SessionId,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
 import {
@@ -3280,8 +3281,8 @@ const claudeCodeClientPath = (
  * - Sets `anthropic-beta: <merged>` from per-model defaults
  * - Sets `x-app: cli`, `user-agent: claude-cli/<version> (external, cli)`,
  *   `anthropic-dangerous-direct-browser-access: true`
- * - Sets `x-claude-code-session-id` to the request's session, when the
- *   hints name one (`CLAUDE_CODE_SESSION_HEADER`)
+ * - Sets `x-claude-code-session-id` to the session tree's Claude Code
+ *   session, when the hints name a root (`claudeCodeSessionId`)
  * - Removes `x-api-key` (the SDK's baseline injects `oauth-placeholder`
  *   here; Anthropic rejects requests where both `x-api-key` and
  *   `authorization: Bearer` are present)
@@ -3314,12 +3315,35 @@ const claudeCodeClientPath = (
  * bundle (read 2026-11-01) puts it in the API client's default headers with
  * `x-app` and the user agent, unconditionally: `{"x-app":…,"User-Agent":…,
  * [m8t]:z()}` with `m8t="X-Claude-Code-Session-Id"`, and `z()` the session's
- * id, a `randomUUID()` per Claude Code session. Gent sends the id of the gent
- * session the request belongs to (`ProviderHints.sessionId`), a UUID too
- * (v7), the same for every request of the session. The usage read sends none,
- * as Claude Code's does not.
+ * id, a `randomUUID()` (version 4) per Claude Code session. A subagent sends
+ * its parent's session and adds `x-claude-code-agent-id` and
+ * `x-claude-code-parent-agent-id`, which the main agent never sends; gent
+ * sends neither. The usage read sends no session, as Claude Code's does not.
  */
 const CLAUDE_CODE_SESSION_HEADER = "x-claude-code-session-id"
+
+/** The UUID variant digits (RFC 9562): `10xx` in the top bits of the clock sequence. */
+const UUID_VARIANT_DIGITS = "89ab"
+
+/**
+ * The Claude Code session gent names for a session tree: a version 4 UUID,
+ * the shape Claude Code's `randomUUID()` has, drawn from the SHA-256 of the
+ * tree's root session id (`ProviderHints.rootSessionId`). Every request of
+ * the tree, a spawned child's and a handoff's too, names the same one, after
+ * a restart as well, and no store holds it. A gent session id is a version 7
+ * UUID, whose version digit and leading timestamp no Claude Code session has.
+ */
+const claudeCodeSessionId = (root: SessionId): Effect.Effect<string, never, Crypto.Crypto> =>
+  Effect.map(sha256Hex(`gent-claude-code-session\u0000${root}`), (hex) => {
+    const variant = UUID_VARIANT_DIGITS.charAt(Number.parseInt(hex.charAt(16), 16) % 4)
+    return [
+      hex.slice(0, 8),
+      hex.slice(8, 12),
+      `4${hex.slice(13, 16)}`,
+      `${variant}${hex.slice(17, 20)}`,
+      hex.slice(20, 32),
+    ].join("-")
+  })
 
 /** Build the OAuth header set for a request. */
 const buildOauthHeaders = (
@@ -3368,8 +3392,8 @@ const buildOauthHeaders = (
  * `transformClient` signature `(HttpClient) => HttpClient` requires the
  * returned client to have an empty requirement channel. Each request
  * invokes `creds.getFresh`, which consults the live `Ref` cache.
- * `session` is the request's session (`AnthropicRequest.session`): none
- * sends no session header.
+ * `session` is the Claude Code session the request names
+ * (`claudeCodeSessionId`): none sends no session header.
  */
 export const buildKeychainTransformClient = (
   creds: CredentialCache<ClaudeCredentials>,
@@ -3469,18 +3493,21 @@ const unifiedQuota = (headers: Headers.Headers): ReadonlyArray<QuotaReading> =>
  * grant's id is the handle that spends a reset: gent never reads it, and no
  * request of gent's redeems one.
  *
- * `&skip_spend=1` is Claude Code's: its 2.1.316 bundle (read 2026-11-01)
- * sends its banked-resets read as `/api/oauth/usage?cedar_ember=1&skip_spend=1`
- * and adds `skip_spend=1` to every read but the plain one. Only the plain
- * read's callers use the overage part of the answer (`extra_usage`, the
- * spend amounts); the others read one block. Gent decodes no overage or
- * spend field. No Claude Code caller reads a window from a `skip_spend` read,
- * so the bundle does not show that the windows stay: a window the answer
- * leaves out reads as none, and every Messages answer's headers name both.
+ * The read sends no `skip_spend=1`. Claude Code 2.1.316 (read 2026-11-01)
+ * adds it to every read but the plain one, its banked-resets read
+ * `?cedar_ember=1&skip_spend=1` included, but no caller of such a read uses
+ * `five_hour` or `seven_day`: each reads one block, and the /usage screen
+ * reads the plain answer. TeamClaude reads the windows from `?cedar_ember=1`
+ * alone. Until a live read shows that the windows stay, gent asks as
+ * TeamClaude does: a 5-hour window gone from the answer would add the
+ * account's whole weekly room to the pool's 5-hour ceiling.
  */
-const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1"
+const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
 const OAUTH_USAGE_BETA = "oauth-2025-04-20"
-const UsageWindow = Schema.OptionFromOptionalNullOr(
+// A window the plan does not meter is null. An answer that leaves a window
+// out is unreadable: it does not say the plan has no such window, and a
+// 5-hour window read as none would admit the account's whole weekly room.
+const UsageWindow = Schema.OptionFromNullOr(
   Schema.Struct({
     utilization: Schema.OptionFromOptionalNullOr(Schema.Finite),
     resets_at: Schema.OptionFromOptionalNullOr(Schema.DateTimeUtcFromString),
@@ -3840,8 +3867,8 @@ interface AnthropicRequest {
   readonly cacheLifetimes: Option.Option<CacheLifetimes>
   /** The effort changes the conversation carries as markers; none sends the plan's effort at the top level. */
   readonly effortCarrier: Option.Option<EffortCarrier>
-  /** The session the hints name (`ProviderHints.sessionId`); the Claude Code path sends it (`CLAUDE_CODE_SESSION_HEADER`). */
-  readonly session: Option.Option<string>
+  /** The root of the session tree the hints name (`ProviderHints.rootSessionId`); the Claude Code path names it (`claudeCodeSessionId`). */
+  readonly rootSession: Option.Option<SessionId>
 }
 
 /** Whether a request may carry effort markers: only the Claude API's own (`takesEffortMarkers`). */
@@ -3874,7 +3901,7 @@ const anthropicRequest = (
     plan,
     cacheLifetimes: Option.liftPredicate(lifetimes, () => writesPromptCache(hints)),
     effortCarrier: messagesEffortCarrier(entry, hints, plan, markers),
-    session: Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.sessionId)),
+    rootSession: Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.rootSessionId)),
   }
 }
 
@@ -4343,10 +4370,11 @@ const makeOauthAnthropicLayer = (
   request: AnthropicRequest,
   creds: CredentialCache<ClaudeCredentials>,
   services: AnthropicDriverServices,
+  session: Option.Option<string>,
 ) => {
   const { AnthropicClient, AnthropicLanguageModel } = sdk
   const env = Context.get(services, AnthropicPlatform).env
-  const keychain = buildKeychainTransformClient(creds, env, request.session)
+  const keychain = buildKeychainTransformClient(creds, env, session)
   const apiUrl = sdkApiUrl(Option.fromUndefinedOr(env.baseUrl))
   const wrappedClient = anthropicClientLayer(
     sdk,
@@ -4549,10 +4577,20 @@ export const buildAnthropicModelDriver = (
           // layer exists, so an expired sign-in fails with its own message.
           const creds = yield* oauthCredentialCache(auth.value)
           yield* checkCredentials(creds)
+          const session = yield* Effect.transposeOption(
+            Option.map(request.rootSession, claudeCodeSessionId),
+          ).pipe(Effect.provideContext(services))
           return AiModel.make(
             "anthropic",
             modelName,
-            makeOauthAnthropicLayer(yield* loadAnthropicSdk, modelName, request, creds, services),
+            makeOauthAnthropicLayer(
+              yield* loadAnthropicSdk,
+              modelName,
+              request,
+              creds,
+              services,
+              session,
+            ),
           )
         }
 

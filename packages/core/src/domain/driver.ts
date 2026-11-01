@@ -250,11 +250,16 @@ export interface ProviderHints {
    */
   readonly turnKey?: string
   /**
-   * The session the request belongs to: the same for every request of the
-   * session, its compaction summary included, which names no `cacheKey`. A
-   * provider whose client names its session on the wire sends it there.
+   * The root of the request's session tree (`getSessionAncestors`): the
+   * session itself, or the first session up its parent chain for a spawned
+   * child, a `/btw` fork or a handoff. Every request names it, the compaction
+   * summary too, which names no `cacheKey`; `cacheKey` stays the request's
+   * own session. A provider whose client names its session on the wire sends
+   * this there, as the reference clients name the root's for their
+   * subagents: Claude Code in `X-Claude-Code-Session-Id`, Codex in
+   * `session-id`.
    */
-  readonly sessionId?: string
+  readonly rootSessionId?: SessionId
   /**
    * The request is a spawned child session's (`isSpawnedSession`) whose
    * agent keeps the child cache (`AgentDefinition.promptCache`). Such a child

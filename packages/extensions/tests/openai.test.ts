@@ -35,6 +35,7 @@ import {
   defineExtension,
   ExtensionHost,
   ModelId,
+  omitUndefined,
   ProviderAuthError,
   CredentialSlot,
   ProviderAuthInfo,
@@ -2058,7 +2059,8 @@ describe("OpenAI cache routing", () => {
 
   // ChatGPT routes cache affinity by the Responses `session-id` header, not
   // by `prompt_cache_key` (codex-rs `core/src/client.rs`, `responses_session_id`).
-  it.live("OAuth requests keep the supplied cache key and name it in the session-id header", () =>
+  // Codex names the root's session there, a spawned agent's and a compaction's too.
+  it.live("OAuth requests keep the cache key and send the session root as session-id", () =>
     Effect.gen(function* () {
       const { driver } = yield* makeDriver({
         cell: makeDurableCell({
@@ -2071,17 +2073,26 @@ describe("OpenAI cache routing", () => {
       const codec = Schema.fromJsonString(
         Schema.Struct({ prompt_cache_key: Schema.optional(Schema.String) }),
       )
-      const cacheKeys = [
-        Option.some("same-session"),
-        Option.some("same-session"),
-        Option.some("other-session"),
-        Option.none<string>(),
+      const root = SessionId.make("root-session")
+      // A root's step, a spawned child's step, the root's summary (no cache
+      // key), and a request that names no session.
+      const requests = [
+        { cacheKey: Option.some("root-session"), root: Option.some(root) },
+        { cacheKey: Option.some("child-session"), root: Option.some(root) },
+        { cacheKey: Option.none<string>(), root: Option.some(root) },
+        { cacheKey: Option.none<string>(), root: Option.none<SessionId>() },
       ]
+      const cacheKeys = requests.map((request) => request.cacheKey)
       const fetchState = makeFakeFetchState()
-      for (const cacheKey of cacheKeys) {
-        const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo(), {
-          cacheKey: Option.getOrUndefined(cacheKey),
-        })
+      for (const request of requests) {
+        const model = yield* driver.resolveModel(
+          "gpt-5.4",
+          makeOAuthInfo(),
+          omitUndefined({
+            cacheKey: Option.getOrUndefined(request.cacheKey),
+            rootSessionId: Option.getOrUndefined(request.root),
+          }),
+        )
         yield* runOne(model, fetchState)
       }
       const keys = yield* Effect.forEach(fetchState.captured, (request) =>
@@ -2092,7 +2103,7 @@ describe("OpenAI cache routing", () => {
       expect(keys).toEqual(cacheKeys)
       expect(
         fetchState.captured.map((request) => Option.fromUndefinedOr(request.headers["session-id"])),
-      ).toEqual(cacheKeys)
+      ).toEqual(requests.map((request) => request.root))
     }),
   )
 

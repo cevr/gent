@@ -6985,7 +6985,7 @@ describe("native model compaction integration", () => {
     )
   })
 
-  it.live("the summary asks for no reasoning and names its session, not a cache key", () => {
+  it.live("the summary asks for no reasoning and names its session root, not a cache key", () => {
     const sessionId = SessionId.make("summary-reasoning-session")
     const branchId = BranchId.make("summary-reasoning-branch")
     const modelId = ModelId.make("summary-driver/model")
@@ -7058,8 +7058,8 @@ describe("native model compaction integration", () => {
         expect(summary[0]?.reasoning).toBe("none")
         // Nothing reads a summary prompt back, so it writes no cache entry.
         expect(summary[0]?.cacheKey).toBeUndefined()
-        // It still names its session, as every request of the session does.
-        expect(summary[0]?.sessionId).toBe(sessionId)
+        // It still names its session root, as every request of the session does.
+        expect(summary[0]?.rootSessionId).toBe(sessionId)
         // The turn itself keeps its own effort.
         expect(
           observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.reasoning,
@@ -7068,8 +7068,95 @@ describe("native model compaction integration", () => {
           observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.cacheKey,
         ).toBe(sessionId)
         expect(
-          observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.sessionId,
+          observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.rootSessionId,
         ).toBe(sessionId)
+      }),
+    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
+  })
+
+  it.live("a nested child names the root of its session tree and caches under its own id", () => {
+    const rootId = SessionId.make("tree-root-session")
+    const rootBranch = BranchId.make("tree-root-branch")
+    const childId = SessionId.make("tree-child-session")
+    const childBranch = BranchId.make("tree-child-branch")
+    const grandchildId = SessionId.make("tree-grandchild-session")
+    const grandchildBranch = BranchId.make("tree-grandchild-branch")
+    const modelId = ModelId.make("tree-driver/model")
+    const observedHints: Array<ProviderHints> = []
+    const providerLayer = LanguageModelLayers.testStream(() =>
+      Effect.succeed(
+        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+      ),
+    )
+    const driver: ModelDriverContribution = {
+      id: "tree-driver",
+      name: "Tree driver",
+      resolveModel: (_modelName, _authInfo, hints) =>
+        Effect.sync(() => {
+          if (Predicate.isNotUndefined(hints)) observedHints.push(hints)
+          return AiModel.make("tree-driver", "model", providerLayer)
+        }),
+    }
+    const layer = actorTestRoot({
+      resolver: ModelResolver.Live.pipe(
+        Layer.provide(Auth.Test()),
+        Layer.provide(fixtureModelCatalogSource),
+      ),
+      registry: ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("tree-driver") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { agents: testAgents, modelDrivers: [driver] },
+          },
+        ]),
+      ),
+      models: [
+        Model.make({
+          id: modelId,
+          name: "Tree model",
+          provider: ProviderId.make("tree-driver"),
+          contextLength: 128_000,
+        }),
+      ],
+    })
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const admission: SessionAdmission = { runSpec: { overrides: { model: modelId } } }
+        yield* ensureStorageParents({ sessionId: rootId, branchId: rootBranch, admission })
+        const sessions = yield* SessionStorage
+        const now = dateFromMillis(yield* Clock.currentTimeMillis)
+        // A child spawned under the root, then a grandchild spawned under the
+        // child: each starts its own thread.
+        yield* sessions.createSession(
+          new Session({
+            id: childId,
+            parentSessionId: rootId,
+            parentBranchId: rootBranch,
+            createdAt: now,
+            updatedAt: now,
+            admission,
+          }),
+        )
+        yield* ensureStorageParents({ sessionId: childId, branchId: childBranch, admission })
+        yield* sessions.createSession(
+          new Session({
+            id: grandchildId,
+            parentSessionId: childId,
+            parentBranchId: childBranch,
+            createdAt: now,
+            updatedAt: now,
+            admission,
+          }),
+        )
+        yield* runAgentLoop(makeMessage(grandchildId, grandchildBranch, "hello"), admission)
+        expect(observedHints.length).toBeGreaterThan(0)
+        for (const hints of observedHints) {
+          expect(hints.rootSessionId).toBe(rootId)
+          expect(hints.cacheKey).toBe(grandchildId)
+        }
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })

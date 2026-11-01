@@ -294,9 +294,13 @@ commit.
     request that carries its own cache markers; a gateway that only forwards
     the Messages API does not. A 1-hour marker cannot extend a 5-minute
     entry, so a later request with a longer lifetime writes its part again
-    (Haiku probe, 2026-10-23). Each request names its session as the cache key and its turn (the
-    turn message id) as `ProviderHints.turnKey`. Over ChatGPT sign-in OpenAI
-    sends the key as the `session-id` header and both in `client_metadata`,
+    (Haiku probe, 2026-10-23). Each request names its session as the cache key, its turn (the
+    turn message id) as `ProviderHints.turnKey`, and the root of its session
+    tree as `ProviderHints.rootSessionId`, the compaction summary too. Over
+    Claude sign-in Anthropic sends a version 4 UUID derived from the root as
+    `x-claude-code-session-id`. Over ChatGPT sign-in OpenAI sends the root
+    as the `session-id` header, as Codex names its root thread there, and
+    the key and the turn in `client_metadata`,
     and sends the route a turn's first successful answer names
     (`x-codex-turn-state`) back on that turn's later requests, as Codex
     does: without it a step can land on a backend that holds none of the

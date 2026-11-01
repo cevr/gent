@@ -1614,6 +1614,8 @@ interface ResolvedTurnContext {
    * say so to the driver, and every cache reading uses the child lifetime.
    */
   child: boolean
+  /** The root of the session's tree, the session itself for a root (`ProviderHints.rootSessionId`). */
+  rootSessionId: SessionId
   /** The driver the agent names; a routed turn derives `modelDriver` from it again. */
   driverRef: Option.Option<DriverRef>
   /** The route's model without the session's own (`SessionRoute.defaultModelId`). */
@@ -2197,6 +2199,11 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     dateNotice: dateNotice(treeStart, today),
     spawned: Option.exists(session, isSpawnedSession),
     child: Option.exists(session, isSpawnedSession) && dispatchAgent.promptCache !== "session",
+    // The chain ends at the root, or at the last session it could read.
+    rootSessionId: Option.getOrElse(
+      Option.map(Option.fromUndefinedOr(ancestors.at(-1)), (root) => root.id),
+      () => params.sessionId,
+    ),
     driverRef: route.driverRef,
     defaultModelId: route.defaultModelId,
     sessionReasoning: Option.flatMap(session, (value) =>
@@ -3951,8 +3958,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       reservedOutputTokens,
     })
     const turnHints = {
-      // Every request of the session names it, the summary too.
-      sessionId: params.sessionId,
+      // Every request of the session tree names its root, the summary too.
+      rootSessionId: resolved.rootSessionId,
       temperature: resolved.temperature,
       reasoning: resolved.reasoning,
       // The driver reads the catalog's word on reasoning, not the model name.

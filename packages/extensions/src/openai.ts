@@ -62,6 +62,7 @@ import {
   reportProviderQuota,
   type ReasoningEffort,
   type RunEffort,
+  type SessionId,
   omitUndefined,
   GentPlatform,
 } from "@gent/core/extensions/api"
@@ -1196,17 +1197,18 @@ const rewriteCodexBody = (
 /**
  * The ChatGPT backend routes prompt-cache affinity by the Responses
  * `session-id` header; `prompt_cache_key` alone does not keep a session on
- * a warm cache. Codex sends its cache key there for a root session
- * (codex-rs `core/src/client.rs`, `responses_session_id`), so the header
- * carries the request's `prompt_cache_key`: the session id, stable for every
- * request of the session. A request without a key gets no header.
+ * a warm cache. Codex names its session there on every request, its
+ * compaction's too: a root's own id, and for a spawned agent the root's
+ * (codex-rs `core/src/client.rs` `responses_session_id`, and
+ * `core/src/session/session.rs`: "session_id is equal to the root thread's
+ * ID", openai/codex `94350a9`, read 2026-11-01). So the header carries the
+ * root of the request's session tree (`ProviderHints.rootSessionId`), the
+ * summary's included, which names no `prompt_cache_key`; the cache key stays
+ * the request's own session. A request whose hints name no root gets no
+ * header.
  */
-const codexSessionId = (req: HttpClientRequest.HttpClientRequest): Option.Option<string> =>
-  requestJsonObject(req).pipe(
-    Option.flatMap((body) => Option.fromUndefinedOr(body["prompt_cache_key"])),
-    Option.filter(Predicate.isString),
-    Option.filter((key) => key.length > 0),
-  )
+const codexSessionId = (hints: Option.Option<ProviderHints>): Option.Option<SessionId> =>
+  Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.rootSessionId))
 
 /**
  * The ChatGPT backend's sticky route for one turn. The first answer of a
@@ -1333,6 +1335,7 @@ const buildOauthHeaders = (
  */
 export const buildCodexClient = (
   creds: CredentialCache<OpenAICredentials>,
+  session: Option.Option<SessionId> = Option.none(),
   turn: Option.Option<CodexTurn> = Option.none(),
 ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) => {
   const signed = authorizedClient(creds, (req, fresh) => {
@@ -1344,8 +1347,7 @@ export const buildCodexClient = (
         "openai-beta",
         ensureBetaToken(Headers.get(headers, "openai-beta"), CODEX_BETA_TOKEN),
       )
-      const sessionId = codexSessionId(req)
-      if (Option.isSome(sessionId)) headers = Headers.set(headers, "session-id", sessionId.value)
+      if (Option.isSome(session)) headers = Headers.set(headers, "session-id", session.value)
       const route = Option.flatMap(turn, (value) =>
         Option.fromUndefinedOr(value.routes.get(codexTurnRouteKey(value, headers))),
       )
@@ -2176,6 +2178,7 @@ const makeOauthOpenAILayer = (
   creds: CredentialCache<OpenAICredentials>,
   rejectedReasoning: RejectedReasoning,
   body: (body: Schema.JsonObject) => Schema.JsonObject,
+  session: Option.Option<SessionId>,
   turn: Option.Option<CodexTurn>,
 ) => {
   const { OpenAiClient: OpenAiResponsesClient, OpenAiLanguageModel: OpenAiResponsesLanguageModel } =
@@ -2184,7 +2187,11 @@ const makeOauthOpenAILayer = (
     HttpClient.HttpClient,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
-      return buildCodexClient(creds, turn)(reasoningReplayClient(rejectedReasoning, body)(client))
+      return buildCodexClient(
+        creds,
+        session,
+        turn,
+      )(reasoningReplayClient(rejectedReasoning, body)(client))
     }),
   ).pipe(Layer.provide(ModelHttpClient))
   const clientLayer = OpenAiResponsesClient.layer({
@@ -2416,6 +2423,7 @@ export const buildOpenAIModelDriver = (
               creds,
               accountState.rejectedReasoning,
               body,
+              codexSessionId(hints),
               codexTurnOf(turnRoutes, hints),
             ),
           )

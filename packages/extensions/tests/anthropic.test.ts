@@ -2712,7 +2712,7 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
       }),
   )
   it.live(
-    "a Claude Code request names its gent session in X-Claude-Code-Session-Id, as Claude Code 2.1.316 does",
+    "a Claude Code request names its session tree in X-Claude-Code-Session-Id as a version 4 UUID, as Claude Code 2.1.316 does",
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
@@ -2732,11 +2732,27 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
             yield* runOne(model, fetchState)
             return fetchState.captured.at(-1)!.headers["x-claude-code-session-id"]
           })
-        const session = "019a3f2e-7b1c-7d4e-9f00-1a2b3c4d5e6f"
-        // A turn step and its compaction summary, which names no cache key, both name the session.
-        expect(yield* sessionHeader({ sessionId: session, cacheKey: session })).toBe(session)
-        expect(yield* sessionHeader({ sessionId: session, reasoning: "none" })).toBe(session)
-        // A request whose hints name no session sends no header.
+        // Gent's session ids are version 7 UUIDs; Claude Code's `randomUUID()` is version 4.
+        const root = SessionId.make("019a3f2e-7b1c-7d4e-9f00-1a2b3c4d5e6f")
+        const other = SessionId.make("019a3f2e-7b1c-7d4e-9f00-1a2b3c4d5e70")
+        const step = yield* sessionHeader({ rootSessionId: root, cacheKey: root })
+        expect(step).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        )
+        expect(step).not.toBe(root)
+        // The compaction summary, which names no cache key, and a spawned
+        // child, whose cache key is its own, name the root's session; so does
+        // a later request of the tree, as after a restart.
+        expect(yield* sessionHeader({ rootSessionId: root, reasoning: "none" })).toBe(step)
+        expect(yield* sessionHeader({ rootSessionId: root, cacheKey: "child-session" })).toBe(step)
+        expect(yield* sessionHeader({ rootSessionId: root, cacheKey: root })).toBe(step)
+        // Another tree names another session.
+        const otherStep = yield* sessionHeader({ rootSessionId: other, cacheKey: other })
+        expect(otherStep).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        )
+        expect(otherStep).not.toBe(step)
+        // A request whose hints name no root sends no header.
         expect(yield* sessionHeader()).toBeUndefined()
       }),
   )
@@ -4305,6 +4321,21 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
         // injection. The API-key branch must not wrap.
         expect(Bun.inspect(payload["system"] ?? "")).not.toContain(SYSTEM_IDENTITY_PREFIX)
       }),
+  )
+  it.live("API-key path names no Claude Code session, whatever the hints name", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const root = SessionId.make("019a3f2e-7b1c-7d4e-9f00-1a2b3c4d5e6f")
+      const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"), {
+        rootSessionId: root,
+        cacheKey: root,
+      })
+      const fetchState = makeFakeFetchState()
+      yield* runOne(model, fetchState)
+      expect(fetchState.captured.at(-1)?.headers["x-claude-code-session-id"]).toBeUndefined()
+    }),
   )
   it.live("API-key path does not touch the OAuth credential cell", () =>
     Effect.gen(function* () {
@@ -7123,7 +7154,7 @@ describe("Claude account sign-in", () => {
 
 // ── Claude plan quota reads ─────────────────────────────────────────────────
 
-const USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1"
+const USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
 const HOUR_MS = 3_600_000
 /** A usage answer: `utilization` in percent, `resets_at` in ISO 8601, as the endpoint sends them. */
 const usageReply = (usage: Record<string, unknown>) => ({
@@ -7220,7 +7251,10 @@ describe("Claude plan quota", () => {
           driver,
           ownedSignIn(expired, 3),
           usageEndpoint(() =>
-            usageReply({ seven_day: { utilization: 10, resets_at: "2100-01-07T00:00:00Z" } }),
+            usageReply({
+              five_hour: externalWireNull,
+              seven_day: { utilization: 10, resets_at: "2100-01-07T00:00:00Z" },
+            }),
           ),
         )
         expect(Exit.isSuccess(exit)).toBe(true)
@@ -7263,6 +7297,44 @@ describe("Claude plan quota", () => {
         }),
       )
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "an answer that leaves a window out fails the read: it does not say the plan has none",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+        const record = ownedRecord({
+          access: "fake-owned-access",
+          refresh: "fake-owned-refresh",
+          expires: YEAR_2100,
+        })
+        const week = { utilization: 10, resets_at: "2100-01-07T00:00:00Z" }
+        const readOf = (usage: Record<string, unknown>) =>
+          Effect.map(
+            readQuotaThrough(
+              driver,
+              ownedSignIn(record),
+              usageEndpoint(() => usageReply(usage)),
+            ),
+            ({ exit }) =>
+              Option.map(
+                Option.flatMap(Exit.findErrorOption(exit), (found) =>
+                  Option.liftPredicate(found, Schema.is(ProviderAuthError)),
+                ),
+                (error) => error.message.startsWith("Anthropic usage answer unreadable"),
+              ),
+          )
+        // A 5-hour window left out, a week left out, or both, as a read that
+        // dropped them would answer: the sweep logs the failure and notes nothing.
+        for (const usage of [{ seven_day: week }, { five_hour: week }, {}]) {
+          expect(yield* readOf(usage)).toEqual(Option.some(true))
+        }
+        // A null window still reads as a plan with none.
+        expect(yield* readOf({ five_hour: externalWireNull, seven_day: week })).toEqual(
+          Option.none(),
+        )
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7332,6 +7404,7 @@ describe("Claude plan quota", () => {
               ownedSignIn(record),
               usageEndpoint(() =>
                 usageReply({
+                  five_hour: externalWireNull,
                   seven_day: { utilization: 10, resets_at: "2100-01-07T00:00:00Z" },
                   ...cedarEmber,
                 }),
@@ -7399,7 +7472,7 @@ describe("Claude plan quota", () => {
           ownedSignIn(record),
           usageEndpoint(() => ({
             status: 200,
-            body: '{"seven_day":{"utilization":10,"resets_at":"2100-01-07T00:00:00Z"},"cedar_ember":{"eligible":true,"weight":1e999,"grants":[{"resets_left":2,"ends_at":null}]}}',
+            body: '{"five_hour":null,"seven_day":{"utilization":10,"resets_at":"2100-01-07T00:00:00Z"},"cedar_ember":{"eligible":true,"weight":1e999,"grants":[{"resets_left":2,"ends_at":null}]}}',
           })),
         )
         expect(Exit.map(odd, (read) => [read.readings.length, read.resets])).toEqual(
