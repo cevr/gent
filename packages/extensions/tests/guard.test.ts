@@ -343,7 +343,7 @@ const platform = BunServices.layer
 
 describe("@gent/guard", () => {
   it.scopedLive(
-    "with no guard entry in the config the guard judges nothing: no model call, no dialog",
+    "with no guard entry in the config the guard calls no model and asks nothing",
     () =>
       Effect.gen(function* () {
         const session = yield* guardedSession({
@@ -371,7 +371,7 @@ describe("@gent/guard", () => {
           repo: true,
           steps: [
             toolCallStep("bash", { command: "git reset --hard" }),
-            toolCallStep("bash", { command: "cd . && rm -rf ." }),
+            toolCallStep("bash", { command: "cd . && rm -r .git" }),
             toolCallStep("bash", { command: "git push --force origin main" }),
             textStep("finished"),
           ],
@@ -380,7 +380,7 @@ describe("@gent/guard", () => {
         const [reset, remove, push] = outcomes(results)
         expect(reset).toContain("the guard floor denies it: `git reset --hard` discards")
         expect(remove).toContain(
-          "the guard floor denies it: `rm -rf .` would delete the repository",
+          "the guard floor denies it: `rm -r .git` would delete a repository's history",
         )
         expect(push).toBe("ok")
         expect(session.ran).toEqual(["git push --force origin main"])
@@ -789,7 +789,7 @@ describe("@gent/guard", () => {
 
 describe("guard floor", () => {
   it.scopedLive(
-    "denies an rm -rf of the root, the home or a repository's root, a hard reset and a wide forced clean",
+    "denies a recursive rm over the root, the home, the working directory or a repository, a hard reset and a wide forced clean",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -810,35 +810,74 @@ describe("guard floor", () => {
         for (const command of [
           "rm -rf /",
           "rm -rf /*",
+          "rm -rf *",
+          "rm -rf ./*",
           "sudo rm -rf ~",
           'rm -fr "$HOME/"',
           "rm --recursive --force ${HOME}",
+          "rm -rf $HOME/*",
           "cd build && rm -Rf ~/*",
           `rm -rf ${repo}`,
           "rm -rf repo/",
+          "rm -rf repo/.git",
+          'rm -rf "$PWD"',
+          "rm -rf ..",
+          `rm -rf ${path.dirname(home)}`,
+          // With no terminal, `rm` never prompts: `-f` adds no safety.
+          "rm -r ~",
+          "rm -r -- repo",
+          // Prefixes, groups and separators.
+          "env rm -rf ~",
+          "\\rm -rf ~",
+          "FOO=1 rm -rf ~",
+          "sudo -E rm -rf ~",
+          "nohup rm -rf ~",
+          "(rm -rf ~)",
+          "{ rm -rf ~; }",
+          "true & rm -rf ~",
+          "echo hi\nrm -rf ~",
+          // A `cd` moves where the next command runs.
+          "cd repo && rm -rf .",
+          "cd repo/build && rm -rf ..",
+          `cd .. && rm -rf ${path.basename(cwd)}`,
           "git reset --hard HEAD~1",
           "git -C repo reset --hard",
+          "git -c core.pager=cat reset --hard",
+          "git --git-dir repo/.git --work-tree repo reset --hard",
           "git clean -fd",
           "git clean -f -x",
+          "git clean --force -d",
           "echo done; git clean -fX | cat",
         ])
           expect([command, yield* judge({ command })]).toEqual([command, denied])
         // The call's own cwd: `.` is the repository.
         expect(yield* judge({ command: "rm -rf .", cwd: "repo" })).toEqual(denied)
+        // The monitor runs its command in bash too.
+        expect(yield* judge({ command: "git reset --hard" }, "monitor")).toEqual(denied)
         for (const command of [
           "rm -rf build",
           "rm -rf repo/build",
-          "rm -r ~",
+          "rm -rf repo/build/*",
           "rm -f ~/notes.txt",
+          // A quoted `~` is a directory named `~`, not the home.
+          'rm -rf "~"',
+          "rm -rf '~'",
+          "rm -rf '$HOME'",
+          // Quoted text and a heredoc's body are data, not commands.
+          'git commit -m "revert; git reset --hard HEAD"',
+          "echo 'a && git clean -fdx'",
+          "git commit -F - <<'EOF'\ngit reset --hard\nEOF\ngit status",
+          'cat > a.sh <<EOF\nrm -rf "$HOME"\nEOF',
           "git reset --soft HEAD~1",
           "git reset --hard-ish",
           "git clean -n -fdx",
+          "git clean --dry-run --force -d",
           "git clean -f",
           "git push --force origin main",
           "trash ~",
         ])
           expect([command, yield* judge({ command })]).toEqual([command, Option.none()])
-        // Only the shell tool's command is read.
+        // Only the shell tools' command is read.
         expect(yield* judge({ command: "rm -rf /" }, "run")).toEqual(Option.none())
         expect(yield* judge({ code: "rm -rf /" })).toEqual(Option.none())
       }).pipe(Effect.provide(platform)),

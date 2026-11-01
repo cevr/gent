@@ -699,19 +699,29 @@ export const ShellAsksExtension = defineExtension({
 ### `@gent/guard`
 
 The shipped `@gent/guard` is a `toolCall` hook. Its floor is always on: a
-`bash` call that loses work for good is denied, with no config and before
-any rule, so an allow rule does not lift it. The floor splits the command on
-`&&`, `||`, `;`, `|` and newlines and denies a part that is:
+`bash` or `monitor` call that loses work for good is denied, with no config
+and before any rule, so an allow rule does not lift it. The floor splits the
+command into simple commands on `&&`, `||`, `;`, `|`, `&` and newlines. It
+reads quotes as bash does and skips heredoc bodies, so a quoted `rm -r ~` is
+text, not a command. A leading `sudo`, `env`, `command`, `exec`, `nohup`,
+`time`, `nice` or `VAR=value` is skipped to find the command that runs, and a
+`cd` moves where the commands after it run. The floor denies a simple
+command that is:
 
-- `rm` both recursive and forced over the root, `*`, the home (`~`, `$HOME`)
-  or a directory that holds `.git`, resolved against the call's `cwd`;
+- `rm` recursive (`-r`, `-R`, `--recursive`), forced or not, over the root,
+  a directory that holds the home or the directory the command runs in, a
+  `.git` directory, or a repository's root. `~` counts as the home only when
+  bare, and `$HOME` and `$PWD` unless single-quoted. A glob is read as its
+  directory: `*` is every file where the command runs. Targets after `--`
+  count;
 - `git reset --hard`, also after global options such as `-C <dir>`;
 - `git clean` forced (`-f`, `--force`) with `-d`, `-x` or `-X`, and not a
   dry run (`-n`, `--dry-run`).
 
-A force-push is not on the floor. The floor reads text, not a shell:
-`$(...)`, `eval`, a variable other than `$HOME` and a script file are not
-seen. It makes no model call.
+Each deny names `trash` or a safe form as the way forward. A force-push is
+not on the floor. The floor reads text, not a shell: `$(...)`, `eval`,
+`bash -c`, `xargs`, `find -delete`, a variable other than `$HOME` and `$PWD`,
+a script file and a cell's `Bun.$` are not seen. It makes no model call.
 
 The rest is off until `~/.gent/config.json` (or a trusted project's
 `.gent/config.json`) holds a `guard` entry with a `policy` or `rules`.
@@ -732,6 +742,7 @@ The rest is off until `~/.gent/config.json` (or a trusted project's
 
 It judges a call in this order, and the first answer wins:
 
+0. The floor, above.
 1. `rules`. `tool` is a glob over the tool id, and `match` a glob over each
    of the call's subjects: a string input, or each of the fields `command`,
    `code`, `path`, `url` and `query` the input holds as a string. `*` is any
@@ -761,7 +772,8 @@ guard at its floor. Both files' entries apply: the policies join, the project's
 rules come after the user's, and the project's `model` wins. The guard reads
 its config when a session profile is built, from the same read of the files
 that names the profile, and an edit to a config file builds a new profile
-for the next turn, so a change applies from the next turn on. Set `disabledExtensions: ["@gent/guard"]` to turn it off.
+for the next turn, so a change applies from the next turn on. Set `disabledExtensions: ["@gent/guard"]` to turn it off; that removes the
+floor too.
 
 The guard is not a sandbox. The classifier reads a call's input as text: a
 cell's code is judged as written, and each tool call the code makes is judged

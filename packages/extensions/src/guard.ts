@@ -255,28 +255,214 @@ const ruleVerdict = (
 
 // ── floor ───────────────────────────────────────────────────────────────────
 
-/** The tool whose `command` the floor reads: the shipped shell tool. */
-const SHELL_TOOL = "bash"
+/** The tools whose `command` the floor reads: both run it in bash. */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(["bash", "monitor"])
 
 const ShellCall = Schema.Struct({ command: Schema.String, cwd: Schema.optional(Schema.String) })
 const decodeShellCall = Schema.decodeUnknownOption(ShellCall)
 
-/** A command's words: a quoted word without its quotes, else each run of non-space. */
-const commandWords = (command: string): ReadonlyArray<string> =>
-  Array.from(command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g), (match) =>
-    String(match[1] ?? match[2] ?? match[3] ?? ""),
+/** One word of a command, its quotes removed. */
+interface Word {
+  readonly text: string
+  /** Its first character was outside quotes: a leading `~` names the home. */
+  readonly bareStart: boolean
+  /** Some of it was in single quotes: no `$` expands in it. */
+  readonly singleQuoted: boolean
+}
+
+/** A word the reader is building, character by character. */
+interface WordDraft {
+  text: string
+  started: boolean
+  bareStart: boolean
+  singleQuoted: boolean
+}
+
+const newDraft = (): WordDraft => ({
+  text: "",
+  started: false,
+  bareStart: false,
+  singleQuoted: false,
+})
+
+/** The characters that end a simple command outside quotes. */
+const SEPARATORS = new Set([";", "&", "|", "\n", "(", ")"])
+
+/** The words after `<<` that name a heredoc's end (`EOF`, `-EOF`, `'EOF'`), and their length. */
+const heredocEnd = (rest: string) =>
+  Option.map(
+    Option.fromNullishOr(/^-?\s*(?:'([^']*)'|"([^"]*)"|([^\s;&|<>()]+))/.exec(rest)),
+    (match) => ({ word: match[1] ?? match[2] ?? match[3] ?? "", length: match[0].length }),
   )
 
-/** The letters of a command's short flags, run together (`-rf -x` is `rfx`). */
-const shortFlags = (words: ReadonlyArray<string>) =>
-  words.filter((word) => /^-[^-]/.test(word)).join("")
+/** Where `char` next appears from `from`: the line's length when it does not. */
+const indexOrEnd = (line: string, char: string, from: number) => {
+  const next = line.indexOf(char, from)
+  if (next === -1) return line.length
+  return next
+}
 
-/** A path word with `~`, `$HOME` and `${HOME}` read as the home and no trailing slash. */
-const expandHome = (word: string, home: string) =>
-  word
-    .replace(/^~(?=\/|$)/, home)
-    .replace(/^\$\{?HOME\}?(?=\/|$)/, home)
-    .replace(/\/+$/, "") || "/"
+/** Reads one command line into its simple commands, one character step at a time. */
+const makeLineReader = (line: string) => {
+  const commands: Array<Array<Word>> = []
+  let words: Array<Word> = []
+  let draft = newDraft()
+  const heredocs: Array<string> = []
+  const endWord = () => {
+    if (draft.started) {
+      words.push({ text: draft.text, bareStart: draft.bareStart, singleQuoted: draft.singleQuoted })
+    }
+    draft = newDraft()
+  }
+  const endCommand = () => {
+    endWord()
+    if (words.length > 0) commands.push(words)
+    words = []
+  }
+  const add = (char: string, bare: boolean) => {
+    if (!draft.started) draft.bareStart = bare
+    draft.started = true
+    draft.text += char
+  }
+  /** A single-quoted run: every character as it is, to the closing quote. */
+  const readSingle = (from: number) => {
+    draft.started = true
+    draft.singleQuoted = true
+    const stop = indexOrEnd(line, "'", from)
+    for (const char of line.slice(from, stop)) add(char, false)
+    return stop + 1
+  }
+  /** A double-quoted run: a backslash keeps the next character. */
+  const readDouble = (from: number) => {
+    draft.started = true
+    let at = from
+    while (at < line.length && line.charAt(at) !== '"') {
+      if (line.charAt(at) === "\\" && at + 1 < line.length) at += 1
+      add(line.charAt(at), false)
+      at += 1
+    }
+    return at + 1
+  }
+  /** `<<WORD`: the body after the next newline is data, to the line `WORD`. */
+  const readHeredoc = (from: number) =>
+    Option.match(heredocEnd(line.slice(from + 2)), {
+      onNone: () => {
+        endWord()
+        return from + 2
+      },
+      onSome: (end) => {
+        endWord()
+        heredocs.push(end.word)
+        return from + 2 + end.length
+      },
+    })
+  /** Past each pending body, to the line after its end word. */
+  const skipBodies = (from: number) => {
+    endCommand()
+    let at = from + 1
+    for (const word of heredocs) {
+      while (at <= line.length) {
+        const stop = indexOrEnd(line, "\n", at)
+        const body = line.slice(at, stop)
+        at = stop + 1
+        if (body.replace(/^\t+/, "") === word) break
+      }
+    }
+    heredocs.length = 0
+    return at
+  }
+  const step = (at: number): number => {
+    const char = line.charAt(at)
+    if (char === "'") return readSingle(at + 1)
+    if (char === '"') return readDouble(at + 1)
+    if (char === "\\" && at + 1 < line.length) {
+      add(line.charAt(at + 1), false)
+      return at + 2
+    }
+    if (line.startsWith("<<", at) && !line.startsWith("<<<", at)) return readHeredoc(at)
+    if (char === "\n" && heredocs.length > 0) return skipBodies(at)
+    if (SEPARATORS.has(char)) {
+      endCommand()
+      return at + 1
+    }
+    if (char === " " || char === "\t") {
+      endWord()
+      return at + 1
+    }
+    add(char, true)
+    return at + 1
+  }
+  return {
+    read: () => {
+      let at = 0
+      while (at < line.length) at = step(at)
+      endCommand()
+      return commands
+    },
+  }
+}
+
+/**
+ * A command line as its simple commands, each its words. It splits on `;`,
+ * `&`, `|`, `(`, `)` and newlines outside quotes, and leaves a heredoc's body
+ * out: the body is data, not a command. Not a shell: `$(...)`, backquotes,
+ * `eval` and a script file are not read.
+ */
+const simpleCommands = (line: string): ReadonlyArray<ReadonlyArray<Word>> =>
+  makeLineReader(line).read()
+
+/** Words that run the command after them: skipped to find what runs. */
+const PREFIX_WORDS = new Set([
+  "sudo",
+  "doas",
+  "env",
+  "command",
+  "builtin",
+  "exec",
+  "nohup",
+  "time",
+  "nice",
+  "!",
+  "{",
+])
+
+/** A prefix's options that take the next word as their value. */
+const PREFIX_VALUE_OPTIONS = new Set(["-u", "-g", "-n", "-C", "-h", "-p"])
+
+const isAssignment = (text: string) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(text)
+
+/** The words of the command that runs: prefixes, their options and assignments skipped. */
+const runningWords = (words: ReadonlyArray<Word>): ReadonlyArray<Word> => {
+  let index = 0
+  let inPrefix = false
+  while (index < words.length) {
+    const text = words[index]?.text ?? ""
+    if (isAssignment(text) || PREFIX_WORDS.has(text)) {
+      inPrefix = inPrefix || PREFIX_WORDS.has(text)
+      index += 1
+      continue
+    }
+    if (inPrefix && text.startsWith("-")) {
+      index += 1
+      if (PREFIX_VALUE_OPTIONS.has(text)) index += 1
+      continue
+    }
+    break
+  }
+  return words.slice(index).filter((word) => word.text !== "}")
+}
+
+/** The letters of a command's short flags, run together (`-rf -x` is `rfx`). */
+const shortFlags = (texts: ReadonlyArray<string>) =>
+  texts.filter((text) => /^-[^-]/.test(text)).join("")
+
+/** A path word as bash reads it: `~`, `$HOME` and `$PWD` expanded unless quoted against it. */
+const expandWord = (word: Word, home: string, cwd: string) => {
+  if (word.text.startsWith("~") && word.bareStart && /^~(?=\/|$)/.test(word.text))
+    return home + word.text.slice(1)
+  if (word.singleQuoted) return word.text
+  return word.text.replace(/^\$\{?HOME\}?(?=\/|$)/, home).replace(/^\$\{?PWD\}?(?=\/|$)/, cwd)
+}
 
 /** Git's options that take the next word as their value. */
 const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"])
@@ -291,33 +477,76 @@ const gitSubcommand = (args: ReadonlyArray<string>) => {
   return { name: args[index], rest: args.slice(index + 1) }
 }
 
+const TRASH_HINT = "use `trash` on what you mean to remove"
+
+/** Whether `inner` is `outer` or under it; both resolved, `outer` not the root. */
+const within = (inner: string, outer: string) => inner === outer || inner.startsWith(`${outer}/`)
+
 /**
- * Why an `rm` loses work for good: recursive and forced, over the root, the
- * home or a repository's root. `cwd` is where it runs, so a relative target
- * resolves against it.
+ * Why a recursive `rm` of `target` loses work for good: the root, a
+ * directory that holds the home, the call's directory or the directory the
+ * command runs in (they differ after a `cd`), a `.git` directory, or a
+ * repository's root. `target` is resolved.
  */
-const rmRefusal = Effect.fn("Guard.rmRefusal")(function* (
+const rmTargetRefusal = Effect.fn("Guard.rmTargetRefusal")(function* (
   command: string,
-  args: ReadonlyArray<string>,
-  cwd: string,
+  target: string,
+  cwds: ReadonlyArray<string>,
   home: string,
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const flags = shortFlags(args)
-  const recursive = args.includes("--recursive") || /[rR]/.test(flags)
-  const force = args.includes("--force") || flags.includes("f")
-  if (!recursive || !force) return Option.none<string>()
-  for (const target of args.filter((word) => !word.startsWith("-"))) {
-    const resolved = path.resolve(cwd, expandHome(target, home))
-    if (resolved === "/" || ["/*", "*"].includes(target))
-      return Option.some(`\`${command}\` would delete the root or every file here`)
-    if (resolved === path.resolve(home) || target === "~/*")
-      return Option.some(`\`${command}\` would delete the home directory`)
-    const isRepoRoot = yield* fs
-      .exists(path.join(resolved, ".git"))
-      .pipe(Effect.orElseSucceed(() => false))
-    if (isRepoRoot) return Option.some(`\`${command}\` would delete the repository at ${resolved}`)
+  if (target === "/") return Option.some(`\`${command}\` would delete the root; ${TRASH_HINT}`)
+  if (within(path.resolve(home), target))
+    return Option.some(`\`${command}\` would delete the home directory; ${TRASH_HINT}`)
+  if (cwds.some((cwd) => within(cwd, target)))
+    return Option.some(`\`${command}\` would delete the directory it runs in; ${TRASH_HINT}`)
+  if (path.basename(target) === ".git")
+    return Option.some(`\`${command}\` would delete a repository's history; ${TRASH_HINT}`)
+  const isRepoRoot = yield* fs
+    .exists(path.join(target, ".git"))
+    .pipe(Effect.orElseSucceed(() => false))
+  if (isRepoRoot)
+    return Option.some(`\`${command}\` would delete the repository at ${target}; ${TRASH_HINT}`)
+  return Option.none<string>()
+})
+
+/**
+ * Why a recursive `rm` loses work for good, forced or not: with no
+ * terminal the tool never prompts, so `-f` adds no safety. A glob over a
+ * directory (`*`, `dir/*`) is read as that directory, and `*` alone as the
+ * directory the command runs in.
+ */
+const rmRefusal = Effect.fn("Guard.rmRefusal")(function* (
+  command: string,
+  args: ReadonlyArray<Word>,
+  cwd: string,
+  callCwd: string,
+  home: string,
+) {
+  const path = yield* Path.Path
+  const texts = args.map((word) => word.text)
+  const end = texts.indexOf("--")
+  let options = texts
+  if (end !== -1) options = texts.slice(0, end)
+  const recursive = options.includes("--recursive") || /[rR]/.test(shortFlags(options))
+  if (!recursive) return Option.none<string>()
+  const targets = args.filter((word, index) => {
+    if (end !== -1 && index > end) return true
+    if (end !== -1 && index === end) return false
+    return !word.text.startsWith("-")
+  })
+  for (const word of targets) {
+    const expanded = expandWord(word, home, cwd)
+    const glob = !word.singleQuoted && /(^|\/)\*$/.test(expanded)
+    // `/*` is the root's files, `dir/*` the directory's, `*` the ones here.
+    let base = expanded
+    if (glob) base = expanded.slice(0, -1) || "."
+    const resolved = path.resolve(cwd, base)
+    const refusal = yield* rmTargetRefusal(command, resolved, [cwd, callCwd], home)
+    if (Option.isSome(refusal)) return refusal
+    if (glob && resolved === cwd)
+      return Option.some(`\`${command}\` would delete every file here; ${TRASH_HINT}`)
   }
   return Option.none<string>()
 })
@@ -336,34 +565,42 @@ const gitRefusal = (command: string, args: ReadonlyArray<string>): Option.Option
   return Option.some(`\`${command}\` deletes untracked files for good; run it with -n first`)
 }
 
-/** Why one command loses work for good; none when it does not. */
-const commandRefusal = (command: string, cwd: string, home: string) => {
-  const words = commandWords(command).filter((word) => word !== "sudo" && word !== "command")
-  const head = words[0]?.split("/").pop()
-  const args = words.slice(1)
-  if (head === "rm") return rmRefusal(command, args, cwd, home)
-  if (head === "git") return Effect.succeed(gitRefusal(command, args))
-  return Effect.succeed(Option.none<string>())
-}
-
 /**
- * The floor's verdict on a call: a deny for a `bash` call one of whose
- * commands loses work for good, none for any other call. It splits the
- * command on `&&`, `||`, `;`, `|` and newlines, and reads each part's words.
- * Not a shell: `$(...)`, `eval`, a variable and a script file are not seen.
+ * The floor's verdict on a call: a deny for a `bash` or `monitor` call one
+ * of whose simple commands loses work for good, none for any other call. A
+ * `cd` moves where the commands after it run.
  */
 export const floorVerdict = Effect.fn("Guard.floorVerdict")(function* (
   call: Pick<ToolCallInput, "toolName" | "input">,
   cwd: string,
   home: string,
 ) {
-  if (call.toolName !== SHELL_TOOL) return Option.none<ToolCallVerdict>()
+  if (!SHELL_TOOLS.has(call.toolName)) return Option.none<ToolCallVerdict>()
   const shell = decodeShellCall(call.input)
   if (Option.isNone(shell)) return Option.none<ToolCallVerdict>()
   const path = yield* Path.Path
-  const runsIn = path.resolve(cwd, shell.value.cwd ?? ".")
-  for (const command of shell.value.command.split(/&&|\|\||;|\||\n/)) {
-    const refusal = yield* commandRefusal(command.trim(), runsIn, home)
+  const callCwd = path.resolve(cwd, shell.value.cwd ?? ".")
+  let runsIn = callCwd
+  for (const words of simpleCommands(shell.value.command)) {
+    const running = runningWords(words)
+    const head = running[0]?.text.split("/").pop()
+    const args = running.slice(1)
+    const text = running.map((word) => word.text).join(" ")
+    if (head === "cd") {
+      const target = Option.fromUndefinedOr(args[0])
+      runsIn = Option.match(target, {
+        onNone: () => home,
+        onSome: (word) => path.resolve(runsIn, expandWord(word, home, runsIn)),
+      })
+      continue
+    }
+    let refusal = Option.none<string>()
+    if (head === "rm") refusal = yield* rmRefusal(text, args, runsIn, callCwd, home)
+    if (head === "git")
+      refusal = gitRefusal(
+        text,
+        args.map((word) => word.text),
+      )
     if (Option.isSome(refusal))
       return Option.some(
         ToolCallVerdict.cases.Deny.make({ reason: `the guard floor denies it: ${refusal.value}` }),
