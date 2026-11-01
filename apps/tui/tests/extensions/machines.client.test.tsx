@@ -127,15 +127,17 @@ const unrated: LaneReport = {
 
 const WORK = CredentialSlot.make("work")
 const HOME = CredentialSlot.make("home")
+const OLD = CredentialSlot.make("old")
 
 /**
  * `measured`, with banked resets: default holds two that lapse at 15:00,
  * work one with no expiry and one lapsed a minute ago, home a lapsed one and
- * an empty one.
+ * an empty one, and old, out of the pool, three with no expiry.
  */
 const banked: LaneReport = {
   providers: measured.providers.map((lanes) => ({
     ...lanes,
+    scope: [DEFAULT, WORK, HOME],
     accounts: [
       ...lanes.accounts.map((account) => ({
         ...account,
@@ -153,6 +155,7 @@ const banked: LaneReport = {
         held: false,
         resets: [{ count: 1, expiresAt: NOW - 1 }, { count: 0 }],
       },
+      { slot: OLD, windows: [], held: false, resets: [{ count: 3 }] },
     ],
   })),
 }
@@ -372,7 +375,8 @@ describe("the lanes band rows", () => {
       text: "resets anthropic work 1",
       state: "banked",
     })
-    // An account with none, or only lapsed grants, shows nothing.
+    // An account with none, or only lapsed grants, shows nothing; nor does
+    // one out of the scope, whatever it holds.
     expect(laneRows(measured, NOW, 120, utc).map((row) => row.state)).toEqual(["free"])
     // The band draws the row with its own mark after the provider's lanes and lost logins.
     expect(texts({ lanes: Option.some(banked), runs: [] }, 120)).toEqual([

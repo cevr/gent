@@ -1794,18 +1794,39 @@ describe("ChatGPT plan quota", () => {
             rate_limit_reset_credits: { available_count: 2, applicable_available_count: 0 },
           }),
         ).toEqual(Exit.succeed({ resets: Option.some([{ count: 2 }]), windows: 2 }))
+        // TeamClaude's `creditCount`: a count in a string counts, a huge one reads 99.
+        expect(yield* resetsOf({ rate_limit_reset_credits: { available_count: "2" } })).toEqual(
+          Exit.succeed({ resets: Option.some([{ count: 2 }]), windows: 2 }),
+        )
+        expect(yield* resetsOf({ rate_limit_reset_credits: { available_count: 1e17 } })).toEqual(
+          Exit.succeed({ resets: Option.some([{ count: 99 }]), windows: 2 }),
+        )
+        // A value no JSON schema takes (`1e999` parses to Infinity) in the
+        // summary never fails the read: the windows and the count still read.
+        const odd = usageAnswer(planLimit(42, 12), {
+          rate_limit_reset_credits: { available_count: 3, weight: "odd-weight" },
+        })
+        const { exit: oddExit } = yield* readPlanQuota(planSignIn("plan-access"), () => ({
+          ...odd,
+          body: odd.body.replace('"odd-weight"', "1e999"),
+        }))
+        expect(Exit.map(oddExit, (read) => [read.readings.length, read.resets])).toEqual(
+          Exit.succeed([2, [{ count: 3 }]]),
+        )
         // A plan that holds none reads an empty list: a fact, not silence.
         expect(
           yield* resetsOf({
             rate_limit_reset_credits: { available_count: 0, applicable_available_count: 0 },
           }),
         ).toEqual(Exit.succeed({ resets: Option.some([]), windows: 2 }))
-        // An answer that names no count says nothing of them; its windows still read.
+        // An answer that names no count, or one that is no count, says
+        // nothing of them (a held count stays); its windows still read.
         const silent: ReadonlyArray<Schema.JsonObject> = [
           {},
           { rate_limit_reset_credits: externalWireNull },
           { rate_limit_reset_credits: { applicable_available_count: 3 } },
           { rate_limit_reset_credits: { available_count: "two" } },
+          { rate_limit_reset_credits: { available_count: -1 } },
         ]
         for (const credits of silent) {
           expect(yield* resetsOf(credits)).toEqual(

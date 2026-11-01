@@ -53,6 +53,8 @@ import {
   ReasoningEffort,
   type QuotaReading,
   type ResetGrant,
+  resetCount,
+  ResetCountWire,
   rateLimitResponse,
   reportProviderCacheWarmer,
   reportProviderQuota,
@@ -3447,31 +3449,36 @@ const UsageWindow = Schema.OptionFromOptionalNullOr(
     resets_at: Schema.OptionFromOptionalNullOr(Schema.DateTimeUtcFromString),
   }),
 )
-// The block reads apart from the windows, so a block of a shape gent does not
-// know reads no resets and still reads every window.
+// The block reads apart from the windows, as any value: a block of a shape
+// gent does not know, or a value no JSON schema accepts (`1e999` parses to
+// Infinity), reads no resets and still reads every window.
 const OAuthUsage = Schema.Struct({
   five_hour: UsageWindow,
   seven_day: UsageWindow,
-  cedar_ember: Schema.optionalKey(Schema.Json),
+  cedar_ember: Schema.optionalKey(Schema.Unknown),
 })
 const CedarEmber = Schema.Struct({
   eligible: Schema.Literal(true),
-  grants: Schema.Array(Schema.Json),
+  grants: Schema.Array(Schema.Unknown),
 })
 const CedarGrant = Schema.Struct({
-  resets_left: Schema.Finite,
-  ends_at: Schema.OptionFromOptionalNullOr(Schema.DateTimeUtcFromString),
+  resets_left: ResetCountWire,
+  ends_at: Schema.optionalKey(Schema.Unknown),
 })
 const decodeCedarEmber = Schema.decodeUnknownOption(CedarEmber)
 const decodeCedarGrant = Schema.decodeUnknownOption(CedarGrant)
+const decodeGrantEnd = Schema.decodeUnknownOption(Schema.DateTimeUtcFromString)
 
 /**
- * The banked resets a usage answer lists: one `ResetGrant` per grant with a
- * reset left, lapsed grants included (placement drops them at its own
- * clock). Every reset a grant holds counts, paused or not yet usable too:
- * that is what the account holds and what the claude.ai Resets page shows. A
- * grant gent cannot read is skipped. None when the answer has no eligible
- * block: an ineligible block speaks of the client, not the account.
+ * The banked resets a usage answer lists, as TeamClaude's `bankedResets`
+ * reads them (`src/oauth.js`): one `ResetGrant` per grant with a reset left
+ * (`resetCount`, so `"2"` counts and `1e17` reads 99), lapsed grants
+ * included (placement drops them at its own clock). Every reset a grant
+ * holds counts, paused or not yet usable too: that is what the account holds
+ * and what the claude.ai Resets page shows. An `ends_at` gent cannot read
+ * counts the grant with no expiry; a grant with no count is skipped.
+ * None when the answer has no eligible block: an ineligible block speaks of
+ * the client, not the account.
  */
 const usageResets = (usage: typeof OAuthUsage.Type): Option.Option<ReadonlyArray<ResetGrant>> =>
   Option.map(decodeCedarEmber(usage.cedar_ember), (block) =>
@@ -3479,9 +3486,9 @@ const usageResets = (usage: typeof OAuthUsage.Type): Option.Option<ReadonlyArray
       Option.toArray(
         Option.flatMap(decodeCedarGrant(raw), (grant) =>
           Option.map(
-            Option.liftPredicate(Math.trunc(grant.resets_left), (count) => count > 0),
+            Option.filter(resetCount(grant.resets_left), (count) => count > 0),
             (count): ResetGrant =>
-              Option.match(grant.ends_at, {
+              Option.match(decodeGrantEnd(grant.ends_at), {
                 onNone: () => ({ count }),
                 onSome: (end) => ({ count, expiresAt: DateTime.toEpochMillis(end) }),
               }),

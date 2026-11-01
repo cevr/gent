@@ -57,6 +57,8 @@ import {
   type ProviderHints,
   type QuotaReading,
   type ResetGrant,
+  resetCount,
+  ResetCountWire,
   reportProviderQuota,
   type ReasoningEffort,
   type RunEffort,
@@ -1465,32 +1467,39 @@ const CodexUsageWindow = Schema.OptionFromOptionalNullOr(
     reset_at: CodexUsageNumber,
   }),
 )
-// The credits read apart from the windows, so a summary of a shape gent does
-// not know reads no credits and still reads every window.
+// The credits read apart from the windows, as any value: a summary of a
+// shape gent does not know, or a value no JSON schema accepts (`1e999`
+// parses to Infinity), reads no credits and still reads every window.
 const CodexUsage = Schema.Struct({
   rate_limit: Schema.OptionFromOptionalNullOr(
     Schema.Struct({ primary_window: CodexUsageWindow, secondary_window: CodexUsageWindow }),
   ),
-  rate_limit_reset_credits: Schema.optionalKey(Schema.Json),
+  rate_limit_reset_credits: Schema.optionalKey(Schema.Unknown),
 })
 const decodeResetCredits = Schema.decodeUnknownOption(
-  Schema.Struct({ available_count: Schema.Finite }),
+  Schema.Struct({ available_count: ResetCountWire }),
 )
 
 /**
- * The banked resets a usage answer lists: the plan's `available_count`, as
- * one grant with no expiry; empty at 0. Not `applicable_available_count`:
- * that reads 0 whenever no window is spent, so it would hide a credit the
- * plan holds. None when the answer names no count.
+ * The banked resets a usage answer lists: the plan's `available_count`
+ * (`resetCount`, as TeamClaude's `resetCredits` reads it), as one grant with
+ * no expiry; empty at 0. Not `applicable_available_count`: that reads 0
+ * whenever no window is spent, so it would hide a credit the plan holds.
+ * None when the answer names no count, or one that is no count (negative,
+ * not a number): only a count clears the resets placement holds.
  */
 const codexUsageResets = (
   usage: typeof CodexUsage.Type,
 ): Option.Option<ReadonlyArray<ResetGrant>> =>
-  Option.map(decodeResetCredits(usage.rate_limit_reset_credits), (credits) => {
-    const count = Math.trunc(credits.available_count)
-    if (count < 1) return []
-    return [{ count }]
-  })
+  Option.map(
+    Option.flatMap(decodeResetCredits(usage.rate_limit_reset_credits), (credits) =>
+      resetCount(credits.available_count),
+    ),
+    (count): ReadonlyArray<ResetGrant> => {
+      if (count < 1) return []
+      return [{ count }]
+    },
+  )
 
 /**
  * The quota windows a usage answer names. A plan whose limit states one

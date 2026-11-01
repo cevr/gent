@@ -661,6 +661,26 @@ export const ResetGrant = Schema.Struct({
 })
 export type ResetGrant = typeof ResetGrant.Type
 
+/**
+ * The most resets one count reads (TeamClaude's `RESET_CREDIT_COUNT_MAX`,
+ * `src/codex-usage.js`): nobody holds a hundred of something granted one at
+ * a time, and a count past a safe integer would fail `ResetGrant`.
+ */
+const RESET_COUNT_MAX = 99
+
+/** A reset count as a usage answer sends it: a number, or a string that holds one (`"2"`). */
+export const ResetCountWire = Schema.Union([Schema.Finite, Schema.FiniteFromString])
+
+/**
+ * A reset count (`ResetCountWire`) as a whole number in 0..99, as
+ * TeamClaude's `creditCount` reads one: truncated and capped. None when
+ * negative: that is no count at all.
+ */
+export const resetCount = (count: number): Option.Option<number> => {
+  if (count < 0) return Option.none()
+  return Option.some(Math.min(Math.trunc(count), RESET_COUNT_MAX))
+}
+
 /** The grants of `grants` that still hold a reset at `now`: a lapsed or empty grant counts none. */
 export const liveResets = (
   grants: ReadonlyArray<ResetGrant>,

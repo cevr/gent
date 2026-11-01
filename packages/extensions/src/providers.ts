@@ -760,7 +760,7 @@ const CredentialRejection = Context.Reference<Option.Option<{ reject: Effect.Eff
 /**
  * One read of a plan's usage endpoint, which spends no quota (a driver's
  * `readQuota`): `request` signed with the credential `creds` serves, sent
- * over `client`, and its 200 answer decoded with `schema`. The credential
+ * over `client`, and its 200 answer parsed and decoded with `schema`. The credential
  * comes from the cache the driver's requests use, so a refresh runs under the
  * store lock and a slot serves only its own sign-in. A 401 invalidates the
  * credential it sent and reads once more, as a request does
@@ -787,7 +787,10 @@ export const readPlanUsage = <C, S extends Schema.Constraint>(options: {
           message: `${label} read failed: HTTP ${response.status}`,
         })
       }
-      return yield* HttpClientResponse.schemaBodyJson(options.schema)(response)
+      // The schema decodes the parsed body as it stands: `schemaBodyJson`
+      // checks every value as JSON first, so one field it does not read
+      // (`1e999` parses to Infinity) would fail the whole answer.
+      return yield* Schema.decodeEffect(options.schema)(yield* response.json)
     })
   return Effect.gen(function* () {
     const first = yield* send

@@ -7323,8 +7323,10 @@ describe("Claude plan quota", () => {
           ...fields,
         })
         // An eligible block: every grant with a reset left counts, paused or
-        // not usable yet; a grant with none left, or one gent cannot read,
-        // reads nothing. A lapsed grant is listed with its expiry: placement
+        // not usable yet, as TeamClaude's `creditCount` reads it: a count in
+        // a string counts, a huge one reads 99. A grant with none left, or no
+        // count, reads nothing; an expiry gent cannot read counts the grant
+        // with none. A lapsed grant is listed with its expiry: placement
         // drops it at its own clock.
         expect(
           yield* resetsOf({
@@ -7336,7 +7338,11 @@ describe("Claude plan quota", () => {
                 grant({ paused: true, usable_now: false, ends_at: externalWireNull }),
                 grant({ resets_left: 0 }),
                 grant({ resets_left: "one" }),
+                grant({ resets_left: -1 }),
+                "garbled",
                 grant({ ends_at: "2000-01-01T00:00:00Z" }),
+                grant({ resets_left: "2", ends_at: "next month" }),
+                grant({ resets_left: 1e17 }),
               ],
             },
           }),
@@ -7346,9 +7352,24 @@ describe("Claude plan quota", () => {
               { count: 2, expiresAt: YEAR_2100 },
               { count: 1 },
               { count: 1, expiresAt: 946_684_800_000 },
+              { count: 2 },
+              { count: 99, expiresAt: YEAR_2100 },
             ]),
             windows: 1,
           }),
+        )
+        // A value no JSON schema takes (`1e999` parses to Infinity) in the
+        // block never fails the read: the windows and the grant still read.
+        const { exit: odd } = yield* readQuotaThrough(
+          driver,
+          ownedSignIn(record),
+          usageEndpoint(() => ({
+            status: 200,
+            body: '{"seven_day":{"utilization":10,"resets_at":"2100-01-07T00:00:00Z"},"cedar_ember":{"eligible":true,"weight":1e999,"grants":[{"resets_left":2,"ends_at":null}]}}',
+          })),
+        )
+        expect(Exit.map(odd, (read) => [read.readings.length, read.resets])).toEqual(
+          Exit.succeed([1, [{ count: 2 }]]),
         )
         // An eligible block with no grant: the account holds none.
         expect(yield* resetsOf({ cedar_ember: { eligible: true, grants: [] } })).toEqual(

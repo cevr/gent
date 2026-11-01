@@ -6403,7 +6403,7 @@ describe("account lanes", () => {
         // A read with no window still lists its account's live grants; one
         // lapsed when read counts none. b's read lists none.
         yield* usageRead(first, signedIn, [
-          { count: 2, expiresAt: now + 2 * HOUR },
+          { count: 2, expiresAt: now + 10 * MINUTE },
           { count: 1, expiresAt: now + 5 * HOUR },
           { count: 1, expiresAt: now - 1 },
         ])
@@ -6414,7 +6414,7 @@ describe("account lanes", () => {
           [
             a,
             [
-              { count: 2, expiresAt: now + 2 * HOUR },
+              { count: 2, expiresAt: now + 10 * MINUTE },
               { count: 1, expiresAt: now + 5 * HOUR },
             ],
           ],
@@ -6423,7 +6423,7 @@ describe("account lanes", () => {
           {
             slot: a,
             resets: [
-              { count: 2, expiresAt: now + 2 * HOUR },
+              { count: 2, expiresAt: now + 10 * MINUTE },
               { count: 1, expiresAt: now + 5 * HOUR },
             ],
           },
@@ -6432,7 +6432,7 @@ describe("account lanes", () => {
         yield* first.read(signedIn, [{ window: "7d", utilization: 0.1, resetAt: now + 100 * HOUR }])
         expect((yield* resetsOf(first, [signedIn, b])).map((entry) => entry.slot)).toEqual([a])
         // Past the first grant's expiry, it counts none.
-        yield* TestClock.adjust("3 hours")
+        yield* TestClock.adjust("20 minutes")
         expect(yield* resetsOf(first, [signedIn, b])).toEqual([
           { slot: a, resets: [{ count: 1, expiresAt: now + 5 * HOUR }] },
         ])
@@ -6452,6 +6452,50 @@ describe("account lanes", () => {
           { slot: c, resets: [{ count: 1, expiresAt: now + 5 * HOUR }] },
         ])
         expect(yield* resetsOf(second, [{ slot: c, signedInAt: 2 }, b])).toEqual([])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "banked resets: a count no read refreshes goes three sweeps after its read, from the lanes and the ledger",
+    () =>
+      Effect.gen(function* () {
+        const { file, store } = yield* ledgerRef
+        const fixture = yield* accounts(store)
+        yield* TestClock.adjust("1 hour")
+        const signedIn = { slot: a, signedInAt: 1 }
+        const held = Effect.map(fixture.lanes([signedIn, b]), (lanes) =>
+          lanes.accounts.flatMap((account) =>
+            Option.toArray(
+              Option.map(Option.fromUndefinedOr(account.resets), (resets) => [
+                account.slot,
+                resets,
+              ]),
+            ),
+          ),
+        )
+        const bank = (count: number) =>
+          fixture.placement.noteQuota({
+            provider: "plan",
+            slot: a,
+            signedInAt: Option.some(1),
+            readings: [],
+            resets: [{ count }],
+          })
+        // A Codex count names no expiry.
+        yield* bank(2)
+        // A read that lists no resets (the block withheld, ineligible or gone) does not refresh it.
+        yield* TestClock.adjust("15 minutes")
+        yield* fixture.read(signedIn, [{ window: "7d", utilization: 0.2, resetAt: 1_000 * HOUR }])
+        yield* TestClock.adjust("14 minutes")
+        expect(yield* held).toEqual([[a, [{ count: 2 }]]])
+        yield* TestClock.adjust("1 minute")
+        expect(yield* held).toEqual([])
+        yield* fixture.placement.flush
+        expect((yield* Ref.get(file)).resets ?? []).toEqual([])
+        // A read that lists it again holds it for another three sweeps.
+        yield* bank(1)
+        yield* TestClock.adjust("29 minutes")
+        expect(yield* held).toEqual([[a, [{ count: 1 }]]])
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

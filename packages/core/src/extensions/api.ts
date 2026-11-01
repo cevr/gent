@@ -83,6 +83,8 @@ export {
   QuotaReading,
   ReasoningOption,
   ResetGrant,
+  resetCount,
+  ResetCountWire,
   reportProviderCacheWarmer,
   reportProviderQuota,
   reportProviderStopReason,

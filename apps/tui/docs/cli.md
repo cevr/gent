@@ -166,8 +166,9 @@ provider's row is followed by a row
 login the provider no longer takes (`unavailable` when the driver found no
 credential), then a row `resets <provider> <slot> <count>, … · next lapses
 <clock>` when its accounts hold banked resets (Claude's reset grants,
-Codex's reset credits; a lapsed grant counts none, and an account with none
-is not named). No free lane is data, not a failure: the call exits 0.
+Codex's reset credits; a lapsed grant counts none, an account with none or
+out of the provider's `scope` is not named, and a count goes 30 minutes
+after the read that listed it). No free lane is data, not a failure: the call exits 0.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 

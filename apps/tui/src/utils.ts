@@ -613,8 +613,9 @@ const lostLoginRow = (
  * One provider's banked resets row, longest form that fits `width` first:
  * each account's live count, and when the soonest grant lapses (a clock in
  * `zone`). A narrow row drops the lapse, then the provider, then reads the
- * provider's total, and a row narrower than that truncates it. None when no
- * account holds a live reset at `now`.
+ * provider's total, and a row narrower than that truncates it. Only the
+ * accounts of the scope count, as for the lanes: an account out of the pool
+ * spends no run. None when no such account holds a live reset at `now`.
  */
 const resetsRow = (
   lanes: ProviderLanes,
@@ -623,6 +624,7 @@ const resetsRow = (
   zone: DateTime.TimeZone,
 ): Option.Option<string> => {
   const held = lanes.accounts.flatMap((account) => {
+    if (!lanes.scope.includes(account.slot)) return []
     const grants = liveResets(account.resets ?? [], now)
     if (grants.length === 0) return []
     return [

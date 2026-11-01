@@ -3621,6 +3621,17 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
 const PLACEMENT_HYSTERESIS_SESSIONS = 1
 /** How far back recorded usage counts. */
 const PLACEMENT_WINDOW_MS = 7 * 24 * 3_600_000
+/** How often the server reads every pool account's quota windows (`sweepPoolQuotas`). */
+const POOL_QUOTA_SWEEP_INTERVAL = Duration.minutes(10)
+/**
+ * How long an account's banked resets count after the usage read that listed
+ * them: three sweeps. Only a read refreshes a count, and the sweep reads every
+ * pool account each `POOL_QUOTA_SWEEP_INTERVAL`, so two failed reads in a row
+ * keep it, while an account the sweep no longer reads (out of the pool,
+ * signed out) or whose answer stopped listing resets goes within half an
+ * hour, and a ledger a stopped server left reads none of its old counts.
+ */
+const RESETS_READ_LIFETIME_MS = 3 * Duration.toMillis(POOL_QUOTA_SWEEP_INTERVAL)
 /** How long a refused account is held when its failure names no reset. */
 const PLACEMENT_REFUSAL_HOLD_MS = 5 * 60_000
 /** Usage is kept in buckets of one hour. */
@@ -5650,10 +5661,18 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     if (trimResets(now)) pruned = true
     if (pruned) version += 1
   }
-  /** Drops each lapsed grant, and an account left with none. Whether any went. Under the lock. */
+  /**
+   * Drops each lapsed grant, an account left with none, and an account whose
+   * read is `RESETS_READ_LIFETIME_MS` old. Whether any went. Under the lock.
+   */
   const trimResets = (now: number) => {
     let pruned = false
     for (const [key, entry] of bankedResets) {
+      if (entry.readAt <= now - RESETS_READ_LIFETIME_MS) {
+        bankedResets.delete(key)
+        pruned = true
+        continue
+      }
       const grants = liveResets(entry.grants, now)
       if (grants.length === entry.grants.length) continue
       pruned = true
@@ -7252,9 +7271,6 @@ export class CredentialPlacement extends Context.Service<
 
 // ── pool quota sweep ────────────────────────────────────────────────────────
 
-/** How often the server reads every pool account's quota windows. */
-const POOL_QUOTA_SWEEP_INTERVAL = Duration.minutes(10)
-
 /**
  * Read the quota windows of each account a sign-in's pool (`authSpread`)
  * names, through its owner driver's `readQuota`, and note them on placement
@@ -7309,7 +7325,7 @@ const readPoolQuotas = Effect.fn("CredentialPlacement.readPoolQuotas")(function*
 
 /**
  * The server's pool sweep: `readPoolQuotas` over the registry `registryOf`
- * leases, once now and then every 10 minutes, for as long as its fiber
+ * leases, once now and then every `POOL_QUOTA_SWEEP_INTERVAL`, for as long as its fiber
  * runs. A failed pass is logged; the next one runs on time.
  */
 export const sweepPoolQuotas = <E>(
