@@ -6,7 +6,13 @@ import {
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { getToolId } from "@gent/core/extensions/api"
+import {
+  AuthMethod,
+  defineExtension,
+  ExtensionHost,
+  getToolId,
+  ProviderAuthError,
+} from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
 import {
   ConfigProvider,
@@ -22,6 +28,7 @@ import {
   Schema,
   Sink,
   Stdio,
+  Stream,
 } from "effect"
 import { MinimumLogLevel } from "effect/References"
 import {
@@ -35,6 +42,7 @@ import {
 import { textWidth } from "../src/bun-adapter"
 import { makeClientTraceLogger } from "../src/client"
 import {
+  AuthCliResult,
   extensionHealthFromSnapshot,
   formatDoctorReport,
   formatServerStatus,
@@ -42,6 +50,7 @@ import {
   inspectLogs,
   inspectServer,
   inspectStorage,
+  listSignIns,
   makeDoctorReport,
   readDoctorExtensionHealth,
   reportFailureOnStderr,
@@ -49,12 +58,16 @@ import {
   resolveClientBundle,
   resumableSessions,
   seedDebugSession,
+  signIn,
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { SqlClient } from "effect/sql"
 import { GentPlatform, KERNEL_SCHEMA_OWNER, KERNEL_SCHEMA_VERSION } from "@gent/core/host"
 import {
+  type AuthProviderInfo,
+  CredentialSlot,
   dateFromMillis,
+  DEFAULT_CREDENTIAL_SLOT,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
   Session,
@@ -813,5 +826,234 @@ describe("debug session", () => {
         }).pipe(Effect.timeout("20 seconds")),
       ),
     30_000,
+  )
+})
+
+// ── gent auth ───────────────────────────────────────────────────────────────
+
+const GOOD_CODE = "good-code"
+
+/**
+ * A driver whose sign-ins end only with `GOOD_CODE`: a `code` method, an
+ * `auto` one whose browser leg never answers, a key with a required
+ * prompt, and a method for the default credential alone. Each test names its own provider: the file's home, and so its user
+ * config, is shared by every test here.
+ */
+const fakeSignIn = (id: string) =>
+  defineExtension({
+    id: `test-${id}`,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      const flows = ["code", "auto"] as const
+      yield* host.register("modelDriver", {
+        id,
+        name: "Fake sign-in",
+        auth: {
+          methods: [
+            AuthMethod.make({ type: "oauth", label: "Paste a code" }),
+            AuthMethod.make({ type: "oauth", label: "Browser" }),
+            AuthMethod.make({
+              type: "api",
+              label: "API key",
+              prompts: [{ key: "region", label: "Region" }],
+            }),
+            // Offered for the default credential only, as a CLI's own login is.
+            AuthMethod.make({ type: "oauth", label: "Default only", credentialTarget: "default" }),
+          ],
+          authorize: ({ methodIndex }) =>
+            Effect.succeedSome({
+              url: `https://sign-in.invalid/${methodIndex}`,
+              method: flows[methodIndex] ?? "code",
+              instructions: "Sign in, then paste the code.",
+            }),
+          callback: ({ code, persist }) => {
+            // The browser leg (no code) never answers: only a pasted code ends it.
+            if (Predicate.isUndefined(code)) return Effect.never
+            if (code !== GOOD_CODE)
+              return Effect.fail(new ProviderAuthError({ message: "wrong code" }))
+            return persist({
+              type: "oauth",
+              access: "fake-access",
+              refresh: "fake-refresh",
+              expires: 0,
+            })
+          },
+        },
+      })
+    }),
+  })
+
+/** An in-memory server with only `fakeSignIn(id)`, and a session the auth calls run in. */
+const signInServer = (id: string) =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTempDirectoryScoped("gent-auth-cli-")
+    const server = yield* Gent.server({
+      cwd,
+      state: Gent.state.memory(),
+      provider: Gent.provider.mock(),
+      extensions: [fakeSignIn(id)],
+      authDirectory: `${cwd}/auth`,
+    })
+    const { client } = yield* Gent.client(server, { cwd })
+    const { sessionId } = yield* client.session.create({ cwd, requestId: `auth-cli-${id}` })
+    return { client, sessionId }
+  })
+
+/** Piped stdin holding `text`; stderr goes to `reported.stderr`. */
+const pipedStdin = (text: string) =>
+  Stdio.layerTest({
+    stdin: Stream.make(new TextEncoder().encode(text)),
+    stdinIsTerminal: Effect.succeed(false),
+    stderr: () => captureTo("stderr"),
+  })
+
+/**
+ * `id`'s credentials as `auth list` prints them. A provider with its default
+ * credential alone lists none: its own row is that credential.
+ */
+const credentialsOf = (providers: ReadonlyArray<AuthProviderInfo>, id: string) =>
+  providers
+    .filter((entry) => entry.provider === id)
+    .flatMap((entry) =>
+      Option.match(Option.fromUndefinedOr(entry.credentials), {
+        onNone: () => [
+          { slot: DEFAULT_CREDENTIAL_SLOT, hasKey: entry.hasKey, authType: entry.authType },
+        ],
+        onSome: (credentials) =>
+          credentials.map(({ slot, hasKey, authType }) => ({ slot, hasKey, authType })),
+      }),
+    )
+
+const WORK = CredentialSlot.make("work")
+
+describe("gent auth", () => {
+  it.live(
+    "a code sign-in shows its page on stderr, reads the code, and puts a new label last",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client, sessionId } = yield* signInServer("fake-code")
+          reported.stderr = ""
+          const request = {
+            provider: "fake-code",
+            slot: WORK,
+            method: Option.some("Paste a code"),
+            inputs: {},
+          }
+          const first = yield* signIn(client, sessionId, request).pipe(
+            Effect.provide(pipedStdin(`${GOOD_CODE}\n`)),
+          )
+          expect(first).toEqual(
+            AuthCliResult.cases.SignedIn.make({
+              provider: "fake-code",
+              slot: WORK,
+              method: "Paste a code",
+              authOrder: [DEFAULT_CREDENTIAL_SLOT, WORK],
+            }),
+          )
+          expect(reported.stderr).toBe(
+            "Open this page to sign in:\nhttps://sign-in.invalid/0\nSign in, then paste the code.\nPaste code: \n",
+          )
+          // Signed in again, the label keeps its place: no order is written.
+          const again = yield* signIn(client, sessionId, request).pipe(
+            Effect.provide(pipedStdin(`${GOOD_CODE}\n`)),
+          )
+          expect(again.authOrder).toBeUndefined()
+          // A method for the default credential alone is not offered for a label.
+          const refused = yield* signIn(client, sessionId, {
+            ...request,
+            method: Option.some("Default only"),
+          }).pipe(Effect.provide(pipedStdin(`${GOOD_CODE}\n`)), Effect.flip)
+          expect(refused.message).toBe(
+            'name the method with --method, one of "Paste a code", "Browser", "API key"',
+          )
+          const listed = yield* listSignIns(client, sessionId)
+          expect(credentialsOf(listed.providers, "fake-code")).toContainEqual({
+            slot: WORK,
+            hasKey: true,
+            authType: "oauth",
+          })
+          expect(
+            listed.providers.find((entry) => entry.provider === "fake-code")?.authOrder,
+          ).toEqual([DEFAULT_CREDENTIAL_SLOT, WORK])
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+  )
+
+  it.live("an auto sign-in takes a pasted code while the browser wait runs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* signInServer("fake-auto")
+        const signedIn = yield* signIn(client, sessionId, {
+          provider: "fake-auto",
+          slot: WORK,
+          method: Option.some("browser"),
+          inputs: {},
+        }).pipe(Effect.provide(pipedStdin(`${GOOD_CODE}\n`)))
+        expect(signedIn.method).toBe("Browser")
+        const listed = yield* listSignIns(client, sessionId)
+        expect(credentialsOf(listed.providers, "fake-auto")).toContainEqual({
+          slot: WORK,
+          hasKey: true,
+          authType: "oauth",
+        })
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("a key sign-in reads the key from stdin and asks for each prompt's answer", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* signInServer("fake-key")
+        const request = {
+          provider: "fake-key",
+          slot: DEFAULT_CREDENTIAL_SLOT,
+          method: Option.some("API key"),
+          inputs: {},
+        }
+        const unnamed = yield* signIn(client, sessionId, {
+          ...request,
+          method: Option.none(),
+        }).pipe(Effect.provide(pipedStdin("fake-key\n")), Effect.flip)
+        expect(unnamed.message).toBe(
+          'name the method with --method, one of "Paste a code", "Browser", "API key", "Default only"',
+        )
+        const unanswered = yield* signIn(client, sessionId, request).pipe(
+          Effect.provide(pipedStdin("fake-key\n")),
+          Effect.flip,
+        )
+        expect(unanswered.message).toBe('"API key" needs --input region=<Region>')
+        const stored = yield* signIn(client, sessionId, {
+          ...request,
+          inputs: { region: "eu" },
+        }).pipe(Effect.provide(pipedStdin("fake-key\n")))
+        expect(stored.authOrder).toBeUndefined()
+        const listed = yield* listSignIns(client, sessionId)
+        expect(credentialsOf(listed.providers, "fake-key")).toContainEqual({
+          slot: DEFAULT_CREDENTIAL_SLOT,
+          hasKey: true,
+          authType: "api",
+        })
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live("a closed stdin fails the sign-in and stores nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client, sessionId } = yield* signInServer("fake-closed")
+        const failed = yield* signIn(client, sessionId, {
+          provider: "fake-closed",
+          slot: WORK,
+          method: Option.some("Paste a code"),
+          inputs: {},
+        }).pipe(Effect.provide(pipedStdin("")), Effect.flip)
+        expect(failed.message).toBe("stdin closed with no answer")
+        const listed = yield* listSignIns(client, sessionId)
+        expect(
+          credentialsOf(listed.providers, "fake-closed").filter((credential) => credential.hasKey),
+        ).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
   )
 })

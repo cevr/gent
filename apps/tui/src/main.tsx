@@ -52,6 +52,7 @@ import {
 import { type GentClientBundle } from "@gent/sdk"
 import { version } from "../package.json"
 import {
+  auth,
   CliStartupError,
   connectFlag,
   isolateFlag,
@@ -482,7 +483,7 @@ const resume = Command.make(
 
 // Root command with subcommands
 const command = main.pipe(
-  Command.withSubcommands([resume, sessions, server, doctor, storage, upgrade, ctl]),
+  Command.withSubcommands([resume, sessions, server, doctor, storage, auth, upgrade, ctl]),
   Command.withDescription("Gent - minimal, opinionated agent harness"),
 )
 

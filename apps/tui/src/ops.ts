@@ -1,9 +1,17 @@
 import {
+  type AuthAuthorization,
+  AuthMethod,
+  AuthProviderInfo,
+  authMethodAppliesTo,
   Branch,
   BranchId,
+  CredentialSlot,
   dateFromMillis,
+  DEFAULT_CREDENTIAL_SLOT,
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
+  type GentClientRpcError,
+  type GentNamespacedClient,
   Message,
   MessageId,
   Session,
@@ -23,6 +31,7 @@ import {
   Option,
   Path,
   type PlatformError,
+  Predicate,
   Runtime,
   Schema,
   Stdio,
@@ -52,9 +61,9 @@ import {
   type HttpClientError,
   type HttpClientResponse,
 } from "effect/http"
-import { runProcess } from "@gent/core/extensions/api"
+import { omitUndefined, runProcess } from "@gent/core/extensions/api"
 import { readonlySqlite, textWidth } from "./bun-adapter"
-import { formatBytes, isConversation, padWidth } from "./utils"
+import { formatBytes, isConversation, padWidth, randomId } from "./utils"
 import * as Terminal from "effect/Terminal"
 
 // ── local health report ─────────────────────────────────────────────────────
@@ -826,7 +835,7 @@ export const seedDebugSession = (cwd: string) =>
 
 /**
  * The admin subcommands: `sessions`, `server start`, `server status`,
- * `server stop`, `doctor` and `storage reset`.
+ * `server stop`, `doctor`, `storage reset` and `auth`.
  *
  * They share no state with the interactive TUI — each one opens what it needs,
  * prints, and returns — so they live beside the health readers they call rather
@@ -1201,6 +1210,411 @@ const storageReset = Command.make("reset", {}, () =>
 export const storage = Command.make("storage", {}, () =>
   Console.log("Usage: gent storage <reset>"),
 ).pipe(Command.withSubcommands([storageReset]))
+
+// ── sign-in ─────────────────────────────────────────────────────────────────
+//
+// `gent auth` signs in with no TUI: over SSH, in a script, on a workbox. It
+// starts its own server with state in memory, so it never opens the data
+// directory's database or lock. The credential store is the one every gent on
+// the machine shares (`~/.gent/auth`, or `GENT_AUTH_DIRECTORY`), and the order
+// goes to the user config, so a running gent reads both at its next turn.
+// Stdout carries one JSON line; the link, the instructions and the prompt go to
+// stderr, and the key or the code comes in on stdin.
+
+class AuthCliFailed extends Schema.TaggedError<AuthCliFailed, { readonly brand: unique symbol }>()(
+  "AuthCliFailed",
+  { message: Schema.String },
+) {}
+
+const authFailure = (
+  error: AuthCliFailed | GentClientRpcError | PlatformError.PlatformError,
+): AuthCliFailed => {
+  if (error._tag === "AuthCliFailed") return error
+  if ("message" in error && Predicate.isString(error.message)) {
+    return new AuthCliFailed({ message: error.message })
+  }
+  return new AuthCliFailed({ message: String(error) })
+}
+
+/** What a `gent auth` call prints on stdout. */
+export const AuthCliResult = Schema.TaggedUnion({
+  /** `list`: each provider's credentials and order, and the sign-in methods `login` takes. */
+  SignIns: {
+    providers: Schema.Array(AuthProviderInfo),
+    methods: Schema.Record(Schema.String, Schema.Array(AuthMethod)),
+  },
+  /** `login`: the credential is stored; `authOrder` is the order written for a new label. */
+  SignedIn: {
+    provider: Schema.String,
+    slot: CredentialSlot,
+    method: Schema.String,
+    authOrder: Schema.optional(Schema.Array(CredentialSlot)),
+  },
+  /** `logout`: the credential is removed. */
+  SignedOut: { provider: Schema.String, slot: CredentialSlot },
+})
+export type AuthCliResult = typeof AuthCliResult.Type
+
+const encodeAuthCliResult = Schema.encodeEffect(Schema.fromJsonString(AuthCliResult))
+
+const sayOnStderr = (text: string) =>
+  Effect.gen(function* () {
+    const stdio = yield* Stdio.Stdio
+    yield* Stream.make(text).pipe(Stream.run(stdio.stderr()))
+  })
+
+/** The first line on stdin, trimmed; none when stdin closes before a line that holds text. */
+const readStdinLine = Effect.gen(function* () {
+  const stdio = yield* Stdio.Stdio
+  const line = yield* stdio.stdin.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.map((each) => each.trim()),
+    Stream.filter((each) => each.length > 0),
+    Stream.runHead,
+  )
+  // A terminal ends the prompt's line with the typed Enter; piped input does not.
+  if (!(yield* stdio.stdinIsTerminal)) yield* sayOnStderr("\n")
+  return line
+}).pipe(Effect.mapError(authFailure))
+
+/** The session `gent auth` runs its calls in: the auth RPCs read its profile. */
+const authSession = (client: GentNamespacedClient, cwd: string) =>
+  Effect.gen(function* () {
+    const created = yield* client.session.create({ cwd, requestId: yield* randomId })
+    return created.sessionId
+  }).pipe(Effect.mapError(authFailure))
+
+/** `gent auth list`: every provider's credentials and order, and the methods `login` takes. */
+export const listSignIns = (client: GentNamespacedClient, sessionId: SessionId) =>
+  Effect.all({
+    providers: client.auth.listProviders({ sessionId }),
+    methods: client.auth.listMethods({ sessionId }),
+  }).pipe(
+    Effect.map((found) => AuthCliResult.cases.SignIns.make(found)),
+    Effect.mapError(authFailure),
+  )
+
+/** What `gent auth login` asks for. */
+interface SignInRequest {
+  readonly provider: string
+  readonly slot: CredentialSlot
+  /** A method's label, any case; none takes the provider's only method. */
+  readonly method: Option.Option<string>
+  /** The answers to the method's prompts, by prompt key. */
+  readonly inputs: Readonly<Record<string, string>>
+}
+
+/**
+ * The method `request` names, with its index in the provider's list: the
+ * methods that apply to the label only, as `/auth` offers them. None named
+ * takes the only one that applies.
+ */
+const pickMethod = (
+  methods: Readonly<Record<string, ReadonlyArray<AuthMethod>>>,
+  request: SignInRequest,
+) => {
+  const offered = (methods[request.provider] ?? []).flatMap((method, index) => {
+    if (!authMethodAppliesTo(method, request.slot)) return []
+    return [{ index, method }]
+  })
+  if (offered.length === 0) {
+    return Effect.fail(
+      new AuthCliFailed({
+        message: `${request.provider} has no sign-in for the label ${request.slot}; \`gent auth list\` names the methods`,
+      }),
+    )
+  }
+  const picked = Option.match(request.method, {
+    onNone: () => Option.liftPredicate(offered, (only) => only.length === 1),
+    onSome: (wanted) =>
+      Option.liftPredicate(
+        offered.filter((each) => each.method.label.toLowerCase() === wanted.toLowerCase()),
+        (found) => found.length > 0,
+      ),
+  })
+  return Effect.fromOption(Option.flatMap(picked, Arr.head)).pipe(
+    Effect.mapError(
+      () =>
+        new AuthCliFailed({
+          message: `name the method with --method, one of ${offered.map((each) => `"${each.method.label}"`).join(", ")}`,
+        }),
+    ),
+  )
+}
+
+/** The method's prompt answers, or the failure that names a missing or unknown one. */
+const promptAnswers = (method: AuthMethod, inputs: Readonly<Record<string, string>>) => {
+  const prompts = method.prompts ?? []
+  const unknown = Object.keys(inputs).filter((key) => !prompts.some((each) => each.key === key))
+  const missing = prompts.filter(
+    (prompt) => prompt.optional !== true && (inputs[prompt.key] ?? "").trim().length === 0,
+  )
+  if (unknown.length > 0) {
+    return Effect.fail(
+      new AuthCliFailed({
+        message: `"${method.label}" asks no ${unknown.join(", ")}; it asks ${prompts.map((each) => each.key).join(", ") || "nothing"}`,
+      }),
+    )
+  }
+  if (missing.length > 0) {
+    return Effect.fail(
+      new AuthCliFailed({
+        message: `"${method.label}" needs ${missing.map((each) => `--input ${each.key}=<${each.label}>`).join(" ")}`,
+      }),
+    )
+  }
+  return Effect.succeed(
+    Option.liftPredicate(
+      Object.fromEntries(
+        Object.entries(inputs).flatMap(([key, value]) => {
+          const answer = value.trim()
+          if (answer.length === 0) return []
+          return [[key, answer] as const]
+        }),
+      ),
+      (answered) => Object.keys(answered).length > 0,
+    ),
+  )
+}
+
+/**
+ * The order to write once `slot` signs in, as `/auth` writes it: a new label
+ * goes last; a label that held a credential keeps its place, or its absence
+ * (none). `provider` is the catalog entry read before the sign-in.
+ */
+const orderAfterSignIn = (
+  provider: Option.Option<AuthProviderInfo>,
+  slot: CredentialSlot,
+): Option.Option<ReadonlyArray<CredentialSlot>> => {
+  if (slot === DEFAULT_CREDENTIAL_SLOT) return Option.none()
+  const held = Option.exists(provider, (entry) =>
+    (entry.credentials ?? []).some((credential) => credential.slot === slot),
+  )
+  if (held) return Option.none()
+  const order = Option.match(
+    Option.flatMapNullishOr(provider, (entry) => entry.authOrder),
+    {
+      onNone: (): ReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT],
+      onSome: (current) => current,
+    },
+  )
+  return Option.some([...order, slot])
+}
+
+/**
+ * `gent auth login`: one sign-in, as `/auth` runs it. A key method reads the
+ * key from stdin. A `code` sign-in prints its link on stderr and reads the
+ * pasted code from stdin; an `auto` one waits for the browser and takes a
+ * pasted code too, whichever comes first.
+ */
+export const signIn = (
+  client: GentNamespacedClient,
+  sessionId: SessionId,
+  request: SignInRequest,
+) =>
+  Effect.gen(function* () {
+    const providers = yield* client.auth.listProviders({ sessionId })
+    const { index, method } = yield* pickMethod(
+      yield* client.auth.listMethods({ sessionId }),
+      request,
+    )
+    const inputs = yield* promptAnswers(method, request.inputs)
+    const before = Option.fromUndefinedOr(
+      providers.find((entry) => entry.provider === request.provider),
+    )
+    const slot = Option.liftPredicate(request.slot, (given) => given !== DEFAULT_CREDENTIAL_SLOT)
+    const target = {
+      provider: request.provider,
+      sessionId,
+      ...omitUndefined({ slot: Option.getOrUndefined(slot) }),
+    }
+    if (method.type === "api") {
+      const key = yield* stdinAnswer(`Paste the ${method.label} for ${request.provider}: `)
+      yield* client.auth.setKey({
+        ...target,
+        key,
+        ...omitUndefined({ metadata: Option.getOrUndefined(inputs) }),
+      })
+    } else {
+      const authorization = yield* client.auth.authorize({
+        ...target,
+        method: index,
+        ...omitUndefined({ inputs: Option.getOrUndefined(inputs) }),
+      })
+      yield* completeAuthorization(client, {
+        sessionId,
+        provider: request.provider,
+        method: index,
+        authorization: Option.fromNullishOr(authorization),
+      })
+    }
+    const order = orderAfterSignIn(before, request.slot)
+    if (Option.isSome(order)) {
+      yield* client.auth.setOrder({
+        provider: request.provider,
+        order: [...order.value],
+        sessionId,
+      })
+    }
+    return AuthCliResult.cases.SignedIn.make({
+      provider: request.provider,
+      slot: request.slot,
+      method: method.label,
+      ...omitUndefined({ authOrder: Option.getOrUndefined(order) }),
+    })
+  }).pipe(Effect.mapError(authFailure))
+
+/** The prompt on stderr, then the answer on stdin; a closed stdin fails. */
+const stdinAnswer = (prompt: string) =>
+  Effect.gen(function* () {
+    yield* sayOnStderr(prompt)
+    return yield* Effect.fromOption(yield* readStdinLine).pipe(
+      Effect.mapError(() => new AuthCliFailed({ message: "stdin closed with no answer" })),
+    )
+  })
+
+const completeAuthorization = (
+  client: GentNamespacedClient,
+  input: {
+    readonly sessionId: SessionId
+    readonly provider: string
+    readonly method: number
+    readonly authorization: Option.Option<AuthAuthorization>
+  },
+) =>
+  Effect.gen(function* () {
+    if (Option.isNone(input.authorization)) {
+      return yield* new AuthCliFailed({ message: "no authorization available for this method" })
+    }
+    const authorization = input.authorization.value
+    // `done`: the server finished the sign-in during `authorize`.
+    if (authorization.method === "done") return
+    const base = {
+      sessionId: input.sessionId,
+      provider: input.provider,
+      method: input.method,
+      authorizationId: authorization.authorizationId,
+    }
+    const notes = Option.match(Option.fromUndefinedOr(authorization.instructions), {
+      onNone: () => "",
+      onSome: (text) => `${text}\n`,
+    })
+    const page = `Open this page to sign in:\n${authorization.url}\n${notes}`
+    if (authorization.method === "code") {
+      const code = yield* stdinAnswer(`${page}Paste code: `)
+      yield* client.auth.callback({ ...base, code })
+      return
+    }
+    // `auto`: the browser leg and a pasted code race; the server takes the first.
+    yield* sayOnStderr(`${page}Waiting for the browser; or paste the code: `)
+    const pasted = Effect.flatMap(readStdinLine, (line) =>
+      Option.match(line, {
+        onNone: () => Effect.never,
+        onSome: (code) => client.auth.callback({ ...base, code }),
+      }),
+    )
+    yield* Effect.race(client.auth.callback(base), pasted)
+  })
+
+const printAuthResult = (result: AuthCliResult) =>
+  Effect.flatMap(encodeAuthCliResult(result), (text) => Console.log(text)).pipe(Effect.orDie)
+
+/** One `gent auth` call: its own in-memory server, a session in `cwd`, `body`, the JSON line. */
+const authCall = <R>(
+  body: (
+    client: GentNamespacedClient,
+    sessionId: SessionId,
+  ) => Effect.Effect<AuthCliResult, AuthCliFailed, R>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cwd = process.cwd()
+      const bundle = yield* resolveClientBundle({
+        cwd,
+        connect: Option.none(),
+        inMemory: true,
+        debug: false,
+        mock: Option.none(),
+        authDirectory: yield* Config.option(Config.String("GENT_AUTH_DIRECTORY")),
+      })
+      yield* bundle.runtime.lifecycle.waitForReady
+      const sessionId = yield* authSession(bundle.client, cwd)
+      yield* printAuthResult(yield* body(bundle.client, sessionId))
+    }),
+  )
+
+const providerArgument = Argument.String("provider").pipe(
+  Argument.withDescription("The provider id, as `gent auth list` names it (anthropic, openai, …)"),
+)
+
+const slotFlag = Flag.String("slot").pipe(
+  Flag.withDescription(
+    "The credential's label: 1 to 32 of a-z, 0-9, _ and - (default: the default credential)",
+  ),
+  Flag.withSchema(CredentialSlot),
+  Flag.withDefault(DEFAULT_CREDENTIAL_SLOT),
+)
+
+const authList = Command.make("list", {}, () =>
+  authCall((client, sessionId) => listSignIns(client, sessionId)),
+).pipe(
+  Command.withDescription("Print each provider's credentials and order, and its sign-in methods"),
+)
+
+const authLogin = Command.make(
+  "login",
+  {
+    provider: providerArgument,
+    slot: slotFlag,
+    method: Flag.String("method").pipe(
+      Flag.withDescription("The sign-in method's label (default: the provider's only method)"),
+      Flag.optional,
+    ),
+    inputs: Flag.KeyValuePair("input").pipe(
+      Flag.withDescription("An answer to the method's prompt, as key=value; repeat for each"),
+      Flag.withDefault({}),
+    ),
+  },
+  (input) => authCall((client, sessionId) => signIn(client, sessionId, input)),
+).pipe(
+  Command.withDescription(
+    "Sign in to a provider: the link goes to stderr, the key or the code comes in on stdin",
+  ),
+  Command.withExamples([
+    {
+      command: 'gent auth login anthropic --method "Sign in to a Claude account" --slot work',
+      description: "Sign in to a Claude account under the label work, pasting the code",
+    },
+    {
+      command: 'printf %s "$KEY" | gent auth login openai --method "Manually enter API key"',
+      description: "Store an API key from a script",
+    },
+  ]),
+)
+
+const authLogout = Command.make("logout", { provider: providerArgument, slot: slotFlag }, (input) =>
+  authCall((client, sessionId) =>
+    client.auth
+      .deleteKey({
+        provider: input.provider,
+        sessionId,
+        ...omitUndefined({
+          slot: Option.getOrUndefined(
+            Option.liftPredicate(input.slot, (given) => given !== DEFAULT_CREDENTIAL_SLOT),
+          ),
+        }),
+      })
+      .pipe(Effect.as(AuthCliResult.cases.SignedOut.make(input)), Effect.mapError(authFailure)),
+  ),
+).pipe(Command.withDescription("Remove a stored credential"))
+
+export const auth = Command.make("auth", {}, () =>
+  Console.log("Usage: gent auth <list|login|logout>"),
+).pipe(
+  Command.withDescription("Sign in without the TUI: over SSH, in a script"),
+  Command.withSubcommands([authList, authLogin, authLogout]),
+)
 
 // ── install and upgrade ─────────────────────────────────────────────────────
 
