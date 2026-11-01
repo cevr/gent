@@ -152,6 +152,13 @@ into a `status` flag (`ctlProjection` in the client contribution): `status
 --run <id>` is the machines extension's `run-status` request, printed as
 `View` with the encoded reply in `view`.
 
+ctl never subtracts a server time from its own clock: a `--connect` call
+from another machine has another clock. `status` reads the session
+snapshot, and its `runningMs` is the snapshot's `serverNow` less the
+runtime's `startedAtMs`, both on the server's clock. `lanes --line` reads
+its ages, and whether a clock time is today, against the report's `serverNow`. A server older
+than `serverNow` is read against the local clock.
+
 `lanes` names no session: the accounts are the server's. It prints `Lanes`,
 the `accounts.lanes` report, with one record per provider gent read a quota
 window of, saw a login lost on or read banked resets of (an account's
@@ -181,7 +188,8 @@ quiet 90 s, and `· links down` for both. A narrow row keeps the held runs,
 then the link down, then the age, then the host. With no command of this
 server's own, the row goes 30 minutes after the peer went silent. The JSON
 holds it as `peer`: `heard` (`host`, `at`, epoch ms), `runs`, `silent` and
-`down` (`own`, `peer`). No free lane is data, not a failure: the call exits 0.
+`down` (`own`, `peer`), and `serverNow` (epoch ms) is the server's clock as
+it built the report. No free lane is data, not a failure: the call exits 0.
 
 `pool` names no session either. It prints `Pool`: the server's own pool
 facts (`accounts.pool`), the part of its lanes another machine on the same

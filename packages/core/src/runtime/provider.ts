@@ -7996,6 +7996,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         for (const [provider, scope] of scopes)
           if (Option.isSome(scope)) settle(provider, scope.value)
         return {
+          serverNow: now,
           ...omitUndefined({
             sabbathEnd: Option.getOrUndefined(
               Option.map(sabbathAt(sabbath, now), (window) => window.end),

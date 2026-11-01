@@ -4935,7 +4935,14 @@ describe("AccountsRpcs", () => {
               }),
             ),
           })
-          expect(yield* client.accounts.lanes()).toEqual({ providers: [] })
+          // The report carries the server's clock as it built it, the clock
+          // its times are on.
+          const before = yield* Clock.currentTimeMillis
+          const bare = yield* client.accounts.lanes()
+          const after = yield* Clock.currentTimeMillis
+          expect(bare).toEqual({ providers: [], serverNow: expect.any(Number) })
+          expect(bare.serverNow).toBeGreaterThanOrEqual(before)
+          expect(bare.serverNow).toBeLessThanOrEqual(after)
           const turn = (content: string, earlierTurns: number) =>
             Effect.gen(function* () {
               const turnCompleted = yield* client.session.events({ sessionId, branchId }).pipe(

@@ -882,18 +882,25 @@ const readSnapshot = Effect.fn("Ctl.snapshot")(function* (
   })
 })
 
-/** `status`: the branch's runtime state and the server that answered. */
+/**
+ * `status`: the branch's runtime state and the server that answered. The
+ * snapshot carries the runtime's start and the server's now in one reply,
+ * both on the server's clock: `runningMs` is their difference, true on a
+ * ctl whose clock runs ahead or behind. A server older than `serverNow`
+ * is read against this clock, as before.
+ */
 const readStatus = Effect.fn("Ctl.status")(function* (
   connection: CtlConnection,
   target: CtlTarget,
 ) {
-  const state = yield* connection.client.session
-    .watchRuntime(target)
-    .pipe(Stream.runHead, Effect.mapError(rpcFailure))
-  if (Option.isNone(state))
-    return yield* new CtlFailed({ message: "the runtime stream ended at once" })
-  const runtime = state.value
-  const now = yield* Clock.currentTimeMillis
+  const snapshot = yield* connection.client.session
+    .getSnapshot(target)
+    .pipe(Effect.mapError(rpcFailure))
+  const runtime = snapshot.runtime
+  const now = yield* Option.match(Option.fromUndefinedOr(snapshot.serverNow), {
+    onNone: () => Clock.currentTimeMillis,
+    onSome: Effect.succeed,
+  })
   const fields = {
     ...target,
     runtime: runtime._tag,
@@ -1361,7 +1368,12 @@ const lanes = Command.make(
         }
         const connection = yield* connectCtl({ connect: input.connect, cwd: cwdOf(flags) })
         const report = yield* connection.client.accounts.lanes().pipe(Effect.mapError(rpcFailure))
-        const now = yield* Clock.currentTimeMillis
+        // The report's times are the server's: their ages read the server's
+        // now it sends, this clock only from a server older than the field.
+        const now = yield* Option.match(Option.fromUndefinedOr(report.serverNow), {
+          onNone: () => Clock.currentTimeMillis,
+          onSome: Effect.succeed,
+        })
         const rows = laneRows(report, now, LINE_WIDTH, DateTime.zoneMakeLocal())
         yield* printLines(rows.map((row) => row.text))
       }),

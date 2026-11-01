@@ -48,7 +48,8 @@ interface CtlRun {
  * `home`; collect its exit code and streams. `brokenStdout` makes a write to
  * stdout die, as a closed pipe can. `stdout` lets a test read stdout while
  * the call still runs. `stdin` is what the call reads on its stdin, which
- * then closes; none by default.
+ * then closes; none by default. `clock` is the call's own clock, not the
+ * server's; the wall clock by default.
  */
 const runCtl = (
   home: string,
@@ -57,6 +58,7 @@ const runCtl = (
     readonly brokenStdout?: boolean
     readonly stdout?: Ref.Ref<string>
     readonly stdin?: string
+    readonly clock?: Clock.Clock
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -64,7 +66,11 @@ const runCtl = (
     const err = yield* Ref.make("")
     const capture = (into: Ref.Ref<string>) =>
       Sink.forEach((chunk: string | Uint8Array) => Ref.update(into, (text) => text + String(chunk)))
-    const exit = yield* runCtlCli(args, "test").pipe(
+    const cli = Option.match(Option.fromUndefinedOr(options.clock), {
+      onNone: () => runCtlCli(args, "test"),
+      onSome: (clock) => runCtlCli(args, "test").pipe(Effect.provideService(Clock.Clock, clock)),
+    })
+    const exit = yield* cli.pipe(
       Effect.provide(
         Layer.mergeAll(
           BunServices.layer,
@@ -93,6 +99,28 @@ const runCtl = (
     })
     return { code, stdout: yield* Ref.get(out), stderr: yield* Ref.get(err) } satisfies CtlRun
   })
+
+/** The wall clock `skewMs` ahead (a negative skew: behind): a ctl on another machine. */
+const skewedClock = (skewMs: number): Clock.Clock => {
+  const wall = Clock.Clock.defaultValue()
+  const millis = () => wall.currentTimeMillisUnsafe() + skewMs
+  const nanos = () => wall.currentTimeNanosUnsafe() + BigInt(skewMs) * 1_000_000n
+  return {
+    currentTimeMillisUnsafe: millis,
+    currentTimeMillis: Effect.sync(millis),
+    currentTimeNanosUnsafe: nanos,
+    currentTimeNanos: Effect.sync(nanos),
+    monotonicTimeNanosUnsafe: () => wall.monotonicTimeNanosUnsafe(),
+    monotonicTimeNanos: wall.monotonicTimeNanos,
+    sleep: (duration) => wall.sleep(duration),
+  }
+}
+
+/** A ctl whose clock reads two minutes off the server's, either way. */
+const SKEWS = [
+  ["two minutes ahead of", 120_000],
+  ["two minutes behind", -120_000],
+] as const
 
 const decodeResult = Schema.decodeEffect(Schema.fromJsonString(CtlResult))
 const decodePoolLine = Schema.decodeEffect(Schema.fromJsonString(PoolFacts))
@@ -248,6 +276,42 @@ describe("gent ctl against a running server", () => {
       ),
     30_000,
   )
+
+  // The runtime's start is the server's time: a ctl whose clock is off reads
+  // how long the turn has run on the server's clock, from the snapshot's now.
+  for (const [where, skewMs] of SKEWS) {
+    it.live(
+      `status on a ctl ${where} the server reads how long the turn has run`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { home, server } = yield* serveScratchHome
+            const { client } = yield* Gent.client(server, { cwd: home })
+            const before = yield* Clock.currentTimeMillis
+            // The scripted turn runs `sleep 20`: it is running for a while.
+            yield* client.session.create({
+              cwd: home,
+              modelId: TEST_MODEL_ID,
+              initialPrompt: "debug ask",
+            })
+            const statusRun = runCtl(home, ["status", "--cwd", home], {
+              clock: skewedClock(skewMs),
+            }).pipe(Effect.flatMap(resultAs("Status")))
+            const status = yield* statusRun.pipe(
+              Effect.repeat({
+                until: (read) => (read.runningMs ?? 0) >= 1_000,
+                schedule: Schedule.spaced("50 millis"),
+              }),
+              Effect.timeout("10 seconds"),
+            )
+            const after = yield* Clock.currentTimeMillis
+            expect(status.runtime).not.toBe("Idle")
+            expect(status.runningMs).toBeLessThanOrEqual(after - before)
+          }).pipe(Effect.timeout("25 seconds")),
+        ),
+      30_000,
+    )
+  }
 
   it.live(
     "a send retried under one request id admits one message",
@@ -707,6 +771,44 @@ describe("gent ctl against a running server", () => {
       ),
     30_000,
   )
+
+  // The peer's last line is dated on the server's clock: `lanes --line`
+  // reads its age against the server's now the report carries.
+  for (const [where, skewMs] of SKEWS) {
+    it.live(
+      `lanes --line on a ctl ${where} the server reads the peer's age on the server's clock`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { home } = yield* serveScratchHome
+            const peerLine = yield* encodePoolLine({
+              boot: "peer",
+              host: "peer-host",
+              seq: 1,
+              providers: [],
+            })
+            yield* runCtl(home, ["pool", "--follow"], { stdin: `${peerLine}\n` }).pipe(
+              Effect.forkScoped,
+            )
+            // Seconds since the line, read until a whole second has passed: a
+            // client behind the server would read 0s, one ahead of it 2m.
+            const aged = /^peer peer-host 0 runs · [1-9]\d?s$/
+            const peerRow = runCtl(home, ["lanes", "--line"], { clock: skewedClock(skewMs) }).pipe(
+              Effect.map((run) => run.stdout.trimEnd().split("\n").at(-1) ?? ""),
+            )
+            const row = yield* peerRow.pipe(
+              Effect.repeat({
+                until: (line) => aged.test(line),
+                schedule: Schedule.spaced("50 millis"),
+              }),
+              Effect.timeout("10 seconds"),
+            )
+            expect(row).toMatch(aged)
+          }).pipe(Effect.timeout("25 seconds")),
+        ),
+      30_000,
+    )
+  }
 
   it.live("a flag or argument the parser refuses is one CtlUsage line and exit 2", () =>
     Effect.scoped(

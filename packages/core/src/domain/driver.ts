@@ -928,12 +928,16 @@ const LanePeer = Schema.Struct({
  * login on. Labels and numbers only. `sabbathEnd`: the end of the owner's
  * Sabbath while it holds every start (epoch ms); absent outside it. `peer`:
  * the other machine's server, once a line of it came or this server runs
- * its link.
+ * its link. `serverNow`: the server's clock as it built the report, the
+ * clock its times are on (a reset, an expiry, the peer's `heard.at`): a
+ * caller with no connection clock reads their ages against it, never
+ * against its own clock. Absent from a server older than the field.
  */
 export const LaneReport = Schema.Struct({
   providers: Schema.Array(ProviderLanes),
   sabbathEnd: Schema.optional(Schema.Finite),
   peer: Schema.optionalKey(LanePeer),
+  serverNow: Schema.optional(Schema.Finite),
 })
 export type LaneReport = typeof LaneReport.Type
 export type LaneAccount = typeof LaneAccount.Type
