@@ -39,13 +39,16 @@ The `sol` preset uses the newest `openai/sol` release at `high` for ordinary
 work and review. Only repetitive mechanical tasks use `openai/gpt-6-luna`
 at `max`, through an explicit child override. Other presets are explicit
 model comparisons. The `haiku` preset is the only one a live check may spend
-the owner's Anthropic accounts on.
+the owner's Anthropic accounts on; its reviews go to the OpenCode Go plan.
 
-The orchestrate reviewers run against the implementor's maker and need
-choices of two makers, so they list the reviewer's family, then the
-worker's. `machine.start` refuses an orchestrate run unless the preset's
-reviewer and worker come from different makers: `mixed` and `opus-luna`
-do.
+The orchestrate reviewers run against the implementor's maker and need a
+choice of another maker. By default they list the reviewer's family, then
+the worker's, so `machine.start` refuses an orchestrate run unless the
+preset's reviewer and worker come from different makers: `mixed` and
+`opus-luna` do. A preset can name its review choices instead
+(`reviewers`): `haiku` reviews on OpenCode Go's newest GLM, then its
+newest DeepSeek flash, both at `high`, and runs every other role on
+Haiku. Its first review choice is also the roster's second opinion.
 
 The TUI takes from the caller only its terminal basics (`PATH`, `SHELL`,
 `USER`, `LOGNAME`, `TMPDIR`, `LANG`) and the proxy variables
@@ -58,7 +61,8 @@ before `up` to send the run's Anthropic requests through the TeamClaude
 account pool rather than the owner's own account.
 
 Each preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
-`anthropic/fable`, `anthropic/haiku`), not releases. `up` and `list` resolve
+`anthropic/fable`, `anthropic/haiku`, `opencode-go/glm`,
+`opencode-go/deepseek-flash`), not releases. `up` and `list` resolve
 each family to its newest release in the models.dev catalog, by its
 models.dev `family` and release date, with core's rule
 (`newestCatalogRelease`). Offline, they
@@ -68,13 +72,13 @@ from `$GENT_DATA_DIR/data.db`, or the OS home directory's `.gent/data.db` when
 fresh scratch directory, opens only that copy read-only, validates the body,
 and removes the copy after reading. It reads no auth files. If there is no
 valid chat snapshot, the original fetch error is reported. A new Sol, Luna,
-Opus, Fable or Haiku release needs no edit here.
+Opus, Fable, Haiku, GLM or DeepSeek flash release needs no edit here.
 
 `up` copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
 repo, installs it, writes the preset into `work/.gent/config.json` (agents `main` and
 `delegate`, and the model `roles` the shipped orchestrate machines name: the
 reviewer as `planner` and `live-verifier`, the worker as `implementor`,
-`codemod` and `verifier`, and both, reviewer first, as `reviewer` and
+`codemod` and `verifier`, and the review choices as `reviewer` and
 `deep-reviewer`, each its family at its effort, which shadow the owner's roles
 of those names) and the roster block in `work/AGENTS.md`, runs the root build of **this** checkout
 (turbo: the `gent-cell` worker, then the `gent` binary beside it in

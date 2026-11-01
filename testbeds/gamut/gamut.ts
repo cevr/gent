@@ -75,16 +75,23 @@ interface Slot {
 /**
  * A preset pins three roles. The orchestrator is agent `main` and the worker
  * is agent `delegate` in `.gent/config.json`: the pairing every delegate
- * thread runs under when its start names no model. The reviewer reaches the
- * orchestrator through the roster block in `AGENTS.md`, which tells it what
- * `model` and `effort` to pass on a `thread.start` call that wants the second
- * opinion.
+ * thread runs under when its start names no model. The reviewer is the
+ * orchestrate planner and live verifier. `reviewers` are the review roles'
+ * choices in order (`reviewer` and `deep-reviewer`), by default the
+ * reviewer, then the worker; the first reaches the orchestrator through the
+ * roster block in `AGENTS.md`, which tells it what `model` and `effort` to
+ * pass on a `thread.start` call that wants the second opinion.
  */
 interface Preset {
   readonly orchestrator: Slot
   readonly worker: Slot
   readonly reviewer: Slot
+  readonly reviewers?: readonly [Slot, ...Array<Slot>]
 }
+
+/** The review roles' choices of `preset`, in order. */
+const reviewersOf = (preset: Preset): readonly [Slot, ...Array<Slot>] =>
+  preset.reviewers ?? [preset.reviewer, preset.worker]
 
 const slot = (modelId: string, reasoningEffort: string): Slot => ({ modelId, reasoningEffort })
 
@@ -101,6 +108,8 @@ const FAMILIES: Record<string, { readonly provider: string; readonly family: str
   "anthropic/opus": { provider: "anthropic", family: "claude-opus" },
   "anthropic/fable": { provider: "anthropic", family: "claude-fable" },
   "anthropic/haiku": { provider: "anthropic", family: "claude-haiku" },
+  "opencode-go/glm": { provider: "opencode-go", family: "glm" },
+  "opencode-go/deepseek-flash": { provider: "opencode-go", family: "deepseek-flash" },
 }
 
 export const PRESETS: Record<string, Preset> = {
@@ -129,11 +138,14 @@ export const PRESETS: Record<string, Preset> = {
     worker: slot("openai/luna", "max"),
     reviewer: slot("anthropic/opus", "high"),
   },
-  // The one preset an Anthropic live check may spend the owner's accounts on.
+  // The one preset an Anthropic live check may spend the owner's accounts
+  // on. Its reviews go to another maker on the OpenCode Go plan, so an
+  // orchestrate run can start.
   haiku: {
     orchestrator: slot("anthropic/haiku", "medium"),
     worker: slot("anthropic/haiku", "medium"),
     reviewer: slot("anthropic/haiku", "high"),
+    reviewers: [slot("opencode-go/glm", "high"), slot("opencode-go/deepseek-flash", "high")],
   },
 }
 
@@ -158,10 +170,12 @@ export const resolvePreset = (preset: Preset, catalog: ModelsDevCatalog): Preset
       family: { provider: entry.provider, family: entry.family },
     }
   }
+  const [first, ...rest] = reviewersOf(preset)
   return {
     orchestrator: resolveSlot(preset.orchestrator),
     worker: resolveSlot(preset.worker),
     reviewer: resolveSlot(preset.reviewer),
+    reviewers: [resolveSlot(first), ...rest.map(resolveSlot)],
   }
 }
 
@@ -220,16 +234,17 @@ const loadCatalog = async (): Promise<ModelsDevCatalog> => {
  * `main`, the worker as agent `delegate`, and the model roles the shipped
  * orchestrate machines name: the reviewer slot as `planner` and
  * `live-verifier`, the worker slot as `implementor`, `codemod` and
- * `verifier`, and both, reviewer first, as `reviewer` and `deep-reviewer`.
- * A project role shadows the owner's of its name, so a run never reaches a
- * model outside its preset. The reviewers run against the implementor's
- * maker, so a preset whose reviewer and worker share a maker cannot start
- * an orchestrate run.
+ * `verifier`, and the review choices (`reviewersOf`) as `reviewer` and
+ * `deep-reviewer`. A project role shadows the owner's of its name, so a run
+ * never reaches a model outside its preset. The reviewers run against the
+ * implementor's maker, so a preset whose review choices are all the
+ * worker's maker cannot start an orchestrate run.
  */
 export const presetConfigJson = (preset: Preset): string => {
-  // The reviewers run against the implementor: the worker's family is their
-  // second choice, so a role of two makers starts and leaves the worker's.
-  const reviewer = roleEntry(preset.reviewer, preset.worker)
+  // The reviewers run against the implementor: by default the worker's
+  // family is their second choice, so a role of two makers starts and
+  // leaves the worker's.
+  const reviewer = roleEntry(...reviewersOf(preset))
   const lead = roleEntry(preset.reviewer)
   const worker = roleEntry(preset.worker)
   return `${JSON.stringify(
@@ -273,7 +288,7 @@ export const rosterBlock = (preset: Preset): string =>
   [
     ROSTER_START,
     `- Worker (fix or feature): the \`delegate\` agent, paired in \`.gent/config.json\` as \`${preset.worker.modelId}\` at \`${preset.worker.reasoningEffort}\`.`,
-    `- Reviewer (second opinion on a diff): \`model\` = \`${preset.reviewer.modelId}\`, \`effort\` = \`${preset.reviewer.reasoningEffort}\``,
+    `- Reviewer (second opinion on a diff): \`model\` = \`${reviewersOf(preset)[0].modelId}\`, \`effort\` = \`${reviewersOf(preset)[0].reasoningEffort}\``,
     "- Repetitive mechanical changes following an established pattern only: `model` = `openai/gpt-6-luna`, `effort` = `max`. Include transformation rules, worked examples, and the validation command in the task.",
     ROSTER_END,
   ].join("\n")
@@ -548,7 +563,11 @@ const prepareAndLaunch = async (args: UpArgs, preset: Preset, root: string) => {
   console.log(`work  ${work}`)
   console.log(`data  ${data}`)
   console.log(
-    `preset ${presetName}  orchestrator ${preset.orchestrator.modelId}  worker ${preset.worker.modelId}  reviewer ${preset.reviewer.modelId}`,
+    `preset ${presetName}  orchestrator ${preset.orchestrator.modelId}  worker ${preset.worker.modelId}  reviewer ${preset.reviewer.modelId}  reviews ${reviewersOf(
+      preset,
+    )
+      .map((each) => each.modelId)
+      .join(", ")}`,
   )
 
   console.log("installing…")
@@ -1250,7 +1269,7 @@ const list = async () => {
     const preset = resolvePreset(named, catalog)
     const format = (s: Slot) => `${s.modelId}:${s.reasoningEffort}`
     console.log(
-      `${name.padEnd(14)} orchestrator ${format(preset.orchestrator).padEnd(34)} worker ${format(preset.worker).padEnd(34)} reviewer ${format(preset.reviewer)}`,
+      `${name.padEnd(14)} orchestrator ${format(preset.orchestrator).padEnd(34)} worker ${format(preset.worker).padEnd(34)} reviewer ${format(preset.reviewer).padEnd(34)} reviews ${reviewersOf(preset).map(format).join(", ")}`,
     )
   }
 }

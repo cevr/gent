@@ -85,6 +85,16 @@ const catalog = {
       "gpt-6-sol": release("gpt-sol", "2026-08-01"),
     },
   },
+  "opencode-go": {
+    models: {
+      "claude-haiku-5-5": release("claude-haiku", "2026-10-07"),
+      "glm-5.2": release("glm", "2026-06-13"),
+      "glm-5.3": release("glm", "2026-08-14"),
+      "glm-5.3-flash": release("glm-flash", "2026-08-26"),
+      "deepseek-v4-pro": release("deepseek-thinking", "2026-04-24"),
+      "deepseek-v4.1-flash": release("deepseek-flash", "2026-09-10"),
+    },
+  },
 }
 
 const preset = resolvePreset(PRESETS["opus-luna"]!, catalog)
@@ -101,6 +111,8 @@ describe("gamut model families", () => {
     expect(newest("anthropic/haiku")).toBe("anthropic/claude-haiku-5-5")
     expect(newest("openai/sol")).toBe("openai/gpt-6-sol")
     expect(newest("openai/luna")).toBe("openai/gpt-6-luna")
+    expect(newest("opencode-go/glm")).toBe("opencode-go/glm-5.3")
+    expect(newest("opencode-go/deepseek-flash")).toBe("opencode-go/deepseek-v4.1-flash")
   })
 
   test("every preset resolves each role to a catalog model and an effort", () => {
@@ -110,6 +122,10 @@ describe("gamut model families", () => {
         expect(role.modelId, name).toMatch(/^(anthropic\/claude|openai\/gpt)-/)
         expect(role.reasoningEffort, name).not.toBe("")
         expect(role.family?.family, name).toMatch(/^(claude|gpt)-[a-z]+$/)
+      }
+      for (const role of resolved.reviewers ?? []) {
+        expect(role.reasoningEffort, name).not.toBe("")
+        expect(role.family, name).toBeDefined()
       }
     }
   })
@@ -179,8 +195,35 @@ describe("gamut preset config", () => {
         ["anthropic", "openai"],
       ])
     }
-    // One family: one choice, so machine.start refuses it.
-    expect(providers("haiku")).toEqual([["anthropic"], ["anthropic"]])
+    // Haiku spends no other Anthropic model: its reviews go to OpenCode Go's GLM, then DeepSeek flash.
+    expect(providers("haiku")).toEqual([
+      ["opencode-go", "opencode-go"],
+      ["opencode-go", "opencode-go"],
+    ])
+  })
+
+  test("the haiku preset reviews on GLM, then DeepSeek flash, and runs everything else on Haiku", () => {
+    const resolved = resolvePreset(PRESETS["haiku"]!, catalog)
+    const config = Schema.decodeSync(Schema.fromJsonString(UserConfig))(presetConfigJson(resolved))
+    const families = (role: string) =>
+      (config.roles?.[role]?.models ?? []).map((model) => `${model.provider}/${model.family}`)
+    expect(families("reviewer")).toEqual(["opencode-go/glm", "opencode-go/deepseek-flash"])
+    expect(families("deep-reviewer")).toEqual(families("reviewer"))
+    for (const role of ["planner", "implementor", "codemod", "verifier", "live-verifier"])
+      expect(families(role), role).toEqual(["anthropic/claude-haiku"])
+    const role = Schema.Struct({ model: Schema.String })
+    const { agents } = Schema.decodeSync(
+      Schema.fromJsonString(
+        Schema.Struct({ agents: Schema.Struct({ main: role, delegate: role }) }),
+      ),
+    )(presetConfigJson(resolved))
+    expect([agents.main.model, agents.delegate.model]).toEqual([
+      "anthropic/claude-haiku-5-5",
+      "anthropic/claude-haiku-5-5",
+    ])
+    expect(rosterBlock(resolved)).toContain(
+      "second opinion on a diff): `model` = `opencode-go/glm-5.3`, `effort` = `high`",
+    )
   })
 
   test("an unresolved slot names no family, so it writes no config", () => {
