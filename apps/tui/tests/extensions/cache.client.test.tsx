@@ -1013,11 +1013,12 @@ const rowsOf = (rows: Option.Option<ReadonlyArray<NoticeRow>>) => Option.getOrTh
 /**
  * The client extension with a catalog the test sets, fed one history. The
  * session runs `selected` (Sonnet unless the test switches it); the timer
- * reads `clock`, a test clock at 0 unless the test passes its own.
+ * reads `clock`, a test clock at 0 unless the test passes its own, on the
+ * server's clock `offset` ahead of it (none by default).
  */
 const setupWithCatalog = (
   initial: Option.Option<ReadonlyArray<Model>>,
-  opts: { readonly clock?: TestClock.TestClock } = {},
+  opts: { readonly clock?: TestClock.TestClock; readonly offset?: number } = {},
 ) =>
   Effect.gen(function* () {
     const subscribers = new Set<(envelope: EventEnvelope) => void>()
@@ -1032,6 +1033,7 @@ const setupWithCatalog = (
         sessionEventSubscribers: subscribers,
         modelCatalog: catalog,
         selectedModel: () => Option.some(selected()),
+        serverClockOffset: () => Option.fromUndefinedOr(opts.offset),
       },
     )
     const deliver = (envelopes: ReadonlyArray<EventEnvelope>) => {
@@ -1822,6 +1824,33 @@ describe("cache timer label", () => {
       yield* waitUntil(() => extension.timer() === "cache cold [textMuted]", "the lifetime ran out")
     }).pipe(Effect.timeout("4 seconds")),
   )
+
+  // The request's start is a server time: the timer counts it on the
+  // server's clock, so a client whose clock is off reads the true time left.
+  for (const [label, offset] of [
+    ["120 s ahead of", -120_000],
+    ["120 s behind", 120_000],
+  ] as const) {
+    it.scopedLive(`a client ${label} the server counts the lifetime on the server's clock`, () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.make()
+        yield* clock.adjust("10 minutes")
+        const serverNow = 10 * MINUTE + offset
+        const extension = yield* setupWithCatalog(Option.some(models), { clock, offset })
+        // The request went out 64 s ago on the server's clock: 3m 56s of 5m left.
+        const history = makeHistory()
+        history.input(serverNow - 70 * SECOND, "t1")
+        history.step({
+          start: serverNow - 64 * SECOND,
+          end: serverNow - 60 * SECOND,
+          turn: "t1",
+          usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+        })
+        extension.deliver(history.envelopes)
+        yield* waitUntil(() => extension.timer() === "cache 4m [textMuted]", "3m 56s left")
+      }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
 
   it.scopedLive("a model switch reads cold before any request goes out", () =>
     Effect.gen(function* () {

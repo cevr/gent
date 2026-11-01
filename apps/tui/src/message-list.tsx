@@ -24,6 +24,7 @@ import {
   reasoningMarkdown,
   reasoningSummaries,
   repliesInView,
+  serverNowAt,
   summaryHeading,
   toolRunFrame,
   truncate,
@@ -368,6 +369,7 @@ const EVENT_TEXT_COLUMN = 4
  */
 function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const { theme } = useTheme()
+  const { serverClockOffset } = useClient()
   const dimensions = useTerminalDimensions()
   const lineWidth = () => Math.max(1, dimensions().width - EVENT_TEXT_COLUMN - FREE_LAST_COLUMN)
 
@@ -384,7 +386,8 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
         steps: props.disclosure !== "collapsed",
         width: lineWidth(),
       })
-    const label = getSessionEventLabel(event, currentMillis())
+    // A reset time is the server's: whether it is today reads the server's now.
+    const label = getSessionEventLabel(event, serverNowAt(serverClockOffset()))
     if (event._tag === "error" && props.disclosure !== "full") return cappedError(label)
     return label
   }

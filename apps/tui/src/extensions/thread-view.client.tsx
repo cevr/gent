@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Option } from "effect"
+import { Effect, Option } from "effect"
 import { createSignal, Show } from "solid-js"
 import {
   type BranchId,
@@ -243,6 +243,8 @@ interface ThreadController {
   readonly windows: () => ReadonlyArray<ThreadWindow>
   readonly sessions: () => number
   readonly current: () => { readonly sessionId: string; readonly branchId: string }
+  /** The now a window's age reads: the server's (`ClientTransport.serverNow`). */
+  readonly now: () => number
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: () => void
@@ -316,6 +318,7 @@ export const makeThreadController = (
       windows: () => loaded.value().windows,
       sessions: () => loaded.value().sessions,
       current: transport.currentSession,
+      now: transport.serverNow,
       error: loaded.error,
       loading: loaded.loading,
       refresh: loaded.refresh,
@@ -369,7 +372,7 @@ export function ThreadPane(props: {
   }
 
   const rowLine = (window: ThreadWindow): string => {
-    const age = formatAge(DateTime.toEpochMillis(DateTime.nowUnsafe()) - window.updatedAt)
+    const age = formatAge(props.controller.now() - window.updatedAt)
     const width = Math.max(0, rowWidth() - textWidth(age) - 2)
     const left = `${marker(window)}  ${windowLabel(window)}`
     return `${fitWidth(left, width)}  ${age}`

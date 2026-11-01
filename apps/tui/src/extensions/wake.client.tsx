@@ -306,7 +306,8 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
       }),
     )
 
-    const nowMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
+    // A due time, a deadline, a fire and a reset are server times.
+    const nowMillis = transport.serverNow
 
     // A pending entry changes nothing in this session until it fires, so the
     // list is re-read on a slow clock only while it shows something.
@@ -363,8 +364,8 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
         slot: "below-input",
         priority: 45,
         component: () => {
-          // Entries carry epoch times; the spinner clock re-reads the local
-          // clock so the countdown moves between server reads.
+          // Entries carry server times; the spinner clock re-reads the
+          // server's now so the countdown moves between server reads.
           const tick = useSpinnerClock()
           const now = () => {
             tick()

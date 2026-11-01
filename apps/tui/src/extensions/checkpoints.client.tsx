@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Clock, DateTime, Effect, Option, Random } from "effect"
+import { Clock, Effect, Option, Random } from "effect"
 import { createEffect, createSignal, on, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
 import {
@@ -260,6 +260,8 @@ const makeRevertController = Effect.gen(function* () {
   return {
     list: list.value,
     loading: list.loading,
+    // A turn's `createdAt` is the server's: its age reads the server's now.
+    now: transport.serverNow,
     error: () => Option.orElse(error(), list.error),
     canOverwrite: () => Option.isSome(refused()),
     revert: (entry: RevertEntry) => fresh(entry, entry.enter),
@@ -291,7 +293,7 @@ function RevertPane(props: { readonly controller: RevertController }) {
       if (open) controller.reset()
     }),
   )
-  const now = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
+  const now = controller.now
   const choosable = (entry: RevertEntry) => plainRow(entry, () => entry.line(rowWidth(), now()))
   const rows = (): ReadonlyArray<SelectListRow<RevertEntry>> => {
     const list = controller.list()

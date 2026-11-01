@@ -454,6 +454,20 @@ export const runningElapsed = (startedAt: Option.Option<number>, now: number) =>
     ),
   )
 
+/**
+ * This clock's `local` milliseconds on the server's clock: `offset` is the
+ * server's clock less this one (`serverClockOffset`). A server time (a row's
+ * `createdAt`, a run's start, a heard peer) is on the server's clock, so an
+ * age or a countdown reads its now here: a client never subtracts a server
+ * time from its own clock. With no offset yet it reads this clock.
+ */
+export const onServerClock = (local: number, offset: Option.Option<number>): number =>
+  local + Option.getOrElse(offset, () => 0)
+
+/** The wall clock's now on the server's clock (`onServerClock`). */
+export const serverNowAt = (offset: Option.Option<number>): number =>
+  onServerClock(DateTime.toEpochMillis(DateTime.nowUnsafe()), offset)
+
 /** A clock field (0 to 59, a month, a day) as two digits. */
 const twoDigits = (n: number) => `${Math.floor(n / 10)}${n % 10}`
 

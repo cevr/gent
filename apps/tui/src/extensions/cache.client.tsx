@@ -22,6 +22,7 @@ import {
   formatTokens,
   type NoticeRow,
   noticeRowContribution,
+  onServerClock,
   statusLabelContribution,
   type StatusLabelItem,
 } from "@gent/tui/extensions"
@@ -980,7 +981,13 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
               promptCacheTtlMsFor(model, last.child),
             )
             const pricing = Option.flatMap(entry, (model) => Option.fromUndefinedOr(model.pricing))
-            const clock = cacheClock(state.refresh, lifetime, transport.selectedModel(), now())
+            // The refresh is a server time: its age reads the tick on the server's clock.
+            const clock = cacheClock(
+              state.refresh,
+              lifetime,
+              transport.selectedModel(),
+              onServerClock(now(), transport.serverClockOffset()),
+            )
             return Option.toArray(
               Option.map(clock, (value) =>
                 cacheClockLabel(value, {

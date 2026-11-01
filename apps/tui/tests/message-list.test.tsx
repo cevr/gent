@@ -232,6 +232,36 @@ describe("session event labels", () => {
     expect(getSessionEventLabel(event)).toBe("Interrupted · what should gent do instead?")
   })
 
+  // Whether a reset is today reads the server's now. A skew shows only where
+  // it moves now across midnight, so the client is a day off: the reset is
+  // the server's now, today on its clock, and another day on the client's.
+  for (const [where, skewMs] of [
+    ["behind", 24 * 60 * 60_000],
+    ["ahead of", -24 * 60 * 60_000],
+  ] as const) {
+    it.scopedLive(`a client a day ${where} the server reads a reset today as a time`, () =>
+      Effect.gen(function* () {
+        const event: SessionEvent = SessionEvent.cases.error.make({
+          error: "Rate limit exceeded",
+          retryAt: currentMillis() + skewMs,
+          createdAt: 1,
+          seq: 1,
+        })
+        const setup = yield* renderScoped(
+          () => (
+            <OnServerClock skewMs={skewMs}>
+              <MessageList items={[event]} disclosure="preview" syntaxStyle={syntaxStyle} />
+            </OnServerClock>
+          ),
+          { width: 80, height: 10 },
+        )
+        const frame = yield* waitForFrame(setup, (next) => next.includes("resets"), "the row")
+        const row = frame.split("\n").find((line) => line.includes("Rate limit exceeded")) ?? ""
+        expect(row.trimEnd()).toMatch(/^ {2}✗ Rate limit exceeded · resets \d\d:\d\d$/)
+      }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
+
   // A settled retry shows at the preview level, where it happened.
   it.scopedLive("a wrapped retry row hangs its next line under the text", () =>
     Effect.gen(function* () {

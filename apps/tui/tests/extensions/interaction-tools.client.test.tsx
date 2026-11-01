@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option, Schema } from "effect"
+import { DateTime, Effect, Option, Schema } from "effect"
 import { createRoot, createSignal } from "solid-js"
 import { type OpenQuestionType, QUESTION_ANSWER_TYPE } from "@gent/extensions/client"
 import { MessageId, QueueEntryInfo } from "@gent/core/protocol"
@@ -421,4 +421,47 @@ describe("/answer", () => {
       yield* Effect.promise(() => runtime.dispose())
     }).pipe(Effect.timeout("8 seconds")),
   )
+})
+
+// A question's `askedAt` is a server time: the pane counts it on the
+// server's clock, so a client whose clock is off reads the true age.
+describe("/answer clock", () => {
+  for (const [label, offset] of [
+    ["120 s ahead of", -120_000],
+    ["120 s behind", 120_000],
+  ] as const) {
+    it.scopedLive(`a client ${label} the server reads a question's age on the server's clock`, () =>
+      Effect.gen(function* () {
+        const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + offset
+        const asked: OpenQuestionType = { ...cache, askedAt: serverNow - 5 * 60_000 - 30_000 }
+        const client = createMockClient({
+          extension: {
+            request: () => Effect.succeed({ questions: [asked] }),
+          },
+        })
+        const runtime = makeClientExtensionRuntime({
+          transport: {
+            ...makeClientTestTransport({ serverClockOffset: () => Option.some(offset) }),
+            client,
+          },
+        })
+        const contributions = yield* runClientExtensionSetup(runtime, interactionToolsExtension)
+        const answer = Option.getOrThrow(
+          Option.fromUndefinedOr(
+            contributions.commands?.find((command) => command.id === "answer"),
+          ),
+        )
+        const widgets = contributions.widgets ?? []
+        const setup = yield* renderScoped(
+          () => <box flexDirection="column">{widgets.map((widget) => widget.component())}</box>,
+          { width: 120, height: 30 },
+        )
+        yield* waitForFrame(setup, (frame) => frame.includes("1 open question"), "the tray")
+        answer.onSelect()
+        yield* waitForFrame(setup, (frame) => frame.includes("Question 1/1"), "the pane")
+        expect(renderFrame(setup)).toMatch(/Question 1\/1 · cache · asked 5m \d+s ago/)
+        yield* Effect.promise(() => runtime.dispose())
+      }).pipe(Effect.timeout("8 seconds")),
+    )
+  }
 })

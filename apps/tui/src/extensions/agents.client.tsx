@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Option, Order, Predicate, Schedule, Schema } from "effect"
+import { Effect, Option, Order, Predicate, Schedule, Schema } from "effect"
 import { createEffect, createRoot, createSignal, For, on, Show } from "solid-js"
 import {
   AgentRowEntry,
@@ -375,7 +375,7 @@ interface AgentsController {
   /** The machine runs the open pane lists, and the run page it shows. */
   readonly runs: RunsController
   /**
-   * This clock's now on the server's (`serverClockOffset`): a row's last
+   * This clock's now on the server's (`ClientTransport.serverNow`): a row's last
    * step, a turn's start and a run's start are server times, so each age
    * the pane shows reads against it. This clock's own before the first
    * snapshot measured the offset.
@@ -902,9 +902,7 @@ export const makeAgentsController = (
       open,
       done,
       runs,
-      now: () =>
-        DateTime.toEpochMillis(DateTime.nowUnsafe()) +
-        Option.getOrElse(transport.serverClockOffset(), () => 0),
+      now: transport.serverNow,
       watched,
     }
   })

@@ -110,6 +110,7 @@ export {
   formatUsageStats,
   modelIdName,
   isReferenceablePath,
+  onServerClock,
   type LaneRow,
   laneRows,
   type PathPlace,

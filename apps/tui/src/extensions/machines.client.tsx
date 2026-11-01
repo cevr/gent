@@ -231,11 +231,12 @@ export default defineClientExtension(statusRef.extensionId, {
         slot: "below-input",
         priority: 50,
         component: () => {
-          // Ages and waits read the local clock; the spinner clock redraws them.
+          // A heard peer, a run's start, a wait and a reset are server times:
+          // they read the server's now. The spinner clock redraws them.
           const tick = useSpinnerClock()
           const now = () => {
             tick()
-            return DateTime.toEpochMillis(DateTime.nowUnsafe())
+            return transport.serverNow()
           }
           return <LanesBand data={band.value} now={now} />
         },

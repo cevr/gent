@@ -97,13 +97,15 @@ interface PaneLog {
 
 /**
  * The pane over a server whose `checkpoints.list` answers `listed` and whose
- * `checkpoints.revert` answers `outcomes` in order; `state` is the session's.
+ * `checkpoints.revert` answers `outcomes` in order; `state` is the session's,
+ * `offset` the server's clock less this one.
  */
 const openPane = (
   width: number,
   listed: CheckpointListType,
   outcomes: ReadonlyArray<RevertOutcomeType> = [],
   state: ClientActivitySnapshot["state"] = "idle",
+  offset = Option.none<number>(),
 ) =>
   Effect.gen(function* () {
     const log: PaneLog = { requests: [], notes: [], switched: [] }
@@ -120,7 +122,7 @@ const openPane = (
       session: { thread: () => Effect.succeed([{ id: "test-session", name: "Parser work" }]) },
     })
     const contributions = yield* provideClientServices(checkpointsClient.setup, {
-      transport: { ...makeClientTestTransport(), client },
+      transport: { ...makeClientTestTransport({ serverClockOffset: () => offset }), client },
       shell: {
         pane: makePaneSlot(),
         notify: (message) => {
@@ -187,6 +189,29 @@ describe("revert pane", () => {
         yield* waitForFrame(setup, (frame) => !frame.includes("Revert ·"), "the pane closed")
       }).pipe(Effect.timeout("10 seconds")),
   )
+
+  // A turn's `createdAt` is a server time: its age reads the server's clock.
+  for (const [label, offset] of [
+    ["120 s ahead of", -120_000],
+    ["120 s behind", 120_000],
+  ] as const) {
+    it.scopedLive(`a client ${label} the server reads each turn's age on the server's clock`, () =>
+      Effect.gen(function* () {
+        const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + offset
+        const onServer: CheckpointListType = {
+          turns: list.turns.map((row) => ({
+            ...row,
+            createdAt: serverNow - (NOW - row.createdAt),
+          })),
+        }
+        const { setup } = yield* openPane(120, onServer, [], "idle", Option.some(offset))
+        expect(renderFrame(setup)).toContain(
+          "#1 · fix the parser so it reads nested lists · +12 -3 in 2 files · 12m",
+        )
+        expect(renderFrame(setup)).toContain("#3 · add the lexer · +12 -3 in 2 files · 2h")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
 
   it.scopedLive(
     "f reverts files only; a refusal names the paths, o writes them with the same request, and the note names what it kept",

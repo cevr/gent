@@ -74,6 +74,7 @@ import {
   type PathPlace,
   runningCallLabel,
   lostRequest,
+  onServerClock,
   randomId,
   SEND_RETRY,
   useRequiredContext,
@@ -2424,15 +2425,11 @@ export function useSessionFeed(
   /**
    * Every event that needs no streaming state: a message, a turn boundary, a
    * tool start, or a transcript notice. `occurredAt` is the envelope's
-   * server time, live or replayed: a tool call's start keeps it, so its timer
-   * reads the same on a live feed and on a resume.
+   * server time, live or replayed: each row it draws is dated by it, so the
+   * row sorts among the stored messages, and a tool call's timer reads the
+   * same on a live feed and on a resume.
    */
-  const applySettledEvent = (
-    event: AgentEvent,
-    occurredAt: number,
-    stampedAt: number,
-    live: boolean,
-  ) => {
+  const applySettledEvent = (event: AgentEvent, occurredAt: number, live: boolean) => {
     switch (event._tag) {
       case "MessageReceived":
         // A replayed message is already in the snapshot unless it is standalone.
@@ -2456,7 +2453,7 @@ export function useSessionFeed(
         if (event.interrupted === true)
           settleRetryingEvents(setStore, "cancelled", ["pending", "stopped"])
         else settleRetryingEvents(setStore, "retried", ["pending", "stopped"])
-        appendTurnEndRow(event, stampedAt)
+        appendTurnEndRow(event, occurredAt)
         return
 
       case "ToolCallStarted":
@@ -2477,14 +2474,14 @@ export function useSessionFeed(
             delayMs: event.delayMs,
             outcome: "pending",
             reason: event.error,
-            createdAt: stampedAt,
+            createdAt: occurredAt,
             seq: eventSeq++,
           }),
         )
         // The retry's request goes out `delayMs` after its row; an answer not
         // yet drawn dates from then, so the row sits above it. Core's own
         // clock readers date the request the same way (`knownRequestStart`).
-        answerStartedAt = stampedAt + event.delayMs
+        answerStartedAt = occurredAt + event.delayMs
         return
 
       case "ErrorOccurred":
@@ -2495,11 +2492,11 @@ export function useSessionFeed(
           appendSessionEvent(
             setStore,
             SessionEvent.cases.notice.make({
-              key: `error:${stampedAt}:${seq}`,
+              key: `error:${occurredAt}:${seq}`,
               glyph: "●",
               color: "textMuted",
               text: event.error,
-              createdAt: stampedAt,
+              createdAt: occurredAt,
               seq,
             }),
           )
@@ -2513,7 +2510,7 @@ export function useSessionFeed(
           SessionEvent.cases.error.make({
             error: event.error,
             retryAt: event.retryAt,
-            createdAt: stampedAt,
+            createdAt: occurredAt,
             seq: eventSeq++,
           }),
         )
@@ -2576,12 +2573,12 @@ export function useSessionFeed(
    */
   const openStreamedAnswer = (
     event: Extract<AgentEvent, { _tag: "StreamStarted" }>,
-    stampedAt: number,
+    occurredAt: number,
     live: boolean,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const durable = Option.some(String(assistantMessageIdForTurn(event.messageId, event.step)))
-      answerStartedAt = stampedAt
+      answerStartedAt = occurredAt
       if (!live) {
         setOpenAnswer(Option.filter(durable, (id) => !snapshotAnswers.has(id)))
         return
@@ -2597,11 +2594,11 @@ export function useSessionFeed(
    */
   const appendStreamedChunk = (
     chunk: Extract<AgentEvent, { _tag: "StreamChunk" }>,
-    stampedAt: number,
+    occurredAt: number,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
       const open = openAnswer()
-      if (Option.isNone(open)) answerStartedAt = stampedAt
+      if (Option.isNone(open)) answerStartedAt = occurredAt
       const id = yield* Option.match(open, {
         onNone: () => randomId,
         onSome: Effect.succeed,
@@ -2619,13 +2616,13 @@ export function useSessionFeed(
    */
   const appendTurnEndRow = (
     event: Extract<AgentEvent, { _tag: "TurnCompleted" }>,
-    stampedAt: number,
+    occurredAt: number,
   ) => {
     const steps = takeTurnSteps()
     if (event.interrupted === true) {
       appendSessionEvent(
         setStore,
-        SessionEvent.cases.interruption.make({ createdAt: stampedAt, seq: eventSeq++ }),
+        SessionEvent.cases.interruption.make({ createdAt: occurredAt, seq: eventSeq++ }),
       )
       return
     }
@@ -2634,7 +2631,7 @@ export function useSessionFeed(
       SessionEvent.cases["turn-ended"].make({
         durationSeconds: Math.round(event.durationMs / 1000),
         steps,
-        createdAt: stampedAt,
+        createdAt: occurredAt,
         seq: eventSeq++,
       }),
     )
@@ -2892,10 +2889,10 @@ export function useSessionFeed(
    *
    * `replay` covers envelopes at or before the snapshot cursor: the snapshot
    * already holds their settled message, tool, and metric state, so replay
-   * rebuilds the event-only UI rows and the answer still in progress, and
-   * stamps them with the recorded time.
-   * `live` covers everything after it and stamps rows with the current time so
-   * they sort after the snapshot's own rows.
+   * rebuilds the event-only UI rows and the answer still in progress.
+   * `live` covers everything after it. Both stamp a row with its envelope's
+   * server time, the clock the stored messages are on, so a live row sorts
+   * among them as a replayed one does, whatever this client's clock reads.
    */
   const processEvent = (
     envelope: EventEnvelope,
@@ -2906,9 +2903,6 @@ export function useSessionFeed(
       const event = envelope.event
       const live = pass === "live"
       if (live) client.log.debug("feed.event", { key, tag: event._tag })
-      // A replayed row keeps the time it happened; a live row takes the clock.
-      let stampedAt = envelope.createdAt
-      if (live) stampedAt = yield* Clock.currentTimeMillis
 
       // Interactions belong to the composer, not the transcript.
       if (routeInteraction(event)) return
@@ -2926,17 +2920,17 @@ export function useSessionFeed(
           // A new step means the last step's retries ran.
           settleRetryingEvents(setStore, "retried")
           if (live) setRunningCalls([])
-          yield* openStreamedAnswer(event, stampedAt, live)
+          yield* openStreamedAnswer(event, envelope.createdAt, live)
           break
 
         case "StreamChunk":
           // The answer streams: the retry ran.
           settleRetryingEvents(setStore, "retried")
-          yield* appendStreamedChunk(event, stampedAt)
+          yield* appendStreamedChunk(event, envelope.createdAt)
           break
 
         default:
-          applySettledEvent(event, envelope.createdAt, stampedAt, live)
+          applySettledEvent(event, envelope.createdAt, live)
           break
       }
     })
@@ -3581,16 +3575,20 @@ export function createSessionController(props: {
         ),
     ),
   )
-  // The retry counts down on the clock its row was stamped by, which the
-  // timer reads each second: the turn's start plus the time it has run, both
-  // on this clock.
+  // The retry's row is dated on the server's clock (its envelope's time), so
+  // it counts down on the server's now: the timer's now, which moves each
+  // second, through the server clock offset. A client whose clock runs ahead
+  // or behind reads the same seconds left.
   const retryPhase = (retry: Extract<SessionEvent, { _tag: "retrying" }>): string =>
     getSessionEventLabel(
       retry,
-      Option.match(timerStart(), {
-        onNone: currentMillis,
-        onSome: (start) => start + elapsed(),
-      }),
+      onServerClock(
+        Option.match(timerStart(), {
+          onNone: currentMillis,
+          onSome: (start) => start + elapsed(),
+        }),
+        client.serverClockOffset(),
+      ),
     )
 
   // What the model works on, as Codex's status header names it: the newest

@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Option, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { createSignal, For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
 import {
@@ -427,7 +427,8 @@ export default defineClientExtension(INTERACTION_TOOLS_EXTENSION_ID, {
       shell.pane.open(QUESTIONS_PANE)
       open.refresh()
     }
-    const nowMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
+    // A question's `askedAt` is a server time.
+    const nowMillis = transport.serverNow
     return clientContributions(
       interactionRendererContribution(PromptRenderer, "prompt"),
       interactionRendererContribution(AskUserRenderer, ASK_USER_INTERACTION_TYPE),

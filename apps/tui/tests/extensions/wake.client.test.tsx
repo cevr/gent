@@ -412,3 +412,57 @@ describe("wake tray reads", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 })
+
+// A deadline and a fire are server times: the tray counts them on the
+// server's clock, so a client whose clock is off reads the true time left.
+describe("wake tray clock", () => {
+  for (const [label, offset] of [
+    ["120 s ahead of", -120_000],
+    ["120 s behind", 120_000],
+  ] as const) {
+    it.scopedLive(
+      `a client ${label} the server reads time left and time since on the server's clock`,
+      () =>
+        Effect.gen(function* () {
+          const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + offset
+          const reply: WakePendingType = {
+            now: serverNow,
+            entries: [
+              WakeEntry.cases.monitor.make({
+                wakeId: "m1",
+                command: "gh run view 12 --exit-status",
+                everySeconds: 60,
+                deadline: serverNow + 25 * 60_000 + 30_000,
+                note: "merge when green",
+              }),
+              WakeEntry.cases.notice.make({
+                wakeId: "n",
+                outcome: "fired",
+                firedAt: serverNow - 5 * 60_000 - 30_000,
+                content: "Alarm n fired.",
+                note: "stand up",
+              }),
+            ],
+          }
+          const options = {
+            requestReply: reply,
+            serverClockOffset: () => Option.some(offset),
+          }
+          const contributions = yield* provideClientServices(wakeExtension.setup, {
+            ...options,
+            transport: makeClientTestTransport(options),
+          })
+          const tray = Option.getOrThrow(
+            Option.fromUndefinedOr(
+              contributions.widgets?.find((widget) => widget.id === "wake.tray"),
+            ),
+          )
+          const setup = yield* renderScoped(() => <tray.component />, { width: 80, height: 6 })
+          yield* waitForFrame(setup, () => renderFrame(setup).includes("monitor every"), "tray")
+          const frame = renderFrame(setup)
+          expect(frame).toMatch(/monitor every 1m 0s · 25m \d+s left · merge when green/)
+          expect(frame).toMatch(/fired 5m \d+s ago · stand up/)
+        }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
+})

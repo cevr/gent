@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Option } from "effect"
+import { DateTime, Deferred, Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import * as Prompt from "effect/ai/Prompt"
 import {
@@ -258,6 +258,7 @@ describe("thread pane", () => {
             windows: () => [base, second],
             sessions: () => 1,
             current: () => ({ sessionId, branchId }),
+            now: () => 60_000,
             error: () => Option.none(),
             loading: () => false,
             refresh: () => {},
@@ -330,4 +331,51 @@ describe("Thread controller across a session switch", () => {
       expect(controller.sessions()).toBe(0)
     }).pipe(Effect.timeout("20 seconds")),
   )
+})
+
+// A window's `updatedAt` is its last message's server time: its age reads
+// the server's clock, so a client whose clock is off reads the true age.
+describe("Thread pane ages", () => {
+  for (const [label, offset] of [
+    ["120 s ahead of", -120_000],
+    ["120 s behind", 120_000],
+  ] as const) {
+    it.scopedLive(`a client ${label} the server reads a window's age on the server's clock`, () =>
+      Effect.gen(function* () {
+        const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + offset
+        const controller = yield* provideClientServices(
+          makeThreadController(
+            () => Effect.succeed([session("s1")]),
+            () =>
+              Effect.succeed([
+                message("u1", "user", "first ask", serverNow - 9 * 60_000),
+                message("a1", "assistant", "first answer", serverNow - 7 * 60_000),
+              ]),
+            () => Effect.succeed(0),
+          ),
+          {
+            currentSession: () => ({ sessionId, branchId }),
+            serverClockOffset: () => Option.some(offset),
+          },
+        )
+        controller.refresh()
+        const setup = yield* renderScoped(
+          () => (
+            <ThreadPane
+              open={true}
+              controller={controller}
+              onSelect={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 80, height: 20 },
+        )
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("window 1"), "the window row")
+        const row = renderFrame(setup)
+          .split("\n")
+          .find((line) => line.includes("window 1"))
+        expect(row).toMatch(/ 7m\s*$/)
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
 })

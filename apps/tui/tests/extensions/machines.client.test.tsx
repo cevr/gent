@@ -736,4 +736,55 @@ describe("the lanes band reads", () => {
       yield* shows("≡ lanes anthropic unknown")
     }).pipe(Effect.timeout("4 seconds")),
   )
+
+  // A heard peer and a run's start are server times: the band reads them on
+  // the server's clock, so a client whose clock is off reads the true ages.
+  for (const [label, offset] of [
+    ["120 s ahead of", -120_000],
+    ["120 s behind", 120_000],
+  ] as const) {
+    it.scopedLive(
+      `a client ${label} the server reads the peer's and a run's age on the server's clock`,
+      () =>
+        Effect.gen(function* () {
+          const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + offset
+          const report = withPeer({
+            ...linked,
+            heard: { host: "workbox", at: serverNow - 5 * MINUTE },
+          })
+          const options = {
+            serverClockOffset: () => Option.some(offset),
+            requestEffect: () => Effect.succeed([run({ createdAt: serverNow - 9 * MINUTE })]),
+          }
+          const base = makeClientTestTransport(options)
+          const transport = {
+            ...base,
+            client: createMockClient({
+              extension: base.client.extension,
+              accounts: { lanes: () => Effect.succeed(report) },
+            }),
+          }
+          const contributions = yield* provideClientServices(machinesExtension.setup, {
+            ...options,
+            transport,
+          })
+          const band = Option.getOrThrow(
+            Option.fromUndefinedOr(
+              contributions.widgets?.find((widget) => widget.id === "machines.band"),
+            ),
+          )
+          const setup = yield* renderScoped(() => <band.component />, { width: 120, height: 6 })
+          yield* waitForFrame(
+            setup,
+            () => renderFrame(setup).includes("⇄") && renderFrame(setup).includes("▸"),
+            "the run and peer rows",
+          )
+          const lines = renderFrame(setup).split("\n")
+          expect(lines.find((line) => line.includes("▸"))?.trim()).toBe("▸ track implement r2 9m")
+          expect(lines.find((line) => line.includes("⇄"))?.trim()).toBe(
+            "⇄ peer workbox 2 runs · 5m",
+          )
+        }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
 })

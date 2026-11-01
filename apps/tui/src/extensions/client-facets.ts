@@ -36,7 +36,7 @@ import type { JSX } from "@opentui/solid"
 import { RGBA } from "@opentui/core"
 import { NamedThemeColor } from "../theme"
 import type { Handover } from "../os"
-import { repliesInView, type ReplyWriter } from "../utils"
+import { repliesInView, type ReplyWriter, serverNowAt } from "../utils"
 
 // ── effect boundary ─────────────────────────────────────────────────────────
 
@@ -201,6 +201,12 @@ export interface ClientTransport {
    */
   readonly serverClockOffset: () => Option.Option<number>
   /**
+   * The wall clock's now on the server's clock, in epoch milliseconds
+   * (`onServerClock`): what an age or a countdown of a server time reads.
+   * Reactive in the offset; this clock's own now before the first snapshot.
+   */
+  readonly serverNow: () => number
+  /**
    * The server's account lanes (`accounts.lanes`): each provider gent read a
    * quota window of, its free lanes and its fuel rates. The accounts are the
    * server's, so no session names the read.
@@ -272,6 +278,7 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   selectedModel: payload.selectedModel,
   connection: payload.connection,
   serverClockOffset: payload.serverClockOffset,
+  serverNow: () => serverNowAt(payload.serverClockOffset()),
   // Built when it runs: building the facet reaches no server.
   accountLanes: Effect.suspend(() =>
     shellRead(payload, "accounts.lanes", (client) => client.accounts.lanes()),

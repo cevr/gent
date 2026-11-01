@@ -7296,10 +7296,16 @@ describe("TUI renderer surfaces", () => {
           },
           initialSession: sessionNamed(sessionId, branchId, "Retry phase"),
         })
+        // The server's clock is the test clock (the snapshot measured no
+        // offset): each event is dated when it is sent.
         const event = (id: number, agentEvent: AgentEvent) =>
           Queue.offer(
             events,
-            EventEnvelope.make({ id: EventId.make(id), createdAt: id, event: agentEvent }),
+            EventEnvelope.make({
+              id: EventId.make(id),
+              createdAt: clock.currentTimeMillisUnsafe(),
+              event: agentEvent,
+            }),
           )
         yield* waitForFrame(setup, (next) => next.includes("✻ Thinking ·"), "the turn")
         yield* event(
@@ -7346,14 +7352,191 @@ describe("TUI renderer surfaces", () => {
       }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // A retry is dated on the server's clock, live or replayed after a
+  // reconnect: a client whose clock is off counts down the true seconds left.
+  for (const [where, skewMs] of [
+    ["two minutes behind", 120_000],
+    ["two minutes ahead of", -120_000],
+  ] as const) {
+    // A replayed retry is at or before the snapshot's cursor.
+    for (const [pass, lastEventId] of [
+      ["live", nullValue],
+      ["replayed", EventId.make(1)],
+    ] as const) {
+      it.scopedLive(
+        `a ${pass} pending retry counts down the server's seconds on a client ${where} it`,
+        () =>
+          Effect.gen(function* () {
+            const clock = yield* TestClock.make()
+            yield* clock.adjust(Duration.minutes(10))
+            const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+            const sessionId = SessionId.make("session-retry-skew")
+            const branchId = BranchId.make("branch-retry-skew")
+            const serverNow = () => clock.currentTimeMillisUnsafe() + skewMs
+            const running = SessionRuntimeStateSchema.cases.Running.make({
+              startedAtMs: serverNow() - 2_000,
+              queue: emptyQueueSnapshot(),
+            })
+            const events = yield* Queue.unbounded<EventEnvelope>()
+            // The retry was sent a second ago, to wait 5 s: 4 s are left.
+            yield* Queue.offer(
+              events,
+              EventEnvelope.make({
+                id: EventId.make(1),
+                createdAt: serverNow() - 1_000,
+                event: AgentEvent.cases.ProviderRetrying.make({
+                  sessionId,
+                  branchId,
+                  attempt: 1,
+                  maxAttempts: 3,
+                  delayMs: 5_000,
+                  error: "Rate limit exceeded",
+                }),
+              }),
+            )
+            const { setup } = yield* mountApp({
+              runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
+              client: {
+                session: {
+                  getSnapshot: () =>
+                    Effect.succeed({
+                      sessionId,
+                      branchId,
+                      messages: [],
+                      lastEventId,
+                      reasoningLevel: absent,
+                      agent: AgentName.make("main"),
+                      runtime: running,
+                      metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+                      serverNow: serverNow(),
+                    }),
+                  watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+                  events: () => Stream.fromQueue(events),
+                },
+              },
+              initialSession: sessionNamed(sessionId, branchId, "Retry skew"),
+            })
+            yield* waitForFrame(
+              setup,
+              (next) => next.includes("✻ Retrying in 4s · 1/3 · Rate limit exceeded"),
+              "4s left",
+            )
+            yield* clock.adjust(Duration.seconds(2))
+            yield* waitForFrame(setup, (next) => next.includes("✻ Retrying in 2s · 1/3"), "2s left")
+          }).pipe(Effect.timeout("10 seconds")),
+      )
+    }
+  }
+
+  // A live row and a stored message sort by time. The stored messages carry
+  // the server's times, so a live row does too: on this client's clock the
+  // turn line of a client behind the server sorts above its answer, and that
+  // of a client ahead of it sorts below the next ask.
+  for (const [where, skewMs] of [
+    ["two minutes behind", 120_000],
+    ["two minutes ahead of", -120_000],
+  ] as const) {
+    it.scopedLive(
+      `a live turn line sits between its answer and the next ask on a client ${where} the server`,
+      () =>
+        Effect.gen(function* () {
+          const clock = yield* TestClock.make()
+          yield* clock.adjust(Duration.minutes(10))
+          const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+          const sessionId = SessionId.make("session-order")
+          const branchId = BranchId.make("branch-order")
+          const running = SessionRuntimeStateSchema.cases.Running.make({
+            startedAtMs: clock.currentTimeMillisUnsafe() + skewMs,
+            queue: emptyQueueSnapshot(),
+          })
+          const events = yield* Queue.unbounded<EventEnvelope>()
+          const serverNow = () => clock.currentTimeMillisUnsafe() + skewMs
+          const { setup } = yield* mountApp({
+            runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
+            client: {
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed({
+                    sessionId,
+                    branchId,
+                    messages: [],
+                    lastEventId: nullValue,
+                    reasoningLevel: absent,
+                    agent: AgentName.make("main"),
+                    runtime: running,
+                    metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+                    serverNow: serverNow(),
+                  }),
+                watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+                events: () => Stream.fromQueue(events),
+              },
+            },
+            initialSession: sessionNamed(sessionId, branchId, "Order"),
+          })
+          let next = 0
+          /** A live event, dated `at` ms after the server's now. */
+          const event = (agentEvent: AgentEvent, at: number) => {
+            next += 1
+            return Queue.offer(
+              events,
+              EventEnvelope.make({
+                id: EventId.make(next),
+                createdAt: serverNow() + at,
+                event: agentEvent,
+              }),
+            )
+          }
+          const message = (id: string, role: "user" | "assistant", text: string, at: number) =>
+            event(
+              AgentEvent.cases.MessageReceived.make({
+                message: StoredMessage.cases.regular.make({
+                  id: MessageId.make(id),
+                  sessionId,
+                  branchId,
+                  role,
+                  parts: [Prompt.textPart({ text })],
+                  createdAt: dateFromMillis(serverNow() + at),
+                }),
+              }),
+              at,
+            )
+          yield* waitForFrame(setup, (frame) => frame.includes("✻ Thinking ·"), "the turn")
+          yield* message("answer", "assistant", "ORDER-ANSWER", 1_000)
+          yield* event(
+            AgentEvent.cases.TurnCompleted.make({
+              streamFailed: false,
+              sessionId,
+              branchId,
+              durationMs: 3_000,
+            }),
+            2_000,
+          )
+          yield* message("next-ask", "user", "ORDER-NEXT-ASK", 10_000)
+          const shown = () => `${terminalText(setup)}\n${renderFrame(setup)}`
+          yield* waitForFrame(
+            setup,
+            () => shown().includes("ORDER-NEXT-ASK") && shown().includes("Worked for 3s"),
+            "the next ask",
+          )
+          const text = shown()
+          const answer = text.indexOf("ORDER-ANSWER")
+          const line = text.indexOf("Worked for 3s")
+          expect(answer).toBeGreaterThanOrEqual(0)
+          expect(answer).toBeLessThan(line)
+          expect(line).toBeLessThan(text.indexOf("ORDER-NEXT-ASK"))
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+
   // ── the live line's reasoning heading ──
   // Codex's status indicator names what the model works on: the newest
   // heading of its reasoning (`**Investigating rendering code**`), never the
   // reasoning itself, and `Thinking` until a heading arrives.
 
   /**
-   * A turn that started at 100 on a test clock that reads 0, so the live line
-   * shows no count. `event` feeds it live events; `attempts` is the turn's
+   * A turn that started at 100 on the server's clock, whose snapshot the
+   * server sent at 200 to a test clock that reads 0: the turn is 100 ms old,
+   * so the live line shows no count, and every event it sends is dated by 200. `event` feeds it live events; `attempts` is the turn's
    * model-call receipt, which the status row reads.
    */
   const mountLiveLine = (width: number, attempts: Option.Option<ModelAttempts> = Option.none()) =>
@@ -7392,7 +7575,7 @@ describe("TUI renderer surfaces", () => {
                     onSome: (turnModelAttempts) => ({ turnModelAttempts }),
                   }),
                 },
-                serverNow: 0,
+                serverNow: 200,
               }),
             watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
             events: () => Stream.fromQueue(events),
