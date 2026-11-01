@@ -7564,17 +7564,20 @@ describe("TUI renderer surfaces", () => {
             yield* view.step("step-1", headed)
             // The turn's budget line lands after the step, inside the same turn.
             yield* view.budgetLine(`budget-${used}`, used, 8)
+            // The status row counts the calls left. It draws its right group
+            // only once the catalog and the root walk answer, which can be a
+            // frame after the notice and the heading, so the wait names it too.
+            const statusCounts = (next: string) =>
+              next.split("\n").some((row) => row.includes(status) && !row.includes("model calls"))
             const frame = yield* waitForFrame(
               view.setup,
-              (next) => next.includes(notice) && view.liveLine(next).includes("Investigating"),
-              "the budget line and the heading",
+              (next) =>
+                next.includes(notice) &&
+                view.liveLine(next).includes("Investigating") &&
+                statusCounts(next),
+              "the budget line, the heading and the status row's count",
             )
             expectLiveLine(view.liveLine(frame), heading, width)
-            // The status row counts the calls left.
-            const rows = frame.split("\n")
-            expect(rows.some((row) => row.includes(status) && !row.includes("model calls"))).toBe(
-              true,
-            )
           }).pipe(Effect.timeout("10 seconds")),
       )
     }
