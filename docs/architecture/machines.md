@@ -103,10 +103,16 @@
     (the same choice and note again is admitted, any other conflicts), an
     ask never answered and no longer current is stale, a choice not offered
     is invalid. At most four commands run at once in one server
-    (`MAX_ACTIVE_MACHINE_COMMANDS`), from the spawn to the step that records
-    the exit. Rounds take no permit: a round's account lane bounds it, and
-    the threads cap bounds the rounds one starter runs. A command killed by a
-    crash is never rerun, so a restart owes no permit. Named command limits use
+    (`MAX_ACTIVE_MACHINE_COMMANDS`): a `run` state takes a permit before its
+    `Dispatched` commit (and before a named permit's wait) and gives it back
+    at the driver's next read after the exit, the stop or the ask commits. A
+    poke (a stop, an answer) takes a run out of the permit's wait, so a stop
+    settles without waiting for a permit. Rounds take no permit. The threads
+    cap (`threads.maxRunning`, 4 by default) bounds the rounds one host
+    session runs at once; an account with quota readings paces its rounds by
+    its lane, and one with none (an API key) is bounded only by that cap. A
+    command killed by a crash asks `interrupted` and never runs again, so an
+    asking run and a restart hold no permit. Named command limits use
     `ExtensionContext.Permits.with`, shared with every participating caller
     in this server. The command captures only the permit facade and holds
     it through its process scope's cleanup. An omitted limit means 1; a

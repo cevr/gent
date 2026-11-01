@@ -321,7 +321,8 @@ boot comes from four rules, each in the place that owns the work:
 - **Machine rounds and commands:** one server-wide permit,
   `MAX_ACTIVE_MACHINE_STEPS` (4), held by a driver for the length of each
   round or command, in every process lifetime, not only at boot (B9b). The
-  rounds that a crash left open count against it first.
+  rounds that a crash left open count against it first. (Superseded
+  2026-10-31: commands only, no tickets; see B9b.)
 - **Other thread rounds** that threads' `loopOpen` reconcile re-sends on an
   opened host stay under the existing per-starter cap
   (`threads.ts:977-1003`). They were running when the server stopped.
@@ -1059,7 +1060,7 @@ is the `machine-run:<run>` record firing at start, or the host's `loopOpen`.
 | stop: after the commit, before the thread stop                            | stopped, Round open                                                               | `settleStop` stops the thread with key `machine-stop:<run>`                                                                                                                                       |
 | host session deleted                                                      | no run rows, no wake rows                                                         | nothing                                                                                                                                                                                           |
 | branch generation rebuilt mid-command                                     | Command, the fiber was interrupted with its scope; the finalizer killed the group | `loopOpen` arms the driver: `stopStaleProcess` finds the group gone; asks `interrupted`                                                                                                           |
-| boot, many runs mid-step                                                  | several Round or Command pendings                                                 | each takes its ticket of the step permit before any new dispatch (B9b)                                                                                                                            |
+| boot, many runs mid-step                                                  | several Round or Command pendings                                                 | superseded 2026-10-31: no ticket; cut rounds re-send through the threads reconcile                                                                                                                |
 
 "A server restart in the middle of a round reruns no completed round" holds
 because a completed round lives in `machine_steps` and `context_json`, and every
@@ -1451,6 +1452,10 @@ passing. These cases are added:
   then a `no-verdict` ask. A worker that replies `{ "next": 7 }`: the same.
 
 ### C7. The boot budget
+
+> Superseded (2026-10-31, queue row 45): rounds take no permit. The tests
+> now assert that twenty runs open twenty rounds and that four commands run
+> at once (machines.test.ts, "the machine boot budget").
 
 - Twenty runs on twenty host branches, each left by SQL in `running` with no
   pending action, and each with an `AtStart` row. One root starts with the

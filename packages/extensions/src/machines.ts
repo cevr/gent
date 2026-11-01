@@ -1040,7 +1040,8 @@ const MAX_ACTIVE_MACHINE_COMMANDS = 4
 
 /**
  * The command permits: one per running `run` state's process, held per run
- * from before its `Dispatched` commit to its receipt or its ask. Rounds take
+ * from before its `Dispatched` commit to the driver's next read after the
+ * command's exit, stop or ask commits. Rounds take
  * none: their lanes admit them by the pace (`ExtensionContext.Accounts`,
  * lanes.md), so a step count would only leave quota unspent. A crashed
  * command never runs again (`recoverCommand`), so a restart owes no permit.
@@ -2408,7 +2409,12 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
       return
     }
     case "run": {
-      yield* store.permits.acquire(run.run)
+      // A poke (a stop, an answer) leaves the wait, and the driver reads the row again.
+      const admitted = yield* Effect.raceFirst(
+        Effect.as(store.permits.acquire(run.run), true),
+        Effect.as(Queue.take(signals.pokes), false),
+      )
+      if (!admitted) return
       const ctx = yield* ExtensionContext
       const action = PendingAction.cases.Command.make({
         state: name,

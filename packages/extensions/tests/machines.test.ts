@@ -2296,36 +2296,34 @@ describe("a machine waits out its account", () => {
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
   )
 
-  it.live(
-    "rounds that wait for the account hold no command permit: a command runs beside four of them",
-    () =>
-      Effect.gen(function* () {
-        const home = yield* restartableHome
-        const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
-        const worker = (round: RoundCall) =>
-          Effect.succeed(billed(`${round.state} ${round.visit} done`))
-        const reset = (yield* Clock.currentTimeMillis) + HOUR
-        // As many waiting rounds as the server runs commands at once: a command still runs beside them.
-        const tags = ["wait-1", "wait-2", "wait-3", "wait-4"]
-        const models = yield* makeModels(worker, quotaOwner(readings))
-        const { client } = yield* createRpcClient(home.layerFor(machineModels(models), oneAccount))
-        const owner = ownerOf(yield* client.session.create({}))
-        yield* Ref.set(readings, rejectedUntil(reset))
-        const runs = yield* Effect.forEach(tags, (tag) =>
-          startRunOn(client, owner, ONE_VISIT, "one-visit", tag),
-        )
-        yield* Effect.forEach(runs, (run) =>
-          waitFor(
-            home.sql(pendingWait(run)),
-            (until) => Option.contains(until, reset),
-            10_000,
-            `${run} waits for the reset`,
-          ),
-        )
-        const command = yield* startRunOn(client, owner, ONE_COMMAND, "one-command")
-        yield* waitFor(home.sql(runRow(command)), isSettled, 10_000, "the command ran beside them")
-        expect(yield* Ref.get(models.calls)).toEqual([])
-      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  it.live("a command runs beside four rounds that wait for the account", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+      const worker = (round: RoundCall) =>
+        Effect.succeed(billed(`${round.state} ${round.visit} done`))
+      const reset = (yield* Clock.currentTimeMillis) + HOUR
+      // As many waiting rounds as the server runs commands at once: a command still runs beside them.
+      const tags = ["wait-1", "wait-2", "wait-3", "wait-4"]
+      const models = yield* makeModels(worker, quotaOwner(readings))
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models), oneAccount))
+      const owner = ownerOf(yield* client.session.create({}))
+      yield* Ref.set(readings, rejectedUntil(reset))
+      const runs = yield* Effect.forEach(tags, (tag) =>
+        startRunOn(client, owner, ONE_VISIT, "one-visit", tag),
+      )
+      yield* Effect.forEach(runs, (run) =>
+        waitFor(
+          home.sql(pendingWait(run)),
+          (until) => Option.contains(until, reset),
+          10_000,
+          `${run} waits for the reset`,
+        ),
+      )
+      const command = yield* startRunOn(client, owner, ONE_COMMAND, "one-command")
+      yield* waitFor(home.sql(runRow(command)), isSettled, 10_000, "the command ran beside them")
+      expect(yield* Ref.get(models.calls)).toEqual([])
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
   )
 
   it.live("a run that waits for its account across a restart keeps its time", () =>
@@ -4262,7 +4260,7 @@ const ranLines = (cwd: string) =>
 
 describe("the machine boot budget", () => {
   it.live(
-    "twenty runs left running open all their rounds at once: lanes, not a step count, bound them",
+    "twenty runs on twenty hosts open all their rounds at once: no server-wide step count",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
@@ -4379,6 +4377,102 @@ describe("the machine boot budget", () => {
       )
       expect(yield* ranLines(home.cwd)).toBe(5)
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a stop on a run that waits for a command permit settles at once", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(twoAsksWorker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const running = yield* Effect.forEach([1, 2, 3, 4], (index) =>
+        startRunOn(client, owner, GATED_COMMAND, "gated-command", `gated-${index}`),
+      )
+      yield* waitFor(ranLines(home.cwd), (count) => count >= 4, 10_000, "four commands started")
+      const waiting = yield* startRunOn(client, owner, GATED_COMMAND, "gated-command", "gated-5")
+      yield* settle
+      const [stopped] = yield* call(client, owner, [
+        ["machine.stop", "stop-waiting", { run: waiting }],
+      ])
+      expect(stopped?.failed).toBe(false)
+      // The four still run: the stop did not wait for a permit to free.
+      const row = yield* waitFor(home.sql(runRow(waiting)), isSettled, 5_000, "the stop settled")
+      expect(Option.map(row, (found) => found.status)).toEqual(Option.some("stopped"))
+      expect(yield* ranLines(home.cwd)).toBe(4)
+      yield* FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.writeFileString(`${home.cwd}/gate`, "")),
+        Effect.provide(BunServices.layer),
+      )
+      yield* Effect.forEach(running, (run) =>
+        waitFor(home.sql(runRow(run)), isSettled, 15_000, `${run}'s end was told`),
+      )
+      expect(yield* ranLines(home.cwd)).toBe(4)
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live(
+    "commands a restart cut ask interrupted and hold no permit: a new command runs while they ask",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels(twoAsksWorker)
+        const { cut, owner } = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+            const owner = ownerOf(yield* client.session.create({}))
+            const cut = yield* Effect.forEach([1, 2, 3, 4], (index) =>
+              startRunOn(client, owner, GATED_COMMAND, "gated-command", `cut-${index}`),
+            )
+            yield* waitFor(
+              ranLines(home.cwd),
+              (count) => count >= 4,
+              10_000,
+              "four commands started",
+            )
+            return { cut, owner }
+          }),
+        )
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        yield* waitFor(home.sql(allAsking(cut)), Boolean, 15_000, "the cut commands asked")
+        // Nobody answers the four asks; a new command still gets a permit.
+        const fresh = yield* startRunOn(client, owner, GATED_COMMAND, "gated-command", "fresh")
+        yield* waitFor(ranLines(home.cwd), (count) => count >= 5, 10_000, "the new command started")
+        yield* FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) => fs.writeFileString(`${home.cwd}/gate`, "")),
+          Effect.provide(BunServices.layer),
+        )
+        yield* waitFor(home.sql(runRow(fresh)), isSettled, 15_000, "the new command's end was told")
+      }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
+    65_000,
+  )
+
+  it.live("six runs on one host open four rounds at once; the threads cap holds the rest", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const gate = yield* Deferred.make<boolean>()
+      const open = yield* Ref.make(0)
+      const most = yield* Ref.make(0)
+      const order = yield* Ref.make<ReadonlyArray<string>>([])
+      const models = yield* makeModels(gatedWorker(gate, open, most, order))
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const runs = yield* Effect.forEach([1, 2, 3, 4, 5, 6], (index) =>
+        startRun(
+          client,
+          owner,
+          BUDGET,
+          "budget",
+          { tag: `one-host-${index}` },
+          `one-host-${index}`,
+        ),
+      )
+      yield* waitFor(Ref.get(open), (count) => count >= 4, 10_000, "four rounds opened")
+      yield* settle
+      expect(yield* Ref.get(open)).toBe(4)
+      yield* Deferred.succeed(gate, true)
+      yield* waitFor(home.sql(allAsking(runs)), Boolean, 30_000, "every run reached its ask")
+      expect(yield* Ref.get(most)).toBe(4)
+    }).pipe(Effect.scoped, Effect.timeout("50 seconds")),
   )
 })
 
