@@ -79,11 +79,16 @@ long-running work.
    alone on its local ledger, at a reduced share (half the pace, guess),
    and shows that on the band. It retries with T3's backoff. When the link
    returns, open local lanes register with the authority.
-5. **Accounts.** The authority holds the credentials (row: TeamClaude
-   tokens into gent). The Mac never holds a refresh token, so one holder
-   rotates each token family (lanes.md "Cause"). The Mac's model calls
-   still go direct: the grant names the slot, and the authority hands a
-   short-lived access token with it.
+5. **Accounts.** While TeamClaude runs beside gent (owner, 2026-10-31:
+   "side by side until I'm more confident"), each machine's gent sends its
+   Anthropic calls through that machine's TeamClaude proxy, and TeamClaude
+   stays the one holder of each token family. At the cutover the authority
+   holds the credentials. The Mac never holds a refresh token, so one
+   holder rotates each token family (lanes.md "Cause"). The Mac's model
+   calls still go direct: the grant names the slot, and the authority
+   hands a short-lived access token with it. Measured 2026-10-31: the Mac
+   and the workbox TeamClaude hold different refresh tokens for the same
+   account, so today each install may hold its own family.
 6. **Cross-machine threads** (later). A thread may start a child on the
    other machine (`environment` on `delegate.start`), as T3's remote
    delegation: the child is an ordinary thread there, and the parent wakes
@@ -104,4 +109,5 @@ long-running work.
 2. Grants and leases, readings flow up. Test: two servers on one scripted
    account; the sum of open lanes holds under the pace.
 3. Offline fallback.
-4. Credentials on the authority (with the TeamClaude import).
+4. Credentials on the authority, at the TeamClaude cutover only (the
+   owner decides when).
