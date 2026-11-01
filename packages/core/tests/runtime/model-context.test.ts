@@ -3667,6 +3667,119 @@ describe("AI transcript projection", () => {
     expect(boundedResult.text.length).toBeLessThanOrEqual(maximumModelToolResultChars)
   })
 
+  test("a succeeded call's ok receipts leave the model view as a count; failed and incomplete ones stay whole; the stored message keeps them all", () => {
+    const receipt = (key: string, tool: string, outcome: string, summary: string) => ({
+      toolCallId: `cell:${key.repeat(64)}`,
+      tool,
+      outcome,
+      summary,
+    })
+    const read = receipt("a", "read", "succeeded", "src/app.ts · 40 lines")
+    const bash = receipt("b", "bash", "failed", "exit 1: bun test failed")
+    const write = receipt("c", "write", "succeeded", "wrote src/app.ts")
+    const fetch = receipt("d", "fetch", "incomplete", "")
+    const cellMessage = (id: string, result: Schema.Json) => {
+      const part = Prompt.toolResultPart({
+        id: ToolCallId.make(id),
+        name: "cell",
+        isFailure: false,
+        providerExecuted: false,
+        result,
+      })
+      const message = baseMessage({
+        id: MessageId.make(`tool-${id}`),
+        sessionId: SessionId.make("session"),
+        branchId: BranchId.make("branch"),
+        role: "tool",
+        parts: [part],
+      })
+      return { part, message }
+    }
+    const seen = (message: Message) =>
+      toPromptMessages([message]).flatMap((prompt) => {
+        if (prompt.role !== "tool") return []
+        return prompt.content.flatMap((part) => {
+          if (part.type !== "tool-result") return []
+          return [part.result]
+        })
+      })
+
+    const stored = { display: "done", operations: [read, bash, write, fetch] }
+    const mixed = cellMessage("tc-mixed", stored)
+    expect(seen(mixed.message)).toEqual([
+      { display: "done", operations: [bash, fetch], succeededOperations: 2 },
+    ])
+    expect(mixed.message.parts[0]).toEqual(mixed.part)
+    expect(mixed.part.result).toEqual(stored)
+
+    // All succeeded: no list, only the count.
+    const allOk = cellMessage("tc-ok", { display: "", operations: [read, write] })
+    expect(seen(allOk.message)).toEqual([{ display: "", succeededOperations: 2 }])
+
+    // A fresh read of the same stored result, as each request makes, is the same bytes.
+    const again = cellMessage("tc-mixed", structuredClone(stored))
+    const wire = (message: Message) =>
+      Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(seen(message))
+    expect(wire(again.message)).toBe(wire(mixed.message))
+  })
+
+  test("the model reads a failed call's receipts, receipts none of which succeeded, and other operations as stored", () => {
+    const receipt = (key: string, outcome: string) => ({
+      toolCallId: `cell:${key.repeat(64)}`,
+      tool: "mark",
+      outcome,
+      summary: `marked ${key}`,
+    })
+    const cases: ReadonlyArray<readonly [string, boolean, Schema.Json]> = [
+      [
+        "a failed cell",
+        true,
+        {
+          error: "The cell worker state was lost.",
+          stateLost: true,
+          operations: [receipt("a", "succeeded"), receipt("b", "incomplete")],
+        },
+      ],
+      ["none succeeded", false, { display: "", operations: [receipt("c", "failed")] }],
+      ["not receipts", false, { operations: ["step one", "step two"] }],
+      ["no receipts", false, { display: "plain" }],
+    ]
+    for (const [name, isFailure, result] of cases) {
+      const part = Prompt.toolResultPart({
+        id: ToolCallId.make("tc-as-stored"),
+        name: "cell",
+        isFailure,
+        providerExecuted: false,
+        result,
+      })
+      expect({ name, seen: boundToolResultForModel(part).result }).toEqual({ name, seen: result })
+    }
+  })
+
+  test("a bounded result with receipts counts the stored text, every receipt included, for paging", () => {
+    const receipts = ["a", "b", "c"].map((key) => ({
+      toolCallId: `cell:${key.repeat(64)}`,
+      tool: "read",
+      outcome: "succeeded",
+      summary: `file-${key}.ts · 10 lines`,
+    }))
+    const stored = { display: "x".repeat(maximumModelToolResultChars * 2), operations: receipts }
+    const bounded = Schema.decodeUnknownSync(BoundedToolResult)(
+      boundToolResultForModel(
+        Prompt.toolResultPart({
+          id: ToolCallId.make("tc-bounded-receipts"),
+          name: "cell",
+          isFailure: false,
+          providerExecuted: false,
+          result: stored,
+        }),
+      ).result,
+    )
+    expect(bounded.totalChars).toBe(encodeWire(stored).length)
+    expect(bounded.result).toMatchObject({ succeededOperations: 3 })
+    expect(bounded.result).not.toHaveProperty("operations")
+  })
+
   test("the whole bounded result the model sees, paging fields included, fits the bound", () => {
     let nested: Schema.Json = { level: 0 }
     for (let level = 1; level < 800; level += 1) nested = { level, next: nested }

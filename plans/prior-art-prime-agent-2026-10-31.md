@@ -124,6 +124,7 @@ PA paths are relative to the PA root. gent paths are relative to the gent root.
 - **North star:** cheap per task.
 - **Evidence:** measured that receipts reach the model (`cell.ts:2133`, no strip in `model-context.ts`). The size per op is inferred (about 50-70 tokens). The saving grows with inner calls per cell and with the number of later requests.
 - **Check first:** count `operations` bytes in real cell results in the gent database (`cell_tool_operations` and the stored tool results) over a week of sessions. Read whether recovery or replay reads `operations` back from the model-facing result. The memory note "a model view that shows less needs a separate field" applies: add one `modelView` projection; do not fork the stored shape.
+- **Outcome (2026-11-01):** built as queue row 47 (numbers and design there). Two departures from this shape. Failed and incomplete receipts keep their ids, so `context.read` can name them; the 40 failed and 12 incomplete receipts in the measure are too few for the ids to matter. The projection is core's, a pure function of the stored part (`operationReceiptsForModel`), not a per-tool `modelView` hook: the prompt build has no registry, and a view keyed on the advertised tools would change earlier results' bytes when the tool set flips.
 
 ### 2. Show a cell result to the model as plain text
 

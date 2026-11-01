@@ -86,7 +86,9 @@ import {
   type ToolRecoveryCall,
   ToolRunner,
   toolResultSummary,
+  type ToolOperationReceipt,
   type TurnStop,
+  withToolOperationReceipts,
 } from "@gent/core/extensions/branch-tools"
 import { SqlClient } from "effect/sql"
 import { Decision } from "effect/ai"
@@ -2069,19 +2071,7 @@ export const cellInteractionOwner = (
 
 // ── operation receipt ───────────────────────────────────────────────────────
 
-/** Compact record of one admitted inner call. It stays in the saved cell result. */
-const CellOperationReceipt = Schema.Struct({
-  toolCallId: ToolCallId,
-  tool: Schema.String,
-  outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
-  summary: Schema.String,
-})
-type CellOperationReceipt = typeof CellOperationReceipt.Type
-
-const CELL_OPERATIONS_KEY = "operations"
-
 const decodeJsonObject = Schema.decodeUnknownOption(Schema.JsonObject)
-const encodeReceipts = Schema.encodeSync(Schema.Array(CellOperationReceipt))
 
 /**
  * Tools bound for this cell call, by tool id. A receipt reads the author's
@@ -2089,7 +2079,8 @@ const encodeReceipts = Schema.encodeSync(Schema.Array(CellOperationReceipt))
  */
 type ReceiptTools = ReadonlyMap<string, ResolvedToolCapability>
 
-const receiptFor = (operation: CellToolOperation, tools: ReceiptTools): CellOperationReceipt => {
+/** The receipt of one admitted inner call (`ToolOperationReceipt`). */
+const receiptFor = (operation: CellToolOperation, tools: ReceiptTools): ToolOperationReceipt => {
   if (operation.state._tag !== "Completed") {
     return {
       toolCallId: operation.toolCallId,
@@ -2098,7 +2089,7 @@ const receiptFor = (operation: CellToolOperation, tools: ReceiptTools): CellOper
       summary: "",
     }
   }
-  let outcome: CellOperationReceipt["outcome"] = "succeeded"
+  let outcome: ToolOperationReceipt["outcome"] = "succeeded"
   if (operation.state.result.isFailure) outcome = "failed"
   return {
     toolCallId: operation.toolCallId,
@@ -2117,7 +2108,9 @@ const receiptFor = (operation: CellToolOperation, tools: ReceiptTools): CellOper
 
 /**
  * Attach inner-operation receipts to a saved cell result. The transcript keeps
- * effects visible after reload. Cells without inner calls stay unchanged.
+ * effects visible after reload; the model sees the ones that did not succeed
+ * (`operationReceiptsForModel` in core). Cells without inner calls stay
+ * unchanged.
  */
 const withCellOperationReceipts = Effect.fn("CellOperationReceipt.attach")(function* (
   cell: OwnedToolCallAddress,
@@ -2129,8 +2122,8 @@ const withCellOperationReceipts = Effect.fn("CellOperationReceipt.attach")(funct
   if (operations.length === 0) return result
   const value = decodeJsonObject(result.result)
   if (Option.isNone(value)) return result
-  const receipts = encodeReceipts(operations.map((entry) => receiptFor(entry.operation, tools)))
-  return { ...result, result: { ...value.value, [CELL_OPERATIONS_KEY]: receipts } }
+  const receipts = operations.map((entry) => receiptFor(entry.operation, tools))
+  return { ...result, result: withToolOperationReceipts(value.value, receipts) }
 })
 
 /**
@@ -3059,17 +3052,19 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
   // outcome is incomplete; a completed one is read back with context.read.
   const latest = yield* operations.listForToolCall(params.cell)
   const tools = yield* recoveredReceiptTools(params, latest)
-  const receipts = encodeReceipts(latest.map(({ operation }) => receiptFor(operation, tools)))
+  const receipts = latest.map(({ operation }) => receiptFor(operation, tools))
   const result = Prompt.toolResultPart({
     id: params.cell.toolCallId,
     name: "cell",
     isFailure: true,
     providerExecuted: false,
-    result: {
-      error: `The cell worker state was lost. Its source was not replayed. ${operationEffectsNote(latest.map((entry) => entry.operation))}`,
-      stateLost: true,
-      [CELL_OPERATIONS_KEY]: receipts,
-    },
+    result: withToolOperationReceipts(
+      {
+        error: `The cell worker state was lost. Its source was not replayed. ${operationEffectsNote(latest.map((entry) => entry.operation))}`,
+        stateLost: true,
+      },
+      receipts,
+    ),
   })
   yield* cells.complete(params.cell, result)
   return result
@@ -3216,7 +3211,7 @@ export const CellTool = tool({
     `A tool image (an object tagged ToolImage, such as an entry of an MCP result's images) that the cell returns or logs reaches you as an image after the result, the newest ${maximumCellImages} per cell; one the cell only binds or reads stays text. Show only the images you need to see.`,
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
-    "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId, and renters: the held items that have cost the most so far (id, kind prompt/reply/tool/handoff, tool, tokens, rent in input-token units, calls carried). When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
+    "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues). A cell result lists its inner calls that failed or did not finish, each with its id, and counts the rest as succeededOperations; context.read of the cell's own tool call id returns every receipt. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId, and renters: the held items that have cost the most so far (id, kind prompt/reply/tool/handoff, tool, tokens, rent in input-token units, calls carried). When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],

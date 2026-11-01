@@ -48,6 +48,7 @@ export { type ResolvedToolCapability, type ToolCallGate, ToolRunner } from "../r
 export { KeptToolCallVerdict } from "../domain/capability.js"
 export { getToolMetadata } from "../domain/capability.js"
 export { toolResultSummary } from "../domain/capability.js"
+export { ToolOperationReceipt, withToolOperationReceipts } from "../domain/capability.js"
 
 // Running a turn's worth of work, and stopping when the turn is interrupted.
 export {

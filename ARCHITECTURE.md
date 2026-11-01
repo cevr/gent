@@ -36,7 +36,7 @@ an invariant updates both lists in the same commit.
 7. **Approvals are one-shot and fail closed.** One durable ask, nothing saved, no answerer means no; the `toolCall` hook's strictest verdict wins.
 8. **Each model step is classified once.** Persistence and the continue/stop policy match on one `StepOutcome`.
 9. **Retry policy belongs to the driver.** The loop re-runs a step; the driver says what is transient and when (`retryAt`).
-10. **Tool results are bounded before the model sees them.** 8,000 characters inline, the rest paged; images by reference and bounded.
+10. **Tool results are bounded before the model sees them.** 8,000 characters inline, the rest paged; succeeded inner-call receipts as a count; images by reference and bounded.
 11. **A model change is a durable user-role notice the loop writes.** Effort changes ride the cache-keeping markers.
 12. **Tool guidance lives on the tool and follows the active tool list.**
 13. **The cell runs in full Bun.** No sandbox, no interpreter.

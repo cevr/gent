@@ -672,6 +672,77 @@ export const toolResultSummary = (
   })
 }
 
+// ── operation receipts ──────────────────────────────────────────────────────
+
+/**
+ * Compact record of one inner call a dispatching tool admitted (a cell's
+ * `tools.*` call). The tool attaches its receipts to its saved result
+ * (`withToolOperationReceipts`); the stored message, the transcript and every
+ * client keep them all. The model sees them through
+ * `operationReceiptsForModel`.
+ */
+export const ToolOperationReceipt = Schema.Struct({
+  toolCallId: ToolCallId,
+  tool: Schema.String,
+  outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
+  summary: Schema.String,
+})
+export type ToolOperationReceipt = typeof ToolOperationReceipt.Type
+
+/** The saved result's field that holds its receipts. */
+const OPERATION_RECEIPTS_KEY = "operations"
+
+/** The model view's field that counts the succeeded receipts it leaves out. */
+const SUCCEEDED_OPERATIONS_KEY = "succeededOperations"
+
+const encodeOperationReceipts = Schema.encodeSync(Schema.Array(ToolOperationReceipt))
+const decodeOperationReceipts = Schema.decodeUnknownOption(Schema.Array(ToolOperationReceipt))
+const decodeResultObject = Schema.decodeUnknownOption(Schema.JsonObject)
+
+/** `value` with `receipts` under the receipts field, last. */
+export const withToolOperationReceipts = (
+  value: Schema.JsonObject,
+  receipts: ReadonlyArray<ToolOperationReceipt>,
+): Schema.JsonObject => ({ ...value, [OPERATION_RECEIPTS_KEY]: encodeOperationReceipts(receipts) })
+
+/**
+ * A saved tool result as the model sees its receipts. A call that succeeded
+ * ran the model's own code, which read what each inner call returned, so its
+ * succeeded receipts (about 60 tokens each, paid again in every later
+ * request) repeat what the model has: they leave the view, and
+ * `succeededOperations` counts them, so a cell that showed nothing still says
+ * its calls ran. Failed and incomplete receipts stay whole, their ids
+ * included for `context.read`. A failed call keeps every receipt: what acted
+ * before it failed is the record the model reconciles without a replay. A
+ * result whose receipts do not decode stays as it is.
+ *
+ * Decided by: a pure function of the stored part, applied to every request,
+ * so an earlier result reads the same bytes in each later request and the
+ * cached prefix holds. `context.read(toolCallId)` pages the stored result,
+ * every receipt included.
+ */
+export const operationReceiptsForModel = (part: Prompt.ToolResultPart): Prompt.ToolResultPart => {
+  if (part.isFailure) return part
+  const value = decodeResultObject(part.result)
+  if (Option.isNone(value)) return part
+  const receipts = decodeOperationReceipts(value.value[OPERATION_RECEIPTS_KEY])
+  if (Option.isNone(receipts)) return part
+  const kept = receipts.value.filter((receipt) => receipt.outcome !== "succeeded")
+  const succeeded = receipts.value.length - kept.length
+  if (succeeded === 0) return part
+  const rest = Object.fromEntries(
+    Object.entries(value.value).filter(([key]) => key !== OPERATION_RECEIPTS_KEY),
+  )
+  return {
+    ...part,
+    result: {
+      ...rest,
+      ...(kept.length > 0 && { [OPERATION_RECEIPTS_KEY]: encodeOperationReceipts(kept) }),
+      [SUCCEEDED_OPERATIONS_KEY]: succeeded,
+    },
+  }
+}
+
 /** Prompt text for extension-owned tool catalogs, without execution metadata. */
 export const getToolPrompt = (
   tool: ToolCapability,

@@ -154,6 +154,10 @@
   `context.read(toolCallId, { offset, limit })`. The bounded result keeps the
   result's shape with each long string cut, so the provider encodes the text
   once; only a result of many short strings is cut as JSON text.
+  Before the bound, a succeeded result's succeeded inner-call receipts leave
+  the view as a `succeededOperations` count (`operationReceiptsForModel`,
+  `domain/capability.ts`; `cell.md` has why); `totalChars` counts the stored
+  text, every receipt included, which is what `context.read` pages.
   Context pressure drops before compaction ever runs.
 - The cell subsumes host tools the Bun runtime already provides: `fetch` for
   network reads and `bun:sqlite` on the data directory's `data.db` for past sessions. No

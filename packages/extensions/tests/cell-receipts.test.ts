@@ -893,6 +893,106 @@ var markCurrent = () => tools.mark("current"); "armed"`,
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
     18000,
   )
+
+  it.scopedLive(
+    "the model reads a cell's failed receipt and a count of the rest; the transcript keeps every receipt",
+    () =>
+      Effect.gen(function* () {
+        const extensions: ReadonlyArray<LoadedExtension> = [
+          {
+            manifest: { id: ExtensionId.make("cell-receipt-view") },
+            scope: "builtin",
+            sourcePath: "cell-receipt-view",
+            artifactIdentity: LoadedArtifactIdentity.make("cell-receipt-view-source"),
+            contributions: {
+              resources: [CellStorageResource, CellKernelResource],
+              tools: [
+                CellTool,
+                tool({
+                  id: "mark",
+                  description: "Record a mark",
+                  params: Schema.String,
+                  output: Schema.Boolean,
+                  execute: () => Effect.succeed(true),
+                  summary: (mark) => `marked ${mark}`,
+                }),
+                tool({
+                  id: "broken",
+                  description: "Always fails",
+                  params: Schema.Struct({}),
+                  output: Schema.String,
+                  execute: () =>
+                    Effect.fail(
+                      new ToolResultFailure({ message: "broken on purpose", result: "no" }),
+                    ),
+                }),
+              ],
+            },
+          },
+        ]
+        const prompts: Array<Prompt.Prompt> = []
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: "await tools.mark('a'); try { await tools.broken({}) } catch {} await tools.mark('b'); 'done'",
+          }),
+          {
+            ...textStep("Receipts read"),
+            assertOptions: (options) => {
+              prompts.push(options.prompt)
+            },
+          },
+        ])
+        const harness = yield* createRpcHarness({
+          extensions,
+          providerLayer,
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+        })
+        const { client, sessionId, branchId } = harness
+        yield* client.message.send({ sessionId, branchId, content: "Mark, break, mark" })
+        const [stored] = yield* cellResultsAfterTurn(harness)
+        if (Predicate.isUndefined(stored)) return yield* Effect.die("Missing cell result")
+        yield* controls.assertDone
+        const Receipts = Schema.Struct({
+          operations: Schema.Array(
+            Schema.Struct({
+              toolCallId: Schema.String,
+              tool: Schema.String,
+              outcome: Schema.String,
+            }),
+          ),
+        })
+        // The transcript every client reads keeps all three receipts, in call order.
+        const all = yield* Schema.decodeUnknownEffect(Receipts)(stored.result)
+        expect(all.operations.map(({ tool, outcome }) => [tool, outcome])).toEqual([
+          ["mark", "succeeded"],
+          ["broken", "failed"],
+          ["mark", "succeeded"],
+        ])
+        // The next request carries the failed receipt whole and counts the two that succeeded.
+        const seen = (prompts[0]?.content ?? []).flatMap((message) => {
+          if (message.role !== "tool") return []
+          return message.content.flatMap((part) => {
+            if (part.type !== "tool-result" || part.id !== stored.id) return []
+            return [part.result]
+          })
+        })
+        expect(seen).toHaveLength(1)
+        expect(seen[0]).toMatchObject({
+          display: expect.stringContaining("done"),
+          operations: [all.operations[1]],
+          succeededOperations: 2,
+        })
+        const { operations } = yield* Schema.decodeUnknownEffect(Receipts)(seen[0])
+        expect(operations).toHaveLength(1)
+        // No id of a succeeded call reaches the model.
+        const wire = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+          prompts[0]?.content,
+        )
+        expect(wire).not.toContain(all.operations[0]?.toolCallId)
+        expect(wire).not.toContain(all.operations[2]?.toolCallId)
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    18000,
+  )
 })
 
 // ── tool-call hook ─────────────────────────────────────────────────────────

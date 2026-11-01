@@ -47,7 +47,7 @@ import {
 } from "../domain/agent.js"
 import { readToolImage, type ToolImage, toolImageBase64Chars, toolImagesOf } from "./tool-image.js"
 import { omitUndefined } from "../domain/guards.js"
-import type { ToolCapability } from "../domain/capability.js"
+import { operationReceiptsForModel, type ToolCapability } from "../domain/capability.js"
 import type { ExtensionContext, TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/ai"
 import type { ProviderAuthError, RunEffort } from "../domain/driver.js"
@@ -211,11 +211,13 @@ const largestFitting = (
 }
 
 /**
- * Bound one tool result for the model, with a locator for the rest. The
- * stored message and its events keep the full result;
+ * One stored tool result as the model sees it: its receipts as the model
+ * reads them (`operationReceiptsForModel`), then bound, with a locator for
+ * the rest, so the bound spends its room on what the model reads. The stored
+ * message and its events keep the full result;
  * `context.read(toolCallId, { offset, limit })` in the cell pages its JSON
- * text, `totalChars` long. The whole bounded result, paging fields included,
- * encodes within `maxChars`.
+ * text, `totalChars` long, every receipt included. The whole bounded
+ * result, paging fields included, encodes within `maxChars`.
  *
  * The bounded result keeps the result's shape in `result`, each long string
  * cut to its head and tail, so the provider encodes the content once, as it
@@ -228,14 +230,18 @@ export const boundToolResultForModel = (
   part: Prompt.ToolResultPart,
   maxChars: number = maximumModelToolResultChars,
 ): Prompt.ToolResultPart => {
-  const encoded = encodeToolResultJson(part.result)
-  if (Option.isNone(encoded) || encoded.value.length <= maxChars) return part
+  const view = operationReceiptsForModel(part)
+  const encoded = encodeToolResultJson(view.result)
+  if (Option.isNone(encoded) || encoded.value.length <= maxChars) return view
   const locator = {
     truncated: true,
-    totalChars: encoded.value.length,
+    totalChars: Option.getOrElse(
+      Option.map(encodeToolResultJson(part.result), (stored) => stored.length),
+      () => encoded.value.length,
+    ),
     read: `context.read("${part.id}", { offset, limit })`,
   }
-  const structured = Option.flatMap(decodeToolResultJson(part.result), (value) =>
+  const structured = Option.flatMap(decodeToolResultJson(view.result), (value) =>
     largestFitting(MINIMUM_STRING_CAP, maxChars, maxChars, (cap) => ({
       ...locator,
       omittedChars: cutStringChars(value, cap),
@@ -260,7 +266,7 @@ export const boundToolResultForModel = (
 }
 
 /**
- * Each stored part's bound at `maximumModelToolResultChars`, by the part
+ * Each stored part's model view at `maximumModelToolResultChars`, by the part
  * object. A step reads its messages once, then its budget estimate and its
  * prompt both bound every tool result: the second reads the first's bound. A
  * stored result never changes, and the entry goes when the step drops the part.

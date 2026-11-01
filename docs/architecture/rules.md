@@ -53,6 +53,10 @@ commit.
     characters inline (head and tail); the rest is paged through
     `context.read`. Receipt: `maximumModelToolResultChars` in
     `packages/core/src/runtime/model-context.ts`.
+    A succeeded call's succeeded inner-call receipts reach the model as a
+    count; failed and incomplete receipts, and every receipt of a failed call,
+    reach it whole. The stored result keeps them all. Receipt:
+    `operationReceiptsForModel` in `packages/core/src/domain/capability.ts`.
     A tool image travels by reference: the stored result holds a
     `ToolImage`, and each request reads its bytes from the blob store and
     sends them in a user message right after the tool results (Anthropic

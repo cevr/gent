@@ -153,8 +153,20 @@ is text; opencode's code mode sends every image a nested call returns
 
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
-receipts (`tool`, `outcome`, `summary`) to the saved cell result whenever a cell
-made inner calls, so the transcript keeps effects visible after reload. A
+receipts (`toolCallId`, `tool`, `outcome`, `summary`) to the saved cell result whenever a cell
+made inner calls, so the transcript keeps effects visible after reload. Core
+owns the receipt shape (`ToolOperationReceipt`, `withToolOperationReceipts` in
+`domain/capability.ts`) and the model's view of it
+(`operationReceiptsForModel`, applied in `boundToolResultForModel`): a cell
+that succeeded shows the model its failed and incomplete receipts whole and
+counts the rest as `succeededOperations`, because the model's own code already
+read what each succeeded call returned; a failed cell shows every receipt. The
+stored result, the transcript, the TUI, `gent ctl`, the round-end row and
+`context.read` of the cell's id keep every receipt. The view is a pure
+function of the stored part with no registry read, so a result reads the same
+bytes in every later request (measured 2026-11-01 on Sept 7–23 data: ok
+receipts were 7.8% of all cell model-view bytes). A session resumed across
+the change pays one cache miss on its first request. A
 receipt summary, like the `summary` on a terminal tool event, comes from the
 tool's optional `summary(input, output)` over wire values when the tool has one
 (read, write, edit, grep and bash do); otherwise, or when it throws, the head of
