@@ -3835,31 +3835,34 @@ describe("a round's patience in its lane queue", () => {
     45_000,
   )
 
-  it.live("a round with no model of another maker keeps its place past ten minutes", () =>
-    Effect.gen(function* () {
-      const rig = yield* oneLaneHeld([OPUS])
-      const { home, client, owner, models } = rig
-      yield* Deferred.succeed(rig.patientEnds, true)
-      const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
-      yield* waitFor(
-        home.sql(stepsOf(run)),
-        (steps) => roundThreads(steps).length === 1,
-        10_000,
-        "the patient round queued on its thread",
-      )
-      yield* TestClock.adjust(Duration.minutes(11))
-      yield* settle
-      yield* TestClock.adjust(Duration.minutes(5))
-      yield* settle
-      expect(repicksOf(yield* home.sql(stepsOf(run)))).toEqual([])
-      expect(yield* Ref.get(models.calls)).toEqual(["hold:1"])
-      // Its lane comes when the hold round ends: it runs on Opus, on its own thread.
-      yield* Deferred.succeed(rig.holdEnds, true)
-      yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
-      const steps = yield* home.sql(stepsOf(run))
-      expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS])
-      expect(roundThreads(steps)).toHaveLength(1)
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  it.live(
+    "a round with no model of another maker keeps its place past ten minutes",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* oneLaneHeld([OPUS])
+        const { home, client, owner, models } = rig
+        yield* Deferred.succeed(rig.patientEnds, true)
+        const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => roundThreads(steps).length === 1,
+          10_000,
+          "the patient round queued on its thread",
+        )
+        yield* TestClock.adjust(Duration.minutes(11))
+        yield* settle
+        yield* TestClock.adjust(Duration.minutes(5))
+        yield* settle
+        expect(repicksOf(yield* home.sql(stepsOf(run)))).toEqual([])
+        expect(yield* Ref.get(models.calls)).toEqual(["hold:1"])
+        // Its lane comes when the hold round ends: it runs on Opus, on its own thread.
+        yield* Deferred.succeed(rig.holdEnds, true)
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS])
+        expect(roundThreads(steps)).toHaveLength(1)
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
   )
 
   it.live(
@@ -3932,45 +3935,65 @@ describe("a round's patience in its lane queue", () => {
       Effect.gen(function* () {
         const died = yield* Ref.make(false)
         const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL])
-        const { home, client, owner, models } = rig
+        const { home, owner, models } = rig
         yield* Deferred.succeed(rig.patientEnds, true)
-        const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
-        yield* waitFor(
-          home.sql(stepsOf(run)),
-          (steps) => roundThreads(steps).length === 1,
-          10_000,
-          "the patient round queued on its thread",
+        // The patient run is planted while no server runs, its round waiting a
+        // minute: the second server's wake hook arms its driver under the
+        // facade, and the hold round runs again before the patient round asks.
+        // A restart that cut a queued round lets it ask in no set order: it
+        // can take the lane before the hold round's cut turn, and never move.
+        const run = runIdAt(1)
+        const sendsAt = (yield* Clock.currentTimeMillis) + 60_000
+        yield* rig.restart(
+          (ctx) => ({
+            ...ctx,
+            Accounts: {
+              ...ctx.Accounts,
+              // The first withdrawal takes the round out of its queue, then its step dies.
+              withdraw: (message) =>
+                Effect.gen(function* () {
+                  const withdrawn = yield* ctx.Accounts.withdraw(message)
+                  if (yield* Ref.getAndSet(died, true)) return withdrawn
+                  return yield* Effect.die("the step died after the withdrawal")
+                }),
+            },
+          }),
+          plantRuns(home, encodeJson(pairOnce("patient", "work")), [
+            { run, host: owner, debt: true, waitsUntil: sendsAt, createdAt: 0, wakeAt: 0 },
+          ]).pipe(Effect.orDie),
         )
-        yield* rig.restart((ctx) => ({
-          ...ctx,
-          Accounts: {
-            ...ctx.Accounts,
-            // The first withdrawal takes the round out of its queue, then its step dies.
-            withdraw: (message) =>
-              Effect.gen(function* () {
-                const withdrawn = yield* ctx.Accounts.withdraw(message)
-                if (yield* Ref.getAndSet(died, true)) return withdrawn
-                return yield* Effect.die("the step died after the withdrawal")
-              }),
-          },
-        }))
-        yield* TestClock.adjust(Duration.seconds(601))
-        yield* waitFor(Ref.get(died), (done) => done, 10_000, "the step died")
+        yield* waitFor(
+          Ref.get(models.calls),
+          (calls) => calls.filter((call) => call === "hold:1").length === 2,
+          10_000,
+          "the hold round ran again on the second server",
+        )
+        // The driver reads the clock, then sleeps out the wait or the patience
+        // left, and the dead step sleeps its retry delay: steps reach each
+        // sleep, where one jump can land before it and leave it past the new time.
+        yield* advanceUntil(home.sql(stepsOf(run)), (steps) => roundThreads(steps).length === 1, {
+          label: "the patient round queued on its thread",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
+        yield* advanceUntil(Ref.get(died), (done) => done, {
+          label: "the step died",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
         // The step runs again after its retry delay and finishes the move.
-        yield* TestClock.adjust(Duration.seconds(2))
-        yield* waitFor(
-          home.sql(stepsOf(run)),
-          (steps) => roundThreads(steps).length === 2,
-          10_000,
-          "the round picked again",
-        )
+        yield* advanceUntil(home.sql(stepsOf(run)), (steps) => roundThreads(steps).length === 2, {
+          label: "the round picked again",
+          step: "1 second",
+          timeoutMs: 10_000,
+        })
         yield* Deferred.succeed(rig.holdEnds, true)
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
         const steps = yield* home.sql(stepsOf(run))
-        expect(repicksOf(steps)).toEqual([{ state: "patient", model: OPUS, maker: "anthropic" }])
+        expect(repicksOf(steps)).toEqual([{ state: "work", model: OPUS, maker: "anthropic" }])
         expect(roundsRan(steps).map((round) => round.model)).toEqual([HOSTED_SOL])
         // The hold round's cut turn ran again after the restart; Opus's queued round never ran.
-        expect(yield* Ref.get(models.calls)).toEqual(["hold:1", "hold:1", "patient:1"])
+        expect(yield* Ref.get(models.calls)).toEqual(["hold:1", "hold:1", "work:1"])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
   )
@@ -3979,16 +4002,55 @@ describe("a round's patience in its lane queue", () => {
     { name: "a usage limit's rerun", fails: usageLimited, wait: Duration.seconds(61) },
     { name: "a dead round's retry", fails: refusedStep, wait: Duration.seconds(0) },
   ]) {
-    it.live(`${name} keeps the makers patience left`, () =>
+    it.live(
+      `${name} keeps the makers patience left`,
+      () =>
+        Effect.gen(function* () {
+          const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL], {
+            patient: (call) => {
+              if (call === 1) return fails()
+              return billed("patient done")
+            },
+          })
+          const { home, client, owner } = rig
+          yield* Deferred.succeed(rig.patientEnds, true)
+          const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
+          yield* waitFor(
+            home.sql(stepsOf(run)),
+            (steps) => roundThreads(steps).length === 1,
+            10_000,
+            "the patient round queued on its thread",
+          )
+          yield* TestClock.adjust(Duration.seconds(601))
+          yield* waitFor(
+            home.sql(stepsOf(run)),
+            (steps) => roundThreads(steps).length === 2,
+            10_000,
+            "the round picked again",
+          )
+          // The lane frees: the hosted Sol round runs and fails; Opus has a lane now.
+          yield* Deferred.succeed(rig.holdEnds, true)
+          yield* waitFor(
+            home.sql(stepsOf(run)),
+            (steps) => roundsRan(steps).length === 1,
+            10_000,
+            "the hosted Sol round ended",
+          )
+          yield* TestClock.adjust(wait)
+          yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
+          const steps = yield* home.sql(stepsOf(run))
+          expect(roundsRan(steps).map((round) => round.model)).toEqual([HOSTED_SOL, HOSTED_SOL])
+        }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+      45_000,
+    )
+  }
+
+  it.live(
+    "a queued round that got its lane is not moved past ten minutes",
+    () =>
       Effect.gen(function* () {
-        const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL], {
-          patient: (call) => {
-            if (call === 1) return fails()
-            return billed("patient done")
-          },
-        })
-        const { home, client, owner } = rig
-        yield* Deferred.succeed(rig.patientEnds, true)
+        const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL])
+        const { home, client, owner, models } = rig
         const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
         yield* waitFor(
           home.sql(stepsOf(run)),
@@ -3996,59 +4058,26 @@ describe("a round's patience in its lane queue", () => {
           10_000,
           "the patient round queued on its thread",
         )
-        yield* TestClock.adjust(Duration.seconds(601))
-        yield* waitFor(
-          home.sql(stepsOf(run)),
-          (steps) => roundThreads(steps).length === 2,
-          10_000,
-          "the round picked again",
-        )
-        // The lane frees: the hosted Sol round runs and fails; Opus has a lane now.
+        // Five minutes on, the hold round ends: the patient round takes the lane and runs.
+        yield* TestClock.adjust(Duration.minutes(5))
         yield* Deferred.succeed(rig.holdEnds, true)
         yield* waitFor(
-          home.sql(stepsOf(run)),
-          (steps) => roundsRan(steps).length === 1,
+          Ref.get(models.calls),
+          (calls) => calls.includes("patient:1"),
           10_000,
-          "the hosted Sol round ended",
+          "the patient round runs",
         )
-        yield* TestClock.adjust(wait)
+        // It still runs past ten minutes: it stays on Opus.
+        yield* TestClock.adjust(Duration.minutes(10))
+        yield* settle
+        expect(repicksOf(yield* home.sql(stepsOf(run)))).toEqual([])
+        yield* Deferred.succeed(rig.patientEnds, true)
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
         const steps = yield* home.sql(stepsOf(run))
-        expect(roundsRan(steps).map((round) => round.model)).toEqual([HOSTED_SOL, HOSTED_SOL])
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS])
+        expect(roundThreads(steps)).toHaveLength(1)
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
-    )
-  }
-
-  it.live("a queued round that got its lane is not moved past ten minutes", () =>
-    Effect.gen(function* () {
-      const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL])
-      const { home, client, owner, models } = rig
-      const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
-      yield* waitFor(
-        home.sql(stepsOf(run)),
-        (steps) => roundThreads(steps).length === 1,
-        10_000,
-        "the patient round queued on its thread",
-      )
-      // Five minutes on, the hold round ends: the patient round takes the lane and runs.
-      yield* TestClock.adjust(Duration.minutes(5))
-      yield* Deferred.succeed(rig.holdEnds, true)
-      yield* waitFor(
-        Ref.get(models.calls),
-        (calls) => calls.includes("patient:1"),
-        10_000,
-        "the patient round runs",
-      )
-      // It still runs past ten minutes: it stays on Opus.
-      yield* TestClock.adjust(Duration.minutes(10))
-      yield* settle
-      expect(repicksOf(yield* home.sql(stepsOf(run)))).toEqual([])
-      yield* Deferred.succeed(rig.patientEnds, true)
-      yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
-      const steps = yield* home.sql(stepsOf(run))
-      expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS])
-      expect(roundThreads(steps)).toHaveLength(1)
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
   )
 })
 
