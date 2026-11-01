@@ -3727,6 +3727,8 @@ const PEER_SILENT_MS = 90_000
  * this server keeps its own load under half the capacity. A guess.
  */
 const PEER_HOLD_MS = 30 * 60_000
+/** The name `PoolFacts.host` gives a machine whose host name is empty. */
+const UNNAMED_HOST = "unnamed"
 /** How long a segment closed on an account the peer shares waits for its next line: two heartbeats. */
 const PEER_PENDING_MS = 60_000
 /**
@@ -5539,15 +5541,18 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       },
     })
   /**
-   * The peer as the lanes report it (`LaneReport.peer`): none before its
-   * first line while this server runs no link of its own. Its runs are
+   * The peer as the lanes report it (`LaneReport.peer`): none while this
+   * server runs no link of its own and the peer's facts do not count (before
+   * its first line, or once its hold ended: an owner who removed the peer's
+   * `pool.peer` sees the band forget it). While this server runs its own
+   * link, the peer stays, so the band names that link down. Its runs are
    * those that hold a label of this server's pools, while its facts count.
    * A link is down when it brought no line for 90 s: this server's own
    * while it runs (counted from its start before its first line), the
    * peer's once a line came on it. Under the lock.
    */
   const peerReport = (now: number): Option.Option<NonNullable<LaneReport["peer"]>> => {
-    if (Option.isNone(peer) && ownLinks === 0) return Option.none()
+    if (Option.isNone(peerCounted(now)) && ownLinks === 0) return Option.none()
     const down: Array<PeerLink> = []
     const ownLast = Math.max(ownSince, linkHeard.get("own") ?? ownSince)
     if (ownLinks > 0 && now - ownLast >= PEER_SILENT_MS) down.push("own")
@@ -5969,9 +5974,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   ]
     .map((part) => part.toString(16).padStart(8, "0"))
     .join("")
-  /** The peer's band names this machine by it: the host name up to its first dot. */
+  /**
+   * The peer's band names this machine by it: the host name up to its first
+   * dot, or `unnamed` when that is empty (no host name, or one that starts
+   * with a dot), so the band never prints an empty name.
+   */
   const { hostname } = yield* (yield* GentPlatform).osInfo
-  const host = hostname.split(".")[0] ?? hostname
+  const host = Option.getOrElse(
+    Option.liftPredicate(hostname.split(".")[0] ?? "", (name) => name.length > 0),
+    () => UNNAMED_HOST,
+  )
   let facts: PoolFacts = { boot, host, seq: 0, providers: [] }
   /**
    * Each reader's pending facts: one slot, the newest, so a reader that

@@ -444,7 +444,7 @@ describe("the lanes band rows", () => {
     ])
   })
 
-  test("the peer row comes last: its host, its runs and its last line's age; a narrow row drops the age, then the host", () => {
+  test("the peer row comes last: its host, its runs and its last line's age; a narrow row drops the host, then the age", () => {
     expect(laneRows(withPeer(linked), NOW, 120, utc)).toEqual([
       ...laneRows(measured, NOW, 120, utc),
       { text: "peer workbox 2 runs · 12s", state: "linked" },
@@ -454,9 +454,11 @@ describe("the lanes band rows", () => {
     )
     const at = (width: number) => laneRows(withPeer(linked), NOW, width, utc)[1]?.text
     expect(at(25)).toBe("peer workbox 2 runs · 12s")
-    expect(at(24)).toBe("peer workbox 2 runs")
-    expect(at(18)).toBe("peer 2 runs")
-    for (const width of [25, 24, 19, 18, 11, 10, 4]) {
+    expect(at(24)).toBe("peer 2 runs · 12s")
+    expect(at(17)).toBe("peer 2 runs · 12s")
+    expect(at(16)).toBe("peer 2 runs")
+    expect(at(11)).toBe("peer 2 runs")
+    for (const width of [25, 24, 19, 18, 17, 16, 11, 10, 4]) {
       expect(textWidth(at(width) ?? "")).toBeLessThanOrEqual(width)
     }
     // The band draws it with its own mark; a peer alone shows the band, after lanes unknown.
@@ -472,7 +474,13 @@ describe("the lanes band rows", () => {
   test("a silent peer reads unread and its age; a link down marks peer! and names the link", () => {
     const row = (peer: NonNullable<LaneReport["peer"]>, width = 120) =>
       laneRows(withPeer(peer), NOW, width, utc)[1]
-    const silent = { ...linked, heard: { host: "workbox", at: NOW - 3 * MINUTE }, silent: true }
+    // Past the hold: silent, and none of its runs count.
+    const silent = {
+      ...linked,
+      heard: { host: "workbox", at: NOW - 3 * MINUTE },
+      runs: 0,
+      silent: true,
+    }
     expect(row({ ...silent, down: ["peer"] })).toEqual({
       text: "peer! workbox unread 3m · peer link down",
       state: "unlinked",
@@ -494,15 +502,54 @@ describe("the lanes band rows", () => {
     })
     expect(row({ runs: 0, silent: true, down: ["own"] })?.text).toBe("peer! unread · own link down")
     expect(row({ runs: 0, silent: true, down: ["own"] }, 27)?.text).toBe("peer! unread")
-    // A narrow row drops the link, then the age, then the host; `peer!` stays.
+    // A narrow row keeps the link down over the age, and the age over the host; `peer!` stays.
     const at = (width: number) => row({ ...silent, down: ["peer"] }, width)?.text
     expect(at(40)).toBe("peer! workbox unread 3m · peer link down")
-    expect(at(39)).toBe("peer! workbox unread 3m")
-    expect(at(22)).toBe("peer! workbox unread")
-    expect(at(19)).toBe("peer! unread")
-    for (const width of [40, 39, 23, 22, 20, 19, 12, 11, 5]) {
+    expect(at(39)).toBe("peer! unread 3m · peer link down")
+    expect(at(32)).toBe("peer! unread 3m · peer link down")
+    expect(at(31)).toBe("peer! unread · peer link down")
+    expect(at(29)).toBe("peer! unread · peer link down")
+    expect(at(28)).toBe("peer! workbox unread 3m")
+    expect(at(22)).toBe("peer! unread 3m")
+    expect(at(14)).toBe("peer! unread")
+    // Live with a link down: the link outlives the age and the host too.
+    const live = (width: number) => row({ ...linked, down: ["own"] }, width)?.text
+    expect(live(41)).toBe("peer! 2 runs · 12s · own link down")
+    expect(live(33)).toBe("peer! 2 runs · own link down")
+    expect(live(27)).toBe("peer! workbox 2 runs · 12s")
+    expect(live(17)).toBe("peer! 2 runs")
+    for (const width of [40, 39, 33, 32, 31, 29, 28, 23, 22, 20, 15, 14, 12, 11, 5]) {
       expect(textWidth(at(width) ?? "")).toBeLessThanOrEqual(width)
+      expect(textWidth(live(width) ?? "")).toBeLessThanOrEqual(width)
       expect(at(width)).toContain("peer")
+    }
+  })
+
+  test("a silent peer's held runs show on its row: they outlive the link down, the age and the host", () => {
+    const row = (peer: NonNullable<LaneReport["peer"]>, width = 120) =>
+      laneRows(withPeer(peer), NOW, width, utc)[1]?.text
+    // In the hold: silent, its two last runs still count against this pool.
+    const held = {
+      ...linked,
+      heard: { host: "workbox", at: NOW - 3 * MINUTE },
+      silent: true,
+      down: ["peer" as const],
+    }
+    expect(row(held)).toBe("peer! workbox unread 3m · 2 runs held · peer link down")
+    expect(row({ ...held, runs: 1, down: [] })).toBe("peer workbox unread 3m · 1 run held")
+    const at = (width: number) => row(held, width)
+    expect(at(54)).toBe("peer! workbox unread 3m · 2 runs held · peer link down")
+    expect(at(53)).toBe("peer! unread 3m · 2 runs held · peer link down")
+    expect(at(46)).toBe("peer! unread 3m · 2 runs held · peer link down")
+    expect(at(45)).toBe("peer! unread · 2 runs held · peer link down")
+    expect(at(42)).toBe("peer! workbox unread 3m · 2 runs held")
+    expect(at(36)).toBe("peer! unread 3m · 2 runs held")
+    expect(at(28)).toBe("peer! unread · 2 runs held")
+    expect(at(25)).toBe("peer! workbox unread 3m")
+    expect(at(22)).toBe("peer! unread 3m")
+    expect(at(14)).toBe("peer! unread")
+    for (const width of [54, 53, 46, 45, 43, 42, 37, 36, 29, 28, 26, 25, 23, 22, 15, 14, 12, 11]) {
+      expect(textWidth(at(width) ?? "")).toBeLessThanOrEqual(width)
     }
   })
 
@@ -578,7 +625,7 @@ describe("the lanes band", () => {
 
   for (const [width, rows] of [
     [120, ["≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%", "⇄ peer workbox 2 runs · 12s"]],
-    [26, ["≡ lanes 3/5 free", "⇄ peer workbox 2 runs"]],
+    [26, ["≡ lanes 3/5 free", "⇄ peer 2 runs · 12s"]],
   ] as const) {
     it.scopedLive(`draws the peer row last at ${width} columns`, () =>
       Effect.gen(function* () {

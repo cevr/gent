@@ -5384,4 +5384,29 @@ describe("AccountsRpcs", () => {
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
+
+  it.live(
+    "accounts.notePeer lines come on the peer's link: 90 s with none reads peer link down",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const { client } = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          // This server runs no link of its own: only the peer's link can be down.
+          yield* client.accounts.notePeer({
+            boot: "peer",
+            host: "peer-host",
+            seq: 1,
+            providers: [],
+          })
+          expect((yield* client.accounts.lanes()).peer).toMatchObject({ silent: false, down: [] })
+          yield* TestClock.adjust("90 seconds")
+          expect((yield* client.accounts.lanes()).peer).toMatchObject({
+            heard: { host: "peer-host" },
+            silent: true,
+            down: ["peer"],
+          })
+        }),
+      ).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
+  )
 })

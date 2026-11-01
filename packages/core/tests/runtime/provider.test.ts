@@ -9388,14 +9388,72 @@ describe("account lanes", () => {
             silent: true,
             down: ["peer"],
           })
-          yield* TestClock.adjust("30 minutes")
+          // The hold's last moment: still reported, its runs still count.
+          yield* TestClock.adjust(Duration.minutes(30).pipe(Duration.subtract(Duration.millis(1))))
+          expect(yield* reportedPeer(fixture)).toEqual({
+            heard,
+            runs: 2,
+            silent: true,
+            down: ["peer"],
+          })
+          // The hold ended and this server runs no link: the lanes forget the peer.
+          yield* TestClock.adjust("1 millis")
+          expect(yield* reportedPeer(fixture)).toBeUndefined()
+          // Its next line brings it back.
+          yield* fixture.placement.notePeer(peerLine("peer", 2, []), scopeOf([a, b]), "peer")
+          expect(yield* reportedPeer(fixture)).toMatchObject({ runs: 0, silent: false, down: [] })
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect(
+      "past the hold, the lanes still report the peer while this server runs its own link, with both links down",
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* accounts()
+          yield* TestClock.adjust("1 hour")
+          const link = yield* Scope.make()
+          yield* fixture.placement.runsLink.pipe(Scope.provide(link))
+          const heard = { host: "peer-host", at: yield* Clock.currentTimeMillis }
+          yield* fixture.placement.notePeer(
+            peerLine("peer", 1, [{ accounts: [a], count: 2 }]),
+            scopeOf([a, b]),
+            "peer",
+          )
+          yield* TestClock.adjust("2 hours")
           expect(yield* reportedPeer(fixture)).toEqual({
             heard,
             runs: 0,
             silent: true,
-            down: ["peer"],
+            down: ["own", "peer"],
           })
+          // This server's link stopped: nothing left to report.
+          yield* Scope.close(link, Exit.void)
+          expect(yield* reportedPeer(fixture)).toBeUndefined()
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("a machine with an empty host name names itself `unnamed` in its facts", () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        expect((yield* factsOf(fixture.placement)).host).toBe("unnamed")
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(
+            BunServices.layer,
+            Layer.effect(
+              GentPlatform,
+              Effect.gen(function* () {
+                const platform = yield* GentPlatform
+                return GentPlatform.of({
+                  ...platform,
+                  osInfo: Effect.map(platform.osInfo, (info) => ({ ...info, hostname: "" })),
+                })
+              }),
+            ).pipe(Layer.provide(GentPlatform.Test())),
+          ),
+        ),
+      ),
     )
 
     it.effect(

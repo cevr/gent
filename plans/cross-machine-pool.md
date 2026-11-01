@@ -604,8 +604,8 @@ running the test (feedback: validate the regression test).
    - Rows: `peer <host> <n> runs · <age>` (`1 run` singular), `peer <host>
      unread <age>` when silent, `peer unread` before the first line. A down
      link marks `peer!` and adds `· own link down`, `· peer link down` or
-     `· links down`. Narrower, the row drops the reason, then the age, then
-     the host. The glyph is `⇄`, info tone while heard, warning while
+     `· links down`. Narrower, the row dropped the reason, then the age,
+     then the host (the review fixes below changed this order). The glyph is `⇄`, info tone while heard, warning while
      silent or down.
    - The band reads `accounts.lanes` every 30 s, at a turn's end and at a
      reconnect, so a peer run of a few seconds can fall between two reads;
@@ -618,9 +618,30 @@ running the test (feedback: validate the regression test).
      read `⇄ peer! Cristians-MacBook-Pro unread 2m · peer link down` at
      121 s. C read `⇄ peer unread`, then `⇄ peer! unread · own link down`
      at 90 s (measured).
-   - Not probed: server.ts passing `peer` as the link of
-     `accounts.notePeer` (the rpc test reads `down: []` either way within
-     90 s; the live check showed `peer link down` on A).
+   - Review fixes (one commit, `fix(lanes): …`):
+     - The `accounts.notePeer` handler tags its lines with the link
+       `peer`. A new rpc test notes one line, moves the test clock 90 s and
+       reads `down: ["peer"]`. With the tag `own`, the test fails.
+     - The lanes report drops the peer when its facts stop counting (90 s
+       of silence and the 30-minute hold) and this server runs no link of
+       its own. Before, a peer whose owner removed `pool.peer` stayed on
+       the band as `peer! … unread 3h · peer link down` until a restart.
+       While this server runs its own link, the report keeps the peer, so
+       the band names that link down.
+     - The row ranks its facts: a silent peer's held runs, then the link
+       down, then the age, then the host. Each width shows the best set of
+       facts that fits. The mark and the runs or `unread` always stay.
+       Before, a narrow row dropped the link down first.
+     - A silent peer's row shows its held runs while they still limit
+       admission: `peer! <host> unread 3m · 2 runs held · peer link down`.
+     - An empty host name (no name, or one that starts with a dot) gives
+       `PoolFacts.host` the name `unnamed`, so the row never prints
+       `peer  2 runs`.
+     - The ranking puts the age over the host. So the form `peer! <host>
+       unread · <link> down` never shows: at each width where it fits,
+       `peer! unread <age> · <link> down` also fits. A live row at 17 to
+       24 text columns now reads `peer 2 runs · 12s`, not `peer <host> 2
+       runs`.
 4. **Later, only on evidence: bound the race.** Build it only if
    `credential-placement.pool-overshoot` appears in either server's logs.
    Each server's facts name the peer `seq` they last read (`seen`); a

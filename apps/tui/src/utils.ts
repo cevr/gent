@@ -666,48 +666,57 @@ export interface LaneRow {
 }
 
 /**
- * The peer row, longest form that fits `width` first: `peer <host> 2 runs ·
- * 12s` while its facts come, `peer <host> unread 3m` once it is silent,
- * `peer unread` before its first line. A link down marks it `peer!` and
- * names the link: `own link down` (this server's command), `peer link
- * down` (the peer's), `links down`. A narrow row drops the link, then the
- * age, then the host, and a row narrower than that truncates it.
+ * Every way to keep or drop each of `count` facts, best first: the first
+ * fact outranks all the others together, so keep-all comes first and
+ * drop-all last.
+ */
+const keepChoices = (count: number): ReadonlyArray<ReadonlyArray<boolean>> => {
+  if (count <= 0) return [[]]
+  const rest = keepChoices(count - 1)
+  return [...rest.map((choice) => [true, ...choice]), ...rest.map((choice) => [false, ...choice])]
+}
+
+/**
+ * The peer row: `peer <host> 2 runs · 12s` while its facts come, `peer
+ * <host> unread 3m` once it is silent (`· 2 runs held` while its last runs
+ * still count in the hold), `peer unread` before its first line. A link
+ * down marks it `peer!` and names the link: `own link down` (this server's
+ * command), `peer link down` (the peer's), `links down`. Each width shows
+ * the most useful facts that fit, in rank: the held runs, then the link
+ * down, then the age, then the host. The mark and the runs or `unread`
+ * always stay, and a row narrower than those truncates.
  */
 const peerRow = (peer: NonNullable<LaneReport["peer"]>, now: number, width: number): LaneRow => {
   let reason = Option.map(Option.fromUndefinedOr(peer.down[0]), (link) => `${link} link down`)
   if (peer.down.length > 1) reason = Option.some("links down")
   let mark = "peer"
   if (Option.isSome(reason)) mark = "peer!"
-  const forms = Option.match(Option.fromUndefinedOr(peer.heard), {
-    onNone: () => [`${mark} unread`],
-    onSome: (heard) => {
-      const age = formatAge(now - heard.at)
-      if (peer.silent)
-        return [
-          `${mark} ${heard.host} unread ${age}`,
-          `${mark} ${heard.host} unread`,
-          `${mark} unread`,
-        ]
-      let runs = `${peer.runs} runs`
-      if (peer.runs === 1) runs = "1 run"
-      return [
-        `${mark} ${heard.host} ${runs} · ${age}`,
-        `${mark} ${heard.host} ${runs}`,
-        `${mark} ${runs}`,
-      ]
+  let runs = `${peer.runs} runs`
+  if (peer.runs === 1) runs = "1 run"
+  const heard = Option.fromUndefinedOr(peer.heard)
+  const held = Option.map(
+    Option.liftPredicate(peer, (silent) => silent.silent && silent.runs > 0),
+    () => `${runs} held`,
+  )
+  const age = Option.map(heard, (last) => formatAge(now - last.at))
+  const host = Option.map(heard, (last) => last.host)
+  const kept = (fact: Option.Option<string>, keep: boolean) => Option.filter(fact, () => keep)
+  const forms = keepChoices(4).map(
+    ([keepHeld = false, keepReason = false, keepAge = false, keepHost = false]) => {
+      const name = [mark, ...Option.toArray(kept(host, keepHost))]
+      let head = [...name, runs].join(" ")
+      let tail = [kept(age, keepAge), kept(reason, keepReason)]
+      if (peer.silent) {
+        head = [...name, "unread", ...Option.toArray(kept(age, keepAge))].join(" ")
+        tail = [kept(held, keepHeld), kept(reason, keepReason)]
+      }
+      return [head, ...tail.flatMap(Option.toArray)].join(" · ")
     },
-  })
-  const head = forms[0] ?? mark
-  const candidates = [
-    ...Option.toArray(Option.map(reason, (words) => `${head} · ${words}`)),
-    ...forms,
-  ]
+  )
   let state: LaneRow["state"] = "linked"
   if (peer.silent || Option.isSome(reason)) state = "unlinked"
   return {
-    text:
-      candidates.find((candidate) => textWidth(candidate) <= width) ??
-      truncate(forms.at(-1) ?? mark, width),
+    text: forms.find((form) => textWidth(form) <= width) ?? truncate(forms.at(-1) ?? mark, width),
     state,
   }
 }

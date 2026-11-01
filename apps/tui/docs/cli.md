@@ -173,18 +173,21 @@ out of the provider's `scope` is not named, and a count goes 30 minutes
 after the read that listed it). With a peer link (`pool.peer`, below) the last
 row is the peer: `peer <host> <n> runs · <age>` while its lines come (its runs
 on this server's accounts, the age of its last line), `peer <host> unread
-<age>` after 90 s with no line, and `peer unread` before its first line. It
+<age>` after 90 s with no line (with `· <n> runs held` while its last runs
+still count, for 30 minutes), and `peer unread` before its first line. It
 reads `peer! … · own link down` when this server's command printed no line
 for 90 s, `· peer link down` when the peer's command was heard and then went
-quiet 90 s, and `· links down` for both. The JSON holds it as `peer`: `heard`
-(`host`, `at`, epoch ms), `runs`, `silent` and `down` (`own`, `peer`). No free
-lane is data, not a failure: the call exits 0.
+quiet 90 s, and `· links down` for both. A narrow row keeps the held runs,
+then the link down, then the age, then the host. With no command of this
+server's own, the row goes 30 minutes after the peer went silent. The JSON
+holds it as `peer`: `heard` (`host`, `at`, epoch ms), `runs`, `silent` and
+`down` (`own`, `peer`). No free lane is data, not a failure: the call exits 0.
 
 `pool` names no session either. It prints `Pool`: the server's own pool
 facts (`accounts.pool`), the part of its lanes another machine on the same
 accounts reads (`plans/cross-machine-pool.md`). `boot` names this server
-start, `host` its machine (the hostname to its first dot, which the peer's band
-shows), `seq` rises at each change, and each provider holds its `runs` (the
+start, `host` its machine (the hostname to its first dot, `unnamed` when that
+is empty, which the peer's band shows), `seq` rises at each change, and each provider holds its `runs` (the
 admitted runs and reserving grants, as `{ accounts, model?, count }`) and its
 `accounts`: per account its warm sessions per model (`live`), the fuel and the
 unpriced steps each model spent since `boot` (`spend`), and the reset of its
