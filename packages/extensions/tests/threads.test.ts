@@ -14,9 +14,8 @@ import {
   PubSub,
   Record,
   Result,
-  Exit,
   Schema,
-  Scope,
+  type Scope,
   Stream,
 } from "effect"
 import { TestClock } from "effect/testing"
@@ -24,7 +23,6 @@ import { SqlClient } from "effect/sql"
 import { BunServices } from "@effect/platform-bun"
 import type * as Prompt from "effect/ai/Prompt"
 import { workspaceIdForCwd } from "@gent/core/host"
-import { BunSqlite } from "@gent/core/host-bun"
 import {
   CredentialSlot,
   DEFAULT_SESSION_NAME,
@@ -83,15 +81,9 @@ import {
   ThreadBusy,
   threadRoundText,
   StartParams,
-  ThreadRounds,
   Threads,
-  ThreadsOverCap,
 } from "../src/threads.js"
-import {
-  makeWorkspacesExtension,
-  WORKSPACES_EXTENSION_ID,
-  WorkspaceKind,
-} from "../src/workspaces.js"
+import { WorkspaceKind } from "../src/workspaces.js"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   acted,
@@ -284,29 +276,12 @@ const accountsRig = (options: RigAccounts) =>
     })
     const threadRequests = Effect.sync(() => threadRequestCount)
     const cwd = yield* makeTempDirectoryScoped("gent-threads-")
-    const home = yield* Option.match(Option.fromUndefinedOr(options.maxRunning), {
-      onNone: () => Effect.succeedNone,
-      onSome: (maxRunning) =>
-        Effect.asSome(
-          Effect.gen(function* () {
-            const dir = yield* makeTempDirectoryScoped("gent-threads-home-")
-            const fs = yield* FileSystem.FileSystem
-            yield* fs.makeDirectory(`${dir}/.gent`, { recursive: true })
-            yield* fs.writeFileString(
-              `${dir}/.gent/config.json`,
-              `{"threads":{"maxRunning":${maxRunning}}}`,
-            )
-            return dir
-          }).pipe(Effect.provide(BunServices.layer)),
-        ),
-    })
     const harness = yield* createRpcHarness({
       ...e2ePreset,
       cwd,
       providerLayer,
       extensionInputs: [AgentsExtension, SessionToolsExtension, ...(options.extensions ?? [])],
       ...omitUndefined({
-        home: Option.getOrUndefined(home),
         modelPricing: options.pricing,
         configServiceLayer: Option.getOrUndefined(
           Option.map(Option.fromUndefinedOr(options.order), (order) =>
@@ -569,8 +544,6 @@ interface RigAccounts {
   readonly usage?: StepUsage
   /** The quota windows the starter's `step`-th request names; threads' requests name none. */
   readonly quota?: (step: number) => ReadonlyArray<QuotaReading>
-  /** The running-thread cap the owner's config names; default: the shipped one. */
-  readonly maxRunning?: number
   /** The owner's Sabbath, beside `order` in the user config. */
   readonly sabbath?: {
     readonly latitude: number
@@ -1075,51 +1048,6 @@ describe("threads", () => {
     )
 
     it.live(
-      "a send the running cap refuses frees the lane admitted for it under its key at once",
-      () =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis
-            // Ten hours to the reset: 89 points carry 2.6 runs, two lanes. The cap is one.
-            const rig = yield* accountsRig({
-              ...metered,
-              maxRunning: 1,
-              quota: (step) => [
-                {
-                  window: "7d",
-                  utilization: Option.getOrElse(
-                    Option.liftPredicate(0.1, () => step === 1),
-                    () => 0.11,
-                  ),
-                  resetAt: now + 10 * 3_600_000,
-                  rejected: false,
-                },
-              ],
-              extensions: [admitSendProbe],
-            })
-            const [idle] = yield* rig.act(rig.starter, [rig.op("thread.start", { name: "idle" })])
-            if (Predicate.isUndefined(idle) || !idle.ok)
-              return yield* Effect.die("thread.start failed")
-            const waiting = yield* decodeStarted(idle.output)
-            // The gate stays shut: the round runs and fills the cap.
-            yield* rig.start(rig.starter, THREAD_TASK)
-            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
-            yield* loadIs(rig, 1, "the round holds a lane")
-            const probed = yield* rig.one(
-              rig.starter,
-              rig.op("probe.admit-send", { thread: waiting.thread }),
-            )
-            expect(yield* decodeSendAdmitted(probed)).toEqual({ admitted: "other" })
-            // Read at once: the refused send holds no lane.
-            expect((yield* lanesOf(rig))?.load).toBe(1)
-            yield* Deferred.succeed(rig.gate, true)
-            yield* loadIs(rig, 0, "every lane is free once the round ends")
-          }).pipe(Effect.timeout("12 seconds")),
-        ),
-      15_000,
-    )
-
-    it.live(
       "a send the thread refuses as busy after its lane was admitted frees that lane at once",
       () =>
         Effect.scoped(
@@ -1587,7 +1515,7 @@ describe("threads", () => {
   )
 
   it.live(
-    "eight starts in one model step: four run and the rest are refused, naming them and leaving no session",
+    "eight starts in one model step all run, each in its own session",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -1600,31 +1528,21 @@ describe("threads", () => {
               rig.op("thread.start", { task: `${THREAD_TASK} ${index}` }),
             ),
           )
-          const refused = results.filter((result) => !result.ok)
-          expect(refused).toHaveLength(4)
-          const started = yield* Effect.forEach(
-            results.filter((result) => result.ok),
-            (result) => decodeStarted(result.output),
-          )
-          for (const refusal of refused) {
-            expect(refusal.output).toContain("already runs 4 threads")
-            for (const thread of started) expect(refusal.output).toContain(thread.thread)
-          }
-          // The refused start leaves no session behind.
-          expect((yield* rig.client.session.list()).length).toBe(before + 4)
+          expect(results.filter((result) => !result.ok)).toEqual([])
+          expect((yield* rig.client.session.list()).length).toBe(before + 8)
           const rows = yield* rig.listUntil(
             rig.starter,
-            (found) => found.filter((row) => row.status === "running").length === 4,
-            "four threads run",
+            (found) => found.filter((row) => row.status === "running").length === 8,
+            "eight threads run",
           )
-          expect(rows).toHaveLength(4)
+          expect(rows).toHaveLength(8)
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,
   )
 
   it.live(
-    "after a handoff the new session lists, stops and counts the threads its thread started",
+    "after a handoff the new session lists and stops the threads its thread started",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -1641,7 +1559,7 @@ describe("threads", () => {
             parentBranchId: rig.starter.branchId,
             continueThread: true,
           })
-          // The handoff starts a fourth: the cap holds four for the whole thread.
+          // The handoff starts a fourth; the thread's list holds all four.
           const own = (yield* rig.start(handoff, `${THREAD_TASK} own`)).thread
           const rows = yield* rig.listUntil(
             handoff,
@@ -1651,12 +1569,6 @@ describe("threads", () => {
           expect(rows.map((row) => row.thread).toSorted()).toEqual(
             [...started.map((entry) => entry.thread), own].toSorted(),
           )
-          // The cap counts every thread the thread started, in either session.
-          const [capped] = yield* rig.act(handoff, [
-            rig.op("thread.start", { task: `${THREAD_TASK} fifth` }),
-          ])
-          expect(capped?.ok).toBe(false)
-          expect(capped?.output).toContain("already runs 4 threads")
           // The older session's thread is the handoff's to stop.
           const first = started[0]
           if (Predicate.isUndefined(first)) return yield* Effect.die("no started thread")
@@ -1673,7 +1585,7 @@ describe("threads", () => {
   )
 
   it.live(
-    "with the thread's first session deleted, its newest session still lists, stops and counts what the thread started",
+    "with the thread's first session deleted, its newest session still lists and stops what the thread started",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -1693,18 +1605,6 @@ describe("threads", () => {
           yield* rig.client.session.delete({ sessionId: rig.starter.sessionId })
           const rows = yield* rig.list(third)
           expect(rows.map((row) => row.thread)).toEqual([child.thread])
-          // The cap counts C: three more run, and one of four is refused.
-          const more = yield* rig.act(
-            third,
-            [1, 2, 3, 4].map((index) =>
-              rig.op("thread.start", { task: `${THREAD_TASK} ${index}` }),
-            ),
-          )
-          // The four starts run at once: which one is refused is not fixed.
-          const refused = more.filter((result) => !result.ok)
-          expect(more).toHaveLength(4)
-          expect(refused).toHaveLength(1)
-          expect(refused[0]?.output).toContain("already runs 4 threads")
           const stopped = yield* rig.stop(third, child.thread)
           expect(stopped.stopped).toEqual([
             { sessionId: child.sessionId, branchId: child.branchId },
@@ -2648,39 +2548,6 @@ describe("thread round ownership", () => {
   )
 
   it.live(
-    "the user's own config sets the running-thread cap",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { client, sessionId, branchId } = yield* roundHarness({
-            userConfig: '{"threads":{"maxRunning":1}}',
-          })
-          const starter = { sessionId, branchId }
-          const [first] = yield* call(client, starter, [
-            ["thread.start", "start-cap-1", { agent: "worker", task: "HANG first" }],
-          ])
-          expect(first?.failed).toBe(false)
-          const [second] = yield* call(client, starter, [
-            ["thread.start", "start-cap-2", { agent: "worker", task: "HANG second" }],
-          ])
-          expect(second?.failed).toBe(true)
-          expect(textOf(second?.result)).toContain("already runs 1 thread:")
-          // The place is resolved before the cap: a place that cannot be made is the refusal.
-          const [nowhere] = yield* call(client, starter, [
-            [
-              "thread.start",
-              "start-cap-3",
-              { agent: "worker", task: "HANG third", workspace: { snapshot: true } },
-            ],
-          ])
-          expect(nowhere?.failed).toBe(true)
-          expect(textOf(nowhere?.result)).toContain("A snapshot workspace")
-        }).pipe(Effect.timeout("25 seconds")),
-      ),
-    30_000,
-  )
-
-  it.live(
     "a worker thread that names no model runs on its starter's when neither its agent nor the config names one",
     () =>
       Effect.scoped(
@@ -2706,116 +2573,6 @@ describe("thread round ownership", () => {
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,
-  )
-
-  it.effect(
-    "a start two calls under one round's key prepare counts until the last of them ends",
-    () =>
-      Effect.gen(function* () {
-        const rounds = yield* ThreadRounds
-        const thread = SessionId.make("thread-preparing")
-        const first = yield* Scope.make()
-        const second = yield* Scope.make()
-        yield* Scope.provide(rounds.prepare("round-shared", thread), first)
-        yield* Scope.provide(rounds.prepare("round-shared", thread), second)
-        // A retry that ends (interrupted, or refused its place) leaves the first call's count.
-        yield* Scope.close(second, Exit.void)
-        expect(yield* rounds.preparing(thread, "round-other")).toBe(1)
-        expect(yield* rounds.preparing(thread, "round-shared")).toBe(0)
-        yield* Scope.close(first, Exit.void)
-        expect(yield* rounds.preparing(thread, "round-other")).toBe(0)
-      }).pipe(Effect.provide(ThreadRounds.Live.pipe(Layer.provide(BunSqlite.memory)))),
-  )
-
-  it.live(
-    "a start preparing its copy counts against the cap, so another start in the thread is refused before it makes anything",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const sh = (cwd: string, command: string) =>
-            runProcess("sh", ["-c", command], { cwd }).pipe(
-              Effect.flatMap((result) => {
-                if (result.exitCode === 0) return Effect.succeed(result.stdout.trim())
-                return Effect.die(`${command} exited ${result.exitCode}: ${result.stderr}`)
-              }),
-              Effect.orDie,
-              Effect.provide(BunServices.layer),
-            )
-          const gate = yield* sh(yield* makeTempDirectoryScoped("threads-gate-"), "pwd -P")
-          const root = yield* makeTempDirectoryScoped("threads-preparing-")
-          // The copy's setup hook says it started, then waits for the gate.
-          yield* sh(
-            root,
-            [
-              "mkdir origin && cd origin",
-              "git init -q -b main",
-              "git config user.name Test",
-              "git config user.email test@example.com",
-              `printf 'version = 1\\n[[hooks.postcreate]]\\nrun = "touch ${gate}/started; while [ ! -f ${gate}/go ]; do sleep 0.05; done"\\n' > .rift.toml`,
-              "git add -A",
-              "git commit -qm init",
-            ].join(" && "),
-          )
-          const origin = yield* sh(`${root}/origin`, "pwd -P")
-          const home = yield* makeTempDirectoryScoped("threads-preparing-home-")
-          yield* sh(
-            home,
-            `mkdir .gent && printf '%s' '{"threads":{"maxRunning":1}}' > .gent/config.json`,
-          )
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            extensionInputs: [
-              ...e2ePreset.extensionInputs.filter(
-                (extension) => extension.manifest.id !== WORKSPACES_EXTENSION_ID,
-              ),
-              makeWorkspacesExtension({ rift: "/nonexistent/gent-test/rift" }),
-            ],
-            providerLayer: workerModels(),
-            cwd: origin,
-            home,
-          })
-          const older = { sessionId, branchId }
-          // A second session of the same thread shares its cap.
-          const newer: SessionKey = yield* client.session.create({
-            parentSessionId: older.sessionId,
-            parentBranchId: older.branchId,
-            continueThread: true,
-          })
-          const copying = yield* Effect.forkChild(
-            call(client, older, [
-              [
-                "thread.start",
-                "start-copy",
-                { agent: "worker", task: "ECHO copied", workspace: { snapshot: true } },
-              ],
-            ]),
-          )
-          yield* waitFor(
-            sh(gate, "ls"),
-            (listed) => listed.includes("started"),
-            10_000,
-            "the copy's setup hook started",
-          )
-          const [plain] = yield* call(client, newer, [
-            ["thread.start", "start-plain", { agent: "worker", task: "ECHO plain" }],
-          ])
-          expect(plain?.failed).toBe(true)
-          expect(textOf(plain?.result)).toContain(
-            "This session's thread is starting already 1 thread.",
-          )
-          yield* sh(gate, "touch go")
-          const [copied] = yield* Fiber.join(copying)
-          expect(copied?.failed).toBe(false)
-          const threads = (yield* client.session.list()).filter(
-            (session) =>
-              session.id !== newer.sessionId &&
-              (session.parentSessionId === older.sessionId ||
-                session.parentSessionId === newer.sessionId),
-          )
-          expect(threads).toHaveLength(1)
-        }).pipe(Effect.timeout("25 seconds")),
-      ),
-    30_000,
   )
 
   test("a workspace names exactly one place, and decodes to the kind it names", () => {
@@ -3068,9 +2825,8 @@ const SendConcurrently = tool({
 
 /** How a sender that is not a model turn reads a refused send: wait, or fail. */
 const Refusal = Schema.Struct({
-  refusal: Schema.Literals(["sent", "busy", "over-cap", "queue-full", "other"]),
+  refusal: Schema.Literals(["sent", "busy", "queue-full", "other"]),
   round: Schema.optionalKey(Schema.String),
-  threads: Schema.optionalKey(Schema.Array(Schema.String)),
 })
 
 const ClassifySend = tool({
@@ -3088,9 +2844,6 @@ const ClassifySend = tool({
           onSuccess: (sent): typeof Refusal.Type => ({ refusal: "sent", round: sent.round }),
           onFailure: (error): typeof Refusal.Type => {
             if (Schema.is(ThreadBusy)(error)) return { refusal: "busy", round: error.round }
-            if (Schema.is(ThreadsOverCap)(error)) {
-              return { refusal: "over-cap", threads: error.threads }
-            }
             if (Schema.is(FollowUpQueueFull)(error)) return { refusal: "queue-full" }
             return { refusal: "other" }
           },
@@ -3114,7 +2867,7 @@ const ServiceProbe = defineExtension({
 
 describe("the Threads service", () => {
   it.live(
-    "a sender through the service tells a busy thread, the running cap and a full queue apart, and the model reads the same words as before",
+    "a sender through the service tells a busy thread and a full queue apart, and the model reads the same words as before",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -3122,11 +2875,9 @@ describe("the Threads service", () => {
           const { client, sessionId, branchId } = yield* roundHarness({
             hang: Effect.asVoid(Deferred.succeed(hanging, true)),
             extensions: [ServiceProbe],
-            userConfig: '{"threads":{"maxRunning":2}}',
           })
           const starter = { sessionId, branchId }
           const { impl, rev } = yield* startTwo(client, starter)
-          const third = yield* startWorker(client, starter, "start-third")
           const classify = (id: string, thread: SessionId) =>
             Effect.map(
               call(client, starter, [
@@ -3157,21 +2908,6 @@ describe("the Threads service", () => {
           expect(busyTool?.failed).toBe(true)
           expect(textOf(busyTool?.result)).toContain(
             `ThreadError: Thread ${impl.thread} is running round 1 (${open.round})`,
-          )
-
-          // Two open rounds at a cap of two: any send is over the cap first.
-          yield* call(client, starter, [
-            ["thread.send", "send-third", { thread: third.thread, message: "HANG" }],
-          ])
-          const capped = yield* classify("classify-cap", rev.thread)
-          expect(capped.refusal).toBe("over-cap")
-          expect(capped.threads?.toSorted()).toEqual([impl.thread, third.thread].toSorted())
-          const [capTool] = yield* call(client, starter, [
-            ["thread.send", "send-capped", { thread: rev.thread, message: "ECHO over" }],
-          ])
-          expect(capTool?.failed).toBe(true)
-          expect(textOf(capTool?.result)).toContain(
-            "ThreadError: This session's thread already runs 2 threads:",
           )
         }).pipe(Effect.timeout("25 seconds")),
       ),

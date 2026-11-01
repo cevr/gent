@@ -4446,7 +4446,7 @@ describe("the machine boot budget", () => {
     65_000,
   )
 
-  it.live("six runs on one host open four rounds at once; the threads cap holds the rest", () =>
+  it.live("six runs on one host open all six rounds at once: no cap per host, the lanes pace", () =>
     Effect.gen(function* () {
       const home = yield* restartableHome
       const gate = yield* Deferred.make<boolean>()
@@ -4466,12 +4466,12 @@ describe("the machine boot budget", () => {
           `one-host-${index}`,
         ),
       )
-      yield* waitFor(Ref.get(open), (count) => count >= 4, 10_000, "four rounds opened")
+      yield* waitFor(Ref.get(open), (count) => count >= 6, 10_000, "six rounds opened")
       yield* settle
-      expect(yield* Ref.get(open)).toBe(4)
+      expect(yield* Ref.get(open)).toBe(6)
       yield* Deferred.succeed(gate, true)
       yield* waitFor(home.sql(allAsking(runs)), Boolean, 30_000, "every run reached its ask")
-      expect(yield* Ref.get(most)).toBe(4)
+      expect(yield* Ref.get(most)).toBe(6)
     }).pipe(Effect.scoped, Effect.timeout("50 seconds")),
   )
 })

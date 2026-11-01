@@ -107,10 +107,9 @@
     `Dispatched` commit (and before a named permit's wait) and gives it back
     at the driver's next read after the exit, the stop or the ask commits. A
     poke (a stop, an answer) takes a run out of the permit's wait, so a stop
-    settles without waiting for a permit. Rounds take no permit. The threads
-    cap (`threads.maxRunning`, 4 by default) bounds the rounds one host
-    session runs at once; an account with quota readings paces its rounds by
-    its lane, and one with none (an API key) is bounded only by that cap. A
+    settles without waiting for a permit. Rounds take no permit and no count
+    caps them: an account with quota readings paces its rounds by its lane,
+    and one with none (an API key) admits every round. A
     command killed by a crash asks `interrupted` and never runs again, so an
     asking run and a restart hold no permit. Named command limits use
     `ExtensionContext.Permits.with`, shared with every participating caller

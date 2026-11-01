@@ -37,7 +37,7 @@ import {
   Effect,
   Exit,
   FiberMap,
-  FileSystem,
+  type FileSystem,
   Layer,
   Match,
   Option,
@@ -50,7 +50,6 @@ import {
   Result,
   Schema,
   SchemaGetter,
-  type Scope,
   Semaphore,
   Stream,
 } from "effect"
@@ -191,21 +190,8 @@ export class ThreadBusy extends Schema.TaggedError<ThreadBusy, { readonly brand:
 ) {}
 
 /**
- * A round past the running cap: the starter's thread already has `threads`
- * with an open round. A sender that is not a model turn waits for one of
- * them to end.
- */
-export class ThreadsOverCap extends Schema.TaggedError<
-  ThreadsOverCap,
-  { readonly brand: unique symbol }
->()("ThreadsOverCap", {
-  message: Schema.String,
-  threads: Schema.Array(Schema.String),
-}) {}
-
-/**
- * Every fault behind the facade is one caller-facing error. A busy thread,
- * the cap and a spent account keep their own words: the model reads them as
+ * Every fault behind the facade is one caller-facing error. A busy thread
+ * and a spent account keep their own words: the model reads them as
  * before, as a `ThreadError`, and the service's callers get the typed refusal.
  */
 const asThreadError = (what: string) =>
@@ -220,16 +206,11 @@ const asThreadError = (what: string) =>
         | WorkspaceError
         | WorkspaceHookFailed
         | ThreadBusy
-        | ThreadsOverCap
         | LaneUnavailable
         | ThreadError,
     ) => {
       if (Schema.is(ThreadError)(cause)) return cause
-      if (
-        Schema.is(ThreadBusy)(cause) ||
-        Schema.is(ThreadsOverCap)(cause) ||
-        Schema.is(LaneUnavailable)(cause)
-      ) {
+      if (Schema.is(ThreadBusy)(cause) || Schema.is(LaneUnavailable)(cause)) {
         return new ThreadError({ message: cause.message, cause })
       }
       return new ThreadError({ message: `${what}: ${cause.message}`, cause })
@@ -432,20 +413,16 @@ interface RoundEnd {
 
 /**
  * A send's claim on its thread: its own round, `fresh` when this claim
- * inserted it and false on a retry; the open round that refuses it; or the
- * busy threads of a starter thread at its cap.
+ * inserted it and false on a retry; or the open round that refuses it.
  */
 const RoundClaim = Schema.TaggedUnion({
   Ready: { round: RoundRow, fresh: Schema.Boolean },
   Busy: { round: RoundRow },
-  OverCap: { threads: Schema.Array(Schema.String) },
 })
 type RoundClaim = typeof RoundClaim.Type
 
 interface NewRound {
   readonly round: string
-  /** The most threads with an open round the starter's thread may have. */
-  readonly cap: number
   readonly thread: SessionId
   readonly starter: {
     readonly sessionId: SessionId
@@ -488,13 +465,9 @@ interface ThreadRoundsService {
     readonly sessionId: SessionId
     readonly branchId: BranchId
   }) => Effect.Effect<Option.Option<RoundRow>, ThreadStorageError>
-  /** The threads with an open round that one starter thread sent. */
-  readonly busyThreads: (
-    starterThread: SessionId,
-  ) => Effect.Effect<ReadonlyArray<string>, ThreadStorageError>
   /**
    * In one transaction: the round itself on a retry, else refused when the
-   * thread is busy or the starter's thread is at its cap, else inserted.
+   * thread is busy, else inserted.
    */
   readonly claimRound: (round: NewRound) => Effect.Effect<RoundClaim, ThreadStorageError>
   /** Keeps the value on the open round; a round that ended keeps the one it had. */
@@ -577,8 +550,9 @@ interface ThreadRoundsService {
   /** Every round end this server marks, in order. In memory: a restart starts it empty. */
   readonly ended: PubSub.PubSub<RoundEnded>
   /**
-   * One admission at a time in this server: the cap check and the start's
-   * session it guards are one step, so a start past the cap makes no session.
+   * One admission at a time in this server: the lane check and the start's
+   * session it guards are one step, so a start its account refuses makes no
+   * session, and two calls in one model step cannot both take the last place.
    */
   readonly admissions: Semaphore.Semaphore
   /**
@@ -588,18 +562,6 @@ interface ThreadRoundsService {
    * stopped, never asked for again. In memory, as the queue is.
    */
   readonly withdrawals: Semaphore.Semaphore
-  /**
-   * Counts a start with a task as running while it prepares its workspace,
-   * until the scope closes or its round is claimed. In memory, as a lane's
-   * hold is: a restart starts it empty, and a retry under the same key
-   * prepares again.
-   */
-  readonly prepare: (
-    round: string,
-    starterThread: SessionId,
-  ) => Effect.Effect<void, never, Scope.Scope>
-  /** The starts `starterThread` is preparing, `round` left out: each counts against the cap. */
-  readonly preparing: (starterThread: SessionId, round: string) => Effect.Effect<number>
   /** The branches whose turns reconciled since the last failed hook step. */
   readonly reconciled: ReconciledBranches
 }
@@ -711,7 +673,7 @@ const ensureThreadRounds = ensureExtensionTables({
  * started with `cwd` runs in another place than its starter, and its round's
  * sender and end must meet one feed and one permit.
  */
-export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
+class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
   "@gent/extensions/src/threads/ThreadRounds",
 ) {
   static Live: Layer.Layer<ThreadRounds, ThreadStorageError, SqlClient.SqlClient> = Layer.effect(
@@ -721,15 +683,6 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
       const ended = yield* PubSub.unbounded<RoundEnded>()
       const admissions = yield* Semaphore.make(1)
       const withdrawals = yield* Semaphore.make(1)
-      /**
-       * round → the starter thread of a start that is preparing its workspace,
-       * and how many calls under the round's key prepare it: the last one out
-       * ends the preparation.
-       */
-      const starting = new Map<string, { readonly thread: SessionId; readonly holders: number }>()
-      const preparingOthers = (starterThread: string, round: string) =>
-        [...starting].filter(([key, entry]) => key !== round && entry.thread === starterThread)
-          .length
       const reconciled = yield* makeReconciledBranches
       const waiters = yield* FiberMap.make<string>()
       yield* ensureThreadRounds
@@ -745,16 +698,6 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
           ORDER BY number DESC LIMIT 1
         `
         return Option.fromNullishOr(rows[0])
-      })
-
-      const selectBusyThreads = Effect.fn("ThreadRounds.selectBusyThreads")(function* (
-        starterThread: string,
-      ) {
-        const rows = yield* sql<{ readonly thread: string }>`
-          SELECT DISTINCT thread FROM thread_rounds
-          WHERE starter_thread = ${starterThread} AND ended_at IS NULL
-        `
-        return rows.map((row) => row.thread)
       })
 
       return ThreadRounds.of({
@@ -785,13 +728,6 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
           Effect.mapError(storageError("Failed to read the open round")),
         ),
 
-        busyThreads: Effect.fn("ThreadRounds.busyThreads")(
-          function* (starterThread) {
-            return yield* selectBusyThreads(starterThread)
-          },
-          Effect.mapError(storageError("Failed to count the busy threads")),
-        ),
-
         claimRound: Effect.fn("ThreadRounds.claimRound")(
           function* (input) {
             return yield* Effect.gen(function* () {
@@ -801,10 +737,6 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
               }
               const open = yield* selectOpenRound(input.thread)
               if (Option.isSome(open)) return RoundClaim.cases.Busy.make({ round: open.value })
-              const busy = yield* selectBusyThreads(input.starter.thread)
-              if (busy.length + preparingOthers(input.starter.thread, input.round) >= input.cap) {
-                return RoundClaim.cases.OverCap.make({ threads: busy })
-              }
               const counted = yield* sql<{
                 readonly rounds: number
               }>`SELECT COUNT(*) AS rounds FROM thread_rounds WHERE thread = ${input.thread}`
@@ -830,15 +762,7 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
                 onSome: (round) =>
                   Effect.succeed(RoundClaim.cases.Ready.make({ round, fresh: true })),
               })
-            }).pipe(
-              sql.withTransaction,
-              // The claimed round's row counts it now; its preparation no longer does.
-              Effect.tap((claimed) =>
-                Effect.sync(() => {
-                  if (claimed._tag === "Ready") starting.delete(input.round)
-                }),
-              ),
-            )
+            }).pipe(sql.withTransaction)
           },
           Effect.mapError(storageError("Failed to admit the round")),
         ),
@@ -1046,23 +970,6 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
         withdrawals,
         waitLane: (round, wait) =>
           Effect.asVoid(FiberMap.run(waiters, round, wait, { onlyIfMissing: true })),
-        prepare: (round, starterThread) =>
-          Effect.acquireRelease(
-            Effect.sync(() => {
-              const holders = starting.get(round)?.holders ?? 0
-              starting.set(round, { thread: starterThread, holders: holders + 1 })
-            }),
-            () =>
-              Effect.sync(() => {
-                const entry = Option.fromUndefinedOr(starting.get(round))
-                if (Option.isNone(entry)) return
-                const holders = entry.value.holders - 1
-                if (holders > 0) starting.set(round, { ...entry.value, holders })
-                else starting.delete(round)
-              }),
-          ),
-        preparing: (starterThread, round) =>
-          Effect.sync(() => preparingOthers(starterThread, round)),
         reconciled,
       })
     }),
@@ -1105,46 +1012,6 @@ export const THREAD_ROUND_TYPE = "thread-round"
 
 /** `metadata.customType` on the message that wakes a starter at a round's end. */
 export const THREAD_ROUND_END_TYPE = "thread-round-end"
-
-/**
- * Running threads one thread may have, over all its sessions: threads with
- * an open round. The user's own config sets another cap:
- *
- *     { "threads": { "maxRunning": 8 } }
- *
- * Only `~/.gent/config.json` counts: each running thread spends the user's
- * money, and a project file cannot.
- */
-const DEFAULT_MAX_RUNNING_THREADS = 4
-
-const ThreadsConfig = Schema.fromJsonString(
-  Schema.Struct({
-    threads: Schema.optionalKey(
-      Schema.Struct({
-        maxRunning: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
-      }),
-    ),
-  }),
-)
-
-/** The cap from the user's own config, else the default; a file that does not decode keeps the default, with a warning. */
-const runningCap = Effect.fn("Threads.runningCap")(function* () {
-  const ctx = yield* ExtensionContext
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const file = path.join(ctx.home, ".gent", "config.json")
-  if (!(yield* fs.exists(file))) return DEFAULT_MAX_RUNNING_THREADS
-  return yield* fs.readFileString(file).pipe(
-    Effect.flatMap(Schema.decodeEffect(ThreadsConfig)),
-    Effect.map((config) => config.threads?.maxRunning ?? DEFAULT_MAX_RUNNING_THREADS),
-    Effect.catch((error) =>
-      Effect.logWarning("threads.config.unreadable").pipe(
-        Effect.annotateLogs({ file, error: String(error) }),
-        Effect.as(DEFAULT_MAX_RUNNING_THREADS),
-      ),
-    ),
-  )
-})
 
 /** A thread that loops on a broken model stops here instead of spending its starter's budget. */
 const THREAD_MAX_MODEL_ATTEMPTS = 32
@@ -1446,7 +1313,7 @@ const sendRoundTurn = Effect.fn("Threads.sendRoundTurn")(function* (round: Round
  * the thread's loop (`FollowUpQueueFull`), and the loop keeps that reply
  * under the round's command id, so a repeat is refused the same way: the
  * round goes with it, since an open round with no turn would hold the thread
- * busy and take a place under the cap until a stop. Any other failure proves
+ * busy until a stop. Any other failure proves
  * nothing (a reply lost after the loop admitted the turn, a concurrent repeat
  * of the request refused as already processing): the round stays, its turn's
  * end records it, and a retry or the starter's reconcile sends a turn that
@@ -1932,7 +1799,7 @@ const randomNonce = Effect.gen(function* () {
  * sent is admitted now, though the thread's loop is open and idle. The
  * turn's own hook ends the round. A round whose thread session was deleted
  * while no process ran (so no delete hook dropped it) goes, as the hook
- * would have dropped it: it wakes nobody, and frees its place under the cap.
+ * would have dropped it: it wakes nobody.
  */
 const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
   round: RoundRow,
@@ -2446,50 +2313,6 @@ const threadAdmission = (starter: StoredSession, input: ThreadStartInput): Store
   }
 }
 
-const threadsWord = (count: number) => {
-  if (count === 1) return "thread"
-  return "threads"
-}
-
-/** The cap's refusal, naming the threads the starter's thread runs and counting the ones it is starting. */
-const capRefusal = Effect.fn("Threads.capRefusal")(function* (
-  busy: ReadonlyArray<string>,
-  starting: number,
-) {
-  const started = yield* startedThreads()
-  const names = busy
-    .map((thread) => {
-      const name = started.find((entry) => entry.thread === thread)?.current.name ?? ""
-      return `${thread} "${name}"`
-    })
-    .join(", ")
-  const clauses: Array<string> = []
-  if (busy.length > 0)
-    clauses.push(`already runs ${busy.length} ${threadsWord(busy.length)}: ${names}`)
-  if (starting > 0 && busy.length > 0) clauses.push(`is starting ${starting} more`)
-  if (starting > 0 && busy.length === 0) {
-    clauses.push(`is starting already ${starting} ${threadsWord(starting)}`)
-  }
-  return yield* new ThreadsOverCap({
-    message: `This session's thread ${clauses.join(", and ")}. Stop one with thread.stop, or send this round when one ends.`,
-    threads: busy,
-  })
-})
-
-/**
- * The cap, read before a start makes its session, so a start past it makes
- * none. The starts preparing a workspace count, `round` left out. The claim
- * reads it again in its transaction: that read is the one the table holds to.
- */
-const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* (cap: number, round: string) {
-  const rounds = yield* ThreadRounds
-  const starter = yield* callerThread()
-  const busy = yield* rounds.busyThreads(starter)
-  const starting = yield* rounds.preparing(starter, round)
-  if (busy.length + starting < cap) return
-  return yield* capRefusal(busy, starting)
-})
-
 /** The session settings a round's run reads its account from. */
 type RoundLane = Pick<StoredSession, "cwd" | "admission" | "modelId">
 
@@ -2563,12 +2386,12 @@ const roundIdOf = Effect.fn("Threads.roundIdOf")(function* (kind: string, key: s
 })
 
 /**
- * Admits one round under the cap and its account's lanes. A retry under the
+ * Admits one round under its account's lanes. A retry under the
  * same key is handed the round it admitted before any refusal applies, and
  * is sent only when its first call never admitted it (a crash between the
  * row and the send, or a round still in the lane queue), through its lane
- * again. `request` runs under the permit after the cap and lane checks, so
- * a start makes its session only when both admit it, and two calls in one
+ * again. `request` runs under the permit after the lane check, so a start
+ * makes its session only when its lane admits it, and two calls in one
  * model step cannot both take the last place. A round the lane queues is
  * claimed and returns at once with its place (`queued`): it starts when its
  * grant comes, and its end reaches the starter as any end does. A spent
@@ -2588,7 +2411,6 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
     branchId: ctx.branchId,
     thread: yield* callerThread(),
   }
-  const cap = yield* runningCap()
   const { claim, admission } = yield* Semaphore.withPermit(
     rounds.admissions,
     Effect.gen(function* () {
@@ -2599,17 +2421,13 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
           admission: Option.none<LaneAdmission>(),
         }
       }
-      // A cap refusal frees the lane a sender admitted for this round first
-      // (`admitSend`): the round does not run now.
-      yield* refuseOverCap(cap, roundId).pipe(Effect.tapError(() => cancelLane(roundId)))
       const answer = yield* admitLane(roundId, lane)
       // Past the lane, a failed create or a claim that refuses (a busy
-      // thread, the cap) runs no round: the lane it took frees with it.
+      // thread) runs no round: the lane it took frees with it.
       const input = yield* request.pipe(Effect.tapError(() => cancelLane(roundId)))
       const claimed = yield* rounds
         .claimRound({
           round: roundId,
-          cap,
           thread: input.thread,
           starter,
           place: input.place,
@@ -2637,9 +2455,6 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
       return { claim: claimed, admission: Option.some(answer) }
     }),
   )
-  if (claim._tag === "OverCap") {
-    return yield* capRefusal(claim.threads, yield* rounds.preparing(starter.thread, roundId))
-  }
   if (claim._tag === "Busy") {
     return yield* new ThreadBusy({
       message: `Thread ${claim.round.thread} is running round ${claim.round.number} (${claim.round.round}); send the next round when it ends`,
@@ -2703,8 +2518,8 @@ const storedThreadIn = Effect.fn("Threads.storedThreadIn")(function* (cwd: strin
  * A thread's workspace, made outside the admission permit: a copy runs its
  * `postcreate` hooks, which can take minutes, and must not hold every other
  * admission on the server. The place resolves first, so a start with a bad
- * workspace takes nothing; then `precheck` refuses a start past the cap or a
- * full account before the place is made. A copy's record exists from the first step of its
+ * workspace takes nothing; then `precheck` refuses a start on a full account
+ * before the place is made. A copy's record exists from the first step of its
  * making. When the start fails or is interrupted (the finalizer on the
  * start's scope), storage decides what happens to a copy, not what this
  * fiber saw: core can store the session and then be interrupted before
@@ -2795,25 +2610,21 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
         admission,
         ...omitUndefined({ cwd: Option.getOrUndefined(at), modelId: route.modelId }),
       })
-      // A start with a task is refused past the cap or a full account before
-      // its copy is made; a retry has its round already, and neither applies.
+      // A start with a task is refused on a full account before its copy is
+      // made; a retry has its round already, and that does not apply.
       const roundId = yield* roundIdOf("thread.start", input.key)
       // Whether this call's precheck took the lane: a retry's round holds its own.
       const admitted = yield* Ref.make(false)
-      // One admission step, as a round's: the cap (starts in preparation
-      // counted), the lane, and this start counted as preparing. The lane
-      // and the count hold until the round is claimed or the start ends.
+      // One admission step, as a round's: the lane, held until the round is
+      // claimed or the start ends.
       const precheck = Effect.gen(function* () {
         if (Option.isNone(task)) return
         const rounds = yield* ThreadRounds
-        const cap = yield* runningCap()
         const took = yield* Semaphore.withPermit(
           rounds.admissions,
           Effect.gen(function* () {
             if (Option.isSome(yield* rounds.round(roundId))) return false
-            yield* refuseOverCap(cap, roundId)
             yield* admitLane(roundId, lane(cwd))
-            yield* rounds.prepare(roundId, yield* callerThread())
             return true
           }),
         )
@@ -2871,8 +2682,8 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
         ),
       )
       const workPlace = Option.map(workspace, (found) => found.place)
-      // With a task, the cap admits the thread before its session is made. A
-      // retry finds its round before the cap and its session after it.
+      // With a task, the lane admits the thread before its session is made. A
+      // retry finds its round before the lane and its session after it.
       const round = yield* Option.match(task, {
         onNone: () => Effect.succeed(Option.none<typeof RoundHandle.Type>()),
         onSome: (message) =>
@@ -3245,7 +3056,7 @@ const makeThreads = (rounds: ThreadRoundsService) => {
      * sender choosing among models admits each until one is free, so no
      * other round takes that lane between the choice and the send. Held as a
      * start's lane is: until the round's turn opens, the send is refused
-     * (the cap, a busy thread), or 2 minutes pass. A send admitted again
+     * (a busy thread), or 2 minutes pass. A send admitted again
      * under `key` on another model gives the lane up and is admitted afresh.
      */
     admitSend: (key: string, lane: RoundLane) =>

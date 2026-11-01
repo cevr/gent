@@ -9,7 +9,7 @@
   then admitting its task as the first round. It returns the handle at
   admission, keyed by the host tool call id so a replayed call finds its
   thread, and never the answer: the model does not block on a thread. The
-  running cap and the round table are described under threads (below).
+  round table and its admission are described under threads (below).
 - The starter's interrupt cascades to the `starter` rounds whose end would
   wake it: when a turn ends interrupted, its branch's `turnAfter` claims each
   open `starter` round its thread sent whose wake lands on that branch
@@ -172,11 +172,10 @@
     `start`, `send`, `round`, `stop` and `subscribeRoundEnds`; the
     subscription is in memory, so after a restart a consumer reads its rows.
     A send it refuses fails with `ThreadBusy` (the open round), with
-    `ThreadsOverCap` (the threads at the running cap), with
     `LaneUnavailable` (the account is spent, with its `retryAt`), or with
     the thread loop's `FollowUpQueueFull`, so a sender that is not a model
-    turn waits on the first three and fails on the rest; the tools wrap the
-    first three in a `ThreadError` with the same words, which is the text
+    turn waits on the first two and fails on the rest; the tools wrap the
+    first two in a `ThreadError` with the same words, which is the text
     the model reads. A round with no free lane is no refusal: it is claimed
     and queued (below).
     A deleted session's `sessionDeleted` drops the rounds it ran; the rounds
@@ -213,16 +212,9 @@
     one whose turn did, the starter's side asks the stop again (a new request
     id), which opens the thread's loop and stops the resumed turn, so the
     round closes when only the starter opens.
-  - One thread runs at most four threads with an open round over all its
-    sessions, or as many as the user's own `~/.gent/config.json` sets
-    (`{ "threads": { "maxRunning": 8 } }`; a project file cannot, as each
-    running thread spends the user's money): the count is read under one permit per server
-    before a start makes its session, so a start with a task past the cap
-    makes no session and names the threads that run, and again in the claim's
-    transaction, the read the table holds to. Both reads count the starts
-    still preparing (in memory, from the permit to the claim), so two starts
-    cannot each pass and one be refused after its copy is made. Under the same permit, after
-    the cap, the account admits the round (`ExtensionContext.Accounts.admit`,
+  - No count caps the threads one thread runs (owner, 2026-10-31): the
+    account's pace bounds them. Under one admission permit per server, the
+    account admits the round (`ExtensionContext.Accounts.admit`,
     keyed by the round's message id, with the thread session's cwd, admission
     and model): a spent account refuses it (`LaneUnavailable`), and a start
     it refuses makes no session and no copy (a workspace start asks before

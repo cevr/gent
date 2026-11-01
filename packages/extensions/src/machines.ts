@@ -99,7 +99,6 @@ import {
   ThreadBusy,
   Threads,
   type ThreadSendInput,
-  ThreadsOverCap,
   type ThreadStartInput,
 } from "./threads.js"
 
@@ -1553,7 +1552,7 @@ const takesStep = (run: Run, now: number) =>
 const isDone = (run: Run, seq: number) =>
   isTerminal(run.status) && Option.isSome(run.notifiedAt) && run.seq === seq
 
-/** How long a refused send (busy, over the cap) waits for a round end before it tries again. */
+/** How long a refused send (a busy thread) waits for a round end before it tries again. */
 const REFUSED_SEND_WAIT = Duration.seconds(30)
 
 /** A failed step is tried again after this, twice as long each time, at most `STEP_RETRY_MAX`. */
@@ -1752,8 +1751,7 @@ const threadFault = <E>(error: E) => {
   return error
 }
 
-const isWaitRefusal = (error: unknown): error is ThreadBusy | ThreadsOverCap =>
-  Schema.is(ThreadBusy)(error) || Schema.is(ThreadsOverCap)(error)
+const isWaitRefusal = (error: unknown): error is ThreadBusy => Schema.is(ThreadBusy)(error)
 
 /** One driver iteration's outcome: go on reading the row, or leave. */
 const AGAIN = false
@@ -2477,7 +2475,7 @@ const threadStateOf = Effect.fn("Machines.threadStateOf")(function* (run: Run, n
  * fixes before the send) are committed first, with a role's thread: a stop
  * or a crash after the admission then finds the round it must stop. A
  * commit that another writer beat sends nothing: the next read decides. A
- * busy thread or the running cap waits for a round end and sends again. A
+ * busy thread waits for a round end and sends again. A
  * round with no free lane is queued by the send and starts when its grant
  * comes; the driver waits for its end as for any open round. An account
  * whose windows are spent (`LaneUnavailable`: a model the round names, or

@@ -1964,43 +1964,24 @@ describe("a stop", () => {
   )
 })
 
-// ── the running cap ─────────────────────────────────────────────────────────
+// ── many starts in one step ─────────────────────────────────────────────────
 
 /**
- * A starter's thread runs at most four threads with an open round. A fifth
- * and sixth start in the same step must fail as ordinary tool results, not as
- * a turn failure: the model reads the refusal and keeps going. This is the
- * shape that broke in the gamut testbed (six starts in one `Promise.all`, two
- * over the cap), so the cap must refuse the extra threads while the four
- * admitted ones still run and deliver.
+ * Six starts in one step (six in one `Promise.all`, the gamut testbed's
+ * shape) all start, each as an ordinary tool result, and each delivers. No
+ * count caps them: the account's pace does (owner, 2026-10-31).
  */
 
 const startCall = (task: string) => ({ toolName: "thread.start", input: delegated(task) })
 
-/**
- * The failed start results on the starter's branch that name the cap. A
- * failed tool result carries its message in `result`, so the refusal is
- * readable model input rather than a dead turn.
- */
-const cappedResults = (messages: ReadonlyArray<{ readonly parts: ReadonlyArray<Prompt.Part> }>) =>
-  resultsOf("thread.start", messages).filter((part) => {
-    if (part.type !== "tool-result" || !part.isFailure) return false
-    const result = part.result
-    if (!Predicate.isReadonlyObject(result)) return false
-    return String(result["error"]).includes("already runs")
-  })
-
-describe("the running cap", () => {
+describe("many starts in one step", () => {
   it.live(
-    "starts past the cap are refused as tool results, and the admitted threads run",
+    "six starts in one step all run as tool results, and each delivers",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          // The starter's follow-up turn and the four admitted threads all
-          // draw from the gated steps, in whatever order they reach the model.
-          // They stay closed until both refusals are on the branch: a thread
-          // that finished between two admissions would free its place, and the
-          // sixth start would be admitted.
+          // The starter's follow-up turn and the six threads all draw from the
+          // gated steps, in whatever order they reach the model.
           const followUps = 16
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
             multiToolCallStep(
@@ -2016,45 +1997,33 @@ describe("the running cap", () => {
           const harness = yield* harnessWithHome(providerLayer)
           const { client, sessionId, branchId } = harness
           yield* sendPrompt(harness, "delegate six tasks")
-
-          // The two starts past the cap come back as ordinary tool results on
-          // the starter's branch. A turn that died on the refusal would never
-          // persist them.
-          const afterAdmission = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) => cappedResults(current.messages).length >= 2,
+          const threads = yield* waitFor(
+            Effect.map(client.session.list(), (sessions) =>
+              sessions.filter((session) => session.parentSessionId === sessionId),
+            ),
+            (found) => found.length >= 6,
             10_000,
-            "the capped starts returned as tool results",
+            "the six threads started",
           )
-          expect(cappedResults(afterAdmission.messages)).toHaveLength(2)
-          // The refusal names the cap the starter's thread is at.
-          for (const refused of cappedResults(afterAdmission.messages)) {
-            expect(refused).toMatchObject({
-              result: { error: expect.stringContaining("thread already runs 4 threads") },
-            })
-          }
-          // A refused start makes no session.
-          const threads = (yield* client.session.list()).filter(
-            (session) => session.parentSessionId === sessionId,
-          )
-          expect(threads).toHaveLength(4)
+          expect(threads).toHaveLength(6)
           yield* Effect.forEach(
             Array.from({ length: followUps }, (_, index) => index + 1),
             controls.emitAll,
             { discard: true },
           )
-
-          // The four admitted threads still deliver; the cap refused the
-          // extras without disturbing them.
           const settled = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
-              roundEndMessages(current.messages).length >= 4 && current.runtime._tag === "Idle",
+              roundEndMessages(current.messages).length >= 6 && current.runtime._tag === "Idle",
             20_000,
-            "the four admitted threads delivered their round ends",
+            "the six threads delivered their round ends",
           )
-          expect(roundEndMessages(settled.messages)).toHaveLength(4)
-          // Each admitted thread ran as the delegate agent, and its round completed.
+          expect(roundEndMessages(settled.messages)).toHaveLength(6)
+          expect(
+            resultsOf("thread.start", settled.messages).filter(
+              (part) => part.type === "tool-result" && part.isFailure,
+            ),
+          ).toEqual([])
           for (const text of messageTexts(roundEndMessages(settled.messages))) {
             expect(text).toMatch(/^Thread ".+" \(agent delegate\) round 1 completed\./)
           }
@@ -2064,7 +2033,7 @@ describe("the running cap", () => {
   )
 
   it.live(
-    "a thread deleted from the agents pane frees its place, and wakes nobody",
+    "a thread deleted from the agents pane takes its round with it, and wakes nobody",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -4373,7 +4342,7 @@ describe("a delegate thread running when the server stopped", () => {
   )
 
   it.live(
-    "delegate threads running when the server stopped resume, end, and free their places under the cap",
+    "delegate threads running when the server stopped resume and end, and a new thread starts after them",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -4411,7 +4380,11 @@ describe("a delegate thread running when the server stopped", () => {
             10_000,
             "the fifth thread was admitted and ended",
           )
-          expect(cappedResults(settled.messages)).toHaveLength(0)
+          expect(
+            resultsOf("thread.start", settled.messages).filter(
+              (part) => part.type === "tool-result" && part.isFailure,
+            ),
+          ).toEqual([])
         }).pipe(Effect.timeout("30 seconds")),
       ),
     35_000,

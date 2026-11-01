@@ -136,8 +136,7 @@ any directory by naming it. Core has no workspace concept: the seam is
   missing file. A delete whose index was lost reads every record.
 - Refusals: a cwd outside git or with no commit, under 2 GB free where the
   copy goes, and free space that `df` does not report. The place is
-  resolved first, then the running cap (starts still preparing counted) and
-  the lane are checked before a copy is made, and the lane is held through
+  resolved first, then the lane is checked before a copy is made, and the lane is held through
   the setup hooks (threads.md, the start's order). Making a copy can be interrupted; only the
   record and marker writes are masked.
 - A copy is not a sandbox: the child's `bash` and cell still reach every
