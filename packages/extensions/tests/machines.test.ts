@@ -3743,18 +3743,20 @@ const oneLaneHeld = (pair: ReadonlyArray<ModelId>, options: OneLaneOptions = {})
       Effect.provideService(Scope.Scope, firstServer),
     )
     /**
-     * Stops the first server and starts a second on the same database, its
-     * machines' facade changed (with the hold round's gate in reach): the
-     * runs' records arm their drivers on it.
+     * Stops the first server, runs `whileDown`, and starts a second on the
+     * same database, its machines' facade changed (with the hold round's gate
+     * in reach): the runs' records arm their drivers on it.
      */
     const restart = (
       change: (
         ctx: ExtensionContextService,
         holdEnds: Deferred.Deferred<boolean>,
       ) => ExtensionContextService,
+      whileDown: Effect.Effect<void> = Effect.void,
     ) =>
       Effect.gen(function* () {
         yield* Scope.close(firstServer, Exit.void)
+        yield* whileDown
         const changed = machinesUnderFacade((ctx) => change(ctx, holdEnds))
         const second = yield* createRpcClient(
           serverWith(
@@ -3868,36 +3870,53 @@ describe("a round's patience in its lane queue", () => {
       Effect.gen(function* () {
         const raced = yield* Ref.make(false)
         const rig = yield* oneLaneHeld([OPUS, HOSTED_SOL])
-        const { home, client, owner } = rig
+        const { home, owner, models } = rig
         yield* Deferred.succeed(rig.patientEnds, true)
-        const run = yield* startRunOn(client, owner, pairOnce("patient", "patient"), "patient")
+        // The patient run is planted while no server runs, its round waiting a
+        // minute: the second server's wake hook arms its driver under the
+        // facade, and the hold round runs again before the patient round asks.
+        // (A restart that cut a queued round lets it ask in no set order.)
+        const run = runIdAt(1)
+        const sendsAt = (yield* Clock.currentTimeMillis) + 60_000
+        yield* rig.restart(
+          (ctx, holdEnds) => ({
+            ...ctx,
+            Accounts: {
+              ...ctx.Accounts,
+              // The first read past patience says queued, though the hold round
+              // ended and the grant reached the round before the machine moves.
+              waiting: (message) =>
+                Effect.gen(function* () {
+                  const queued = yield* ctx.Accounts.waiting(message)
+                  if (!queued || (yield* Ref.getAndSet(raced, true))) return queued
+                  yield* Deferred.succeed(holdEnds, true)
+                  yield* waitFor(
+                    ctx.Accounts.waiting(message),
+                    (still) => !still,
+                    10_000,
+                    "the grant reached the round",
+                  ).pipe(Effect.orDie)
+                  return true
+                }),
+            },
+          }),
+          plantRuns(home, encodeJson(pairOnce("patient", "work")), [
+            { run, host: owner, debt: true, waitsUntil: sendsAt, createdAt: 0, wakeAt: 0 },
+          ]).pipe(Effect.orDie),
+        )
+        yield* waitFor(
+          Ref.get(models.calls),
+          (calls) => calls.filter((call) => call === "hold:1").length === 2,
+          10_000,
+          "the hold round ran again on the second server",
+        )
+        yield* TestClock.adjust(Duration.seconds(61))
         yield* waitFor(
           home.sql(stepsOf(run)),
           (steps) => roundThreads(steps).length === 1,
           10_000,
           "the patient round queued on its thread",
         )
-        yield* rig.restart((ctx, holdEnds) => ({
-          ...ctx,
-          Accounts: {
-            ...ctx.Accounts,
-            // The first read past patience says queued, though the hold round
-            // ended and the grant reached the round before the machine moves.
-            waiting: (message) =>
-              Effect.gen(function* () {
-                const queued = yield* ctx.Accounts.waiting(message)
-                if (!queued || (yield* Ref.getAndSet(raced, true))) return queued
-                yield* Deferred.succeed(holdEnds, true)
-                yield* waitFor(
-                  ctx.Accounts.waiting(message),
-                  (still) => !still,
-                  10_000,
-                  "the grant reached the round",
-                ).pipe(Effect.orDie)
-                return true
-              }),
-          },
-        }))
         yield* TestClock.adjust(Duration.seconds(601))
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the patient run's end was told")
         expect(yield* Ref.get(raced)).toBe(true)
