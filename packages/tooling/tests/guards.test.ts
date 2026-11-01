@@ -5,6 +5,7 @@ import {
   type ExportFacts,
   findBannedEslintDisableBlocks,
   findBlanketEslintDisables,
+  findClientWallClockReads,
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
@@ -239,6 +240,25 @@ describe("SQL bound list guard", () => {
     expect(findSqlBoundLists("packages/extensions/src/exec-tools.ts", text).length).toBe(1)
     expect(findSqlBoundLists("apps/tui/src/ops.ts", text).length).toBe(1)
     expect(findSqlBoundLists("packages/core/tests/storage/storage.test.ts", text)).toEqual([])
+  })
+})
+
+// ── a client extension reads the server's clock ─────────────────────────────
+
+describe("client wall clock guard", () => {
+  test("reports a DateTime.nowUnsafe read in a client extension, and only there", () => {
+    const text = [
+      "const stamp = yield* Clock.currentTimeMillis",
+      "const age = DateTime.toEpochMillis(DateTime.nowUnsafe()) - row.createdAt",
+      "// DateTime.nowUnsafe() in a comment is prose",
+      "const onServer = transport.serverNow() - row.createdAt",
+    ].join("\n")
+    const findings = findClientWallClockReads("apps/tui/src/extensions/agents.client.tsx", text)
+    expect(findings.map((finding) => finding.line)).toEqual([2])
+    expect(findings[0]?.message).toContain("transport.serverNow()")
+    expect(findClientWallClockReads("apps/tui/src/extensions/builtins.tsx", text).length).toBe(1)
+    expect(findClientWallClockReads("apps/tui/src/client.tsx", text)).toEqual([])
+    expect(findClientWallClockReads("apps/tui/tests/agents.test.tsx", text)).toEqual([])
   })
 })
 

@@ -308,14 +308,16 @@ const errorLabel = (
 }
 
 /**
- * The row's text at `now`, at the collapsed level. Clock times read in the
+ * The row's text at `now`, at the collapsed level. `now` is on the server's
+ * clock (`serverNowAt`), as the row's times are, so no default reads this
+ * client's clock. Clock times read in the
  * zone `zone` gives, the viewer's own unless a test fixes it; only a row with
  * a reset time asks. A pending retry's text is the live line's phase
  * (`Retrying in 3s · 2/3 · Rate limit exceeded`): it draws no row.
  */
 export const getSessionEventLabel = (
   event: SessionEvent,
-  now = currentMillis(),
+  now: number,
   zone: () => DateTime.TimeZone = DateTime.zoneMakeLocal,
 ): string => {
   if (event._tag === "turn-ended") return formatTurnLine(event, { steps: false })

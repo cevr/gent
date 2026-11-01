@@ -229,7 +229,7 @@ describe("session event labels", () => {
 
   test("an interruption row joins its parts with the separator every row uses", () => {
     const event: SessionEvent = SessionEvent.cases.interruption.make({ createdAt: 1, seq: 1 })
-    expect(getSessionEventLabel(event)).toBe("Interrupted · what should gent do instead?")
+    expect(getSessionEventLabel(event, 0)).toBe("Interrupted · what should gent do instead?")
   })
 
   // Whether a reset is today reads the server's now. A skew shows only where
@@ -323,24 +323,24 @@ describe("turn line", () => {
     })
 
   test("the turn line names the time, the retries, the tokens and the cost", () => {
-    expect(getSessionEventLabel(ended(addRetry(addRetry(steps))))).toBe(
+    expect(getSessionEventLabel(ended(addRetry(addRetry(steps))), 0)).toBe(
       "Worked for 1m 48s · 2 retries · ↑38k ↓2.1k · $0.04",
     )
   })
 
   test("one retry is one, and a turn with none has no retry slot", () => {
-    expect(getSessionEventLabel(ended(addRetry(steps)))).toBe(
+    expect(getSessionEventLabel(ended(addRetry(steps)), 0)).toBe(
       "Worked for 1m 48s · 1 retry · ↑38k ↓2.1k · $0.04",
     )
-    expect(getSessionEventLabel(ended(steps))).toBe("Worked for 1m 48s · ↑38k ↓2.1k · $0.04")
+    expect(getSessionEventLabel(ended(steps), 0)).toBe("Worked for 1m 48s · ↑38k ↓2.1k · $0.04")
   })
 
   test("a turn with no recorded steps keeps the plain duration", () => {
-    expect(getSessionEventLabel(ended(emptyTurnSteps, 5))).toBe("Worked for 5s")
+    expect(getSessionEventLabel(ended(emptyTurnSteps, 5), 0)).toBe("Worked for 5s")
     // A step with no usage or price adds nothing to the line.
-    expect(getSessionEventLabel(ended(addStep(emptyTurnSteps, { outcome: "Answered" }), 5))).toBe(
-      "Worked for 5s",
-    )
+    expect(
+      getSessionEventLabel(ended(addStep(emptyTurnSteps, { outcome: "Answered" }), 5), 0),
+    ).toBe("Worked for 5s")
   })
 
   test("the preview adds the steps, and a narrow line drops parts from the right", () => {
@@ -391,17 +391,17 @@ describe("model-call budget rows", () => {
   }
 
   test("the turn line counts the newest receipt's calls right after the time", () => {
-    expect(getSessionEventLabel(turnLine)).toBe(
+    expect(getSessionEventLabel(turnLine, 0)).toBe(
       "Worked for 1m 48s · 6/8 model calls · 2 retries · ↑38k ↓2.1k · $0.04",
     )
     // A turn with no budget has no slot.
     const unbudgeted = { ...turnLine, steps: addStep(emptyTurnSteps, { outcome: "Answered" }) }
-    expect(getSessionEventLabel(unbudgeted)).toBe("Worked for 1m 48s")
+    expect(getSessionEventLabel(unbudgeted, 0)).toBe("Worked for 1m 48s")
   })
 
   test("a turn under a second keeps its model-call slot", () => {
     const short = { ...turnLine, durationSeconds: 0 }
-    expect(getSessionEventLabel(short)).toBe(
+    expect(getSessionEventLabel(short, 0)).toBe(
       "Worked for <1s · 6/8 model calls · 2 retries · ↑38k ↓2.1k · $0.04",
     )
     expect(formatTurnLine(short, { steps: false, width: 40 })).toBe(

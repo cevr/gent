@@ -2145,7 +2145,7 @@ describe("useSessionFeed", () => {
         if (retry?._tag !== "retrying") return
         // The answer streams, so the retry ran; its row names the provider's reason.
         expect(retry.outcome).toBe("retried")
-        expect(getSessionEventLabel(retry)).toBe("Retried 1/3 · overloaded (529)")
+        expect(getSessionEventLabel(retry, 0)).toBe("Retried 1/3 · overloaded (529)")
         dispose()
       })
     }).pipe(Effect.timeout("4 seconds")),
@@ -2215,7 +2215,7 @@ describe("useSessionFeed", () => {
       yield* Effect.sync(() => {
         if (Option.isNone(feed)) return
         const ended = feed.value.items().find((item) => item._tag === "turn-ended")
-        expect(ended?._tag === "turn-ended" && getSessionEventLabel(ended)).toBe(
+        expect(ended?._tag === "turn-ended" && getSessionEventLabel(ended, 0)).toBe(
           "Worked for 1m 48s · 2 retries · ↑38k ↓2.1k · $0.02",
         )
         dispose()
@@ -2262,7 +2262,9 @@ describe("useSessionFeed", () => {
       yield* Effect.sync(() => {
         if (Option.isNone(feed)) return
         const ended = feed.value.items().find((item) => item._tag === "turn-ended")
-        expect(ended?._tag === "turn-ended" && getSessionEventLabel(ended)).toBe("Worked for <1s")
+        expect(ended?._tag === "turn-ended" && getSessionEventLabel(ended, 0)).toBe(
+          "Worked for <1s",
+        )
         dispose()
       })
     }).pipe(Effect.timeout("4 seconds")),
@@ -2339,7 +2341,7 @@ describe("useSessionFeed", () => {
         const retry = yield* retryRowAfterBackoffCancel(lastEventId)
         expect(Option.isSome(retry)).toBe(true)
         if (Option.isNone(retry) || retry.value._tag !== "retrying") continue
-        expect(getSessionEventLabel(retry.value)).toBe("Retry 1/3 cancelled · overloaded (529)")
+        expect(getSessionEventLabel(retry.value, 0)).toBe("Retry 1/3 cancelled · overloaded (529)")
       }
     }).pipe(Effect.timeout("4 seconds")),
   )

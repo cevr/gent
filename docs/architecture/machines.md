@@ -155,4 +155,7 @@
     each active run as `<machine> <state> r<visits> <age>`, with
     `· wait <clock>` while its round waits for its account. It hides with no
     reading and no active run, and reads again on `TurnCompleted`, on a
-    reconnect and every 30 s.
+    reconnect and every 30 s. A run's age, the peer's age and whether a
+    `wait` clock falls today read the server's now
+    (`ClientTransport.serverNow`): a run's start is the server's time, and a
+    client never subtracts a server time from its own clock.

@@ -157,7 +157,14 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   at the same point: the runtime's `startedAtMs` minus the offset is its
   start on this clock. A per-snapshot "server now, advanced by a local tick"
   is the same arithmetic anchored at the same reply; one offset on the
-  connection serves every reader, and a later reply measures it again. The
+  connection serves every reader, and a later reply measures it again. Every
+  other age of a server time reads through the same offset: a pending
+  retry's countdown, live or replayed, a usage-limit row's test of whether
+  its reset falls today, and each extension's ages
+  (`transport.serverNow()`, see extensions.md). A live event's row is dated
+  with its envelope's server time, as a replayed row is, so a live turn line
+  sorts among the stored messages on one clock; a row dated on this
+  client's clock sat above its answer, or below the next ask, by the skew. The
   offset is off by the reply's one-way latency, under a second on a sound
   link. A server that sends no time gives no offset, and a running row then
   shows no timer, never one off by the skew. A narrow

@@ -387,7 +387,9 @@
   before. A reply for a run no longer viewed, or from another `since` (a
   read from before the run was viewed again), is dropped. Each age on the
   page and on a session row reads on the server's clock
-  (`ClientTransport.serverClockOffset`). Enter (or →) on a visit opens its round's thread by the listed row
+  (`ClientTransport.serverNow`, the connection's one offset; see
+  `apps/tui/docs/extensions.md`, Server clock), as do the `/thread`
+  pane's ages. Enter (or →) on a visit opens its round's thread by the listed row
   of that thread (`thread` or a member id), as a session pick does; a
   double Ctrl+X stops an active run (`MachinesRpc.Stop`, then the listing
   and the page read again), and any other key disarms the first; Esc or ←

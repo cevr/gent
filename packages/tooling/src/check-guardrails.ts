@@ -8,6 +8,7 @@ import {
   type SeamKey,
   findBannedEslintDisableBlocks,
   findBlanketEslintDisables,
+  findClientWallClockReads,
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
@@ -370,6 +371,7 @@ const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
 const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findBlanketEslintDisables,
   findBannedEslintDisableBlocks,
+  findClientWallClockReads,
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,

@@ -1250,6 +1250,39 @@ export const findSqlBoundLists = (file: string, text: string): ReadonlyArray<Fin
   }))
 }
 
+// ── a client extension reads the server's clock ─────────────────────────────
+
+/**
+ * Guard: a client extension reads no wall clock of its own.
+ *
+ * The times a client extension draws an age or a countdown from (a row's
+ * `createdAt`, a run's start, a heard peer) are the server's, and a
+ * `--connect` client's clock can read minutes off the server's. The
+ * extension reads the server's now through `transport.serverNow()`
+ * (`ClientTransport`, the connection's one clock offset): a client never
+ * subtracts a server time from its own clock. `DateTime.nowUnsafe` is the
+ * synchronous wall clock a widget reaches for while it draws, and each age
+ * that read it there was off by the skew. `Clock.currentTimeMillis` stays
+ * allowed: a request stamp, a frecency score and a tick read it, and a tick
+ * that counts a server time moves it onto the server's clock
+ * (`onServerClock`). The host's own files outside `extensions/` read the
+ * wall clock for log lines and frecency, so the scan stops at the
+ * extensions directory.
+ */
+const CLIENT_EXTENSION_SOURCE = /^apps\/tui\/src\/extensions\//
+const WALL_CLOCK_READ = /\bDateTime\.nowUnsafe\b/g
+
+export const findClientWallClockReads = (file: string, text: string): ReadonlyArray<Finding> => {
+  if (!CLIENT_EXTENSION_SOURCE.test(file)) return []
+  const code = withoutComments(file, text)
+  return Array.from(code.matchAll(WALL_CLOCK_READ), (match) => ({
+    file,
+    line: lineAt(code, match.index),
+    message:
+      "a client extension reads the server's now through `transport.serverNow()`, never `DateTime.nowUnsafe`: a server time less this client's clock is off by the clock skew",
+  }))
+}
+
 // ── the portable import graph ───────────────────────────────────────────────
 
 /**
