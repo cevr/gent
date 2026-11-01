@@ -56,6 +56,7 @@ import {
   type ProviderAuthInfo,
   type ProviderHints,
   type QuotaReading,
+  type ResetGrant,
   reportProviderQuota,
   type ReasoningEffort,
   type RunEffort,
@@ -1450,7 +1451,10 @@ const codexQuota = (headers: Headers.Headers): ReadonlyArray<QuotaReading> =>
  * the headers give it. `additional_rate_limits` meter single models, as the
  * other header families do, so gent reads the plan's own limit only. The
  * top-level `rate_limit_reset_credits.available_count` is the plan's count of
- * reset credits (`backend-client/src/types.rs`), which gent does not read.
+ * banked reset credits (`backend-client/src/types.rs`
+ * `RateLimitResetCreditsSummary`), which gent reads and shows. The answer
+ * names no expiry (only the credit detail endpoint does), and gent never
+ * calls an endpoint that redeems one.
  */
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 const CodexUsageNumber = Schema.OptionFromOptionalNullOr(Schema.Finite)
@@ -1461,11 +1465,32 @@ const CodexUsageWindow = Schema.OptionFromOptionalNullOr(
     reset_at: CodexUsageNumber,
   }),
 )
+// The credits read apart from the windows, so a summary of a shape gent does
+// not know reads no credits and still reads every window.
 const CodexUsage = Schema.Struct({
   rate_limit: Schema.OptionFromOptionalNullOr(
     Schema.Struct({ primary_window: CodexUsageWindow, secondary_window: CodexUsageWindow }),
   ),
+  rate_limit_reset_credits: Schema.optionalKey(Schema.Json),
 })
+const decodeResetCredits = Schema.decodeUnknownOption(
+  Schema.Struct({ available_count: Schema.Finite }),
+)
+
+/**
+ * The banked resets a usage answer lists: the plan's `available_count`, as
+ * one grant with no expiry; empty at 0. Not `applicable_available_count`:
+ * that reads 0 whenever no window is spent, so it would hide a credit the
+ * plan holds. None when the answer names no count.
+ */
+const codexUsageResets = (
+  usage: typeof CodexUsage.Type,
+): Option.Option<ReadonlyArray<ResetGrant>> =>
+  Option.map(decodeResetCredits(usage.rate_limit_reset_credits), (credits) => {
+    const count = Math.trunc(credits.available_count)
+    if (count < 1) return []
+    return [{ count }]
+  })
 
 /**
  * The quota windows a usage answer names. A plan whose limit states one
@@ -1511,7 +1536,11 @@ const readCodexQuota = Effect.fn("openai.readCodexQuota")(
       },
       schema: CodexUsage,
     })
-    return codexUsageQuota(usage)
+    const readings = codexUsageQuota(usage)
+    return Option.match(codexUsageResets(usage), {
+      onNone: () => ({ readings }),
+      onSome: (resets) => ({ readings, resets }),
+    })
   },
   // @effect-diagnostics-next-line strictEffectProvide:off -- ChatGPT usage endpoint at extension boundary
   Effect.provide(FetchHttpClient.layer),
@@ -2343,7 +2372,7 @@ export const buildOpenAIModelDriver = (
     // A ChatGPT sign-in reads its plan's windows from the usage endpoint; an
     // API key is metered by no window and reads none.
     readQuota: (authInfo) => {
-      if (authInfo._tag !== "Oauth") return Effect.succeed([])
+      if (authInfo._tag !== "Oauth") return Effect.succeed({ readings: [] })
       return Effect.flatMap(oauthCredentialCache(authInfo), readCodexQuota)
     },
     resolveModel: (modelName, authInfo, hintsInput, catalog) =>

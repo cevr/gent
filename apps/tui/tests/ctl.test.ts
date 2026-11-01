@@ -426,7 +426,7 @@ describe("gent ctl against a running server", () => {
   )
 
   it.live(
-    "lanes needs no session: one Lanes value, or with --line the band's row, and exit 0",
+    "lanes needs no session: one Lanes value, or with --line the band's rows, and exit 0",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -438,7 +438,9 @@ describe("gent ctl against a running server", () => {
           const unknown = yield* runCtl(bare.home, ["lanes", "--line"])
           expect(unknown).toEqual({ code: CTL_EXIT.ok, stdout: "lanes unknown\n", stderr: "" })
 
-          // A ledger with a reading and two fitted segments: the server sizes the lanes.
+          // A ledger with a reading, two fitted segments and banked resets: the server
+          // sizes the lanes. default holds two resets with no expiry and one lapsed a
+          // minute ago; work holds only a lapsed one.
           const now = yield* Clock.currentTimeMillis
           const reading = {
             provider: "anthropic",
@@ -458,11 +460,29 @@ describe("gent ctl against a running server", () => {
             deltaPct: 2,
             tokens: { input: 1000, output: 1000, cacheRead: 1000, cacheWrite: 0 },
           })
+          const defaultGrants: ReadonlyArray<Schema.JsonObject> = [
+            { count: 2 },
+            { count: 1, expiresAt: now - 60_000 },
+          ]
           const seeded = yield* serveScratchHomeWith(
             Option.some({
               buckets: [],
               readings: [reading],
               segments: [segment(now - 600_000), segment(now - 120_000)],
+              resets: [
+                {
+                  provider: "anthropic",
+                  slot: "default",
+                  readAt: now - 60_000,
+                  grants: defaultGrants,
+                },
+                {
+                  provider: "anthropic",
+                  slot: "work",
+                  readAt: now - 60_000,
+                  grants: [{ count: 1, expiresAt: now - 1 }],
+                },
+              ],
             }),
           )
           const printed = yield* runCtl(seeded.home, ["lanes"])
@@ -476,18 +496,25 @@ describe("gent ctl against a running server", () => {
             load: anthropic?.load,
             fuelPerPct: anthropic?.accounts[0]?.windows[0]?.fuelPerPct,
             samples: anthropic?.accounts[0]?.windows[0]?.samples,
+            resets: anthropic?.accounts.map((account) => ({
+              slot: String(account.slot),
+              resets: account.resets,
+            })),
           }).toEqual({
             provider: "anthropic",
             capacity: 1,
             load: 0,
             fuelPerPct: 120_000,
             samples: 2,
+            // A lapsed grant counts none: default keeps its live two, work none at all.
+            resets: [{ slot: "default", resets: [{ count: 2 }] }],
           })
           // 60 points left to the 90% stop at 120k a point over 2 h, at 3.4 M an hour: one run, ±0.5/4 points.
           const line = yield* runCtl(seeded.home, ["lanes", "--line"])
           expect(line).toEqual({
             code: CTL_EXIT.ok,
-            stdout: "lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%\n",
+            stdout:
+              "lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%\nresets anthropic default 2\n",
             stderr: "",
           })
         }).pipe(Effect.timeout("25 seconds")),

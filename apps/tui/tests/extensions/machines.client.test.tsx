@@ -125,6 +125,38 @@ const unrated: LaneReport = {
   ],
 }
 
+const WORK = CredentialSlot.make("work")
+const HOME = CredentialSlot.make("home")
+
+/**
+ * `measured`, with banked resets: default holds two that lapse at 15:00,
+ * work one with no expiry and one lapsed a minute ago, home a lapsed one and
+ * an empty one.
+ */
+const banked: LaneReport = {
+  providers: measured.providers.map((lanes) => ({
+    ...lanes,
+    accounts: [
+      ...lanes.accounts.map((account) => ({
+        ...account,
+        resets: [{ count: 2, expiresAt: NOW + 3 * HOUR }],
+      })),
+      {
+        slot: WORK,
+        windows: [],
+        held: false,
+        resets: [{ count: 1 }, { count: 1, expiresAt: NOW - MINUTE }],
+      },
+      {
+        slot: HOME,
+        windows: [],
+        held: false,
+        resets: [{ count: 1, expiresAt: NOW - 1 }, { count: 0 }],
+      },
+    ],
+  })),
+}
+
 /** A run as `MachinesRpc.Runs` puts it on the wire, decoded by the request's own output schema. */
 const decodeRuns = Schema.decodeUnknownSync(ref(MachinesRpc.Runs).output)
 
@@ -276,7 +308,6 @@ describe("the lanes band rows", () => {
   })
 
   test("a lost login follows its provider's row and names where to sign in", () => {
-    const WORK = CredentialSlot.make("work")
     const lost = (
       report: LaneReport,
       reason: "Rejected" | "Unavailable" = "Rejected",
@@ -319,6 +350,34 @@ describe("the lanes band rows", () => {
     expect(texts({ lanes: Option.some(alone), runs: [] }, 120)).toEqual([
       "≡ lanes anthropic unknown",
       "≡ login! anthropic work refused · sign in with /auth",
+    ])
+  })
+
+  test("banked resets follow their provider's rows: each account's live count and the soonest lapse", () => {
+    expect(laneRows(banked, NOW, 120, utc)).toEqual([
+      { text: "lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%", state: "free" },
+      { text: "resets anthropic default 2, work 1 · next lapses 15:00", state: "banked" },
+    ])
+    // A narrow row drops the lapse, then the provider, then reads the total.
+    const at = (width: number) => laneRows(banked, NOW, width, utc)[1]?.text
+    expect(at(54)).toBe("resets anthropic default 2, work 1 · next lapses 15:00")
+    expect(at(53)).toBe("resets anthropic default 2, work 1")
+    expect(at(33)).toBe("resets default 2, work 1")
+    expect(at(23)).toBe("resets 3")
+    for (const width of [54, 53, 34, 33, 24, 23, 8, 7, 4]) {
+      expect(textWidth(at(width) ?? "")).toBeLessThanOrEqual(width)
+    }
+    // Past 15:00 default's grant has lapsed too: work's alone counts, with no lapse to name.
+    expect(laneRows(banked, NOW + 3 * HOUR, 120, utc)[1]).toEqual({
+      text: "resets anthropic work 1",
+      state: "banked",
+    })
+    // An account with none, or only lapsed grants, shows nothing.
+    expect(laneRows(measured, NOW, 120, utc).map((row) => row.state)).toEqual(["free"])
+    // The band draws the row with its own mark after the provider's lanes and lost logins.
+    expect(texts({ lanes: Option.some(banked), runs: [] }, 120)).toEqual([
+      "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
+      "↺ resets anthropic default 2, work 1 · next lapses 15:00",
     ])
   })
 
@@ -400,6 +459,34 @@ describe("the lanes band", () => {
           height: 6,
         })
         yield* waitForFrame(setup, () => renderFrame(setup).includes("≡"), "band")
+        const lines = renderFrame(setup)
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+        expect(lines).toEqual([...rows])
+      }),
+    )
+  }
+
+  for (const [width, rows] of [
+    [
+      120,
+      [
+        "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
+        "↺ resets anthropic default 2, work 1 · next lapses 15:00",
+      ],
+    ],
+    [40, ["≡ lanes anthropic 3/5 free · 5h 120k/%", "↺ resets anthropic default 2, work 1"]],
+    [28, ["≡ lanes anthropic 3/5 free", "↺ resets default 2, work 1"]],
+  ] as const) {
+    it.scopedLive(`draws each account's banked resets under its lanes at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const data: BandData = { lanes: Option.some(banked), runs: [] }
+        const setup = yield* renderScoped(() => <LanesBand data={() => data} now={() => NOW} />, {
+          width,
+          height: 6,
+        })
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("↺"), "resets row")
         const lines = renderFrame(setup)
           .split("\n")
           .map((line) => line.trim())

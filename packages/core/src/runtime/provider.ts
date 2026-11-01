@@ -89,6 +89,8 @@ import {
   type LoginLossReason,
   type ProviderLanes,
   type QuotaReading,
+  liveResets,
+  ResetGrant,
   SpendLimit,
   type RetryPolicy,
   type HeldOAuthCredentials,
@@ -4055,7 +4057,8 @@ interface CredentialPlacementService {
    * the account since the window's last reading. A rejected window holds the
    * account until its reset. A response of a sign-in the label no longer
    * holds is dropped, and one of a sign-in renamed since is read on its
-   * new label. A reading serves the lane queue.
+   * new label. A reading serves the lane queue. A usage read's banked
+   * resets replace the account's (`PlacementQuota.resets`).
    */
   readonly noteQuota: (quota: PlacementQuota) => Effect.Effect<void>
   /**
@@ -4065,9 +4068,9 @@ interface CredentialPlacementService {
    */
   readonly noteFuel: (fuel: PlacementFuel) => Effect.Effect<void>
   /**
-   * The lanes of every provider gent read a quota window of or lost a login
-   * on: each account's windows, fuel per percent, sustainable runs and lost
-   * login, and the provider's
+   * The lanes of every provider gent read a quota window or banked resets
+   * of, or lost a login on: each account's windows, fuel per percent,
+   * sustainable runs, lost login and banked resets, and the provider's
    * capacity over the accounts `scopeOf` names (its unpinned runs' accounts).
    */
   readonly lanes: (
@@ -4126,6 +4129,13 @@ interface PlacementQuota {
   /** The sign-in the request went out with (`CredentialReceipt.signedInAt`). */
   readonly signedInAt: Option.Option<number>
   readonly readings: ReadonlyArray<QuotaReading>
+  /**
+   * The account's banked resets, when the answer listed them (a usage read,
+   * `ModelDriverContribution.readQuota`): they replace what placement held
+   * for the account, and an empty list clears it. Absent, as on a step's
+   * response, the held resets stay.
+   */
+  readonly resets?: ReadonlyArray<ResetGrant>
 }
 
 /** A step's or a summary's token counts, as its usage reports them; input counts cached tokens too. */
@@ -4295,8 +4305,22 @@ const SpendMeter = Schema.Struct({
 type SpendMeter = typeof SpendMeter.Type
 
 /**
- * The ledger file. `segments`, `readings`, `burn` and `meters` are
- * optional: a file an older gent wrote has none, and an older gent drops
+ * One account's banked resets (`ResetGrant`), as its last usage read listed
+ * them, read at `readAt` for the sign-in `signedInAt` names (absent for an
+ * unstamped credential).
+ */
+const AccountResets = Schema.Struct({
+  provider: Schema.String,
+  slot: CredentialSlot,
+  signedInAt: Schema.optionalKey(Schema.Finite),
+  readAt: Schema.Finite,
+  grants: Schema.Array(ResetGrant),
+})
+type AccountResets = typeof AccountResets.Type
+
+/**
+ * The ledger file. `segments`, `readings`, `burn`, `meters` and `resets`
+ * are optional: a file an older gent wrote has none, and an older gent drops
  * them when it reads them.
  */
 const PlacementLedger = Schema.fromJsonString(
@@ -4307,6 +4331,7 @@ const PlacementLedger = Schema.fromJsonString(
     burn: Schema.optionalKey(Schema.Array(LaneBurn)),
     modelBurn: Schema.optionalKey(Schema.Array(ModelBurn)),
     meters: Schema.optionalKey(Schema.Array(SpendMeter)),
+    resets: Schema.optionalKey(Schema.Array(AccountResets)),
   }),
 )
 type PlacementLedgerValue = typeof PlacementLedger.Type
@@ -5169,6 +5194,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    */
   const spendMeters = new Map<string, SpendMeter>()
   /**
+   * provider, slot → the account's banked resets, as its last usage read
+   * listed them: shown on its lanes, never spent. Lapsed grants drop at
+   * `trim`; an account whose read lists none has no entry.
+   */
+  const bankedResets = new Map<string, AccountResets>()
+  /**
    * session → the provider, accounts and model its open turn
    * spends from, when it opened, and the fuel it spent since (none once an
    * unpriced request fell in it): its lane, and that lane's burn. `starter`
@@ -5370,7 +5401,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   /** Whether `key` of a quota map, or a hold of one model, names `provider`'s `slot`. */
   const ofLabel = (key: string, provider: string, slot: CredentialSlot) =>
     key.startsWith(placementKey(provider, slot, ""))
-  /** A label's quota readings, segments and holds go: the sign-in they were for left it. */
+  /** A label's quota readings, segments, holds and resets go: the sign-in they were for left it. */
   const forget = (provider: string, slot: CredentialSlot) => {
     for (const key of [...readings.keys()]) if (ofLabel(key, provider, slot)) readings.delete(key)
     for (const key of [...openSegments.keys()])
@@ -5381,6 +5412,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const key of [...held.keys()])
       if (key === placementKey(provider, slot) || ofLabel(key, provider, slot)) held.delete(key)
     lostLogins.delete(placementKey(provider, slot))
+    bankedResets.delete(placementKey(provider, slot))
   }
   /** A label's quota state and holds move to `to`, whose own go: its sign-in was renamed. */
   const relabel = (provider: string, from: CredentialSlot, to: CredentialSlot) => {
@@ -5423,6 +5455,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     if (Predicate.isNotUndefined(lost)) {
       lostLogins.delete(placementKey(provider, from))
       lostLogins.set(placementKey(provider, to), { ...lost, slot: to })
+    }
+    const banked = bankedResets.get(placementKey(provider, from))
+    if (Predicate.isNotUndefined(banked)) {
+      bankedResets.delete(placementKey(provider, from))
+      bankedResets.set(placementKey(provider, to), { ...banked, slot: to })
     }
   }
   /**
@@ -5610,7 +5647,20 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const [key, until] of held) if (until <= now) held.delete(key)
     if (trimQuota(now - PLACEMENT_WINDOW_MS)) pruned = true
     for (const key of [...spendMeters.keys()]) if (meterReadings(key, now)) pruned = true
+    if (trimResets(now)) pruned = true
     if (pruned) version += 1
+  }
+  /** Drops each lapsed grant, and an account left with none. Whether any went. Under the lock. */
+  const trimResets = (now: number) => {
+    let pruned = false
+    for (const [key, entry] of bankedResets) {
+      const grants = liveResets(entry.grants, now)
+      if (grants.length === entry.grants.length) continue
+      pruned = true
+      if (grants.length === 0) bankedResets.delete(key)
+      else bankedResets.set(key, { ...entry, grants })
+    }
+    return pruned
   }
   /**
    * The windows of the meter `key` as readings at `now`, each the spend of
@@ -5805,16 +5855,17 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     version += 1
   }
   /**
-   * The quota state a ledger kept: readings, segments, burns and meters,
-   * and each label's sign-in, the one its newest stamped reading or meter
-   * names.
+   * The quota state a ledger kept: readings, segments, burns, meters and
+   * banked resets, and each label's sign-in, the one its newest stamped
+   * reading, meter or resets read names.
    */
   const loadQuotaState = (stored: PlacementLedgerValue) => {
     for (const reading of stored.readings ?? [])
       readings.set(windowKey(reading.provider, reading.slot, reading), reading)
-    // Oldest first: a later reading or meter hour of a label names its sign-in now.
+    // Oldest first: a later reading, meter hour or resets read of a label names its sign-in now.
     const stamped = [
       ...(stored.readings ?? []).map((reading) => ({ ...reading, at: reading.readAt })),
+      ...(stored.resets ?? []).map((entry) => ({ ...entry, at: entry.readAt })),
       ...(stored.meters ?? []).map((meter) => ({
         ...meter,
         at: ((meter.hours.at(-1)?.hour ?? 0) + 1) * PLACEMENT_BUCKET_MS,
@@ -5836,6 +5887,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       modelBurns.set(placementKey(burn.provider, burn.model), burn)
     for (const meter of stored.meters ?? [])
       spendMeters.set(placementKey(meter.provider, meter.slot, meter.model), meter)
+    for (const entry of stored.resets ?? [])
+      bankedResets.set(placementKey(entry.provider, entry.slot), entry)
   }
   if (Option.isSome(ledger)) {
     const now = yield* Clock.currentTimeMillis
@@ -5894,6 +5947,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
                 ),
                 meters: Option.getOrUndefined(
                   Option.liftPredicate([...spendMeters.values()], Arr.isReadonlyArrayNonEmpty),
+                ),
+                resets: Option.getOrUndefined(
+                  Option.liftPredicate([...bankedResets.values()], Arr.isReadonlyArrayNonEmpty),
                 ),
               }),
             },
@@ -6021,24 +6077,64 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     })
   })
   /**
-   * `accounts` with each lost login of `provider` on its account: one the
-   * lanes do not list (no reading, outside the scope) is listed with no
-   * window. Under the lock.
+   * A usage read of `slot` listed its banked resets `grants` at `now`:
+   * they replace the account's; none clears it. A lapsed grant goes at the
+   * `trim` that `serve` runs right after, under the same lock.
    */
-  const withLostLogins = (
+  const bank = (
+    provider: string,
+    slot: CredentialSlot,
+    grants: ReadonlyArray<ResetGrant>,
+    now: number,
+  ) => {
+    const key = placementKey(provider, slot)
+    if (grants.length === 0) {
+      if (bankedResets.delete(key)) version += 1
+      return
+    }
+    const signedInAt = Option.getOrUndefined(signedInOf(provider, slot))
+    bankedResets.set(key, {
+      provider,
+      slot,
+      readAt: now,
+      grants,
+      ...omitUndefined({ signedInAt }),
+    })
+    version += 1
+  }
+  /**
+   * `accounts` with each lost login and each account's banked resets of
+   * `provider` on its account: one the lanes do not list (no reading,
+   * outside the scope) is listed with no window. Under the lock.
+   */
+  const withAccountNotes = (
     provider: string,
     accounts: ReadonlyArray<LaneAccount>,
   ): ReadonlyArray<LaneAccount> => {
     const lost = [...lostLogins.values()].filter((entry) => entry.provider === provider)
+    const banked = [...bankedResets.values()].filter((entry) => entry.provider === provider)
     const listed = new Set(accounts.map((account) => account.slot))
-    const unlisted = lost.flatMap((entry): ReadonlyArray<LaneAccount> => {
-      if (listed.has(entry.slot)) return []
-      return [{ slot: entry.slot, windows: [], held: held.has(placementKey(provider, entry.slot)) }]
-    })
+    const unlisted = [...new Set([...lost, ...banked].map((entry) => entry.slot))].flatMap(
+      (slot): ReadonlyArray<LaneAccount> => {
+        if (listed.has(slot)) return []
+        return [{ slot, windows: [], held: held.has(placementKey(provider, slot)) }]
+      },
+    )
     return [...accounts, ...unlisted].map((account) => {
       const found = lost.find((entry) => entry.slot === account.slot)
-      if (Predicate.isUndefined(found)) return account
-      return { ...account, loginLost: { since: found.since, reason: found.reason } }
+      const resets = banked.find((entry) => entry.slot === account.slot)
+      return {
+        ...account,
+        ...omitUndefined({
+          loginLost: Option.getOrUndefined(
+            Option.map(Option.fromUndefinedOr(found), (entry) => ({
+              since: entry.since,
+              reason: entry.reason,
+            })),
+          ),
+          resets: resets?.grants,
+        }),
+      }
     })
   }
   /**
@@ -7018,6 +7114,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         const slot = reportedOn(quota.provider, quota.slot, quota.signedInAt)
         if (Option.isNone(slot)) return []
         for (const reading of quota.readings) read(quota.provider, slot.value, reading, now)
+        if (Predicate.isNotUndefined(quota.resets))
+          bank(quota.provider, slot.value, quota.resets, now)
         return serve(now)
       })
       yield* afterServe(grants)
@@ -7078,6 +7176,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           ...new Set([
             ...[...readings.values()].map((reading) => reading.provider),
             ...[...lostLogins.values()].map((lost) => lost.provider),
+            ...[...bankedResets.values()].map((entry) => entry.provider),
           ]),
         ].sort()
       })
@@ -7104,7 +7203,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               now,
               sabbath,
             ).lanes
-            return { ...lanes, accounts: withLostLogins(provider, lanes.accounts) }
+            return { ...lanes, accounts: withAccountNotes(provider, lanes.accounts) }
           }),
         }
       })
@@ -7160,7 +7259,8 @@ const POOL_QUOTA_SWEEP_INTERVAL = Duration.minutes(10)
  * Read the quota windows of each account a sign-in's pool (`authSpread`)
  * names, through its owner driver's `readQuota`, and note them on placement
  * under the sign-in the store holds there now: placement ranks an account
- * no step has run on yet by them. One account after another. A sign-in
+ * no step has run on yet by them, and the lanes show the banked resets the
+ * same read lists. One account after another. A sign-in
  * whose driver reads no quota or whose order cannot be read, and a label
  * that holds no sign-in, are skipped. A failed read is logged and skipped;
  * the other accounts still read.
@@ -7190,14 +7290,14 @@ const readPoolQuotas = Effect.fn("CredentialPlacement.readPoolQuotas")(function*
         if (Option.isNone(stored)) return
         const { key, info } = stored.value
         // Driver code: a defect fails this account's read alone.
-        const readings = yield* Effect.suspend(() =>
+        const read = yield* Effect.suspend(() =>
           readQuota(toProviderAuthInfo(auth, key, info, slot)),
         )
         yield* placement.noteQuota({
           provider: owner,
           slot,
           signedInAt: Option.fromUndefinedOr(info.signedInAt),
-          readings,
+          ...read,
         })
       }).pipe(
         Effect.catch((error) => failed(error.message)),

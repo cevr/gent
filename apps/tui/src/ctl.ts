@@ -1369,7 +1369,7 @@ const lanes = Command.make(
     ),
 ).pipe(
   Command.withDescription(
-    "Print the server's account lanes: free runs per provider, fuel per percent, outside spend and lost logins",
+    "Print the server's account lanes: free runs per provider, fuel per percent, outside spend, lost logins and banked resets",
   ),
   Command.withExamples([
     {

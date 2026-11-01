@@ -6,6 +6,7 @@ export {
   authMethodAppliesTo,
   type CredentialReceipt,
   LaneReport,
+  liveResets,
   roundLanes,
   type LaneWindow,
   LOGIN_LOSS_WORDS,

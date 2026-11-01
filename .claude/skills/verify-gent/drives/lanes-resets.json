@@ -1,0 +1,32 @@
+{
+  "command": ["gent"],
+  "cols": 120,
+  "rows": 40,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "ready · work", 30000],
+    ["waitFor", "resets anthropic default 2, work 1 · next lapses", 10000],
+    ["settle"],
+    ["expect", "≡ lanes anthropic 1/1 free"],
+    ["expect", "↺ resets anthropic default 2, work 1 · next lapses \\d\\d:\\d\\d"],
+    ["expectNot", "home \\d"],
+    ["fits"],
+    ["cap", "79-resets-at-rest"],
+    ["sh", "gent ctl lanes --line > \"$EVIDENCE/ctl-resets-line.txt\""],
+    ["sh", "gent ctl lanes > \"$EVIDENCE/ctl-resets.json\""],
+    ["resize", 50, 20],
+    ["settle"],
+    ["expect", "↺ resets anthropic default 2, work 1"],
+    ["fits"],
+    ["cap", "79b-resets-narrow"],
+    ["resize", 34, 20],
+    ["settle"],
+    ["expect", "↺ resets default 2, work 1"],
+    ["fits"],
+    ["cap", "79c-resets-narrower"],
+    ["resize", 120, 40],
+    ["settle"],
+    ["expect", "↺ resets anthropic default 2, work 1 · next lapses"],
+    ["cap", "79d-resets-wide-again"]
+  ]
+}

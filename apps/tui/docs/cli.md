@@ -152,7 +152,8 @@ into a `status` flag (`ctlProjection` in the client contribution): `status
 
 `lanes` names no session: the accounts are the server's. It prints `Lanes`,
 the `accounts.lanes` report, with one record per provider gent read a quota
-window of or saw a login lost on, and `sabbathEnd` (epoch ms) while the
+window of, saw a login lost on or read banked resets of (an account's
+`resets`, each `{ count, expiresAt? }`), and `sabbathEnd` (epoch ms) while the
 owner's Sabbath holds every start. `--line` prints the TUI band's lanes rows as text instead: in the
 Sabbath first `sabbath · no run starts until <end>`, then one per
 provider: `lanes <provider> <free>/<capacity> free · <window> <fuel per
@@ -163,7 +164,10 @@ hold every lane (`· held` when a refusal holds the account), and `lanes unknown
 provider's row is followed by a row
 `login! <provider> <slot> refused · sign in with /auth` for each account whose
 login the provider no longer takes (`unavailable` when the driver found no
-credential). No free lane is data, not a failure: the call exits 0.
+credential), then a row `resets <provider> <slot> <count>, … · next lapses
+<clock>` when its accounts hold banked resets (Claude's reset grants,
+Codex's reset credits; a lapsed grant counts none, and an account with none
+is not named). No free lane is data, not a failure: the call exits 0.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 

@@ -6310,7 +6310,7 @@ describe("account lanes", () => {
               ).pipe(Option.getOrUndefined)
               if (Predicate.isUndefined(resetAt))
                 return yield* new ProviderAuthError({ message: "usage read refused" })
-              return [{ window: "7d", utilization: 0, resetAt, rejected: false }]
+              return { readings: [{ window: "7d", utilization: 0, resetAt, rejected: false }] }
             }),
         }
         const resolved = resolveExtensions([makeExt("plan", [driver])])
@@ -6362,6 +6362,96 @@ describe("account lanes", () => {
         yield* TestClock.adjust("1 minute")
         yield* readCount(8)
         expect((yield* Ref.get(reads)).slice(4)).toEqual(Arr.map(pool, Option.some))
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "banked resets: a usage read replaces an account's, a step's report keeps them, a lapsed grant counts none, they move with a rename, go with a new sign-in and outlive a restart",
+    () =>
+      Effect.gen(function* () {
+        const { file, store } = yield* ledgerRef
+        const first = yield* accounts(store)
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        const signedIn = { slot: a, signedInAt: 1 }
+        /** The banked resets the lanes list per account of `scope`: an account that holds none is left out. */
+        const resetsOf = (fixture: typeof first, scope: Scope) =>
+          Effect.map(fixture.lanes(scope), (lanes) =>
+            lanes.accounts.flatMap((account) =>
+              Option.toArray(
+                Option.map(Option.fromUndefinedOr(account.resets), (resets) => ({
+                  slot: account.slot,
+                  resets,
+                })),
+              ),
+            ),
+          )
+        const usageRead = (
+          fixture: typeof first,
+          account: Account,
+          resets: ReadonlyArray<{ readonly count: number; readonly expiresAt?: number }>,
+        ) => {
+          const { slot, signedInAt } = receiptOf(account)
+          return fixture.placement.noteQuota({
+            provider: "plan",
+            slot,
+            signedInAt: Option.fromUndefinedOr(signedInAt),
+            readings: [],
+            resets,
+          })
+        }
+        // A read with no window still lists its account's live grants; one
+        // lapsed when read counts none. b's read lists none.
+        yield* usageRead(first, signedIn, [
+          { count: 2, expiresAt: now + 2 * HOUR },
+          { count: 1, expiresAt: now + 5 * HOUR },
+          { count: 1, expiresAt: now - 1 },
+        ])
+        yield* usageRead(first, b, [])
+        // The ledger takes the live grants alone: a lapsed one never lands on the file.
+        yield* first.placement.flush
+        expect((yield* Ref.get(file)).resets?.map((entry) => [entry.slot, entry.grants])).toEqual([
+          [
+            a,
+            [
+              { count: 2, expiresAt: now + 2 * HOUR },
+              { count: 1, expiresAt: now + 5 * HOUR },
+            ],
+          ],
+        ])
+        expect(yield* resetsOf(first, [signedIn, b])).toEqual([
+          {
+            slot: a,
+            resets: [
+              { count: 2, expiresAt: now + 2 * HOUR },
+              { count: 1, expiresAt: now + 5 * HOUR },
+            ],
+          },
+        ])
+        // A step's response names windows only: the account keeps its resets.
+        yield* first.read(signedIn, [{ window: "7d", utilization: 0.1, resetAt: now + 100 * HOUR }])
+        expect((yield* resetsOf(first, [signedIn, b])).map((entry) => entry.slot)).toEqual([a])
+        // Past the first grant's expiry, it counts none.
+        yield* TestClock.adjust("3 hours")
+        expect(yield* resetsOf(first, [signedIn, b])).toEqual([
+          { slot: a, resets: [{ count: 1, expiresAt: now + 5 * HOUR }] },
+        ])
+        // A restart reads them back from the ledger.
+        yield* first.placement.flush
+        const second = yield* accounts(store)
+        expect(yield* resetsOf(second, [signedIn, b])).toEqual([
+          { slot: a, resets: [{ count: 1, expiresAt: now + 5 * HOUR }] },
+        ])
+        // A read that lists none clears them; a rename moves them; a new
+        // sign-in on the label drops them.
+        yield* usageRead(second, b, [{ count: 3 }])
+        yield* usageRead(second, b, [])
+        expect((yield* resetsOf(second, [signedIn, b])).map((entry) => entry.slot)).toEqual([a])
+        yield* second.placement.renameLabel({ provider: "plan", from: a, to: c })
+        expect(yield* resetsOf(second, [{ slot: c, signedInAt: 1 }, b])).toEqual([
+          { slot: c, resets: [{ count: 1, expiresAt: now + 5 * HOUR }] },
+        ])
+        expect(yield* resetsOf(second, [{ slot: c, signedInAt: 2 }, b])).toEqual([])
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

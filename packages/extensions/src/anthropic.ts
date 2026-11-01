@@ -52,6 +52,7 @@ import {
   clampEffort,
   ReasoningEffort,
   type QuotaReading,
+  type ResetGrant,
   rateLimitResponse,
   reportProviderCacheWarmer,
   reportProviderQuota,
@@ -3427,8 +3428,18 @@ const unifiedQuota = (headers: Headers.Headers): ReadonlyArray<QuotaReading> =>
  * account's OAuth access token and the OAuth beta, and answers per window
  * `utilization` (a percent, 0 to 100) and `resets_at` (ISO 8601). A window
  * the plan does not meter, or one with no reset, is null.
+ *
+ * `?cedar_ember=1` asks it for the account's banked resets too, as TeamClaude
+ * does (`src/oauth.js` `USAGE_URL` and `bankedResets`, read 2026-11-01). The
+ * `cedar_ember` block reads `eligible`, and when eligible a `grants` list,
+ * each with `resets_left` and an `ends_at` (ISO 8601) it lapses at. The
+ * endpoint withholds the block (`eligible: false`, an `ineligible_reason` of
+ * `cli_version` or `surface`) from a client older than claude-cli 2.1.280 or
+ * not Claude Code; gent sends that version (`MODEL_CONFIG.ccVersion`). A
+ * grant's id is the handle that spends a reset: gent never reads it, and no
+ * request of gent's redeems one.
  */
-const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
 const OAUTH_USAGE_BETA = "oauth-2025-04-20"
 const UsageWindow = Schema.OptionFromOptionalNullOr(
   Schema.Struct({
@@ -3436,7 +3447,49 @@ const UsageWindow = Schema.OptionFromOptionalNullOr(
     resets_at: Schema.OptionFromOptionalNullOr(Schema.DateTimeUtcFromString),
   }),
 )
-const OAuthUsage = Schema.Struct({ five_hour: UsageWindow, seven_day: UsageWindow })
+// The block reads apart from the windows, so a block of a shape gent does not
+// know reads no resets and still reads every window.
+const OAuthUsage = Schema.Struct({
+  five_hour: UsageWindow,
+  seven_day: UsageWindow,
+  cedar_ember: Schema.optionalKey(Schema.Json),
+})
+const CedarEmber = Schema.Struct({
+  eligible: Schema.Literal(true),
+  grants: Schema.Array(Schema.Json),
+})
+const CedarGrant = Schema.Struct({
+  resets_left: Schema.Finite,
+  ends_at: Schema.OptionFromOptionalNullOr(Schema.DateTimeUtcFromString),
+})
+const decodeCedarEmber = Schema.decodeUnknownOption(CedarEmber)
+const decodeCedarGrant = Schema.decodeUnknownOption(CedarGrant)
+
+/**
+ * The banked resets a usage answer lists: one `ResetGrant` per grant with a
+ * reset left, lapsed grants included (placement drops them at its own
+ * clock). Every reset a grant holds counts, paused or not yet usable too:
+ * that is what the account holds and what the claude.ai Resets page shows. A
+ * grant gent cannot read is skipped. None when the answer has no eligible
+ * block: an ineligible block speaks of the client, not the account.
+ */
+const usageResets = (usage: typeof OAuthUsage.Type): Option.Option<ReadonlyArray<ResetGrant>> =>
+  Option.map(decodeCedarEmber(usage.cedar_ember), (block) =>
+    block.grants.flatMap((raw) =>
+      Option.toArray(
+        Option.flatMap(decodeCedarGrant(raw), (grant) =>
+          Option.map(
+            Option.liftPredicate(Math.trunc(grant.resets_left), (count) => count > 0),
+            (count): ResetGrant =>
+              Option.match(grant.ends_at, {
+                onNone: () => ({ count }),
+                onSome: (end) => ({ count, expiresAt: DateTime.toEpochMillis(end) }),
+              }),
+          ),
+        ),
+      ),
+    ),
+  )
 
 /** The windows the usage endpoint names, as gent names them. */
 const USAGE_WINDOWS = [
@@ -3493,7 +3546,11 @@ const readOauthQuota = Effect.fn("anthropic.readOauthQuota")(function* (
       ),
     schema: OAuthUsage,
   })
-  return usageQuota(usage)
+  const readings = usageQuota(usage)
+  return Option.match(usageResets(usage), {
+    onNone: () => ({ readings }),
+    onSome: (resets) => ({ readings, resets }),
+  })
 })
 
 // ── rate-limit reset ──
@@ -4483,7 +4540,7 @@ export const buildAnthropicModelDriver = (
     // A Claude plan sign-in reads its windows from the usage endpoint; an API
     // key is metered by no window and reads none.
     readQuota: (authInfo) => {
-      if (authInfo._tag !== "Oauth") return Effect.succeed([])
+      if (authInfo._tag !== "Oauth") return Effect.succeed({ readings: [] })
       return Effect.flatMap(oauthCredentialCache(authInfo), (creds) =>
         readOauthQuota(creds, services),
       )

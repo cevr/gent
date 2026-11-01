@@ -39,6 +39,7 @@ import {
   CredentialSlot,
   ProviderAuthInfo,
   type ProviderHints,
+  type QuotaReading,
   type ReasoningEffort,
   RequestId,
   type RunEffort,
@@ -1545,12 +1546,17 @@ const usageWindow = (usedPercent: number, seconds: number, resetAt: number): Usa
   reset_after_seconds: 3_600,
   reset_at: resetAt,
 })
+/** The reset credits of the default usage answer: one credit held. */
+const ONE_CREDIT = { rate_limit_reset_credits: { available_count: 1 } }
 /**
  * A usage answer shaped as Codex's `RateLimitStatusPayload` with its reset
- * credits: the plan's own limit `rateLimit`, a limit metering one model, and
- * the fields gent does not read.
+ * credits (`credits`, the top-level key or none): the plan's own limit
+ * `rateLimit`, a limit metering one model, and the fields gent does not read.
  */
-const usageAnswer = (rateLimit: PlanLimitWire | typeof externalWireNull) => ({
+const usageAnswer = (
+  rateLimit: PlanLimitWire | typeof externalWireNull,
+  credits: Schema.JsonObject = ONE_CREDIT,
+) => ({
   status: 200,
   body: encodeExternalJson({
     plan_type: "plus",
@@ -1570,9 +1576,13 @@ const usageAnswer = (rateLimit: PlanLimitWire | typeof externalWireNull) => ({
       },
     ],
     rate_limit_reached_type: externalWireNull,
-    rate_limit_reset_credits: { available_count: 1 },
+    ...credits,
   }),
 })
+/** The readings of a quota read's exit, its banked resets left out. */
+const readingsOf = <E>(
+  exit: Exit.Exit<{ readonly readings: ReadonlyArray<QuotaReading> }, E>,
+): Exit.Exit<ReadonlyArray<QuotaReading>, E> => Exit.map(exit, (read) => read.readings)
 /** The plan's own limit: a 5-hour window used `fiveHour` percent and a weekly one used `week`. */
 const planLimit = (fiveHour: number, week: number): PlanLimitWire => ({
   allowed: true,
@@ -1661,15 +1671,18 @@ describe("ChatGPT plan quota", () => {
           usageAnswer(planLimit(42, 100)),
         )
         expect(exit).toEqual(
-          Exit.succeed([
-            {
-              window: "5h",
-              utilization: 0.42,
-              resetAt: PLAN_FIVE_HOUR_RESET_S * 1000,
-              rejected: false,
-            },
-            { window: "7d", utilization: 1, resetAt: PLAN_WEEK_RESET_S * 1000, rejected: true },
-          ]),
+          Exit.succeed({
+            readings: [
+              {
+                window: "5h",
+                utilization: 0.42,
+                resetAt: PLAN_FIVE_HOUR_RESET_S * 1000,
+                rejected: false,
+              },
+              { window: "7d", utilization: 1, resetAt: PLAN_WEEK_RESET_S * 1000, rejected: true },
+            ],
+            resets: [{ count: 1 }],
+          }),
         )
         // One read, of the usage endpoint alone: no model request spends quota.
         expect(captured.map((request) => [request.method, request.url])).toEqual([
@@ -1722,11 +1735,11 @@ describe("ChatGPT plan quota", () => {
         })
       const fiveHour = yield* bothPaths(18_000, "300")
       expect(fiveHour.headers.map((reading) => reading.window)).toEqual(["5h", "7d"])
-      expect(fiveHour.endpoint).toEqual(Exit.succeed(fiveHour.headers))
+      expect(readingsOf(fiveHour.endpoint)).toEqual(Exit.succeed(fiveHour.headers))
       // A length one second past a whole minute rounds up, as Codex does.
       const oddLength = yield* bothPaths(18_001, "301")
       expect(oddLength.headers.map((reading) => reading.window)).toEqual(["301m", "7d"])
-      expect(oddLength.endpoint).toEqual(Exit.succeed(oddLength.headers))
+      expect(readingsOf(oddLength.endpoint)).toEqual(Exit.succeed(oddLength.headers))
     }),
   )
 
@@ -1743,7 +1756,7 @@ describe("ChatGPT plan quota", () => {
             secondary_window: externalWireNull,
           }),
         )
-        expect(weekOnly.exit).toEqual(
+        expect(readingsOf(weekOnly.exit)).toEqual(
           Exit.succeed([
             { window: "7d", utilization: 0.3, resetAt: PLAN_WEEK_RESET_S * 1000, rejected: false },
           ]),
@@ -1753,12 +1766,52 @@ describe("ChatGPT plan quota", () => {
         const partial = yield* readPlanQuota(planSignIn("plan-access"), () =>
           usageAnswer({ allowed: true, limit_reached: false, primary_window: noReset }),
         )
-        expect(partial.exit).toEqual(Exit.succeed([]))
+        expect(readingsOf(partial.exit)).toEqual(Exit.succeed([]))
         // A sign-in whose plan states no limit reads none.
         const unmetered = yield* readPlanQuota(planSignIn("plan-access"), () =>
           usageAnswer(externalWireNull),
         )
-        expect(unmetered.exit).toEqual(Exit.succeed([]))
+        expect(readingsOf(unmetered.exit)).toEqual(Exit.succeed([]))
+      }),
+  )
+
+  it.live(
+    "the plan's banked reset credits read beside its windows: the count it holds, not the count usable now",
+    () =>
+      Effect.gen(function* () {
+        const resetsOf = (credits: Schema.JsonObject) =>
+          Effect.map(
+            readPlanQuota(planSignIn("plan-access"), () => usageAnswer(planLimit(42, 12), credits)),
+            ({ exit }) =>
+              Exit.map(exit, (read) => ({
+                resets: Option.fromUndefinedOr(read.resets),
+                windows: read.readings.length,
+              })),
+          )
+        // Two credits held while no window is spent: none applies now, both count.
+        expect(
+          yield* resetsOf({
+            rate_limit_reset_credits: { available_count: 2, applicable_available_count: 0 },
+          }),
+        ).toEqual(Exit.succeed({ resets: Option.some([{ count: 2 }]), windows: 2 }))
+        // A plan that holds none reads an empty list: a fact, not silence.
+        expect(
+          yield* resetsOf({
+            rate_limit_reset_credits: { available_count: 0, applicable_available_count: 0 },
+          }),
+        ).toEqual(Exit.succeed({ resets: Option.some([]), windows: 2 }))
+        // An answer that names no count says nothing of them; its windows still read.
+        const silent: ReadonlyArray<Schema.JsonObject> = [
+          {},
+          { rate_limit_reset_credits: externalWireNull },
+          { rate_limit_reset_credits: { applicable_available_count: 3 } },
+          { rate_limit_reset_credits: { available_count: "two" } },
+        ]
+        for (const credits of silent) {
+          expect(yield* resetsOf(credits)).toEqual(
+            Exit.succeed({ resets: Option.none(), windows: 2 }),
+          )
+        }
       }),
   )
 
@@ -1774,7 +1827,7 @@ describe("ChatGPT plan quota", () => {
         if (call === 0) return { status: 401, body: "unauthorized" }
         return usageAnswer(planLimit(42, 12))
       })
-      expect(refreshed.exit).toEqual(
+      expect(readingsOf(refreshed.exit)).toEqual(
         Exit.succeed([
           {
             window: "5h",
@@ -1857,70 +1910,84 @@ describe("ChatGPT plan quota", () => {
       const { exit, captured } = yield* readPlanQuota(makeApiAuthInfo("sk-test"), () =>
         usageAnswer(planLimit(42, 12)),
       )
-      expect(exit).toEqual(Exit.succeed([]))
+      expect(exit).toEqual(Exit.succeed({ readings: [] }))
       expect(captured).toEqual([])
     }),
   )
 
-  it.live("the server's pool sweep reads each ChatGPT account's windows at start", () =>
-    Effect.gen(function* () {
-      const a = CredentialSlot.make("a")
-      const b = CredentialSlot.make("b")
-      const fetchState = makeFakeFetchState()
-      const used = new Map([
-        ["Bearer access-a", 10],
-        ["Bearer access-b", 50],
-      ])
-      const fetchLayer = fakeFetchLayer(fetchState, (request) =>
-        usageAnswer({
-          allowed: true,
-          limit_reached: false,
-          primary_window: usageWindow(
-            used.get(request.headers["authorization"] ?? "") ?? 0,
-            604_800,
-            PLAN_WEEK_RESET_S,
-          ),
-          secondary_window: externalWireNull,
-        }),
-      )
-      const windows = yield* Effect.gen(function* () {
-        const { client } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer: LanguageModelLayers.testStream(() => Effect.die("no model request")),
-          authLayer: oauthAuth([
-            ["openai", a, { access: "access-a", refresh: "refresh-a", expires: FAR_FUTURE_MS }],
-            ["openai", b, { access: "access-b", refresh: "refresh-b", expires: FAR_FUTURE_MS }],
-          ]),
-          configServiceLayer: ConfigService.Test(
-            new UserConfig({ providers: { openai: { authOrder: [a, b], authSpread: [a, b] } } }),
-          ),
+  it.live(
+    "the server's pool sweep reads each ChatGPT account's windows and reset credits at start",
+    () =>
+      Effect.gen(function* () {
+        const a = CredentialSlot.make("a")
+        const b = CredentialSlot.make("b")
+        const fetchState = makeFakeFetchState()
+        const used = new Map([
+          ["Bearer access-a", 10],
+          ["Bearer access-b", 50],
+        ])
+        const credits = new Map([
+          ["Bearer access-a", 2],
+          ["Bearer access-b", 0],
+        ])
+        const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+          const bearer = request.headers["authorization"] ?? ""
+          return usageAnswer(
+            {
+              allowed: true,
+              limit_reached: false,
+              primary_window: usageWindow(used.get(bearer) ?? 0, 604_800, PLAN_WEEK_RESET_S),
+              secondary_window: externalWireNull,
+            },
+            { rate_limit_reset_credits: { available_count: credits.get(bearer) ?? 0 } },
+          )
         })
-        const read = Effect.map(client.accounts.lanes(), ({ providers }) =>
-          providers.flatMap((lanes) =>
-            lanes.accounts.flatMap((account) =>
-              account.windows.map((window) => ({
-                provider: lanes.provider,
-                slot: account.slot,
-                window: window.window,
-                utilization: window.utilization,
-              })),
+        const windows = yield* Effect.gen(function* () {
+          const { client } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer: LanguageModelLayers.testStream(() => Effect.die("no model request")),
+            authLayer: oauthAuth([
+              ["openai", a, { access: "access-a", refresh: "refresh-a", expires: FAR_FUTURE_MS }],
+              ["openai", b, { access: "access-b", refresh: "refresh-b", expires: FAR_FUTURE_MS }],
+            ]),
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({ providers: { openai: { authOrder: [a, b], authSpread: [a, b] } } }),
             ),
-          ),
-        )
-        // The sweep runs on its own fiber: the server answers before it reads.
-        return yield* waitFor(
-          read,
-          (current) => current.length === 2,
-          5_000,
-          "both ChatGPT accounts' weekly windows read",
-        )
-      }).pipe(Effect.scoped, Effect.provide(fetchLayer))
-      expect(windows).toEqual([
-        { provider: "openai", slot: a, window: "7d", utilization: 0.1 },
-        { provider: "openai", slot: b, window: "7d", utilization: 0.5 },
-      ])
-      expect(fetchState.captured.every((request) => request.url === WHAM_USAGE_URL)).toBe(true)
-    }),
+          })
+          const read = Effect.map(client.accounts.lanes(), ({ providers }) =>
+            providers.flatMap((lanes) =>
+              lanes.accounts.flatMap((account) =>
+                account.windows.map((window) => ({
+                  provider: lanes.provider,
+                  slot: account.slot,
+                  window: window.window,
+                  utilization: window.utilization,
+                  // An account that holds none lists no resets.
+                  resets: Option.fromUndefinedOr(account.resets),
+                })),
+              ),
+            ),
+          )
+          // The sweep runs on its own fiber: the server answers before it reads.
+          return yield* waitFor(
+            read,
+            (current) => current.length === 2,
+            5_000,
+            "both ChatGPT accounts' weekly windows read",
+          )
+        }).pipe(Effect.scoped, Effect.provide(fetchLayer))
+        expect(windows).toEqual([
+          {
+            provider: "openai",
+            slot: a,
+            window: "7d",
+            utilization: 0.1,
+            resets: Option.some([{ count: 2 }]),
+          },
+          { provider: "openai", slot: b, window: "7d", utilization: 0.5, resets: Option.none() },
+        ])
+        expect(fetchState.captured.every((request) => request.url === WHAM_USAGE_URL)).toBe(true)
+      }),
   )
 })
 

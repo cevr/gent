@@ -7090,7 +7090,7 @@ describe("Claude account sign-in", () => {
 
 // ── Claude plan quota reads ─────────────────────────────────────────────────
 
-const USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+const USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
 const HOUR_MS = 3_600_000
 /** A usage answer: `utilization` in percent, `resets_at` in ISO 8601, as the endpoint sends them. */
 const usageReply = (usage: Record<string, unknown>) => ({
@@ -7143,11 +7143,19 @@ describe("Claude plan quota", () => {
             }),
           ),
         )
+        // An answer with no `cedar_ember` block says nothing of banked resets.
         expect(exit).toEqual(
-          Exit.succeed([
-            { window: "5h", utilization: 0.42, resetAt: YEAR_2100 + 5 * HOUR_MS, rejected: false },
-            { window: "7d", utilization: 1, resetAt: YEAR_2100 + 144 * HOUR_MS, rejected: true },
-          ]),
+          Exit.succeed({
+            readings: [
+              {
+                window: "5h",
+                utilization: 0.42,
+                resetAt: YEAR_2100 + 5 * HOUR_MS,
+                rejected: false,
+              },
+              { window: "7d", utilization: 1, resetAt: YEAR_2100 + 144 * HOUR_MS, rejected: true },
+            ],
+          }),
         )
         // One read, of the usage endpoint alone: no message request spends quota.
         expect(captured.map((request) => [request.method, request.url])).toEqual([
@@ -7209,14 +7217,16 @@ describe("Claude plan quota", () => {
         ),
       )
       expect(exit).toEqual(
-        Exit.succeed([
-          {
-            window: "7d",
-            utilization: 0.255,
-            resetAt: YEAR_2100 + 144 * HOUR_MS,
-            rejected: false,
-          },
-        ]),
+        Exit.succeed({
+          readings: [
+            {
+              window: "7d",
+              utilization: 0.255,
+              resetAt: YEAR_2100 + 144 * HOUR_MS,
+              rejected: false,
+            },
+          ],
+        }),
       )
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
@@ -7265,9 +7275,101 @@ describe("Claude plan quota", () => {
         makeApiAuthInfo("fake-api-key"),
         () => usageReply({ seven_day: { utilization: 1, resets_at: "2100-01-07T00:00:00Z" } }),
       )
-      expect(exit).toEqual(Exit.succeed([]))
+      expect(exit).toEqual(Exit.succeed({ readings: [] }))
       expect(captured).toEqual([])
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "the usage read lists the account's banked resets: each grant with a reset left, with its expiry",
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* linkedDriver("darwin", fakeKeychain([]).spawner)
+        const record = ownedRecord({
+          access: "fake-owned-access",
+          refresh: "fake-owned-refresh",
+          expires: YEAR_2100,
+        })
+        /** The banked resets a usage answer with the block `cedarEmber` reads, none when it lists none. */
+        const resetsOf = (cedarEmber: Record<string, unknown>) =>
+          Effect.map(
+            readQuotaThrough(
+              driver,
+              ownedSignIn(record),
+              usageEndpoint(() =>
+                usageReply({
+                  seven_day: { utilization: 10, resets_at: "2100-01-07T00:00:00Z" },
+                  ...cedarEmber,
+                }),
+              ),
+            ),
+            ({ exit }) =>
+              Exit.map(exit, (read) => ({
+                resets: Option.fromUndefinedOr(read.resets),
+                windows: read.readings.length,
+              })),
+          )
+        /** One grant as the endpoint lists it (TeamClaude `src/oauth.js` `bankedResets`). */
+        const grant = (fields: Record<string, unknown>) => ({
+          id: "grant-handle",
+          label: "Usage reset",
+          resets_total: 1,
+          resets_left: 1,
+          starts_at: "2099-12-01T16:00:00+00:00",
+          ends_at: "2100-01-01T00:00:00+00:00",
+          clears: ["five_hour", "seven_day"],
+          paused: false,
+          usable_now: true,
+          ...fields,
+        })
+        // An eligible block: every grant with a reset left counts, paused or
+        // not usable yet; a grant with none left, or one gent cannot read,
+        // reads nothing. A lapsed grant is listed with its expiry: placement
+        // drops it at its own clock.
+        expect(
+          yield* resetsOf({
+            cedar_ember: {
+              eligible: true,
+              ineligible_reason: externalWireNull,
+              grants: [
+                grant({ resets_total: 2, resets_left: 2 }),
+                grant({ paused: true, usable_now: false, ends_at: externalWireNull }),
+                grant({ resets_left: 0 }),
+                grant({ resets_left: "one" }),
+                grant({ ends_at: "2000-01-01T00:00:00Z" }),
+              ],
+            },
+          }),
+        ).toEqual(
+          Exit.succeed({
+            resets: Option.some([
+              { count: 2, expiresAt: YEAR_2100 },
+              { count: 1 },
+              { count: 1, expiresAt: 946_684_800_000 },
+            ]),
+            windows: 1,
+          }),
+        )
+        // An eligible block with no grant: the account holds none.
+        expect(yield* resetsOf({ cedar_ember: { eligible: true, grants: [] } })).toEqual(
+          Exit.succeed({ resets: Option.some([]), windows: 1 }),
+        )
+        // No block, a block withheld from this client, or one gent cannot
+        // read says nothing of resets; the windows still read.
+        for (const block of [
+          {},
+          { cedar_ember: externalWireNull },
+          {
+            cedar_ember: { eligible: false, ineligible_reason: "cli_version", grants: [grant({})] },
+          },
+          { cedar_ember: { eligible: true } },
+          { cedar_ember: "garbled" },
+        ]) {
+          expect(yield* resetsOf(block)).toEqual(
+            Exit.succeed({ resets: Option.none(), windows: 1 }),
+          )
+        }
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
 

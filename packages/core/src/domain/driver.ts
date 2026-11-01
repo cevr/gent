@@ -648,6 +648,27 @@ export const QuotaReading = Schema.Struct({
 export type QuotaReading = typeof QuotaReading.Type
 
 /**
+ * One grant of banked resets a plan holds for its account: `count` resets
+ * left in it, each of which clears the plan's spent windows at once when the
+ * owner redeems it, until `expiresAt` (epoch ms) when the grant lapses;
+ * absent, the provider names no expiry. Claude's usage endpoint lists grants
+ * (`cedar_ember`), Codex's a count (`rate_limit_reset_credits`). Gent only
+ * reads and shows them: no code path redeems one.
+ */
+export const ResetGrant = Schema.Struct({
+  count: Schema.Int,
+  expiresAt: Schema.optionalKey(Schema.Finite),
+})
+export type ResetGrant = typeof ResetGrant.Type
+
+/** The grants of `grants` that still hold a reset at `now`: a lapsed or empty grant counts none. */
+export const liveResets = (
+  grants: ReadonlyArray<ResetGrant>,
+  now: number,
+): ReadonlyArray<ResetGrant> =>
+  grants.filter((grant) => grant.count > 0 && (grant.expiresAt ?? Infinity) > now)
+
+/**
  * One window of a plan that limits a model by what its requests cost, not by
  * a server's report: at most `usd` of list price in any trailing `window`
  * (`5h`, `7d`, `31d`). Gent meters each account's own spend on the model
@@ -785,6 +806,12 @@ export const LaneAccount = Schema.Struct({
    * on it, clears it.
    */
   loginLost: Schema.optionalKey(Schema.Struct({ since: Schema.Finite, reason: LoginLossReason })),
+  /**
+   * The banked resets the account's plan holds now (`ResetGrant`), as its
+   * last usage read listed them, lapsed grants dropped; absent when it holds
+   * none or no read listed any. Shown only: gent never spends one.
+   */
+  resets: Schema.optionalKey(Schema.Array(ResetGrant)),
   /**
    * The fewest runs any of its account-wide windows can carry; none when one
    * has no rate or none was read. A model's window is listed but not counted:
@@ -1321,11 +1348,19 @@ export interface ModelDriverContribution {
    * The server's pool sweep reads each pool account with it, so placement
    * ranks an account no step has run on yet. A sign-in the provider meters
    * no window for (an API key) reads none. Absent, the driver's accounts
-   * are read only from the answers to their requests.
+   * are read only from the answers to their requests. `resets` is the
+   * account's banked resets the same answer lists (`ResetGrant`), lapsed
+   * ones included (placement drops them): empty when the account holds
+   * none, absent when the answer says nothing of them (no block, or one the
+   * provider withholds from this client).
    */
-  readonly readQuota?: (
-    authInfo: ProviderAuthInfo,
-  ) => Effect.Effect<ReadonlyArray<QuotaReading>, ProviderAuthError>
+  readonly readQuota?: (authInfo: ProviderAuthInfo) => Effect.Effect<
+    {
+      readonly readings: ReadonlyArray<QuotaReading>
+      readonly resets?: ReadonlyArray<ResetGrant>
+    },
+    ProviderAuthError
+  >
   /**
    * The price one request of `modelName` bills at, from the price the
    * catalog lists: a plan that prices a model by the request's input tokens

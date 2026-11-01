@@ -25,6 +25,7 @@ import {
   defineClientExtension,
   formatAge,
   formatClock,
+  type LaneRow,
   laneRows,
   sessionQuery,
   textWidth,
@@ -44,8 +45,8 @@ export interface BandData {
   readonly runs: ReadonlyArray<MachineRunView>
 }
 
-/** The tone of a row's glyph: a free lane, none left, a run at work, a run that waits. */
-type BandTone = "free" | "none" | "unknown" | "running" | "asking" | "waiting"
+/** The tone of a row's glyph: a free lane, none left, banked resets, a run at work, a run that waits. */
+type BandTone = "free" | "none" | "unknown" | "banked" | "running" | "asking" | "waiting"
 
 interface BandRow {
   readonly glyph: string
@@ -53,8 +54,18 @@ interface BandRow {
   readonly text: string
 }
 
-/** Single marks, fx style: lanes, a running run, an asking run, a run that waits for its account. */
+/**
+ * Single marks, fx style: lanes, banked resets, a running run, an asking
+ * run, a run that waits for its account.
+ */
 const LANES_GLYPH = "≡"
+const RESETS_GLYPH = "↺"
+const LANE_GLYPHS: Record<LaneRow["state"], string> = {
+  free: LANES_GLYPH,
+  none: LANES_GLYPH,
+  unknown: LANES_GLYPH,
+  banked: RESETS_GLYPH,
+}
 const RUN_GLYPH = "▸"
 const ASK_GLYPH = "?"
 const WAIT_GLYPH = "◷"
@@ -115,7 +126,7 @@ export const bandRows = (
   if (!measured && active.length === 0) return []
   const report = Option.getOrElse(data.lanes, (): LaneReport => ({ providers: [] }))
   const lanes = laneRows(report, now, width, zone).map((row): BandRow => ({
-    glyph: LANES_GLYPH,
+    glyph: LANE_GLYPHS[row.state],
     tone: row.state,
     text: row.text,
   }))

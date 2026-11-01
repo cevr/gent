@@ -21,6 +21,7 @@ import {
   type LaneReport,
   type LaneWindow,
   lineCount,
+  liveResets,
   LOGIN_LOSS_WORDS,
   type LoginLossReason,
   type Model,
@@ -608,10 +609,56 @@ const lostLoginRow = (
   )
 }
 
-/** One lanes row: its words, and whether a run can start (`free`), cannot (`none`), or nobody knows. */
-interface LaneRow {
+/**
+ * One provider's banked resets row, longest form that fits `width` first:
+ * each account's live count, and when the soonest grant lapses (a clock in
+ * `zone`). A narrow row drops the lapse, then the provider, then reads the
+ * provider's total, and a row narrower than that truncates it. None when no
+ * account holds a live reset at `now`.
+ */
+const resetsRow = (
+  lanes: ProviderLanes,
+  now: number,
+  width: number,
+  zone: DateTime.TimeZone,
+): Option.Option<string> => {
+  const held = lanes.accounts.flatMap((account) => {
+    const grants = liveResets(account.resets ?? [], now)
+    if (grants.length === 0) return []
+    return [
+      { slot: account.slot, grants, count: grants.reduce((sum, grant) => sum + grant.count, 0) },
+    ]
+  })
+  if (held.length === 0) return Option.none()
+  const counts = held.map(({ slot, count }) => `${slot} ${count}`).join(", ")
+  const total = held.reduce((sum, { count }) => sum + count, 0)
+  const expiries = held.flatMap(({ grants }) =>
+    grants.flatMap((grant) => Option.toArray(Option.fromUndefinedOr(grant.expiresAt))),
+  )
+  const lapse = Option.map(
+    Option.liftPredicate(expiries, (found) => found.length > 0),
+    (found) => `next lapses ${formatClock(Math.min(...found), now, zone)}`,
+  )
+  const head = `resets ${lanes.provider} ${counts}`
+  const candidates = [
+    ...Option.toArray(Option.map(lapse, (words) => `${head} · ${words}`)),
+    head,
+    `resets ${counts}`,
+    `resets ${total}`,
+  ]
+  return Option.some(
+    candidates.find((candidate) => textWidth(candidate) <= width) ??
+      truncate(`resets ${total}`, width),
+  )
+}
+
+/**
+ * One lanes row: its words, and whether a run can start (`free`), cannot
+ * (`none`), or nobody knows; `banked` is a provider's banked resets.
+ */
+export interface LaneRow {
   readonly text: string
-  readonly state: "free" | "none" | "unknown"
+  readonly state: "free" | "none" | "unknown" | "banked"
 }
 
 /** `sabbath · no run starts until 18:09`, as the width allows. */
@@ -628,9 +675,10 @@ const sabbathRow = (end: number, now: number, width: number, zone: DateTime.Time
 /**
  * The lanes rows of the band and of `gent ctl lanes --line`: in the owner's
  * Sabbath, a first row naming its end; one row per provider gent read a
- * quota window of or lost a login on, `lanes unknown` when there is none
- * (and no Sabbath row). Each provider's row is followed by a `login!` row
- * per account whose sign-in is lost.
+ * quota window or banked resets of or lost a login on, `lanes unknown`
+ * when there is none (and no Sabbath row). Each provider's row is followed
+ * by a `login!` row per account whose sign-in is lost, then a `resets` row
+ * when an account holds a live banked reset.
  */
 export const laneRows = (
   report: LaneReport,
@@ -666,7 +714,13 @@ const providerRows = (
     let state: LaneRow["state"] = "free"
     if (Predicate.isUndefined(lanes.capacity)) state = "unknown"
     else if (freeLanes(lanes.capacity, lanes.load) === 0) state = "none"
-    return [{ text, state }, ...lost]
+    const banked = Option.toArray(
+      Option.map(resetsRow(lanes, now, width, zone), (resets): LaneRow => ({
+        text: resets,
+        state: "banked",
+      })),
+    )
+    return [{ text, state }, ...lost, ...banked]
   })
 }
 
