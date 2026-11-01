@@ -241,6 +241,10 @@ import {
   ToolSourceRevision,
 } from "../../src/domain/capability"
 
+/** A placement on the test platform (host `test-host`), with `ledger`. */
+const placementOnTestHost = (ledger: Parameters<typeof makeCredentialPlacement>[0]) =>
+  makeCredentialPlacement(ledger).pipe(Effect.provide(GentPlatform.Test()))
+
 // ── turn response collectors ────────────────────────────────────────────────
 
 const sessionId = SessionId.make("collector-session")
@@ -2537,7 +2541,7 @@ describe("cache keep-warm", () => {
         name: "Warm driver",
         resolveModel: () => Effect.succeed(AiModel.make("warm-driver", "model", providerLayer)),
       }
-      const realPlacement = yield* makeCredentialPlacement(Option.none())
+      const realPlacement = yield* placementOnTestHost(Option.none())
       const notedQuota = yield* Ref.make<
         ReadonlyArray<Parameters<typeof realPlacement.noteQuota>[0]>
       >([])
@@ -3157,7 +3161,7 @@ describe("credential order", () => {
 
   it.live("a refused credential is a lost login the lanes name; the one that served is not", () =>
     Effect.gen(function* () {
-      const placement = yield* makeCredentialPlacement(Option.none())
+      const placement = yield* placementOnTestHost(Option.none())
       const run = yield* credentialTurn({
         name: "lost-login",
         order: [DEFAULT_CREDENTIAL_SLOT, personal],
@@ -3175,7 +3179,7 @@ describe("credential order", () => {
 
   it.live("a pinned run's refused credential is a lost login too, and a spent quota is not", () =>
     Effect.gen(function* () {
-      const placement = yield* makeCredentialPlacement(Option.none())
+      const placement = yield* placementOnTestHost(Option.none())
       const refused = yield* credentialTurn({
         name: "lost-login-pinned",
         order: [personal],
@@ -3187,7 +3191,7 @@ describe("credential order", () => {
       // The pin is the order: nothing else is tried.
       expect(refused.sent).toEqual(["sk-b"])
       expect(yield* lostLoginsOf(placement)).toEqual([[personal, "Rejected"]])
-      const spent = yield* makeCredentialPlacement(Option.none())
+      const spent = yield* placementOnTestHost(Option.none())
       yield* credentialTurn({
         name: "spent-quota-pinned",
         order: [personal],
@@ -3202,7 +3206,7 @@ describe("credential order", () => {
 
   it.live("a step served on a refused credential clears its lost login", () =>
     Effect.gen(function* () {
-      const placement = yield* makeCredentialPlacement(Option.none())
+      const placement = yield* placementOnTestHost(Option.none())
       const run = yield* credentialTurn({
         name: "lost-login-served",
         order: [personal],
@@ -4312,7 +4316,7 @@ describe("credential order", () => {
       const storage: CredentialStorage = Layer.succeedContext(
         yield* Layer.build(testSqliteStorage).pipe(Effect.orDie),
       )
-      return { storage, placement: yield* makeCredentialPlacement(Option.none()) }
+      return { storage, placement: yield* placementOnTestHost(Option.none()) }
     })
     type SpreadWorld = Effect.Success<typeof spreadWorld>
 
@@ -4950,7 +4954,7 @@ describe("credential order", () => {
         Effect.gen(function* () {
           const run = (name: string, filled: ReadonlyArray<CredentialSlot>, extraUsage: boolean) =>
             Effect.gen(function* () {
-              const placement = yield* makeCredentialPlacement(Option.none())
+              const placement = yield* placementOnTestHost(Option.none())
               const resetAt = (yield* Clock.currentTimeMillis) + HOUR_MS
               yield* Effect.forEach(filled, (slot) => fill(placement, slot, resetAt), {
                 discard: true,
@@ -6212,7 +6216,7 @@ describe("credential order", () => {
       ) =>
         Effect.gen(function* () {
           const out = yield* Deferred.make<void>()
-          const placement = yield* makeCredentialPlacement(Option.none())
+          const placement = yield* placementOnTestHost(Option.none())
           for (const slot of Option.toArray(busy))
             for (const other of [1, 2, 3])
               yield* placement.place({
@@ -6575,7 +6579,7 @@ describe("credential order", () => {
     /** A placement whose ledger is a list: each write it saved, oldest first. */
     const recordedLedger = Effect.gen(function* () {
       const saved = yield* Ref.make<ReadonlyArray<ReadonlyArray<SavedBucket>>>([])
-      const placement = yield* makeCredentialPlacement(
+      const placement = yield* placementOnTestHost(
         Option.some({
           load: Effect.succeed({ buckets: [] }),
           save: (ledger: { readonly buckets: ReadonlyArray<SavedBucket> }) =>

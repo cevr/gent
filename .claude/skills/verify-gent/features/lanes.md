@@ -13,6 +13,7 @@ Under the status row, a band shows how many runs the accounts can carry now and 
 - `band-sabbath`: in the owner's Sabbath the band's first row is `≡ sabbath · no run starts until <end>`, alone with no reading; narrower, `≡ sabbath until <end>`, then `≡ sabbath`. The end reads `HH:MM` when it falls on today's local date, else with its date, so the width each form needs moves with it: with a dated end the row is `sabbath until` at 44 columns, with a clock only it is still the full row. The owner's own turn still answers. `gent ctl lanes` holds `sabbathEnd`, and `--line` prints the row.
 - `band-login-lost`: after the provider answers 401 to a sign-in's key, `≡ login! anthropic default refused · sign in with /auth` follows the provider's row, once however many turns it refuses; at 44 columns `≡ login! anthropic default refused`, at 28 `≡ login! anthropic default`.
 - `band-resets`: banked resets under the provider's row: [banked-resets.md](banked-resets.md).
+- `band-peer`: the peer's row after the provider rows, its runs, silence and links down: [lanes-peer.md](lanes-peer.md).
 
 ## How to get to it (user POV)
 

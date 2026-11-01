@@ -5366,12 +5366,21 @@ describe("AccountsRpcs", () => {
         yield* waitFor(loadOf, (load) => load === 0, 5_000, "the step's quota reading")
         yield* client.accounts.notePeer({
           boot: "peer",
+          host: "peer-host",
           seq: 1,
           providers: [
             { provider: "anthropic", runs: [{ accounts: [work], count: 2 }], accounts: [] },
           ],
         })
         expect(yield* loadOf).toBe(2)
+        // The lanes name the peer, its runs on this server's accounts, and no link down.
+        const { peer } = yield* client.accounts.lanes()
+        expect(peer).toMatchObject({
+          heard: { host: "peer-host" },
+          runs: 2,
+          silent: false,
+          down: [],
+        })
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )

@@ -656,11 +656,60 @@ const resetsRow = (
 
 /**
  * One lanes row: its words, and whether a run can start (`free`), cannot
- * (`none`), or nobody knows; `banked` is a provider's banked resets.
+ * (`none`), or nobody knows; `banked` is a provider's banked resets; the
+ * peer row is `linked` while its facts come over both links, `unlinked`
+ * while it is silent or a link is down.
  */
 export interface LaneRow {
   readonly text: string
-  readonly state: "free" | "none" | "unknown" | "banked"
+  readonly state: "free" | "none" | "unknown" | "banked" | "linked" | "unlinked"
+}
+
+/**
+ * The peer row, longest form that fits `width` first: `peer <host> 2 runs ·
+ * 12s` while its facts come, `peer <host> unread 3m` once it is silent,
+ * `peer unread` before its first line. A link down marks it `peer!` and
+ * names the link: `own link down` (this server's command), `peer link
+ * down` (the peer's), `links down`. A narrow row drops the link, then the
+ * age, then the host, and a row narrower than that truncates it.
+ */
+const peerRow = (peer: NonNullable<LaneReport["peer"]>, now: number, width: number): LaneRow => {
+  let reason = Option.map(Option.fromUndefinedOr(peer.down[0]), (link) => `${link} link down`)
+  if (peer.down.length > 1) reason = Option.some("links down")
+  let mark = "peer"
+  if (Option.isSome(reason)) mark = "peer!"
+  const forms = Option.match(Option.fromUndefinedOr(peer.heard), {
+    onNone: () => [`${mark} unread`],
+    onSome: (heard) => {
+      const age = formatAge(now - heard.at)
+      if (peer.silent)
+        return [
+          `${mark} ${heard.host} unread ${age}`,
+          `${mark} ${heard.host} unread`,
+          `${mark} unread`,
+        ]
+      let runs = `${peer.runs} runs`
+      if (peer.runs === 1) runs = "1 run"
+      return [
+        `${mark} ${heard.host} ${runs} · ${age}`,
+        `${mark} ${heard.host} ${runs}`,
+        `${mark} ${runs}`,
+      ]
+    },
+  })
+  const head = forms[0] ?? mark
+  const candidates = [
+    ...Option.toArray(Option.map(reason, (words) => `${head} · ${words}`)),
+    ...forms,
+  ]
+  let state: LaneRow["state"] = "linked"
+  if (peer.silent || Option.isSome(reason)) state = "unlinked"
+  return {
+    text:
+      candidates.find((candidate) => textWidth(candidate) <= width) ??
+      truncate(forms.at(-1) ?? mark, width),
+    state,
+  }
 }
 
 /** `sabbath · no run starts until 18:09`, as the width allows. */
@@ -680,7 +729,8 @@ const sabbathRow = (end: number, now: number, width: number, zone: DateTime.Time
  * quota window or banked resets of or lost a login on, `lanes unknown`
  * when there is none (and no Sabbath row). Each provider's row is followed
  * by a `login!` row per account whose sign-in is lost, then a `resets` row
- * when an account holds a live banked reset.
+ * when an account holds a live banked reset. The peer's row comes last,
+ * while the server reports a peer (`peerRow`).
  */
 export const laneRows = (
   report: LaneReport,
@@ -692,7 +742,13 @@ export const laneRows = (
     Option.filter(Option.fromUndefinedOr(report.sabbathEnd), (end) => end > now),
     (end) => sabbathRow(end, now, width, zone),
   )
-  return [...Option.toArray(rest), ...providerRows(report, now, width, zone, Option.isSome(rest))]
+  return [
+    ...Option.toArray(rest),
+    ...providerRows(report, now, width, zone, Option.isSome(rest)),
+    ...Option.toArray(
+      Option.map(Option.fromUndefinedOr(report.peer), (peer) => peerRow(peer, now, width)),
+    ),
+  ]
 }
 
 const providerRows = (

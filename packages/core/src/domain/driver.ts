@@ -900,13 +900,40 @@ export const ProviderLanes = Schema.Struct({
 })
 
 /**
+ * A peer link, as this server sees it: `own`, the link this server runs
+ * (`pool.peer`, its command's stdout); `peer`, the link the peer runs (its
+ * lines through `accounts.notePeer`).
+ */
+const PeerLink = Schema.Literals(["own", "peer"])
+export type PeerLink = typeof PeerLink.Type
+
+/**
+ * The server on the other machine that shares the pool (`notePeer`), as this
+ * server last heard it. `heard`: its host and this server's clock at its
+ * last line from either link; absent before its first line. `runs`: its
+ * runs on the labels of this server's pools, while its facts count. `silent`:
+ * no line for 90 s, or none yet. `down`: each link that runs or ran and
+ * brought no line for 90 s: `own` while this server runs its link, `peer`
+ * once the peer's link sent a line.
+ */
+const LanePeer = Schema.Struct({
+  heard: Schema.optionalKey(Schema.Struct({ host: Schema.String, at: Schema.Finite })),
+  runs: Schema.Int,
+  silent: Schema.Boolean,
+  down: Schema.Array(PeerLink),
+})
+
+/**
  * `accounts.lanes`: every provider gent read a quota window of or lost a
  * login on. Labels and numbers only. `sabbathEnd`: the end of the owner's
- * Sabbath while it holds every start (epoch ms); absent outside it.
+ * Sabbath while it holds every start (epoch ms); absent outside it. `peer`:
+ * the other machine's server, once a line of it came or this server runs
+ * its link.
  */
 export const LaneReport = Schema.Struct({
   providers: Schema.Array(ProviderLanes),
   sabbathEnd: Schema.optional(Schema.Finite),
+  peer: Schema.optionalKey(LanePeer),
 })
 export type LaneReport = typeof LaneReport.Type
 export type LaneAccount = typeof LaneAccount.Type
@@ -962,11 +989,13 @@ const PoolProvider = Schema.Struct({
  * `accounts.pool`: this server's own pool facts, for a server on another
  * machine that spends from the same accounts. `boot` is a random id per
  * server start: the `spend` counts start again under a new one. `seq` rises
- * on each change of `providers`. Own state only, and no time from this
- * server's clock: `week` is the provider's.
+ * on each change of `providers`. `host`: the machine's host name up to its
+ * first dot, which the peer's band names it by. Own state only, and no time
+ * from this server's clock: `week` is the provider's.
  */
 export const PoolFacts = Schema.Struct({
   boot: Schema.String,
+  host: Schema.String,
   seq: PoolCount,
   providers: Schema.Array(PoolProvider),
 })

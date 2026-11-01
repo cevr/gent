@@ -45,8 +45,11 @@ export interface BandData {
   readonly runs: ReadonlyArray<MachineRunView>
 }
 
-/** The tone of a row's glyph: a free lane, none left, banked resets, a run at work, a run that waits. */
-type BandTone = "free" | "none" | "unknown" | "banked" | "running" | "asking" | "waiting"
+/**
+ * The tone of a row's glyph: a free lane, none left, banked resets, the
+ * peer linked or not, a run at work, a run that waits.
+ */
+type BandTone = LaneRow["state"] | "running" | "asking" | "waiting"
 
 interface BandRow {
   readonly glyph: string
@@ -55,16 +58,19 @@ interface BandRow {
 }
 
 /**
- * Single marks, fx style: lanes, banked resets, a running run, an asking
- * run, a run that waits for its account.
+ * Single marks, fx style: lanes, banked resets, the peer's link, a running
+ * run, an asking run, a run that waits for its account.
  */
 const LANES_GLYPH = "≡"
 const RESETS_GLYPH = "↺"
+const PEER_GLYPH = "⇄"
 const LANE_GLYPHS: Record<LaneRow["state"], string> = {
   free: LANES_GLYPH,
   none: LANES_GLYPH,
   unknown: LANES_GLYPH,
   banked: RESETS_GLYPH,
+  linked: PEER_GLYPH,
+  unlinked: PEER_GLYPH,
 }
 const RUN_GLYPH = "▸"
 const ASK_GLYPH = "?"
@@ -107,8 +113,8 @@ const runRow = (
 /**
  * The band: the lanes rows, then one row per active run, oldest first, up
  * to four and a count of the rest. Empty while gent read no quota window,
- * the owner's Sabbath does not hold the lanes and no run is active, so the
- * band hides. `width` is the text's columns.
+ * the owner's Sabbath does not hold the lanes, the server reports no peer
+ * and no run is active, so the band hides. `width` is the text's columns.
  */
 export const bandRows = (
   data: BandData,
@@ -121,6 +127,7 @@ export const bandRows = (
     data.lanes,
     (report) =>
       report.providers.length > 0 ||
+      Predicate.isNotUndefined(report.peer) ||
       (Predicate.isNotUndefined(report.sabbathEnd) && report.sabbathEnd > now),
   )
   if (!measured && active.length === 0) return []
@@ -145,6 +152,8 @@ export function LanesBand(props: { readonly data: () => BandData; readonly now: 
   const toneColor = (tone: BandTone) => {
     if (tone === "free") return theme.success
     if (tone === "none") return theme.warning
+    if (tone === "unlinked") return theme.warning
+    if (tone === "linked") return theme.info
     if (tone === "asking") return theme.warning
     if (tone === "running") return theme.info
     return theme.textMuted

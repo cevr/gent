@@ -25,18 +25,17 @@ import {
   ExtensionId,
   type GentClientRpcError,
   type GentNamespacedClient,
+  LaneReport,
   messagePartsText,
   MessageId,
   ModelId,
   PoolFacts,
   type ProjectedMessage,
-  ProviderLanes,
   RequestReply,
   SessionId,
   SessionSnapshot,
   userMessageIdForRequest,
 } from "@gent/core/protocol"
-import { omitUndefined } from "@gent/core/extensions/api"
 import type { GentPlatform } from "@gent/core/host"
 import { Gent, serverLock, dataPaths } from "@gent/sdk"
 import {
@@ -413,15 +412,12 @@ export const CtlResult = Schema.TaggedUnion({
     view: Schema.Json,
   },
   /**
-   * `lanes`: the server's account lanes, one record per provider gent read a
-   * quota window of, and the end of the owner's Sabbath while it holds every
-   * start. No session names them.
+   * `lanes`: the server's account lanes (`LaneReport`), one record per
+   * provider gent read a quota window of, the end of the owner's Sabbath
+   * while it holds every start, and the peer while the server reports one.
+   * No session names them.
    */
-  Lanes: {
-    server: Schema.String,
-    providers: Schema.Array(ProviderLanes),
-    sabbathEnd: Schema.optional(Schema.Finite),
-  },
+  Lanes: { server: Schema.String, ...LaneReport.fields },
   /**
    * `pool`: the server's own pool facts now (`PoolFacts`): per provider its
    * runs, per account its warm sessions, its spend since `boot` and its
@@ -1344,7 +1340,7 @@ const lanes = Command.make(
     connect: connectFlag,
     line: Flag.Boolean("line").pipe(
       Flag.withDescription(
-        "Print the band's lanes rows as text: the owner's Sabbath first while it holds, then one per provider",
+        "Print the band's lanes rows as text: the owner's Sabbath first while it holds, then one per provider, then the peer",
       ),
       Flag.withDefault(false),
     ),
@@ -1358,11 +1354,7 @@ const lanes = Command.make(
             connection.client.accounts.lanes().pipe(
               Effect.mapError(rpcFailure),
               Effect.map((report) =>
-                CtlResult.cases.Lanes.make({
-                  server: connection.server,
-                  providers: report.providers,
-                  ...omitUndefined({ sabbathEnd: report.sabbathEnd }),
-                }),
+                CtlResult.cases.Lanes.make({ server: connection.server, ...report }),
               ),
             ),
           )

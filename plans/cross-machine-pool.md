@@ -2,8 +2,8 @@
 
 Date: 2026-10-31. Revised 2026-11-01 against main `92f0a8653`, after rows
 53 to 55, and again after review round 1 and the owner's link decision.
-Status: steps 1 and 2 built; steps 3 and 4 are design. The live check of
-step 2 on both machines is open.
+Status: steps 1 to 3 built, step 2 checked live on both machines; step 4
+waits for evidence.
 
 The owner works on the Mac and on the workbox (`bite-workbox`, Tailscale)
 at the same time. Each machine runs its own gent server, with its own
@@ -348,7 +348,10 @@ packages/core/src/domain/driver.ts.
   one point later. An account the peer does not share closes at once, as
   today.
 - **Band (F7).** `accounts.lanes` reports the peer: its name, its runs per
-  provider, and the age of its last line by this server's clock.
+  provider, and the age of its last line by this server's clock. As built
+  (step 3): one `peer` record, not one per provider. Its name is the host
+  its last line named (`PoolFacts.host`), its runs the sum on matched
+  accounts of every pool, and each link's state (`down`).
 - **Overshoot signal.** The server logs
   `credential-placement.pool-overshoot` once per crossing when own plus
   counted peer load exceeds the capacity. Two events can cross: a peer
@@ -365,7 +368,10 @@ servers follow the same rules; nothing revokes a run already admitted.
 - **One link is down.** Each link carries both directions (owner rule 3),
   so either link alone keeps both servers informed. The counts do not
   change; only the band (step 3) shows the link that failed. Inferred
-  from the link design.
+  from the link design. As built, each server knows its own link from
+  its command's stdout and the peer's from `accounts.notePeer` lines;
+  it cannot tell the peer's link is down until that link was heard once
+  in this server run (step 3).
 - **A partition: both links down** (Tailscale down, a machine asleep, or
   its server stopped). Silence does not prove the peer stopped: a
   sleeping Mac resumes its runs when it wakes, and a cut network hides
@@ -561,8 +567,14 @@ running the test (feedback: validate the regression test).
      run (the spawner ends stderr at the exit, measured).
    - Left: a silent peer's next line with a lower `seq` of the same
      `boot` replaces the cache (it starts a new base), not a refresh.
-     Not done: the live check on the two machines (no access from the
-     build; queued for the owner).
+   - Live check, 2026-11-01: two scripted-model servers (Mac and workbox,
+     scratch homes, a fake `default` key, a seeded ledger) linked by
+     `pool.peer` over ssh. `debug threads` and `debug delegate` on either
+     side raised `load` to 1 on both sides within 0.2 s, and both fell to 0
+     together. No link failure past the one at start (the workbox server
+     was not yet up), no silence, no label mismatch, no overshoot
+     (measured). `debug machine` holds no lane: its step is a shell
+     command.
 
 3. **`feat(tui): show the peer in the lanes band`.** A row after the
    provider rows: `peer <name> <runs> runs · <age>`, or `peer <name>
@@ -571,6 +583,44 @@ running the test (feedback: validate the regression test).
    Tests: `laneRows` in apps/tui/tests (fails without the row), the ctl
    line test. `bun run test:e2e` and the verify-gent live check at normal
    and narrow widths.
+   Done (2026-11-01). As built:
+   - The name is the peer machine's hostname cut at its first dot, a new
+     required `host` in `PoolFacts` (`os.hostname` through `GentPlatform`).
+     No config key: the hostname names the machine with no setup, and both
+     servers are this build. The memory placement (`CredentialPlacement.Memory`)
+     and the test placements name `test-host`.
+   - `LaneReport.peer` is optional: `heard` (`host`, `at`), `runs`,
+     `silent`, `down` (`own`, `peer`). It is absent with no peer line and
+     no link of this server's own. `gent ctl lanes` now prints the whole
+     `LaneReport` beside `server`, so the JSON carries it.
+   - What a server can know of the links: its own link (`own`) is the
+     `pool.peer` command's stdout, down after 90 s with no line, counted
+     from the link's start or its last line, so a command that never
+     prints reads down too. The peer's link (`peer`) is the lines that come
+     through `accounts.notePeer`: down after 90 s with no line, but only
+     once one came in this server run. Nothing tells a server that the
+     peer set a `pool.peer`, so a link that was never heard reads as no
+     link, not as down.
+   - Rows: `peer <host> <n> runs · <age>` (`1 run` singular), `peer <host>
+     unread <age>` when silent, `peer unread` before the first line. A down
+     link marks `peer!` and adds `· own link down`, `· peer link down` or
+     `· links down`. Narrower, the row drops the reason, then the age, then
+     the host. The glyph is `⇄`, info tone while heard, warning while
+     silent or down.
+   - The band reads `accounts.lanes` every 30 s, at a turn's end and at a
+     reconnect, so a peer run of a few seconds can fall between two reads;
+     the age ticks between reads. A real model run lasts minutes (inferred).
+   - Live check (verify-gent, 2026-11-01, one Mac, three scratch servers):
+     run A, a server B whose `pool.peer` runs A's `gent ctl pool --follow`,
+     and a server C whose `pool.peer` prints nothing. A read
+     `⇄ peer Cristians-MacBook-Pro 0 runs · 29s`, then `1 run · 0s` while B
+     ran `debug threads`; at 26 columns `⇄ peer 1 run`. B stopped by PID: A
+     read `⇄ peer! Cristians-MacBook-Pro unread 2m · peer link down` at
+     121 s. C read `⇄ peer unread`, then `⇄ peer! unread · own link down`
+     at 90 s (measured).
+   - Not probed: server.ts passing `peer` as the link of
+     `accounts.notePeer` (the rpc test reads `down: []` either way within
+     90 s; the live check showed `peer link down` on A).
 4. **Later, only on evidence: bound the race.** Build it only if
    `credential-placement.pool-overshoot` appears in either server's logs.
    Each server's facts name the peer `seq` they last read (`seen`); a

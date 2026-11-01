@@ -566,6 +566,8 @@ describe("gent ctl against a running server", () => {
           const facts = yield* resultAs("Pool")(printed)
           expect(facts.server).toBe(seeded.server.url)
           expect(facts.boot).toMatch(/^[0-9a-f]{16}$/)
+          // The host's name up to its first dot: the peer's band names this server by it.
+          expect(facts.host).toMatch(/^[^.]+$/)
           expect(facts.providers).toEqual([
             {
               provider: "anthropic",
@@ -590,7 +592,12 @@ describe("gent ctl against a running server", () => {
           )
           const line = first.slice(0, first.indexOf("\n"))
           const decoded = yield* decodePoolLine(line)
-          expect(decoded).toEqual({ boot: facts.boot, seq: facts.seq, providers: facts.providers })
+          expect(decoded).toEqual({
+            boot: facts.boot,
+            host: facts.host,
+            seq: facts.seq,
+            providers: facts.providers,
+          })
           // No `_tag`, no server, no spaces: the line is the facts' own compact JSON.
           expect(yield* encodePoolLine(decoded)).toBe(line)
           expect(follow.pollUnsafe()).toBeUndefined()
@@ -640,6 +647,7 @@ describe("gent ctl against a running server", () => {
           // The peer's line, as its server's link writes it: two runs on default.
           const peerLine = yield* encodePoolLine({
             boot: "peer",
+            host: "peer-host",
             seq: 1,
             providers: [
               {
@@ -666,6 +674,16 @@ describe("gent ctl against a running server", () => {
             Effect.timeout("5 seconds"),
           )
           expect(load).toBe(2)
+          // The lanes name the peer: its record in the JSON, its row last in --line.
+          const lanes = yield* Effect.flatMap(runCtl(seeded.home, ["lanes"]), resultAs("Lanes"))
+          expect(lanes.peer).toMatchObject({
+            heard: { host: "peer-host" },
+            runs: 2,
+            silent: false,
+            down: [],
+          })
+          const line = yield* runCtl(seeded.home, ["lanes", "--line"])
+          expect(line.stdout.trimEnd().split("\n").at(-1)).toMatch(/^peer peer-host 2 runs · \d+s$/)
           // Its stdin closed: the forwarding ended, and the stream still prints.
           yield* Ref.get(out).pipe(
             Effect.repeat({

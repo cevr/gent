@@ -1915,7 +1915,11 @@ const RpcHandlers = GentRpcs.toLayer(
       "accounts.notePeer": (facts) =>
         Effect.gen(function* () {
           const profile = yield* profileForCwd(Option.none())
-          yield* placement.notePeer(facts, poolScopeOf(profile.registryService, modelRegistry))
+          yield* placement.notePeer(
+            facts,
+            poolScopeOf(profile.registryService, modelRegistry),
+            "peer",
+          )
         }).pipe(Effect.scoped),
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>

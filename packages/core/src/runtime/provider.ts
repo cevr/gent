@@ -90,6 +90,7 @@ import {
   LaneUnavailable,
   type LaneWindow,
   type LoginLossReason,
+  type PeerLink,
   PoolFacts,
   type ProviderLanes,
   type QuotaReading,
@@ -4112,9 +4113,16 @@ interface CredentialPlacementService {
    * and each rise of its spend adds to the open (or pending) segments of
    * the account. Labels are the identity: a peer label `scopeOf` does not
    * name in this server's pool counts nothing. A line of this server's own
-   * `boot` is ignored. A line serves the lane queue.
+   * `boot` is ignored. A line serves the lane queue. `link` names the link
+   * it came on, for the lanes report.
    */
-  readonly notePeer: (facts: PoolFacts, scopeOf: LaneScopeOf) => Effect.Effect<void>
+  readonly notePeer: (facts: PoolFacts, scopeOf: LaneScopeOf, link: PeerLink) => Effect.Effect<void>
+  /**
+   * This server's own peer link runs while the scope is open
+   * (`followPoolPeer`): the lanes report the peer, and the link down when
+   * no line came on it for 90 s.
+   */
+  readonly runsLink: Effect.Effect<void, never, Scope.Scope>
   /**
    * The lanes of every provider gent read a quota window or banked resets
    * of, or lost a login on: each account's windows, fuel per percent,
@@ -5446,6 +5454,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * One cache for both links.
    */
   let peer = Option.none<PeerView>()
+  /** Each link → this server's clock at the last peer line that came on it. */
+  const linkHeard = new Map<PeerLink, number>()
+  /** The open scopes of this server's own link (`runsLink`), and when the first opened. */
+  let ownLinks = 0
+  let ownSince = 0
   /** The notices logged for the peer's boot: each unmatched label, the own-label check, a week mismatch. */
   const peerLogged = new Set<string>()
   /**
@@ -5525,6 +5538,46 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         return load
       },
     })
+  /**
+   * The peer as the lanes report it (`LaneReport.peer`): none before its
+   * first line while this server runs no link of its own. Its runs are
+   * those that hold a label of this server's pools, while its facts count.
+   * A link is down when it brought no line for 90 s: this server's own
+   * while it runs (counted from its start before its first line), the
+   * peer's once a line came on it. Under the lock.
+   */
+  const peerReport = (now: number): Option.Option<NonNullable<LaneReport["peer"]>> => {
+    if (Option.isNone(peer) && ownLinks === 0) return Option.none()
+    const down: Array<PeerLink> = []
+    const ownLast = Math.max(ownSince, linkHeard.get("own") ?? ownSince)
+    if (ownLinks > 0 && now - ownLast >= PEER_SILENT_MS) down.push("own")
+    const peerLast = linkHeard.get("peer")
+    if (Predicate.isNotUndefined(peerLast) && now - peerLast >= PEER_SILENT_MS) down.push("peer")
+    const runs = Option.match(peerCounted(now), {
+      onNone: () => 0,
+      onSome: (view) =>
+        view.facts.providers
+          .flatMap((entry) =>
+            entry.runs.filter((run) =>
+              run.accounts.some((slot) => peerMatched(view, entry.provider, slot)),
+            ),
+          )
+          .reduce((sum, run) => sum + run.count, 0),
+    })
+    return Option.some({
+      ...omitUndefined({
+        heard: Option.getOrUndefined(
+          Option.map(peer, (view) => ({ host: view.facts.host, at: view.heardAt })),
+        ),
+      }),
+      runs,
+      silent: Option.match(peer, {
+        onNone: () => true,
+        onSome: (view) => now - view.heardAt >= PEER_SILENT_MS,
+      }),
+      down,
+    })
+  }
   /**
    * The runs holding a lane on `provider` that share an account with
    * `scope`, of `model` alone when one is named: this server's own
@@ -5916,7 +5969,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   ]
     .map((part) => part.toString(16).padStart(8, "0"))
     .join("")
-  let facts: PoolFacts = { boot, seq: 0, providers: [] }
+  /** The peer's band names this machine by it: the host name up to its first dot. */
+  const { hostname } = yield* (yield* GentPlatform).osInfo
+  const host = hostname.split(".")[0] ?? hostname
+  let facts: PoolFacts = { boot, host, seq: 0, providers: [] }
   /**
    * Each reader's pending facts: one slot, the newest, so a reader that
    * stalls holds one value and an offer never waits under the lock.
@@ -5936,7 +5992,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const publishFacts = Effect.map(Clock.currentTimeMillis, (now) => {
     const providers = poolProviders(now)
     if (Equal.equals(providers, facts.providers)) return false
-    facts = { boot, seq: facts.seq + 1, providers }
+    facts = { boot, host, seq: facts.seq + 1, providers }
     for (const reader of readers) Queue.offerUnsafe(reader, facts)
     return true
   })
@@ -7855,6 +7911,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     notePeer: Effect.fn("CredentialPlacement.notePeer")(function* (
       facts: PoolFacts,
       scopeOf: LaneScopeOf,
+      link: PeerLink,
     ) {
       // A link that reached this server itself.
       if (facts.boot === boot) return
@@ -7878,6 +7935,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       const now = yield* Clock.currentTimeMillis
       const grants = yield* locked(() => {
         trim(now)
+        linkHeard.set(link, now)
         takePeerLine(facts, pools, now)
         checkOvershoot(now)
         return serve(now)
@@ -7892,6 +7950,18 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       silenceWatch = Option.some(watch)
       if (Option.isSome(before)) yield* Fiber.interrupt(before.value)
     }),
+    runsLink: Effect.acquireRelease(
+      Effect.flatMap(Clock.currentTimeMillis, (now) =>
+        locked(() => {
+          if (ownLinks === 0) ownSince = now
+          ownLinks += 1
+        }),
+      ),
+      () =>
+        locked(() => {
+          ownLinks -= 1
+        }),
+    ),
     lanes: Effect.fn("CredentialPlacement.lanes")(function* (
       scopeOf: LaneScopeOf,
       sabbath: Option.Option<Sabbath>,
@@ -7918,6 +7988,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             sabbathEnd: Option.getOrUndefined(
               Option.map(sabbathAt(sabbath, now), (window) => window.end),
             ),
+            peer: Option.getOrUndefined(peerReport(now)),
           }),
           providers: scopes.map(([provider, scope]) => {
             const lanes = providerLanes(
@@ -7978,8 +8049,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
  * The server's credential placement: one per server, so every session of
  * every workspace reads one usage table. Its ledger lives in gent's data
  * directory (`credential-usage.json`), not per workspace, as accounts are
- * not. `Memory` keeps the table in memory alone, with no ledger: a root
- * with no data directory to write to (a test's actor).
+ * not. `Memory` keeps the table in memory alone, with no ledger, on the
+ * test platform (its facts name the host `test-host`): a root with no data
+ * directory to write to (a test's actor).
  */
 export class CredentialPlacement extends Context.Service<
   CredentialPlacement,
@@ -8009,7 +8081,9 @@ export class CredentialPlacement extends Context.Service<
     }),
   )
 
-  static Memory = Layer.effect(CredentialPlacement, makeCredentialPlacement(Option.none()))
+  static Memory = Layer.effect(CredentialPlacement, makeCredentialPlacement(Option.none())).pipe(
+    Layer.provide(GentPlatform.Test()),
+  )
 }
 
 // ── pool quota sweep ────────────────────────────────────────────────────────
@@ -8163,7 +8237,7 @@ const runPoolPeer = (
         }),
         Stream.runForEach((line) =>
           decodePoolFactsLine(line).pipe(
-            Effect.flatMap((facts) => placement.notePeer(facts, scopeOf)),
+            Effect.flatMap((facts) => placement.notePeer(facts, scopeOf, "own")),
             Effect.andThen(Ref.set(heard, true)),
           ),
         ),
@@ -8200,24 +8274,33 @@ export const followPoolPeer = Effect.fn("CredentialPlacement.followPoolPeer")(fu
   scopeOf: LaneScopeOf,
 ) {
   const config = yield* ConfigService
-  let wait = PEER_RETRY_FIRST
-  while (true) {
-    const command = yield* config.poolPeer
-    if (Option.isNone(command)) return
-    const heard = yield* Ref.make(false)
-    const started = yield* Clock.currentTimeMillis
-    const reason = yield* runPoolPeer(command.value, scopeOf, heard).pipe(
-      Effect.catch((error) => Effect.succeed(error.message)),
-      Effect.catchDefect((defect) => Effect.succeed(causeMessage(defect))),
-    )
-    yield* Effect.logWarning("credential-placement.peer.failed").pipe(
-      Effect.annotateLogs({ command: command.value[0], error: reason }),
-    )
-    const lived = (yield* Clock.currentTimeMillis) - started
-    if ((yield* Ref.get(heard)) && lived >= PEER_STEADY_MS) wait = PEER_RETRY_FIRST
-    yield* Effect.sleep(wait)
-    wait = Duration.min(Duration.times(wait, 2), PEER_RETRY_MAX)
-  }
+  const placement = yield* CredentialPlacement
+  if (Option.isNone(yield* config.poolPeer)) return
+  // The link is this server's own while it runs, through each retry wait:
+  // the lanes mark it down when it brings no line (`runsLink`).
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      yield* placement.runsLink
+      let wait = PEER_RETRY_FIRST
+      while (true) {
+        const command = yield* config.poolPeer
+        if (Option.isNone(command)) return
+        const heard = yield* Ref.make(false)
+        const started = yield* Clock.currentTimeMillis
+        const reason = yield* runPoolPeer(command.value, scopeOf, heard).pipe(
+          Effect.catch((error) => Effect.succeed(error.message)),
+          Effect.catchDefect((defect) => Effect.succeed(causeMessage(defect))),
+        )
+        yield* Effect.logWarning("credential-placement.peer.failed").pipe(
+          Effect.annotateLogs({ command: command.value[0], error: reason }),
+        )
+        const lived = (yield* Clock.currentTimeMillis) - started
+        if ((yield* Ref.get(heard)) && lived >= PEER_STEADY_MS) wait = PEER_RETRY_FIRST
+        yield* Effect.sleep(wait)
+        wait = Duration.min(Duration.times(wait, 2), PEER_RETRY_MAX)
+      }
+    }),
+  )
 })
 
 // ── decision-model-resolver ─────────────────────────────────────────────────

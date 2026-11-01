@@ -170,12 +170,21 @@ credential), then a row `resets <provider> <slot> <count>, … · next lapses
 <clock>` when its accounts hold banked resets (Claude's reset grants,
 Codex's reset credits; a lapsed grant counts none, an account with none or
 out of the provider's `scope` is not named, and a count goes 30 minutes
-after the read that listed it). No free lane is data, not a failure: the call exits 0.
+after the read that listed it). With a peer link (`pool.peer`, below) the last
+row is the peer: `peer <host> <n> runs · <age>` while its lines come (its runs
+on this server's accounts, the age of its last line), `peer <host> unread
+<age>` after 90 s with no line, and `peer unread` before its first line. It
+reads `peer! … · own link down` when this server's command printed no line
+for 90 s, `· peer link down` when the peer's command was heard and then went
+quiet 90 s, and `· links down` for both. The JSON holds it as `peer`: `heard`
+(`host`, `at`, epoch ms), `runs`, `silent` and `down` (`own`, `peer`). No free
+lane is data, not a failure: the call exits 0.
 
 `pool` names no session either. It prints `Pool`: the server's own pool
 facts (`accounts.pool`), the part of its lanes another machine on the same
 accounts reads (`plans/cross-machine-pool.md`). `boot` names this server
-start, `seq` rises at each change, and each provider holds its `runs` (the
+start, `host` its machine (the hostname to its first dot, which the peer's band
+shows), `seq` rises at each change, and each provider holds its `runs` (the
 admitted runs and reserving grants, as `{ accounts, model?, count }`) and its
 `accounts`: per account its warm sessions per model (`live`), the fuel and the
 unpriced steps each model spent since `boot` (`spend`), and the reset of its
@@ -183,7 +192,7 @@ weekly window (`week`, epoch ms, as the provider sent it). No facts hold a
 time of this machine's clock.
 
 ```text
-{"_tag":"Pool","server":"http://127.0.0.1:55350/rpc","boot":"c1758aa2372ad90a","seq":1,"providers":[
+{"_tag":"Pool","server":"http://127.0.0.1:55350/rpc","boot":"c1758aa2372ad90a","host":"Cristians-MacBook-Pro","seq":1,"providers":[
 {"provider":"anthropic","runs":[],"accounts":[{"slot":"default","live":[],"spend":[],"week":1793904480307}]}
 ]}
 ```
