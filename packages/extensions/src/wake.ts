@@ -961,8 +961,12 @@ const branchMessages = (
 ): ReadonlyArray<Message> =>
   detail.branches.find((entry) => entry.branch.id === branchId)?.messages ?? []
 
-/** No user watches the branch's turns: its newest client message came from a headless run. */
-const unattended = (messages: ReadonlyArray<Message>): boolean =>
+/**
+ * No user watches the branch's turns: its newest client message came from a
+ * headless run. A thread round reads its root starter's branch the same way
+ * (threads.ts, `planWait`).
+ */
+export const unattended = (messages: ReadonlyArray<Message>): boolean =>
   messages.findLast((message) => message.metadata?.fromClient === true)?.metadata?.unattended ===
   true
 

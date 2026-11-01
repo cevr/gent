@@ -15,7 +15,10 @@
   open `starter` round its thread sent whose wake lands on that branch
   (marked stopped, with `stop_notice_at`), then stops the round's turn,
   queued or running, so a starter Escape stops the whole subtree (a thread
-  stopped this way ends its own turn interrupted, and cascades in turn) and
+  stopped this way ends its own turn interrupted, and cascades in turn; a
+  thread whose round the stop closes with no turn running, a round that
+  waits for a reset or one still queued, has no turn to end, so the stop
+  cascades from `settleStopped` to the rounds that thread started) and
   no round end wakes the starter the user just interrupted. A `user` or
   `none` round runs on: it is the user's side thread, or a service's. A
   round's turn that completed before the stop reached it ends uninterrupted,
@@ -271,8 +274,15 @@
     `wake.autoResume` (wake.ts; a rerun spends their money, as a session's
     resume does), its `notify` is not `none` (a machine reads an ended round
     and picks its own next move), no stop closed it, the reset is at most
-    24 hours away (`MAXIMUM_WAKE_DELAY_MS`), and the round waited fewer than
-    `maxResumes` times (the `waits` column). Otherwise it ends failed with
+    24 hours away (`MAXIMUM_WAKE_DELAY_MS`), the round waited fewer than
+    `maxResumes` times (the `waits` column), and a user watches its tree:
+    the branch that started its top thread (the walk climbs each starter
+    thread to the starter of its latest round, so a nested thread reads the
+    root's flag) has no `unattended` newest client message, which a `gent -H`
+    run sends so nothing it leaves spends after it exits, as a session's
+    resume reads it (`rootUnattended`). The `maxResumes` cap counts every
+    wait in the round's life, unlike wake.ts, which counts the limited turns
+    since the branch's last answered turn. Otherwise it ends failed with
     its `retryAt`, as before, and that end wakes a `starter` round's
     starter. A waiting round is open, unstopped, with `retry_at` set: it
     keeps its error and its bill so far, frees its lane, and wakes nobody;
@@ -280,19 +290,26 @@
     `thread.list` shows its thread `waiting` (when no loop of it works) with
     the time on its `openRound`. Its wake record (`Session.wakeAt`, source
     `thread-round-wait:<round>`) is due `RESUME_MARGIN_MS` (30 s) after the
-    reset and lives on the starter's current place: core refuses a `turn`
+    reset; it is written with no time before the wait commits and gets its
+    time after, so a crash between the two leaves a record the next start
+    fires, not a waiting round nothing wakes. It lives on the starter's
+    current place: core refuses a `turn`
     delivery to a hook's own branch, and the starter side sends a round's
     turns. Its fire (`roundWaitDue`) asks for the round's lane again, so the
     turn runs on the account placement picks then; a turn that ran before
     the wait is followed by a new one under a new key
     (`<message>:resume-<n>`, the `turn_message_id` column, which also keys
-    the lane, the stop and the receipt), so the two receipts stay apart. A
-    stop or the starter's interrupt ends a waiting round at once, stopped:
-    the stop reaches its next turn's key, and its end drops the wake record.
+    the lane, the stop and the receipt), so the two receipts stay apart. The
+    resume clears the wait's error, so the open round shows none, and a
+    queue that refuses the resumed turn ends the round, whose starter waits
+    for its end. A stop or the starter's interrupt ends a waiting round at
+    once, stopped: the stop reaches its next turn's key, and its end drops
+    the wake record after it is delivered (a drop that fails is logged).
     The record is durable, and the starter's loop-open reconcile arms it
     again (the same record), so a restart fires it, late or not, and a late
-    fire runs the round. The wait spans the round's `turnDuration`, and its
-    bill adds every turn it ran. A starter thread deleted while its round
+    fire runs the round. The wait spans the round's `turnDuration`. Its bill
+    adds every turn it ran, and is none once one turn's is unknown: a turn a
+    usage limit stopped ends on a cut step, whose spend core does not know. A starter thread deleted while its round
     waits takes the record with it: the round stays waiting until a stop.
 - Machines (`machines.ts`, `@gent/machines`) run state machines as data over threads: definitions, runs and steps, the driver, rounds and their role picks, asks, the orchestrate machine's states. They are in [machines.md](machines.md); read it when you change machines.
 
