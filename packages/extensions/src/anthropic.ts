@@ -3280,6 +3280,8 @@ const claudeCodeClientPath = (
  * - Sets `anthropic-beta: <merged>` from per-model defaults
  * - Sets `x-app: cli`, `user-agent: claude-cli/<version> (external, cli)`,
  *   `anthropic-dangerous-direct-browser-access: true`
+ * - Sets `x-claude-code-session-id` to the request's session, when the
+ *   hints name one (`CLAUDE_CODE_SESSION_HEADER`)
  * - Removes `x-api-key` (the SDK's baseline injects `oauth-placeholder`
  *   here; Anthropic rejects requests where both `x-api-key` and
  *   `authorization: Bearer` are present)
@@ -3307,12 +3309,25 @@ const claudeCodeClientPath = (
 
 // ── Helpers ──
 
+/**
+ * The session header Claude Code sends on every Messages request. Its 2.1.316
+ * bundle (read 2026-11-01) puts it in the API client's default headers with
+ * `x-app` and the user agent, unconditionally: `{"x-app":…,"User-Agent":…,
+ * [m8t]:z()}` with `m8t="X-Claude-Code-Session-Id"`, and `z()` the session's
+ * id, a `randomUUID()` per Claude Code session. Gent sends the id of the gent
+ * session the request belongs to (`ProviderHints.sessionId`), a UUID too
+ * (v7), the same for every request of the session. The usage read sends none,
+ * as Claude Code's does not.
+ */
+const CLAUDE_CODE_SESSION_HEADER = "x-claude-code-session-id"
+
 /** Build the OAuth header set for a request. */
 const buildOauthHeaders = (
   req: HttpClientRequest.HttpClientRequest,
   accessToken: string,
   modelId: string,
   env: AnthropicKeychainEnv,
+  session: Option.Option<string>,
 ): Headers.Headers => {
   // Start from the SDK's existing headers (preserve `anthropic-version`
   // etc.) but drop `x-api-key` since OAuth uses Bearer.
@@ -3338,6 +3353,8 @@ const buildOauthHeaders = (
   // NOT as an HTTP header. We do set this declarative
   // browser-access acknowledgement to match Claude Code's behavior.
   headers = Headers.set(headers, "anthropic-dangerous-direct-browser-access", "true")
+  if (Option.isSome(session))
+    headers = Headers.set(headers, CLAUDE_CODE_SESSION_HEADER, session.value)
 
   return headers
 }
@@ -3351,14 +3368,17 @@ const buildOauthHeaders = (
  * `transformClient` signature `(HttpClient) => HttpClient` requires the
  * returned client to have an empty requirement channel. Each request
  * invokes `creds.getFresh`, which consults the live `Ref` cache.
+ * `session` is the request's session (`AnthropicRequest.session`): none
+ * sends no session header.
  */
 export const buildKeychainTransformClient = (
   creds: CredentialCache<ClaudeCredentials>,
   env: AnthropicKeychainEnv,
+  session: Option.Option<string>,
 ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) => {
   const signed = authorizedClient(creds, (req, fresh) => {
     const modelId = requestModelId(req)
-    return withHeaders(req, buildOauthHeaders(req, fresh.accessToken, modelId, env))
+    return withHeaders(req, buildOauthHeaders(req, fresh.accessToken, modelId, env, session))
   })
   // Each answer the request ends with, a refusal included, names the plan's
   // quota windows (`unifiedQuota`).
@@ -3448,8 +3468,17 @@ const unifiedQuota = (headers: Headers.Headers): ReadonlyArray<QuotaReading> =>
  * that floor. A
  * grant's id is the handle that spends a reset: gent never reads it, and no
  * request of gent's redeems one.
+ *
+ * `&skip_spend=1` is Claude Code's: its 2.1.316 bundle (read 2026-11-01)
+ * sends its banked-resets read as `/api/oauth/usage?cedar_ember=1&skip_spend=1`
+ * and adds `skip_spend=1` to every read but the plain one. Only the plain
+ * read's callers use the overage part of the answer (`extra_usage`, the
+ * spend amounts); the others read one block. Gent decodes no overage or
+ * spend field. No Claude Code caller reads a window from a `skip_spend` read,
+ * so the bundle does not show that the windows stay: a window the answer
+ * leaves out reads as none, and every Messages answer's headers name both.
  */
-const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
+const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1"
 const OAUTH_USAGE_BETA = "oauth-2025-04-20"
 const UsageWindow = Schema.OptionFromOptionalNullOr(
   Schema.Struct({
@@ -3811,6 +3840,8 @@ interface AnthropicRequest {
   readonly cacheLifetimes: Option.Option<CacheLifetimes>
   /** The effort changes the conversation carries as markers; none sends the plan's effort at the top level. */
   readonly effortCarrier: Option.Option<EffortCarrier>
+  /** The session the hints name (`ProviderHints.sessionId`); the Claude Code path sends it (`CLAUDE_CODE_SESSION_HEADER`). */
+  readonly session: Option.Option<string>
 }
 
 /** Whether a request may carry effort markers: only the Claude API's own (`takesEffortMarkers`). */
@@ -3843,6 +3874,7 @@ const anthropicRequest = (
     plan,
     cacheLifetimes: Option.liftPredicate(lifetimes, () => writesPromptCache(hints)),
     effortCarrier: messagesEffortCarrier(entry, hints, plan, markers),
+    session: Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.sessionId)),
   }
 }
 
@@ -4314,7 +4346,7 @@ const makeOauthAnthropicLayer = (
 ) => {
   const { AnthropicClient, AnthropicLanguageModel } = sdk
   const env = Context.get(services, AnthropicPlatform).env
-  const keychain = buildKeychainTransformClient(creds, env)
+  const keychain = buildKeychainTransformClient(creds, env, request.session)
   const apiUrl = sdkApiUrl(Option.fromUndefinedOr(env.baseUrl))
   const wrappedClient = anthropicClientLayer(
     sdk,

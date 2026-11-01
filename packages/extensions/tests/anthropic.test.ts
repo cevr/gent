@@ -589,7 +589,11 @@ const keychainClient = (responder: FakeResponder, io: AnthropicCredentialIO = va
   Effect.gen(function* () {
     const creds = yield* credentialCache(io)
     const fakeState: FakeClientState = { captured: [], responder }
-    const wrapped = buildKeychainTransformClient(creds, TEST_ENV)(makeFakeClient(fakeState))
+    const wrapped = buildKeychainTransformClient(
+      creds,
+      TEST_ENV,
+      Option.none(),
+    )(makeFakeClient(fakeState))
     const post = (headers: Record<string, string> = {}) =>
       wrapped.post("https://api.anthropic.com/v1/messages", {
         headers,
@@ -805,7 +809,7 @@ describe("keychainTransformClient — 401 recovery", () => {
           return HttpClientResponse.fromWeb(request, new Response("auth", { status: 401 }))
         }),
       )
-      const wrapped = buildKeychainTransformClient(creds, TEST_ENV)(client)
+      const wrapped = buildKeychainTransformClient(creds, TEST_ENV, Option.none())(client)
       const post = runOk(
         wrapped.post("https://api.anthropic.com/v1/messages", {
           body: jsonBody({ model: "claude-opus-4-6" }),
@@ -875,7 +879,7 @@ describe("keychainTransformClient — credential failure through the SDK", () =>
         })
         const state = makeFakeFetchState()
         const clientLayer = AnthropicSdkClient.layer({
-          transformClient: buildKeychainTransformClient(creds, TEST_ENV),
+          transformClient: buildKeychainTransformClient(creds, TEST_ENV, Option.none()),
         }).pipe(Layer.provide(FetchHttpClient.layer))
         const modelLayer = AnthropicLanguageModel.layer({ model: "claude-opus-4-6" }).pipe(
           Layer.provide(clientLayer),
@@ -2705,6 +2709,35 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
         const systemBlocks = payload["system"]
         expect(Array.isArray(systemBlocks)).toBe(true)
         expect(Bun.inspect(systemBlocks)).toContain(SYSTEM_IDENTITY_PREFIX)
+      }),
+  )
+  it.live(
+    "a Claude Code request names its gent session in X-Claude-Code-Session-Id, as Claude Code 2.1.316 does",
+    () =>
+      Effect.gen(function* () {
+        const credentialCellRef =
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.set(
+          credentialCellRef,
+          makeDurableCell(
+            { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
+            yield* Clock.currentTimeMillis,
+          ),
+        )
+        const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+        const sessionHeader = (hints?: ProviderHints) =>
+          Effect.gen(function* () {
+            const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo(), hints)
+            const fetchState = makeFakeFetchState()
+            yield* runOne(model, fetchState)
+            return fetchState.captured.at(-1)!.headers["x-claude-code-session-id"]
+          })
+        const session = "019a3f2e-7b1c-7d4e-9f00-1a2b3c4d5e6f"
+        // A turn step and its compaction summary, which names no cache key, both name the session.
+        expect(yield* sessionHeader({ sessionId: session, cacheKey: session })).toBe(session)
+        expect(yield* sessionHeader({ sessionId: session, reasoning: "none" })).toBe(session)
+        // A request whose hints name no session sends no header.
+        expect(yield* sessionHeader()).toBeUndefined()
       }),
   )
   it.live(
@@ -7090,7 +7123,7 @@ describe("Claude account sign-in", () => {
 
 // ── Claude plan quota reads ─────────────────────────────────────────────────
 
-const USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
+const USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1"
 const HOUR_MS = 3_600_000
 /** A usage answer: `utilization` in percent, `resets_at` in ISO 8601, as the endpoint sends them. */
 const usageReply = (usage: Record<string, unknown>) => ({

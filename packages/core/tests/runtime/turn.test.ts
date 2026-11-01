@@ -6985,7 +6985,7 @@ describe("native model compaction integration", () => {
     )
   })
 
-  it.live("the summary request asks for no reasoning and names no cache key", () => {
+  it.live("the summary asks for no reasoning and names its session, not a cache key", () => {
     const sessionId = SessionId.make("summary-reasoning-session")
     const branchId = BranchId.make("summary-reasoning-branch")
     const modelId = ModelId.make("summary-driver/model")
@@ -7058,12 +7058,17 @@ describe("native model compaction integration", () => {
         expect(summary[0]?.reasoning).toBe("none")
         // Nothing reads a summary prompt back, so it writes no cache entry.
         expect(summary[0]?.cacheKey).toBeUndefined()
+        // It still names its session, as every request of the session does.
+        expect(summary[0]?.sessionId).toBe(sessionId)
         // The turn itself keeps its own effort.
         expect(
           observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.reasoning,
         ).toBe("high")
         expect(
           observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.cacheKey,
+        ).toBe(sessionId)
+        expect(
+          observedHints.filter((hints) => hints.maxTokens === turnOutput).at(-1)?.sessionId,
         ).toBe(sessionId)
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))

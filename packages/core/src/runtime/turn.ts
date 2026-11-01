@@ -3951,6 +3951,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       reservedOutputTokens,
     })
     const turnHints = {
+      // Every request of the session names it, the summary too.
+      sessionId: params.sessionId,
       temperature: resolved.temperature,
       reasoning: resolved.reasoning,
       // The driver reads the catalog's word on reasoning, not the model name.

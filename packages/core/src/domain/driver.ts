@@ -250,6 +250,12 @@ export interface ProviderHints {
    */
   readonly turnKey?: string
   /**
+   * The session the request belongs to: the same for every request of the
+   * session, its compaction summary included, which names no `cacheKey`. A
+   * provider whose client names its session on the wire sends it there.
+   */
+  readonly sessionId?: string
+  /**
    * The request is a spawned child session's (`isSpawnedSession`) whose
    * agent keeps the child cache (`AgentDefinition.promptCache`). Such a child
    * runs its steps back to back, so a driver may give its prompt cache a
