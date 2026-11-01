@@ -208,19 +208,51 @@ again. The peer link is this call through ssh: `pool.peer` in the user file
 array, by the other machine's Tailscale name. On the Mac:
 
 ```json
-{ "pool": { "peer": ["ssh", "bite-workbox", "gent", "ctl", "pool", "--follow"] } }
+{
+  "pool": {
+    "peer": [
+      "ssh",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "bite-workbox",
+      "gent",
+      "ctl",
+      "pool",
+      "--follow"
+    ]
+  }
+}
 ```
 
 On the workbox:
 
 ```json
-{ "pool": { "peer": ["ssh", "cvr@cristians-macbook-pro", "gent", "ctl", "pool", "--follow"] } }
+{
+  "pool": {
+    "peer": [
+      "ssh",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "cvr@cristians-macbook-pro",
+      "gent",
+      "ctl",
+      "pool",
+      "--follow"
+    ]
+  }
+}
 ```
 
 With both entries set, each server runs a link and both feed one cache of the
 peer's facts: either link alone keeps both servers informed. The server reads
 `pool.peer` at each run of the command; one added while the server runs takes a
-server restart.
+server restart. The ssh options end a link whose route died within a minute;
+the server also stops a run that prints no line for 90 s (the peer sends a
+heartbeat each 30 s) and runs it again.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 

@@ -919,6 +919,11 @@ export type ProviderLanes = typeof ProviderLanes.Type
 
 // ── Pool facts ──
 
+// A peer's facts are decoded from another machine: no count or fuel below 0
+// lowers this server's load.
+const PoolCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+const PoolFuel = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+
 /**
  * The runs that hold a lane on one set of accounts for one model: turns a
  * start was admitted to, and starts admitted whose turn has not opened. A
@@ -929,19 +934,19 @@ const PoolRuns = Schema.Struct({
   accounts: Schema.Array(CredentialSlot),
   /** The model its turns run; absent when its route named none. */
   model: Schema.optionalKey(ModelId),
-  count: Schema.Int,
+  count: PoolCount,
 })
 
 /** What one account holds and spent on this server. */
 const PoolAccount = Schema.Struct({
   slot: CredentialSlot,
   /** The sessions whose cache is warm on the account now, per model. */
-  live: Schema.Array(Schema.Struct({ model: ModelId, sessions: Schema.Int })),
+  live: Schema.Array(Schema.Struct({ model: ModelId, sessions: PoolCount })),
   /**
    * Per model since `boot`: the priced fuel, and the count of requests that
    * had no price. Neither falls while the server runs.
    */
-  spend: Schema.Array(Schema.Struct({ model: ModelId, fuel: Schema.Finite, unpriced: Schema.Int })),
+  spend: Schema.Array(Schema.Struct({ model: ModelId, fuel: PoolFuel, unpriced: PoolCount })),
   /** The reset of the account's latest account-wide `7d` reading: the provider's time. */
   week: Schema.optionalKey(Schema.Finite),
 })
@@ -962,7 +967,7 @@ const PoolProvider = Schema.Struct({
  */
 export const PoolFacts = Schema.Struct({
   boot: Schema.String,
-  seq: Schema.Int,
+  seq: PoolCount,
   providers: Schema.Array(PoolProvider),
 })
 export type PoolFacts = typeof PoolFacts.Type

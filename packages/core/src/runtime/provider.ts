@@ -8096,6 +8096,27 @@ const PEER_RETRY_MAX = Duration.minutes(5)
 const PEER_FORCE_KILL_AFTER = Duration.seconds(2)
 /** How much of the command's stderr a failure log keeps: its last characters. */
 const PEER_STDERR_TAIL = 2_000
+/**
+ * A run whose stdout prints no line this long is stopped: the peer sends a
+ * heartbeat each `POOL_FACTS_HEARTBEAT`, so a quiet link is a dead one (a
+ * machine asleep, a route gone, an ssh waiting on a socket with no reset).
+ */
+const PEER_IDLE = Duration.millis(PEER_SILENT_MS)
+/** A run that noted a line and lived this long starts the wait over. */
+const PEER_STEADY_MS = 60_000
+/**
+ * After the command's stdout ends: how long its exit is awaited. A command
+ * that outlives its stdout holds no run past it. (Its stderr ends with it:
+ * the spawner closes the pipe at the exit, even while a child of the
+ * command still holds it.)
+ */
+const PEER_END_GRACE = Duration.seconds(1)
+
+/** The peer command printed no line for `PEER_IDLE`. */
+class PoolPeerIdle extends Schema.TaggedError<PoolPeerIdle, { readonly brand: unique symbol }>()(
+  "PoolPeerIdle",
+  { message: Schema.String },
+) {}
 
 const PoolFactsLine = Schema.fromJsonString(PoolFacts)
 const encodePoolFactsLine = Schema.encodeSync(PoolFactsLine)
@@ -8105,9 +8126,10 @@ const decodePoolFactsLine = Schema.decodeEffect(PoolFactsLine)
  * One run of the peer command: its stdin gets this server's own pool facts
  * (`CredentialPlacement.pool`), one JSON line each, and each line of its
  * stdout is noted as the peer's facts (`notePeer`). It ends when the
- * command's stdout ends, with the exit code and the end of its stderr, or
- * fails at a line that does not decode. Scoped: the command stops with it.
- * `heard` turns true at the first line noted.
+ * command's stdout ends, with the exit code (awaited for `PEER_END_GRACE`)
+ * and the end of its stderr, or fails at a line that does not decode or after `PEER_IDLE`
+ * with no line. Scoped: the command stops with it. `heard` turns true at the
+ * first line noted.
  */
 const runPoolPeer = (
   command: readonly [string, ...Array<string>],
@@ -8130,6 +8152,15 @@ const runPoolPeer = (
         Stream.decodeText,
         Stream.splitLines,
         Stream.filter((line) => line.trim().length > 0),
+        Stream.timeoutOrElse({
+          duration: PEER_IDLE,
+          orElse: () =>
+            Stream.fail(
+              new PoolPeerIdle({
+                message: `the command printed no line in ${Duration.format(PEER_IDLE)}`,
+              }),
+            ),
+        }),
         Stream.runForEach((line) =>
           decodePoolFactsLine(line).pipe(
             Effect.flatMap((facts) => placement.notePeer(facts, scopeOf)),
@@ -8137,16 +8168,20 @@ const runPoolPeer = (
           ),
         ),
       )
-      const stderr = handle.stderr.pipe(
+      const tail = yield* Ref.make("")
+      const stderr = yield* handle.stderr.pipe(
         Stream.decodeText,
-        Stream.runFold(
-          () => "",
-          (tail: string, text: string) => (tail + text).slice(-PEER_STDERR_TAIL),
+        Stream.runForEach((text) =>
+          Ref.update(tail, (kept) => (kept + text).slice(-PEER_STDERR_TAIL)),
         ),
+        Effect.forkScoped,
       )
-      const [, tail] = yield* Effect.all([lines, stderr], { concurrency: "unbounded" })
-      const exitCode = yield* handle.exitCode
-      return `the command ended with exit code ${exitCode}: ${tail.trim()}`
+      yield* lines
+      const exitCode = yield* handle.exitCode.pipe(Effect.timeoutOption(PEER_END_GRACE))
+      // Its stderr ends at the exit; a command still running keeps it open.
+      if (Option.isSome(exitCode)) yield* Fiber.join(stderr)
+      const code = Option.match(exitCode, { onNone: () => "none (it still ran)", onSome: String })
+      return `the command closed its stdout, exit code ${code}: ${(yield* Ref.get(tail)).trim()}`
     }),
   )
 
@@ -8154,7 +8189,9 @@ const runPoolPeer = (
  * The server's peer link (`pool.peer` in the user file, `PoolConfig`): runs
  * the command (`runPoolPeer`) and runs it again each time it ends or fails,
  * after a wait that starts at `PEER_RETRY_FIRST`, doubles up to
- * `PEER_RETRY_MAX`, and starts over once a run noted a line. Each end is
+ * `PEER_RETRY_MAX`, and starts over once a run noted a line and lived
+ * `PEER_STEADY_MS` (a run that dies at its first stdin line, as on a peer
+ * server too old for `accounts.notePeer`, keeps doubling). Each end is
  * logged (`credential-placement.peer.failed`). The command is read from the
  * config at each run; with none, the link stops. `scopeOf` names each
  * provider's pool accounts, as `notePeer` reads them.
@@ -8168,6 +8205,7 @@ export const followPoolPeer = Effect.fn("CredentialPlacement.followPoolPeer")(fu
     const command = yield* config.poolPeer
     if (Option.isNone(command)) return
     const heard = yield* Ref.make(false)
+    const started = yield* Clock.currentTimeMillis
     const reason = yield* runPoolPeer(command.value, scopeOf, heard).pipe(
       Effect.catch((error) => Effect.succeed(error.message)),
       Effect.catchDefect((defect) => Effect.succeed(causeMessage(defect))),
@@ -8175,7 +8213,8 @@ export const followPoolPeer = Effect.fn("CredentialPlacement.followPoolPeer")(fu
     yield* Effect.logWarning("credential-placement.peer.failed").pipe(
       Effect.annotateLogs({ command: command.value[0], error: reason }),
     )
-    if (yield* Ref.get(heard)) wait = PEER_RETRY_FIRST
+    const lived = (yield* Clock.currentTimeMillis) - started
+    if ((yield* Ref.get(heard)) && lived >= PEER_STEADY_MS) wait = PEER_RETRY_FIRST
     yield* Effect.sleep(wait)
     wait = Duration.min(Duration.times(wait, 2), PEER_RETRY_MAX)
   }

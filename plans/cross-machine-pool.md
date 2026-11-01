@@ -546,6 +546,19 @@ running the test (feedback: validate the regression test).
    - `gent ctl pool --follow` reads no stdin when stdin is a terminal.
    - The 1-minute steps of the probe let a pending segment expire exactly
      at 60 s, a test artifact: the tests step 30 s.
+   - Review fixes (one commit): a run that prints no line for 90 s is
+     stopped (an ssh on a dead route waits hours on TCP keepalive, and both
+     servers would count each other as 0 after the hold); the documented
+     commands add `ServerAliveInterval=15`. A run that noted a line starts
+     the wait over only when it lived a minute, so a peer server that
+     refuses this one's facts at its first stdin line does not relaunch
+     each second. A command that closes its stdout and stays up is stopped
+     1 s later. Counts, sessions, unpriced, `seq` and fuel decode only at 0
+     or above. Not changed: a duplicate line from the second link can commit
+     a pending segment early, the same edge bias as facts first; the link
+     and `accounts.notePeer` resolve the same launch cwd (`RuntimeEnvironment`
+     is built from `config.cwd`); a child holding stderr does not hold the
+     run (the spawner ends stderr at the exit, measured).
    - Left: a silent peer's next line with a lower `seq` of the same
      `boot` replaces the cache (it starts a new base), not a refresh.
      Not done: the live check on the two machines (no access from the

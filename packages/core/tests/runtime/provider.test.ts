@@ -9409,6 +9409,137 @@ describe("account lanes", () => {
         expect(failed[0]?.annotations.get("error")).not.toContain("exit code")
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
     })
+
+    /**
+     * `follow` on the test clock: also each end the link logs, as it logs
+     * it, and the runs it began (each run reads `pool.peer` first, the
+     * moment its wait ends).
+     */
+    const followCounted = (fixture: Fixture, command: readonly [string, ...Array<string>]) =>
+      Effect.gen(function* () {
+        const noted = yield* Queue.unbounded<PoolFacts>()
+        const ends = yield* Queue.unbounded<string>()
+        const runs = yield* Ref.make(0)
+        const placement = {
+          ...fixture.placement,
+          notePeer: (facts: PoolFacts, pool: Parameters<typeof fixture.placement.notePeer>[1]) =>
+            Effect.andThen(fixture.placement.notePeer(facts, pool), Queue.offer(noted, facts)),
+        }
+        const logger = Logger.make(({ message, fiber }) => {
+          let text = String(message)
+          if (Array.isArray(message)) text = message.map((part) => String(part)).join(" ")
+          if (text !== "credential-placement.peer.failed") return
+          const error = fiber.getRef(References.CurrentLogAnnotations)["error"]
+          Queue.offerUnsafe(ends, String(error))
+        })
+        const config = Layer.effect(
+          ConfigService,
+          Effect.gen(function* () {
+            const service = yield* ConfigService
+            return ConfigService.of({
+              ...service,
+              poolPeer: Effect.tap(service.poolPeer, () => Ref.update(runs, (count) => count + 1)),
+            })
+          }),
+        ).pipe(Layer.provide(ConfigService.Test(new UserConfig({ pool: { peer: command } }))))
+        yield* Effect.forkScoped(
+          followPoolPeer(scopeOf([a])).pipe(
+            Effect.provideService(CredentialPlacement, placement),
+            Effect.provide(
+              Layer.mergeAll(
+                config,
+                Logger.layer([logger]),
+                // The test preload turns logs off.
+                Layer.succeed(References.MinimumLogLevel, "Warn"),
+              ),
+            ),
+          ),
+        )
+        return { noted, ends, runs }
+      })
+    /** Lets the fibers a clock step woke run to their next wait. */
+    const settle = Effect.gen(function* () {
+      for (let turn = 0; turn < 20; turn++) yield* Effect.yieldNow
+    })
+
+    it.effect("a link whose command prints nothing for 90 s is stopped and run again", () =>
+      Effect.gen(function* () {
+        const A = yield* accounts()
+        const line = encodeFacts(peerLine("peer", 1, []))
+        // One line, then the command stays up and quiet: an ssh on a dead socket.
+        const link = yield* followCounted(A, [
+          "sh",
+          "-c",
+          'printf "%s\\n" "$0"; exec sleep 600',
+          line,
+        ])
+        yield* Queue.take(link.noted)
+        yield* settle
+        yield* TestClock.adjust("90 seconds")
+        expect(yield* Queue.take(link.ends)).toContain("printed no line")
+        yield* settle
+        yield* TestClock.adjust("1 second")
+        yield* Queue.take(link.noted)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("a link that dies right after its first line keeps doubling its wait", () =>
+      Effect.gen(function* () {
+        const A = yield* accounts()
+        const line = encodeFacts(peerLine("peer", 1, []))
+        // Each run prints one line and exits: a peer server that refuses this one's facts.
+        const link = yield* followCounted(A, ["sh", "-c", 'printf "%s\\n" "$0"; exit 3', line])
+        yield* Queue.take(link.noted)
+        const waits: Array<number> = []
+        for (let run = 1; run <= 3; run++) {
+          expect(yield* Queue.take(link.ends)).toContain("exit code 3")
+          yield* settle
+          const before = yield* Ref.get(link.runs)
+          let seconds = 0
+          while ((yield* Ref.get(link.runs)) === before && seconds < 10) {
+            yield* TestClock.adjust("1 second")
+            yield* settle
+            seconds++
+          }
+          waits.push(seconds)
+          yield* Queue.take(link.noted)
+        }
+        // A wait that started over at each line is 1 s each time.
+        expect(waits).toEqual([1, 2, 4])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    bunTest("a peer line with a count or fuel below 0 does not decode", () => {
+      const good = peerLine("peer", 1, [{ accounts: [a], count: 1 }], [spentOn(a, 1, 1)])
+      expect(decodeFacts(encodeFacts(good)).seq).toBe(1)
+      const text = encodeFacts(good)
+      for (const bad of [
+        text.replace('"count":1', '"count":-5'),
+        text.replace('"sessions":1', '"sessions":-1'),
+        text.replace(/"fuel":[0-9.e+]+/, '"fuel":-3'),
+      ]) {
+        expect(bad).not.toBe(text)
+        expect(() => decodeFacts(bad)).toThrow()
+      }
+    })
+
+    it.live("a command that closes its stdout and stays up ends its run", () => {
+      const logged = warnings()
+      return Effect.gen(function* () {
+        const A = yield* accounts()
+        const line = encodeFacts(peerLine("peer", 1, []))
+        const noted = yield* follow(A, [
+          "sh",
+          "-c",
+          'printf "%s\\n" "$0"; exec sleep 600 > /dev/null',
+          line,
+        ])
+        yield* Queue.take(noted)
+        yield* Queue.take(noted)
+        const failed = logged.named("credential-placement.peer.failed")
+        expect(failed[0]?.annotations.get("error")).toContain("it still ran")
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
+    })
   })
 
   describe("lost logins", () => {
