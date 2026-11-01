@@ -55,11 +55,12 @@ import {
  * from the agent's own `git commit`, and every diff passes `--no-ext-diff
  * --no-textconv`, so repository config chooses no program to run.
  *
- * A read runs on a session or branch move, on a write git makes in the
- * checkout's git directory (`HEAD`, `index`, `MERGE_HEAD`, `ORIG_HEAD`,
- * `FETCH_HEAD`, stamped every 500 ms), 1 s after the last tool call of a
- * burst ends (any tool can write files), at a turn's end and on a message (a
- * `!git commit` arrives as one). One read runs at a time (`sessionQuery`);
+ * A read runs on a session or branch move, on a write git makes to the
+ * checkout's git files (checked every 500 ms: `HEAD`, `index`, `MERGE_HEAD`,
+ * `ORIG_HEAD`, `FETCH_HEAD`, the refs of the branch and its upstream,
+ * `packed-refs`, `config`, a reftable's `tables.list`), 1 s after the last
+ * tool call of a burst ends (any tool can write files), at a turn's end and
+ * on a message (a `!git commit` arrives as one). One read runs at a time (`sessionQuery`);
  * triggers during a read fold into one more. The work tree is not followed:
  * an edit made in another program shows at the next trigger.
  *
@@ -400,10 +401,19 @@ const EMPTY_TREE = {
   sha256: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
 }
 
-/** The checkout's top directory, git directory and empty tree, by the cwd it was asked from. */
-interface Location {
-  readonly root: string
+/**
+ * Where a checkout's git files are: `gitDir` holds its own (`HEAD`, `index`,
+ * `FETCH_HEAD`), `commonDir` the ones its worktrees share (refs, config). They
+ * are one directory outside a linked worktree.
+ */
+interface GitDirs {
   readonly gitDir: string
+  readonly commonDir: string
+}
+
+/** The checkout's top directory, git directories and empty tree, by the cwd it was asked from. */
+interface Location extends GitDirs {
+  readonly root: string
   readonly emptyTree: string
 }
 
@@ -415,46 +425,85 @@ interface Location {
 const locate = (
   cwd: string,
   locations: Map<string, Location>,
-): Effect.Effect<Option.Option<Location>, GitReadError, ChildProcessSpawner.ChildProcessSpawner> =>
-  Option.match(Option.fromUndefinedOr(locations.get(cwd)), {
-    onSome: (value) => Effect.succeedSome(value),
-    onNone: () =>
-      git(cwd, ["rev-parse", "--show-toplevel", "--absolute-git-dir", "--show-object-format"]).pipe(
-        Effect.map(
-          Option.flatMap((output) => {
-            const [root = "", gitDir = "", format = ""] = output.trim().split("\n")
-            let emptyTree = EMPTY_TREE.sha1
-            if (format === "sha256") emptyTree = EMPTY_TREE.sha256
-            return Option.liftPredicate(
-              { root, gitDir, emptyTree },
-              (value) => value.root.length > 0 && value.gitDir.length > 0,
-            )
-          }),
-        ),
-        Effect.tap((found) =>
-          Effect.sync(() => Option.map(found, (value) => locations.set(cwd, value))),
-        ),
-      ),
+): Effect.Effect<
+  Option.Option<Location>,
+  GitReadError,
+  ChildProcessSpawner.ChildProcessSpawner | Path.Path
+> =>
+  Effect.gen(function* () {
+    const known = Option.fromUndefinedOr(locations.get(cwd))
+    if (Option.isSome(known)) return known
+    const path = yield* Path.Path
+    const output = yield* git(cwd, [
+      "rev-parse",
+      "--show-toplevel",
+      "--absolute-git-dir",
+      // Relative to `cwd`, unless it is absolute.
+      "--git-common-dir",
+      "--show-object-format",
+    ])
+    const found = Option.flatMap(output, (text) => {
+      const [root = "", gitDir = "", common = "", format = ""] = text.trim().split("\n")
+      let emptyTree = EMPTY_TREE.sha1
+      if (format === "sha256") emptyTree = EMPTY_TREE.sha256
+      return Option.liftPredicate(
+        { root, gitDir, commonDir: path.resolve(cwd, common), emptyTree },
+        () => root.length > 0 && gitDir.length > 0 && common.length > 0,
+      )
+    })
+    Option.map(found, (value) => locations.set(cwd, value))
+    return found
   })
+
+/**
+ * What follows a checkout's git files while it is read. `located` runs once
+ * the checkout is found, before its status is read (none outside a
+ * checkout): a write after that must reach the labels. `named` runs after the
+ * status read with the refs it names, which only that read can tell.
+ */
+interface ReadFollower {
+  readonly located: (dirs: Option.Option<GitDirs>) => Effect.Effect<void, never, GitServices>
+  readonly named: (refs: ReadonlyArray<string>) => Effect.Effect<void, never, GitServices>
+}
+
+const NO_FOLLOWER: ReadFollower = { located: () => Effect.void, named: () => Effect.void }
+
+/**
+ * The loose refs a head names, under the common directory: the branch's, and
+ * each one the upstream's short name can stand for. `git status` shortens the
+ * upstream as `git rev-parse` resolves it back, so the full ref is one of
+ * `refs/<u>`, `refs/heads/<u>` and `refs/remotes/<u>`.
+ */
+const headRefs = (head: GitHead): ReadonlyArray<string> => [
+  ...Option.toArray(Option.map(head.branch, (branch) => `refs/heads/${branch}`)),
+  ...Option.match(head.upstream, {
+    onNone: () => [],
+    onSome: (upstream) => [
+      `refs/${upstream}`,
+      `refs/heads/${upstream}`,
+      `refs/remotes/${upstream}`,
+    ],
+  }),
+]
 
 /**
  * Read the checkout at `cwd`: where it is, then its status, then its line
  * counts against its base (`HEAD`, or the empty tree on an unborn branch),
  * then the lines of its untracked files. `None` outside a checkout.
  *
- * `located` runs where the checkout is known and before its status is read:
- * what follows the git directory takes its first stamp there, so a write
- * that lands after the read started is never missed.
+ * `follower` hears where the checkout is before its status is read, and the
+ * refs the status names after it.
  */
 export const readCheckout = (
   cwd: string,
   locations: Map<string, Location>,
-  located: (gitDir: Option.Option<string>) => Effect.Effect<void, never, GitServices> = () =>
-    Effect.void,
+  follower: ReadFollower = NO_FOLLOWER,
 ): Effect.Effect<Option.Option<Checkout>, GitReadError, GitServices> =>
   Effect.gen(function* () {
     const location = yield* locate(cwd, locations)
-    yield* located(Option.map(location, (value) => value.gitDir))
+    yield* follower.located(
+      Option.map(location, ({ gitDir, commonDir }) => ({ gitDir, commonDir })),
+    )
     if (Option.isNone(location)) return Option.none()
     const status = yield* git(cwd, [
       "status",
@@ -467,6 +516,7 @@ export const readCheckout = (
     ])
     if (Option.isNone(status)) return Option.none()
     const { head, entries } = parseStatus(status.value)
+    yield* follower.named(headRefs(head))
     const { root, gitDir, emptyTree } = location.value
     const base = Option.match(head.oid, { onNone: () => emptyTree, onSome: () => "HEAD" })
     let counts: ReadonlyMap<string, Option.Option<LineCounts>> = new Map()
@@ -1254,11 +1304,27 @@ function GitPane(props: GitPaneProps) {
 
 // ── refresh ─────────────────────────────────────────────────────────────────
 
-/** The files git writes when the checkout's branch, index, merge or upstream moves. */
-const GIT_STATE_FILES = ["HEAD", "index", "MERGE_HEAD", "ORIG_HEAD", "FETCH_HEAD"]
+/**
+ * The checkout's own files a branch move, a merge or a fetch writes, whose
+ * content is their stamp. `FETCH_HEAD` git rewrites in place (its inode stays,
+ * measured), and two fetches can leave its size and time alike; `HEAD` is a
+ * stub git leaves alone in a reftable repository. All are a few lines, so a
+ * read costs about what a stat does, and a rewrite that changes them always
+ * moves the stamp.
+ */
+const OWN_CONTENT_FILES = ["HEAD", "ORIG_HEAD", "MERGE_HEAD", "FETCH_HEAD"]
 
 /**
- * How often the git directory is stamped. A directory watch would answer
+ * Files git writes only through a lock file it renames over the old one
+ * (git's lockfile; measured for each on a commit, `git branch -u`,
+ * `pack-refs` and a reftable commit): each write is a new file, with a new inode and
+ * birth time, so a stat tells it. `index` is too large to read every poll.
+ */
+const OWN_REPLACED_FILES = ["index"]
+const SHARED_REPLACED_FILES = ["packed-refs", "config", "reftable/tables.list"]
+
+/**
+ * How often the git files are stamped. A directory watch would answer
  * sooner when it answers, but under Bun on macOS (FSEvents) it gives no sign
  * that it has started, delivers late, and drops a write now and then, so a
  * branch switch could show only at the next turn.
@@ -1268,47 +1334,69 @@ const GIT_STATE_POLL = Duration.millis(500)
 /** A tool burst settles this long after its last call before the checkout is read again. */
 const TOOL_SETTLE = Duration.seconds(1)
 
-/**
- * The state of `GIT_STATE_FILES` in `gitDir`: each file's inode, size and
- * time, or nothing for a file that is absent or cannot be read. Git writes
- * `HEAD`, `index`, `MERGE_HEAD` and `ORIG_HEAD` to a lock file it renames
- * over the old one, a new inode, and `FETCH_HEAD` in place, a new size or
- * time: each write moves the stamp. A stat runs no program and writes nothing.
- */
-const gitStateStamp = (
-  gitDir: string,
-): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
+/** The git files the labels follow: the checkout's directories and the loose refs its last read named. */
+interface GitFiles extends GitDirs {
+  readonly refs: ReadonlyArray<string>
+}
+
+/** A file's content, or a mark no content can be when it is absent or cannot be read. */
+const contentStamp = (file: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const stamps = yield* Effect.forEach(GIT_STATE_FILES, (name) =>
-      fs.stat(path.join(gitDir, name)).pipe(
-        Effect.map((info) =>
-          [
-            name,
-            Option.getOrNull(info.ino),
-            info.size,
-            Option.getOrNull(Option.map(info.mtime, (time) => time.getTime())),
-          ].join(":"),
-        ),
-        Effect.orElseSucceed(() => name),
-      ),
+    return yield* fs.readFileString(file).pipe(
+      Effect.map((content) => `=${content}`),
+      Effect.orElseSucceed(() => "!"),
     )
-    return stamps.join("|")
+  })
+
+/** A file's inode, birth time, size and time, or a mark when it is absent or cannot be read. */
+const replacedStamp = (file: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    return yield* fs.stat(file).pipe(
+      Effect.map((info) =>
+        [
+          Option.getOrNull(info.ino),
+          Option.getOrNull(Option.map(info.birthtime, (time) => time.getTime())),
+          info.size,
+          Option.getOrNull(Option.map(info.mtime, (time) => time.getTime())),
+        ].join(":"),
+      ),
+      Effect.orElseSucceed(() => "!"),
+    )
   })
 
 /**
- * A tick each time the stamp of `gitDir` moves away from the last one,
+ * The stamp of every file in `files`: a git write the labels show moves it.
+ * Loose refs are a line each and are read; git replaces them by a renamed
+ * lock file too. Reads and stats run no program and write nothing.
+ */
+const gitStateStamp = (
+  files: GitFiles,
+): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const stamps = yield* Effect.all([
+      ...OWN_CONTENT_FILES.map((name) => contentStamp(path.join(files.gitDir, name))),
+      ...OWN_REPLACED_FILES.map((name) => replacedStamp(path.join(files.gitDir, name))),
+      ...SHARED_REPLACED_FILES.map((name) => replacedStamp(path.join(files.commonDir, name))),
+      ...files.refs.map((ref) => contentStamp(path.join(files.commonDir, ref))),
+    ])
+    return stamps.join("\0")
+  })
+
+/**
+ * A tick each time the stamp of `files` moves away from the last one,
  * starting from `from`: the stamp taken before the read the labels show, so
  * a write that lands after that read began ticks within one poll.
  */
 const gitStateChanges = (
-  gitDir: string,
+  files: GitFiles,
   from: string,
 ): Stream.Stream<void, never, FileSystem.FileSystem | Path.Path> =>
   Stream.concat(
     Stream.make(from),
-    Stream.fromEffectSchedule(gitStateStamp(gitDir), Schedule.spaced(GIT_STATE_POLL)),
+    Stream.fromEffectSchedule(gitStateStamp(files), Schedule.spaced(GIT_STATE_POLL)),
   ).pipe(
     Stream.changes,
     Stream.drop(1),
@@ -1328,43 +1416,53 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
       Option.map(fiber, (running) => fork(Fiber.interrupt(running)))
     const locations = new Map<string, Location>()
 
-    // The git directory followed now, and the fiber that stamps it. A new
-    // directory takes its first stamp inside the read that located it, before
+    // The git files followed now, and the fiber that stamps them. A new
+    // checkout takes its first stamp inside the read that located it, before
     // that read asks git anything, so no write falls between the two.
-    let followed = Option.none<{ readonly gitDir: string; readonly fiber: Fiber.Fiber<void> }>()
+    let followed = Option.none<{ readonly files: GitFiles; readonly fiber: Fiber.Fiber<void> }>()
     let stopped = false
     const unfollow = () => {
       interrupt(Option.map(followed, (f) => f.fiber))
       followed = Option.none()
     }
-    const follow = (gitDir: Option.Option<string>) =>
+    const followFrom = (files: GitFiles) =>
       Effect.gen(function* () {
-        if (
-          Option.getOrUndefined(Option.map(followed, (f) => f.gitDir)) ===
-          Option.getOrUndefined(gitDir)
-        )
-          return
-        unfollow()
-        if (Option.isNone(gitDir)) return
-        const from = yield* gitStateStamp(gitDir.value)
+        const from = yield* gitStateStamp(files)
         // The extension may have stopped while the stamp was read.
         if (stopped) return
+        unfollow()
         followed = Option.some({
-          gitDir: gitDir.value,
+          files,
           fiber: fork(
-            gitStateChanges(gitDir.value, from).pipe(
-              Stream.runForEach(() => Effect.sync(local.refresh)),
-            ),
+            gitStateChanges(files, from).pipe(Stream.runForEach(() => Effect.sync(local.refresh))),
           ),
         })
       })
+    const follower: ReadFollower = {
+      located: (dirs) =>
+        Effect.gen(function* () {
+          if (Option.isNone(dirs)) return unfollow()
+          if (Option.exists(followed, (f) => f.files.gitDir === dirs.value.gitDir)) return
+          yield* followFrom({ ...dirs.value, refs: [] })
+        }),
+      named: (refs) =>
+        Effect.gen(function* () {
+          if (Option.isNone(followed)) return
+          const files = followed.value.files
+          if (files.refs.join("\0") === refs.join("\0")) return
+          yield* followFrom({ ...files, refs })
+          // The new refs are stamped after git read them: a move between the
+          // two shows only to one more read, which starts after this one.
+          local.refresh()
+        }),
+    }
 
     const local = yield* sessionQuery({
       initial: Option.none<Checkout>(),
       follow: true,
       fetch: () =>
         workspace.sessionCwd.pipe(
-          Effect.flatMap((cwd) => readCheckout(cwd, locations, follow)),
+          Effect.flatMap((cwd) => readCheckout(cwd, locations, follower)),
           Effect.provideContext(services),
         ),
     })

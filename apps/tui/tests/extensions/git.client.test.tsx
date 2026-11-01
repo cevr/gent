@@ -347,6 +347,68 @@ const fakeGh = (reply: {
  */
 const GIT_STATE_WAIT = 4_000
 
+/**
+ * A stand-in program: a shell script, in its own directory, made of the lines
+ * `script` gives for that directory. `log` reads `<dir>/log`.
+ */
+const fakeProgram = (name: string, script: (dir: string) => ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const dir = yield* makeTempDirectoryScoped(`gent-fake-${name}-`)
+    const program = `${dir}/${name}`
+    yield* fs.writeFileString(program, ["#!/bin/sh", ...script(dir), ""].join("\n"))
+    yield* fs.chmod(program, 0o755)
+    const log = fs.readFileString(`${dir}/log`).pipe(Effect.orElseSucceed(() => ""))
+    return { program, dir, log }
+  })
+
+/** A clone of a new repository on `trunk`: `trunk` follows `origin/trunk`. */
+const makeClone = (prefix: string) =>
+  Effect.gen(function* () {
+    const upstream = yield* makeRepo(`${prefix}upstream-`)
+    const root = yield* makeTempDirectoryScoped(prefix)
+    yield* git(root, "clone", "-q", upstream, "clone")
+    return { upstream, root, clone: `${root}/clone` }
+  })
+
+/** A commit in `repo` that adds the file `name`. */
+const commitIn = (repo: string, name: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    yield* fs.writeFileString(`${repo}/${name}`, "x\n")
+    yield* git(repo, "add", name)
+    yield* git(repo, "commit", "-q", "-m", name)
+  })
+
+/**
+ * A `git` whose first `status` answers what it saw, then holds that answer
+ * until `<dir>/released` exists; its log says `held` once it holds.
+ */
+const heldGit = fakeProgram("git", (dir) => [
+  `if [ "$4" = status ] && [ ! -e '${dir}/released' ]; then`,
+  `  git "$@" > '${dir}/answer'; code=$?`,
+  `  echo held > '${dir}/log'`,
+  `  while [ ! -e '${dir}/released' ]; do sleep 0.02; done`,
+  `  cat '${dir}/answer'; exit $code`,
+  "fi",
+  'exec git "$@"',
+])
+
+/**
+ * A `git` that logs `status` each time a status run ends. The first read
+ * learns the refs the labels follow and reads once more, so after two runs
+ * only a stamp of the git files reads the checkout again.
+ */
+const countingGit = fakeProgram("git", (dir) => [
+  `if [ "$4" = status ]; then`,
+  `  git "$@"; code=$?`,
+  `  echo status >> '${dir}/log'; exit $code`,
+  "fi",
+  'exec git "$@"',
+])
+
+const statusRuns = (log: string) => log.split("\n").filter((line) => line === "status").length
+
 /** `gh pr view --json` for open pull request 7, whose one check passed. */
 const PR_JSON =
   '{"number":7,"title":"Show the branch","url":"https://github.invalid/o/r/pull/7",' +
@@ -418,15 +480,7 @@ describe("git refresh", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const repo = yield* makeRepo("gent-git-held-")
-      const held = yield* fakeProgram("git", (dir) => [
-        `if [ "$4" = status ] && [ ! -e '${dir}/released' ]; then`,
-        `  git "$@" > '${dir}/answer'; code=$?`,
-        `  echo held > '${dir}/log'`,
-        `  while [ ! -e '${dir}/released' ]; do sleep 0.02; done`,
-        `  cat '${dir}/answer'; exit $code`,
-        "fi",
-        'exec git "$@"',
-      ])
+      const held = yield* heldGit
       const { texts } = yield* mountLabels(repo, { git: held.program })
       yield* waitForLog(held.log, (log) => log === "held\n")
       yield* git(repo, "checkout", "-q", "-b", "next")
@@ -435,27 +489,107 @@ describe("git refresh", () => {
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 
-  // A fetch writes no HEAD and no index, only FETCH_HEAD: the first fetch
+  // The upstream's ref is known only once the first status names the
+  // upstream, after git read it. A fetch while that answer is held moves the
+  // ref before it is stamped; the read that learns the ref reads once more.
+  it.live("an upstream that moves while the first read is out still reaches the labels", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const { upstream, clone } = yield* makeClone("gent-git-held-upstream-")
+      const held = yield* heldGit
+      const { texts } = yield* mountLabels(clone, { git: held.program })
+      yield* waitForLog(held.log, (log) => log === "held\n")
+      yield* commitIn(upstream, "first.txt")
+      yield* git(clone, "fetch", "-q", "--no-write-fetch-head")
+      yield* fs.writeFileString(`${held.dir}/released`, "")
+      yield* waitUntil(() => texts().join("|") === "trunk ↓1", "the fetch", GIT_STATE_WAIT)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+
+  // git rewrites FETCH_HEAD in place. Here the rewrite keeps its inode, its
+  // size and its time, so only its content tells it moved; the stand-in's
+  // status answers the branch its own file names, which no stamp reads.
+  it.live("a FETCH_HEAD rewritten in place with its size and time kept reaches the labels", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* makeRepo("gent-git-fetch-head-")
+      const fetchHead = `${repo}/.git/FETCH_HEAD`
+      const line = (oid: string) => `${oid.repeat(40)}\t\tbranch 'trunk' of upstream\n`
+      yield* fs.writeFileString(fetchHead, line("a"))
+      const named = yield* fakeProgram("git", (dir) => [
+        `if [ "$4" = status ]; then`,
+        `  printf '# branch.head %s\\0' "$(cat '${dir}/branch')"`,
+        `  echo status >> '${dir}/log'; exit 0`,
+        "fi",
+        'exec git "$@"',
+      ])
+      yield* fs.writeFileString(`${named.dir}/branch`, "trunk")
+      const { texts } = yield* mountLabels(repo, { git: named.program })
+      yield* waitForLog(named.log, (log) => statusRuns(log) >= 2)
+      yield* waitUntil(() => texts().join("|") === "trunk", "the first branch")
+      const before = yield* fs.stat(fetchHead)
+      yield* fs.writeFileString(`${named.dir}/branch`, "fetched")
+      yield* fs.writeFileString(fetchHead, line("b"))
+      yield* fs.utimes(
+        fetchHead,
+        yield* Effect.fromOption(before.atime),
+        yield* Effect.fromOption(before.mtime),
+      )
+      const after = yield* fs.stat(fetchHead)
+      expect([after.ino, after.size, Option.map(after.mtime, (time) => time.getTime())]).toEqual([
+        before.ino,
+        before.size,
+        Option.map(before.mtime, (time) => time.getTime()),
+      ])
+      yield* waitUntil(() => texts().join("|") === "fetched", "the rewrite", GIT_STATE_WAIT)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+
+  // A fetch that writes no FETCH_HEAD, and `git update-ref`, move only the
+  // upstream's ref: no HEAD, index or FETCH_HEAD write.
+  it.live("a move of the upstream's ref alone moves the behind count", () =>
+    Effect.gen(function* () {
+      const { upstream, clone } = yield* makeClone("gent-git-ref-")
+      const counting = yield* countingGit
+      const { texts } = yield* mountLabels(clone, { git: counting.program })
+      yield* waitForLog(counting.log, (log) => statusRuns(log) >= 2)
+      yield* waitUntil(() => texts().join("|") === "trunk", "the clean clone")
+      yield* commitIn(upstream, "first.txt")
+      yield* git(clone, "fetch", "-q", "--no-write-fetch-head")
+      yield* waitUntil(() => texts().join("|") === "trunk ↓1", "the fetch", GIT_STATE_WAIT)
+      yield* git(clone, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+      yield* waitUntil(() => texts().join("|") === "trunk", "the update-ref", GIT_STATE_WAIT)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+
+  // A linked worktree keeps its own HEAD, index and FETCH_HEAD, and shares
+  // the refs: a fetch in the main checkout moves the worktree's upstream.
+  it.live("a fetch in the main checkout moves a worktree's behind count", () =>
+    Effect.gen(function* () {
+      const { upstream, root, clone } = yield* makeClone("gent-git-shared-")
+      yield* git(clone, "worktree", "add", "-q", "-b", "side", `${root}/worktree`, "origin/trunk")
+      const counting = yield* countingGit
+      const { texts } = yield* mountLabels(`${root}/worktree`, { git: counting.program })
+      yield* waitForLog(counting.log, (log) => statusRuns(log) >= 2)
+      yield* waitUntil(() => texts().join("|") === "side", "the worktree")
+      yield* commitIn(upstream, "first.txt")
+      yield* git(clone, "fetch", "-q")
+      yield* waitUntil(() => texts().join("|") === "side ↓1", "the fetch", GIT_STATE_WAIT)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+
+  // Each fetch moves the upstream's ref and rewrites FETCH_HEAD: the first
   // makes it, the next one rewrites it in place, its inode kept.
   it.live("each fetch made outside the session moves the behind count", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const upstream = yield* makeRepo("gent-git-upstream-")
-      const root = yield* makeTempDirectoryScoped("gent-git-fetch-")
-      yield* git(root, "clone", "-q", upstream, "clone")
-      const clone = `${root}/clone`
+      const { upstream, clone } = yield* makeClone("gent-git-fetch-")
       const { texts } = yield* mountLabels(clone)
       yield* waitUntil(() => texts().join("|") === "trunk", "the clean clone")
-      const fetchAfterCommit = (name: string) =>
-        Effect.gen(function* () {
-          yield* fs.writeFileString(`${upstream}/${name}`, "x\n")
-          yield* git(upstream, "add", name)
-          yield* git(upstream, "commit", "-q", "-m", name)
-          yield* git(clone, "fetch", "-q")
-        })
-      yield* fetchAfterCommit("first.txt")
+      yield* commitIn(upstream, "first.txt")
+      yield* git(clone, "fetch", "-q")
       yield* waitUntil(() => texts().join("|") === "trunk ↓1", "the first fetch", GIT_STATE_WAIT)
-      yield* fetchAfterCommit("second.txt")
+      yield* commitIn(upstream, "second.txt")
+      yield* git(clone, "fetch", "-q")
       yield* waitUntil(() => texts().join("|") === "trunk ↓2", "the next fetch", GIT_STATE_WAIT)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
@@ -795,21 +929,6 @@ describe("git review commands", () => {
  * one, about 12 MB, keeps git writing until the pager reads or stops.
  */
 const LONG_FILE = "a line of the untracked file\n".repeat(400_000)
-
-/**
- * A stand-in program: a shell script, in its own directory, made of the lines
- * `script` gives for that directory. `log` reads `<dir>/log`.
- */
-const fakeProgram = (name: string, script: (dir: string) => ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const dir = yield* makeTempDirectoryScoped(`gent-fake-${name}-`)
-    const program = `${dir}/${name}`
-    yield* fs.writeFileString(program, ["#!/bin/sh", ...script(dir), ""].join("\n"))
-    yield* fs.chmod(program, 0o755)
-    const log = fs.readFileString(`${dir}/log`).pipe(Effect.orElseSucceed(() => ""))
-    return { program, dir, log }
-  })
 
 /** A `hunk` that logs where it ran and its arguments, and the patch it was handed. */
 const fakeHunk = fakeProgram("hunk", (dir) => [
