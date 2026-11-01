@@ -1085,6 +1085,10 @@ dispatch reuses the key it recorded before the send.
 
 ### B9b. The step permit: a bound on machine model work
 
+> Superseded (2026-10-31, queue row 45): rounds take no permit; lanes and
+> the threads cap bound them. Four is now a cap on commands
+> (`MAX_ACTIVE_MACHINE_COMMANDS`), with no crash tickets.
+
 - `MachineStoreResource` holds one server-wide semaphore of
   `MAX_ACTIVE_MACHINE_STEPS = 4` permits. A driver takes one for each round or
   command, from before its `Dispatched` commit to its receipt or its ask, and

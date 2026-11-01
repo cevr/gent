@@ -294,8 +294,8 @@ const PendingAction = Schema.TaggedUnion({
   /**
    * `key` is the Threads idempotency key; `thread` and `round` are set once
    * admitted. `notBefore` (epoch ms): the round waits for the account until
-   * then, holding nothing. The marker stays after its deadline until a
-   * permit is acquired and the dispatch commits. `fresh`: the round runs on
+   * then, holding nothing. The marker stays after its deadline until the
+   * dispatch commits again without it. `fresh`: the round runs on
    * a new thread, as a usage limit's rerun does. `model`: the model the
    * thread's session runs, read when it is admitted. `configRole`: the
    * config role the round ran, a state's switch or its thread role's own.
@@ -1035,20 +1035,18 @@ const ensureMachineTables = ensureExtensionTables({
   create: createMachineTables,
 }).pipe(Effect.mapError(storageError("Machine table setup failed")))
 
-/** At most this many rounds and commands run at once in one server, over every machine. */
-const MAX_ACTIVE_MACHINE_STEPS = 4
-
-/** A crash-debt ticket no driver claims within this goes back. */
-const TICKET_TTL = Duration.minutes(10)
+/** At most this many machine commands run at once in one server, over every machine. */
+const MAX_ACTIVE_MACHINE_COMMANDS = 4
 
 /**
- * The step permits: one per open round or command, held per run from before
- * its `Dispatched` commit to its receipt or its ask. A run that held one when
- * the server stopped gets a ticket at the next build, so the work a crash
- * left counts first.
+ * The command permits: one per running `run` state's process, held per run
+ * from before its `Dispatched` commit to its receipt or its ask. Rounds take
+ * none: their lanes admit them by the pace (`ExtensionContext.Accounts`,
+ * lanes.md), so a step count would only leave quota unspent. A crashed
+ * command never runs again (`recoverCommand`), so a restart owes no permit.
  */
-interface StepPermits {
-  /** Takes the run's permit, or claims its ticket; a run that holds one keeps it. */
+interface CommandPermits {
+  /** Takes the run's permit; a run that holds one keeps it. */
   readonly acquire: (run: RunId) => Effect.Effect<void>
   /** Gives the run's permit back; a run that holds none is left alone. */
   readonly release: (run: RunId) => Effect.Effect<void>
@@ -1118,65 +1116,38 @@ interface MachineStoreService {
   /** The runs a branch hosts that have work left. */
   readonly activeOn: (host: PlaceRecord) => Effect.Effect<ReadonlyArray<Run>, MachineStorageError>
   readonly removeHostSession: (sessionId: SessionId) => Effect.Effect<void, MachineStorageError>
-  readonly permits: StepPermits
+  readonly permits: CommandPermits
 }
 
-const makeStepPermits = Effect.fn("MachineStore.stepPermits")(function* (
-  debt: ReadonlyArray<RunId>,
-) {
-  const semaphore = yield* Semaphore.make(MAX_ACTIVE_MACHINE_STEPS)
-  // The runs that hold a permit; a ticket's expiry fiber gives it back unclaimed.
-  const held = new Map<RunId, Option.Option<Fiber.Fiber<void>>>()
+const makeCommandPermits = Effect.fn("MachineStore.commandPermits")(function* () {
+  const semaphore = yield* Semaphore.make(MAX_ACTIVE_MACHINE_COMMANDS)
+  // The runs that hold a permit.
+  const held = new Set<RunId>()
   const lock = yield* Semaphore.make(1)
-  const giveBack = (run: RunId) =>
-    Effect.suspend(() => {
-      if (!held.has(run)) return Effect.void
-      held.delete(run)
-      return semaphore.release(1)
-    }).pipe(lock.withPermits(1))
-  for (const run of debt.slice(0, MAX_ACTIVE_MACHINE_STEPS)) {
-    yield* semaphore.take(1)
-    const expiry = yield* Effect.sleep(TICKET_TTL).pipe(
-      Effect.andThen(Effect.logInfo("machines.ticket.expired").pipe(Effect.annotateLogs({ run }))),
-      Effect.andThen(giveBack(run)),
-      Effect.forkScoped,
-    )
-    held.set(run, Option.some(expiry))
-  }
-  const claim = (run: RunId) =>
-    Effect.suspend(() => {
-      const found = held.get(run)
-      if (Predicate.isUndefined(found)) return Effect.succeed(false)
-      held.set(run, Option.none())
-      return Option.match(found, {
-        onNone: () => Effect.succeed(true),
-        onSome: (expiry) => Effect.as(Fiber.interrupt(expiry), true),
-      })
-    }).pipe(lock.withPermits(1))
-  const permits: StepPermits = {
-    acquire: Effect.fn("MachineStore.acquireStep")(function* (run: RunId) {
-      if (yield* claim(run)) return
+  const permits: CommandPermits = {
+    acquire: Effect.fn("MachineStore.acquireCommand")(function* (run: RunId) {
+      if (yield* Effect.sync(() => held.has(run)).pipe(lock.withPermits(1))) return
       const mark = Effect.suspend(() => {
         if (held.has(run)) return semaphore.release(1)
-        held.set(run, Option.none())
+        held.add(run)
         return Effect.void
       }).pipe(lock.withPermits(1))
       // The take and the mark are one step: an interrupt between them would leak a permit.
       yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           if (!(yield* semaphore.takeIfAvailable(1))) {
-            yield* Effect.logDebug("machines.step.waiting").pipe(Effect.annotateLogs({ run }))
+            yield* Effect.logDebug("machines.command.waiting").pipe(Effect.annotateLogs({ run }))
             yield* restore(semaphore.take(1))
           }
           yield* mark
         }),
       )
     }),
-    release: Effect.fn("MachineStore.releaseStep")(function* (run: RunId) {
-      const found = yield* Effect.sync(() => held.get(run)).pipe(lock.withPermits(1))
-      if (Predicate.isUndefined(found)) return
-      if (Option.isSome(found)) yield* Fiber.interrupt(found.value)
-      yield* giveBack(run)
+    release: Effect.fn("MachineStore.releaseCommand")(function* (run: RunId) {
+      yield* Effect.suspend(() => {
+        if (!held.delete(run)) return Effect.void
+        return semaphore.release(1)
+      }).pipe(lock.withPermits(1))
     }),
   }
   return permits
@@ -1187,8 +1158,8 @@ const RUN_COLUMNS = `run, machine, definition_json, host_session_id, host_branch
   state, status, pending_json, seq, notified_at, error, created_at, updated_at`
 
 /**
- * The run tables and the step permits. Building it makes the tables
- * when the database lacks them at this version, and reads the crash debt. It is a server resource:
+ * The run tables and the command permits. Building it makes the tables
+ * when the database lacks them at this version. It is a server resource:
  * one server's machines share the permits.
  */
 export class MachineStore extends Context.Service<MachineStore, MachineStoreService>()(
@@ -1229,19 +1200,7 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
           }),
         )
 
-      // The runs that held a step when the last server stopped, oldest first.
-      // A round that waits for its account held none.
-      const debtRows = yield* sql`
-        SELECT run FROM machine_runs
-        WHERE status = 'running'
-          AND json_extract(pending_json, '$._tag') IN ('Round', 'Command')
-          AND json_extract(pending_json, '$.notBefore') IS NULL
-        ORDER BY created_at ASC, run ASC
-      `.pipe(Effect.mapError(storageError("Failed to read the machine step debt")))
-      const debt = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ run: RunId })))(
-        debtRows,
-      ).pipe(Effect.mapError(storageError("A machine run id does not decode")))
-      const permits = yield* makeStepPermits(debt.map((row) => row.run))
+      const permits = yield* makeCommandPermits()
 
       const insertSteps = (run: RunId, from: number, steps: ReadonlyArray<MachineStep>) =>
         Effect.gen(function* () {
@@ -1564,10 +1523,9 @@ type DriverServices =
   | Crypto.Crypto
   | ChildProcessSpawner
 
-const isStepAction = Predicate.or(Predicate.isTagged("Round"), Predicate.isTagged("Command"))
-
-const isRoundOrCommand = (pending: Option.Option<PendingAction>) =>
-  Option.exists(pending, isStepAction)
+/** The pending action runs a command, which holds a command permit. */
+const runsCommand = (pending: Option.Option<PendingAction>) =>
+  Option.exists(pending, Predicate.isTagged("Command"))
 
 /** When the pending round or push may be sent: none when it does not wait. */
 const waitsUntil = (pending: Option.Option<PendingAction>, now: number) =>
@@ -1618,7 +1576,7 @@ interface Signals {
 /**
  * Drains `subscription` as each end comes, into one slot: a waiter learns
  * that an end came, and the driver then reads its row, so no backlog is
- * kept while the run asks, runs a command or waits for a permit.
+ * kept while the run asks, runs a command or waits for a command permit.
  */
 export const roundEndSignal = (subscription: PubSub.Subscription<unknown>) =>
   Effect.gen(function* () {
@@ -1925,10 +1883,7 @@ const failRun = Effect.fn("Machines.fail")(function* (run: RunId, error: string)
 const advance = (run: Run, signals: Signals) =>
   Effect.gen(function* () {
     const store = yield* MachineStore
-    const now = yield* Clock.currentTimeMillis
-    if (!isRoundOrCommand(run.pending) || Option.isSome(waitsUntil(run.pending, now))) {
-      yield* store.permits.release(run.run)
-    }
+    if (!runsCommand(run.pending)) yield* store.permits.release(run.run)
     switch (run.status) {
       case "final":
       case "failed":
@@ -1982,14 +1937,12 @@ const advancePending = (run: Run, signals: Signals) =>
     }),
   )
 
-/** A wait becomes crash debt only after its driver takes a permit and records that transfer. */
+/** A wait whose time came is dispatched again, without its marker, before its send. */
 const resumeRound = Effect.fn("Machines.resumeRound")(function* (
   run: Run,
   pending: RoundAction,
   signals: Signals,
 ) {
-  const store = yield* MachineStore
-  yield* store.permits.acquire(run.run)
   const { notBefore, ...ready } = pending
   if (Predicate.isUndefined(notBefore)) return yield* awaitRound(run, pending, signals)
   const action = PendingAction.cases.Round.make(ready)
@@ -2483,7 +2436,6 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
       return
     }
     case "thread": {
-      yield* store.permits.acquire(run.run)
       const action = PendingAction.cases.Round.make({
         state: name,
         visit,

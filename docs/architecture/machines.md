@@ -41,13 +41,11 @@
     stored in `thread_rounds.retry_at` and read from the turn's
     `ErrorOccurred` when a reconcile records the end) waits: the run commits
     a `Waiting` step (`lane` or `quota`) and `Round.notBefore`, its driver
-    drops its step permit and its hold, re-arms the run's record at that time
+    drops its hold, re-arms the run's record at that time
     on each activation, and sleeps. At the time it sends the same round; a
     quota death reruns on a new thread under a new key. Neither spends a
-    visit or the dead-worker retry, and a second refusal moves the time. A
-    server start gives a waiting round no crash-debt ticket, even past its
-    deadline. The driver removes `notBefore` only after taking a permit and
-    committing the resumed dispatch.
+    visit or the dead-worker retry, and a second refusal moves the time.
+    The driver removes `notBefore` only when it commits the resumed dispatch.
   - A role names a pinned `model` (and `effort`) or a config `role`
     ([models.md](models.md)), not both; with neither, the agent's model. A
     thread state's first switch that holds (a slot like
@@ -104,15 +102,16 @@
   - Answers check in one order: an answered ask is decided by its answer
     (the same choice and note again is admitted, any other conflicts), an
     ask never answered and no longer current is stale, a choice not offered
-    is invalid. At most four rounds and commands run at once in one server
-    (`MAX_ACTIVE_MACHINE_STEPS`); the runs that held one when the server
-    stopped take the first permits as tickets. Named command limits use
+    is invalid. At most four commands run at once in one server
+    (`MAX_ACTIVE_MACHINE_COMMANDS`), from the spawn to the step that records
+    the exit. Rounds take no permit: a round's account lane bounds it, and
+    the threads cap bounds the rounds one starter runs. A command killed by a
+    crash is never rerun, so a restart owes no permit. Named command limits use
     `ExtensionContext.Permits.with`, shared with every participating caller
     in this server. The command captures only the permit facade and holds
     it through its process scope's cleanup. An omitted limit means 1; a
     conflicting live limit becomes a typed `MachineFault` and a recorded
-    failed run before spawn. This does not change the step cap or its debt
-    reservations. A stop first arms a separate
+    failed run before spawn. This does not change the command cap. A stop first arms a separate
     start-only `machine-stop:<run>` record, then commits and kicks the host.
     This record survives a crash before the kick, even while the run's main
     record names a future quota reset. Settlement removes both records. A

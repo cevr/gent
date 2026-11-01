@@ -9,14 +9,12 @@ import {
   Fiber,
   FileSystem,
   Layer,
-  Logger,
   Option,
   Predicate,
   PubSub,
   Queue,
   Ref,
   Sink,
-  References,
   Schema,
   Scope,
   Stream,
@@ -2299,7 +2297,7 @@ describe("a machine waits out its account", () => {
   )
 
   it.live(
-    "rounds that wait for the account hold no step permit: a command runs beside four of them",
+    "rounds that wait for the account hold no command permit: a command runs beside four of them",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
@@ -2307,7 +2305,7 @@ describe("a machine waits out its account", () => {
         const worker = (round: RoundCall) =>
           Effect.succeed(billed(`${round.state} ${round.visit} done`))
         const reset = (yield* Clock.currentTimeMillis) + HOUR
-        // As many waiting rounds as the server runs steps at once: a command still runs beside them.
+        // As many waiting rounds as the server runs commands at once: a command still runs beside them.
         const tags = ["wait-1", "wait-2", "wait-3", "wait-4"]
         const models = yield* makeModels(worker, quotaOwner(readings))
         const { client } = yield* createRpcClient(home.layerFor(machineModels(models), oneAccount))
@@ -2533,17 +2531,15 @@ const allAsking = (runs: ReadonlyArray<string>) =>
 
 /**
  * Boots a root over planted runs with the worker gated, and waits until
- * `open` model calls are open and `waiting` drivers wait for a permit, as
- * the drivers log it. Then `check` reads the order the rounds opened in, the
- * gate opens, and every run reaches its ask. Answers the most calls open at once.
+ * `opens` model calls are open. Then `check` reads the order the rounds
+ * opened in, the gate opens, and every run reaches its ask. Answers the most
+ * calls open at once.
  */
 const bootGated = (
   home: Effect.Success<typeof restartableHome>,
   runs: ReadonlyArray<PlantedRun>,
-  waiting: number,
+  opens: number,
   check: (order: ReadonlyArray<string>) => void,
-  /** The runs that reach their ask; every run by default. */
-  asking: ReadonlyArray<PlantedRun> = runs,
 ) =>
   Effect.gen(function* () {
     yield* plantRuns(home, BUDGET_JSON, runs)
@@ -2551,36 +2547,21 @@ const bootGated = (
     const open = yield* Ref.make(0)
     const most = yield* Ref.make(0)
     const order = yield* Ref.make<ReadonlyArray<string>>([])
-    const waits: Array<string> = []
-    const capture = Logger.make(({ message }) => {
-      const text = String(message)
-      if (text.includes("machines.step.waiting")) waits.push(text)
-    })
     const models = yield* makeModels(gatedWorker(gate, open, most, order))
     yield* Effect.scoped(
       Effect.gen(function* () {
         yield* createRpcClient(home.layerFor(machineModels(models)))
-        yield* waitFor(Ref.get(open), (count) => count >= 4, 20_000, "four rounds opened")
-        yield* waitFor(
-          Effect.sync(() => waits.length),
-          (count) => count >= waiting,
-          20_000,
-          "the rest wait",
-        )
-        expect(yield* Ref.get(open)).toBe(4)
+        yield* waitFor(Ref.get(open), (count) => count >= opens, 20_000, `${opens} rounds opened`)
+        expect(yield* Ref.get(open)).toBe(opens)
         check(yield* Ref.get(order))
         yield* Deferred.succeed(gate, true)
         yield* waitFor(
-          home.sql(allAsking(asking.map((planted) => planted.run))),
+          home.sql(allAsking(runs.map((planted) => planted.run))),
           Boolean,
           40_000,
           "every run reached its ask",
         )
-      }).pipe(
-        Effect.provide(Logger.layer([capture])),
-        // The test preload turns logs off; this test reads the drivers' waits.
-        Effect.provideService(References.MinimumLogLevel, "Debug"),
-      ),
+      }),
     )
     return yield* Ref.get(most)
   })
@@ -4233,9 +4214,36 @@ describe("a model's quality in a machine's state", () => {
   )
 })
 
+/** One command that records its start in `ran.log`, then runs until a `gate` file appears. */
+const GATED_COMMAND = {
+  name: "gated-command",
+  threads: {},
+  start: "check",
+  states: {
+    check: {
+      kind: "run",
+      run: "echo ran >> ran.log; while [ ! -f gate ]; do sleep 0.05; done",
+      on: { pass: "done", fail: "done" },
+    },
+    done: { kind: "final" },
+  },
+}
+
+/** The lines of `ran.log` in the run's cwd: one per command that started. */
+const ranLines = (cwd: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    Effect.flatMap(fs.exists(`${cwd}/ran.log`), (exists) => {
+      if (!exists) return Effect.succeed(0)
+      return Effect.map(
+        fs.readFileString(`${cwd}/ran.log`),
+        (text) => text.split("\n").filter((line) => line.length > 0).length,
+      )
+    }),
+  ).pipe(Effect.provide(BunServices.layer))
+
 describe("the machine boot budget", () => {
   it.live(
-    "twenty runs left running open at most four model calls at once, and all reach their ask",
+    "twenty runs left running open all their rounds at once: lanes, not a step count, bound them",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
@@ -4247,39 +4255,18 @@ describe("the machine boot budget", () => {
           createdAt: 1_000 + index,
           wakeAt: 1_000 + index,
         }))
-        // Four rounds open; the sixteen other drivers wait for a permit.
-        expect(yield* bootGated(home, runs, 16, (order) => expect(order).toHaveLength(4))).toBe(4)
+        // No lane reads a window here, so every round is admitted at once.
+        expect(yield* bootGated(home, runs, 20, (order) => expect(order).toHaveLength(20))).toBe(20)
       }).pipe(Effect.scoped, Effect.timeout("90 seconds")),
   )
 
-  it.live("runs that held a step when the server stopped take the first four permits", () =>
-    Effect.gen(function* () {
-      const home = yield* restartableHome
-      const hosts = yield* makeHosts(home, 8)
-      // Two new runs whose records come first, then six that held a round,
-      // the oldest runs of all, whose records come last.
-      const runs = hosts.map((host, index): PlantedRun => {
-        const run = runIdAt(index + 1)
-        if (index < 2) {
-          return { run, host, debt: false, createdAt: 5_000 + index, wakeAt: 1_000 + index }
-        }
-        return { run, host, debt: true, createdAt: 100 + index, wakeAt: 9_000 + index }
-      })
-      // The four oldest debt runs hold the four tickets; the two new runs and
-      // the two younger debt runs wait.
-      const most = yield* bootGated(home, runs, 4, (order) => {
-        expect(order.toSorted()).toEqual(runs.slice(2, 6).map((planted) => planted.run))
-      })
-      expect(most).toBe(4)
-    }).pipe(Effect.scoped, Effect.timeout("90 seconds")),
-  )
-
   it.live(
-    "expired waits leave crash tickets to genuine interrupted rounds and resume as permit holders",
+    "after a restart, cut rounds and waits whose time came run at once, each wait dispatched again before its send",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
-        const hosts = yield* makeHosts(home, 4)
+        // Five waits: more than the four commands the server runs at once.
+        const hosts = yield* makeHosts(home, 5)
         const interrupted = yield* Effect.scoped(
           Effect.gen(function* () {
             const entered = yield* Queue.unbounded<void>()
@@ -4316,37 +4303,29 @@ describe("the machine boot budget", () => {
         const open = yield* Ref.make(0)
         const most = yield* Ref.make(0)
         const order = yield* Ref.make<ReadonlyArray<string>>([])
-        const waits = yield* Queue.unbounded<string>()
-        const capture = Logger.make(({ message, fiber }) => {
-          if (String(message).includes("machines.step.waiting"))
-            Queue.offerUnsafe(waits, String(fiber.getRef(References.CurrentLogAnnotations)["run"]))
-        })
         const worker = gatedWorker(gate, open, most, order)
         const resumedMarkers = yield* Ref.make<ReadonlyArray<Option.Option<number>>>([])
         const models = yield* makeModels((round) =>
           Effect.gen(function* () {
             if (round.mode.startsWith("run-")) {
-              // A resumed wait must durably become a permit holder before admission.
+              // A resumed wait is dispatched again, with no marker, before its send.
               const marker = yield* home.sql(pendingWait(round.mode)).pipe(Effect.orDie)
               yield* Ref.update(resumedMarkers, (all) => [...all, marker])
             }
             return yield* worker(round)
           }),
         )
-        yield* createRpcClient(home.layerFor(machineModels(models))).pipe(
-          Effect.provide(Logger.layer([capture])),
-          Effect.provideService(References.MinimumLogLevel, "Debug"),
+        yield* createRpcClient(home.layerFor(machineModels(models)))
+        yield* waitFor(Ref.get(open), (count) => count >= 9, 8_000, "every round opened")
+        expect((yield* Ref.get(order)).toSorted()).toEqual(
+          [
+            ...expired.map((run) => run.run),
+            "interrupted-1",
+            "interrupted-2",
+            "interrupted-3",
+            "interrupted-4",
+          ].toSorted(),
         )
-        const blocked = yield* Effect.forEach([1, 2, 3, 4], () => Queue.take(waits))
-        expect(blocked.toSorted()).toEqual(expired.map((run) => run.run))
-        yield* waitFor(Ref.get(open), (count) => count >= 4, 8_000, "interrupted workers resumed")
-        expect(yield* Ref.get(open)).toBe(4)
-        expect((yield* Ref.get(order)).toSorted()).toEqual([
-          "interrupted-1",
-          "interrupted-2",
-          "interrupted-3",
-          "interrupted-4",
-        ])
         yield* Deferred.succeed(gate, true)
         yield* waitFor(
           home.sql(allAsking([...interrupted, ...expired.map((run) => run.run)])),
@@ -4354,48 +4333,33 @@ describe("the machine boot budget", () => {
           20_000,
           "all runs reached their ask",
         )
-        expect(yield* Ref.get(most)).toBe(4)
-        expect(yield* Ref.get(resumedMarkers)).toEqual([
-          Option.none(),
-          Option.none(),
-          Option.none(),
-          Option.none(),
-        ])
+        expect(yield* Ref.get(most)).toBe(9)
+        expect(yield* Ref.get(resumedMarkers)).toEqual(expired.map(() => Option.none()))
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
 
-  it.live(
-    "runs whose round waits for its account take no ticket, so new runs open beside them",
-    () =>
-      Effect.gen(function* () {
-        const home = yield* restartableHome
-        const hosts = yield* makeHosts(home, 8)
-        const until = (yield* Clock.currentTimeMillis) + HOUR
-        // Four runs, the oldest of all, wait an hour for their account; four new runs come after.
-        const runs = hosts.map((host, index): PlantedRun => {
-          const run = runIdAt(index + 1)
-          if (index < 4) {
-            return {
-              run,
-              host,
-              debt: true,
-              waitsUntil: until,
-              createdAt: 100 + index,
-              wakeAt: 1_000,
-            }
-          }
-          return { run, host, debt: false, createdAt: 5_000 + index, wakeAt: 1_000 + index }
-        })
-        const fresh = runs.slice(4)
-        const most = yield* bootGated(
-          home,
-          runs,
-          0,
-          (order) => expect(order.toSorted()).toEqual(fresh.map((planted) => planted.run)),
-          fresh,
-        )
-        expect(most).toBe(4)
-      }).pipe(Effect.scoped, Effect.timeout("90 seconds")),
+  it.live("at most four machine commands run at once; the fifth starts when one ends", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(twoAsksWorker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const runs = yield* Effect.forEach([1, 2, 3, 4, 5], (index) =>
+        startRunOn(client, owner, GATED_COMMAND, "gated-command", `gated-${index}`),
+      )
+      yield* waitFor(ranLines(home.cwd), (count) => count >= 4, 10_000, "four commands started")
+      yield* settle
+      expect(yield* ranLines(home.cwd)).toBe(4)
+      // The gate opens: the four end, and the fifth runs and ends too.
+      yield* FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.writeFileString(`${home.cwd}/gate`, "")),
+        Effect.provide(BunServices.layer),
+      )
+      yield* Effect.forEach(runs, (run) =>
+        waitFor(home.sql(runRow(run)), isSettled, 15_000, `${run}'s end was told`),
+      )
+      expect(yield* ranLines(home.cwd)).toBe(5)
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
 })
 
