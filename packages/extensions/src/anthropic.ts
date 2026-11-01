@@ -4460,8 +4460,8 @@ export const buildAnthropicModelDriver = (
             return Option.some({
               url: claudeAuthorizeUrl(begun.pkce, begun.state),
               method: "code" as const,
-              instructions:
-                "Sign in to the Claude account on the page, then paste the code it shows.",
+              // Short enough for a 60-column pane, which cuts a longer line.
+              instructions: "Sign in on the page, then paste the code it shows.",
             })
           }
           if (ctx.methodIndex === 2) {
