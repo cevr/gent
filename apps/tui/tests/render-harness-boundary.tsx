@@ -96,14 +96,16 @@ const makeRenderDirectory = (prefix: "home-" | "workspace-") =>
 
 // ── platform ────────────────────────────────────────────────────────────────
 
-/** Stand-ins for the optional tools a client extension runs; each names a program path. */
+/** Stand-ins for the tools a client extension runs; each names a program path. */
 export interface TestTools {
   readonly gh?: string
   readonly hunk?: string
+  /** A program that stands in for `git`, which runs for real without one. */
+  readonly git?: string
 }
 
 /** No test reaches the real `gh` or `hunk`: each runs as a program that is not there. */
-const MISSING_TOOLS: Required<TestTools> = {
+const MISSING_TOOLS = {
   gh: "/nonexistent/loop-probe-gh",
   hunk: "/nonexistent/loop-probe-hunk",
 }
@@ -112,14 +114,15 @@ const MISSING_TOOLS: Required<TestTools> = {
  * The Bun platform a test renders on, with a process spawner that runs `gh`
  * and `hunk` from `tools`, by default from a path that does not exist, so a
  * test sees them missing. The real `gh` would read the reader's sign-in and
- * reach GitHub, and the real `hunk` would take the terminal. Every other
- * command runs for real.
+ * reach GitHub, and the real `hunk` would take the terminal. `git` runs from
+ * `tools` when it names one; every other command runs for real.
  */
 export const testPlatformLayer = (tools: TestTools = {}) => {
   const stand = { ...MISSING_TOOLS, ...tools }
   const programFor = (command: string): Option.Option<string> => {
     if (command === "gh") return Option.some(stand.gh)
     if (command === "hunk") return Option.some(stand.hunk)
+    if (command === "git") return Option.fromUndefinedOr(stand.git)
     return Option.none()
   }
   return Layer.mergeAll(

@@ -9,6 +9,7 @@ import {
   Path,
   PlatformError,
   Ref,
+  Schedule,
   Schema,
   Stream,
 } from "effect"
@@ -56,11 +57,11 @@ import {
  *
  * A read runs on a session or branch move, on a write git makes in the
  * checkout's git directory (`HEAD`, `index`, `MERGE_HEAD`, `ORIG_HEAD`,
- * `FETCH_HEAD`), 1 s after the last tool call of a burst ends (any tool can
- * write files), at a turn's end and on a message (a `!git commit` arrives as
- * one). One read runs at a time (`sessionQuery`); triggers during a read fold
- * into one more. No work-tree watch and no poll: an edit made in another
- * program shows at the next trigger.
+ * `FETCH_HEAD`, stamped every 500 ms), 1 s after the last tool call of a
+ * burst ends (any tool can write files), at a turn's end and on a message (a
+ * `!git commit` arrives as one). One read runs at a time (`sessionQuery`);
+ * triggers during a read fold into one more. The work tree is not followed:
+ * an edit made in another program shows at the next trigger.
  *
  * @module
  */
@@ -441,18 +442,19 @@ const locate = (
  * counts against its base (`HEAD`, or the empty tree on an unborn branch),
  * then the lines of its untracked files. `None` outside a checkout.
  *
- * `located` hears where the checkout is before its status is read, so a
- * watch on its git directory starts before the read and misses no write
- * that lands after it.
+ * `located` runs where the checkout is known and before its status is read:
+ * what follows the git directory takes its first stamp there, so a write
+ * that lands after the read started is never missed.
  */
 export const readCheckout = (
   cwd: string,
   locations: Map<string, Location>,
-  located: (gitDir: Option.Option<string>) => void = () => {},
+  located: (gitDir: Option.Option<string>) => Effect.Effect<void, never, GitServices> = () =>
+    Effect.void,
 ): Effect.Effect<Option.Option<Checkout>, GitReadError, GitServices> =>
   Effect.gen(function* () {
     const location = yield* locate(cwd, locations)
-    located(Option.map(location, (value) => value.gitDir))
+    yield* located(Option.map(location, (value) => value.gitDir))
     if (Option.isNone(location)) return Option.none()
     const status = yield* git(cwd, [
       "status",
@@ -1253,32 +1255,64 @@ function GitPane(props: GitPaneProps) {
 // ── refresh ─────────────────────────────────────────────────────────────────
 
 /** The files git writes when the checkout's branch, index, merge or upstream moves. */
-const GIT_STATE_FILES = new Set(["HEAD", "index", "MERGE_HEAD", "ORIG_HEAD", "FETCH_HEAD"])
+const GIT_STATE_FILES = ["HEAD", "index", "MERGE_HEAD", "ORIG_HEAD", "FETCH_HEAD"]
+
+/**
+ * How often the git directory is stamped. A directory watch would answer
+ * sooner when it answers, but under Bun on macOS (FSEvents) it gives no sign
+ * that it has started, delivers late, and drops a write now and then, so a
+ * branch switch could show only at the next turn.
+ */
+const GIT_STATE_POLL = Duration.millis(500)
 
 /** A tool burst settles this long after its last call before the checkout is read again. */
 const TOOL_SETTLE = Duration.seconds(1)
 
 /**
- * A tick each time git writes one of `GIT_STATE_FILES` in `gitDir`,
- * debounced. A watch that cannot start ticks never: the other triggers still
- * read the checkout.
+ * The state of `GIT_STATE_FILES` in `gitDir`: each file's inode, size and
+ * time, or nothing for a file that is absent or cannot be read. Git writes
+ * `HEAD`, `index`, `MERGE_HEAD` and `ORIG_HEAD` to a lock file it renames
+ * over the old one, a new inode, and `FETCH_HEAD` in place, a new size or
+ * time: each write moves the stamp. A stat runs no program and writes nothing.
  */
-const gitStateChanges = (gitDir: string): Stream.Stream<void, never, FileSystem.FileSystem> =>
-  Stream.unwrap(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      return fs.watch(gitDir).pipe(
-        Stream.filter((event) => GIT_STATE_FILES.has(event.path.split("/").pop() ?? "")),
-        Stream.debounce("200 millis"),
-        Stream.map((): void => {}),
-      )
-    }),
+const gitStateStamp = (
+  gitDir: string,
+): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const stamps = yield* Effect.forEach(GIT_STATE_FILES, (name) =>
+      fs.stat(path.join(gitDir, name)).pipe(
+        Effect.map((info) =>
+          [
+            name,
+            Option.getOrNull(info.ino),
+            info.size,
+            Option.getOrNull(Option.map(info.mtime, (time) => time.getTime())),
+          ].join(":"),
+        ),
+        Effect.orElseSucceed(() => name),
+      ),
+    )
+    return stamps.join("|")
+  })
+
+/**
+ * A tick each time the stamp of `gitDir` moves away from the last one,
+ * starting from `from`: the stamp taken before the read the labels show, so
+ * a write that lands after that read began ticks within one poll.
+ */
+const gitStateChanges = (
+  gitDir: string,
+  from: string,
+): Stream.Stream<void, never, FileSystem.FileSystem | Path.Path> =>
+  Stream.concat(
+    Stream.make(from),
+    Stream.fromEffectSchedule(gitStateStamp(gitDir), Schedule.spaced(GIT_STATE_POLL)),
   ).pipe(
-    Stream.catchCause((cause) =>
-      Stream.fromEffect(
-        Effect.logDebug("git.watch.failed").pipe(Effect.annotateLogs({ error: String(cause) })),
-      ).pipe(Stream.drain),
-    ),
+    Stream.changes,
+    Stream.drop(1),
+    Stream.map((): void => {}),
   )
 
 // ── extension ───────────────────────────────────────────────────────────────
@@ -1286,7 +1320,7 @@ const gitStateChanges = (gitDir: string): Stream.Stream<void, never, FileSystem.
 export default defineClientExtension(GIT_EXTENSION_ID, {
   setup: Effect.gen(function* () {
     const { transport, workspace, lifecycle, shell } = yield* ClientContext
-    // Reads, the watch and the settle timer run outside the setup, from sync
+    // Reads, the git directory's stamps and the settle timer run outside the setup, from sync
     // callbacks, so the setup keeps the platform services they need.
     const services = yield* Effect.context<GitServices>()
     const fork = Effect.runForkWith(services)
@@ -1294,29 +1328,43 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
       Option.map(fiber, (running) => fork(Fiber.interrupt(running)))
     const locations = new Map<string, Location>()
 
-    // The git directory watched now, and the fiber that watches it.
-    let watched = Option.none<{ readonly gitDir: string; readonly fiber: Fiber.Fiber<void> }>()
-    const watch = (gitDir: Option.Option<string>, onChange: () => void) => {
-      if (
-        Option.getOrUndefined(Option.map(watched, (w) => w.gitDir)) ===
-        Option.getOrUndefined(gitDir)
-      )
-        return
-      interrupt(Option.map(watched, (w) => w.fiber))
-      watched = Option.map(gitDir, (dir) => ({
-        gitDir: dir,
-        fiber: fork(gitStateChanges(dir).pipe(Stream.runForEach(() => Effect.sync(onChange)))),
-      }))
+    // The git directory followed now, and the fiber that stamps it. A new
+    // directory takes its first stamp inside the read that located it, before
+    // that read asks git anything, so no write falls between the two.
+    let followed = Option.none<{ readonly gitDir: string; readonly fiber: Fiber.Fiber<void> }>()
+    let stopped = false
+    const unfollow = () => {
+      interrupt(Option.map(followed, (f) => f.fiber))
+      followed = Option.none()
     }
+    const follow = (gitDir: Option.Option<string>) =>
+      Effect.gen(function* () {
+        if (
+          Option.getOrUndefined(Option.map(followed, (f) => f.gitDir)) ===
+          Option.getOrUndefined(gitDir)
+        )
+          return
+        unfollow()
+        if (Option.isNone(gitDir)) return
+        const from = yield* gitStateStamp(gitDir.value)
+        // The extension may have stopped while the stamp was read.
+        if (stopped) return
+        followed = Option.some({
+          gitDir: gitDir.value,
+          fiber: fork(
+            gitStateChanges(gitDir.value, from).pipe(
+              Stream.runForEach(() => Effect.sync(local.refresh)),
+            ),
+          ),
+        })
+      })
 
     const local = yield* sessionQuery({
       initial: Option.none<Checkout>(),
       follow: true,
       fetch: () =>
         workspace.sessionCwd.pipe(
-          Effect.flatMap((cwd) =>
-            readCheckout(cwd, locations, (gitDir) => watch(gitDir, () => local.refresh())),
-          ),
+          Effect.flatMap((cwd) => readCheckout(cwd, locations, follow)),
           Effect.provideContext(services),
         ),
     })
@@ -1338,7 +1386,8 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
     )
     lifecycle.addCleanup(() => {
       interrupt(settling)
-      watch(Option.none(), () => {})
+      stopped = true
+      unfollow()
     })
 
     // The branch's pull request, through `gh`, read again only when the

@@ -338,6 +338,15 @@ const fakeGh = (reply: {
     return { program, calls }
   })
 
+/**
+ * How long a write git makes takes to reach the labels: one 500 ms stamp of
+ * the git directory, then one read of the checkout (two or three git
+ * processes, and `gh` once the branch moves), slow at a load of 40. Nothing
+ * else reads the checkout in these tests, so a stamp that misses the write
+ * fails at this bound however long it is.
+ */
+const GIT_STATE_WAIT = 4_000
+
 /** `gh pr view --json` for open pull request 7, whose one check passed. */
 const PR_JSON =
   '{"number":7,"title":"Show the branch","url":"https://github.invalid/o/r/pull/7",' +
@@ -393,8 +402,62 @@ describe("git refresh", () => {
       yield* waitUntil(() => texts().join("|") === "trunk|1 file +0 -1", "the edited file")
       yield* git(repo, "commit", "-q", "-am", "edit")
       yield* git(repo, "checkout", "-q", "-b", "next")
-      yield* waitUntil(() => texts().join("|") === "next", "the commit and the checkout", 1_500)
+      yield* waitUntil(
+        () => texts().join("|") === "next",
+        "the commit and the checkout",
+        GIT_STATE_WAIT,
+      )
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  // The first `git status` answers with the branch it saw, then holds its
+  // answer while the test checks out another branch. The labels draw the old
+  // branch; the git directory was stamped before the status was asked, so
+  // the checkout still reaches them, with no turn and no tool call.
+  it.live("a checkout made while the first read is out still reaches the labels", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* makeRepo("gent-git-held-")
+      const held = yield* fakeProgram("git", (dir) => [
+        `if [ "$4" = status ] && [ ! -e '${dir}/released' ]; then`,
+        `  git "$@" > '${dir}/answer'; code=$?`,
+        `  echo held > '${dir}/log'`,
+        `  while [ ! -e '${dir}/released' ]; do sleep 0.02; done`,
+        `  cat '${dir}/answer'; exit $code`,
+        "fi",
+        'exec git "$@"',
+      ])
+      const { texts } = yield* mountLabels(repo, { git: held.program })
+      yield* waitForLog(held.log, (log) => log === "held\n")
+      yield* git(repo, "checkout", "-q", "-b", "next")
+      yield* fs.writeFileString(`${held.dir}/released`, "")
+      yield* waitUntil(() => texts().join("|") === "next", "the checkout", GIT_STATE_WAIT)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+
+  // A fetch writes no HEAD and no index, only FETCH_HEAD: the first fetch
+  // makes it, the next one rewrites it in place, its inode kept.
+  it.live("each fetch made outside the session moves the behind count", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const upstream = yield* makeRepo("gent-git-upstream-")
+      const root = yield* makeTempDirectoryScoped("gent-git-fetch-")
+      yield* git(root, "clone", "-q", upstream, "clone")
+      const clone = `${root}/clone`
+      const { texts } = yield* mountLabels(clone)
+      yield* waitUntil(() => texts().join("|") === "trunk", "the clean clone")
+      const fetchAfterCommit = (name: string) =>
+        Effect.gen(function* () {
+          yield* fs.writeFileString(`${upstream}/${name}`, "x\n")
+          yield* git(upstream, "add", name)
+          yield* git(upstream, "commit", "-q", "-m", name)
+          yield* git(clone, "fetch", "-q")
+        })
+      yield* fetchAfterCommit("first.txt")
+      yield* waitUntil(() => texts().join("|") === "trunk ↓1", "the first fetch", GIT_STATE_WAIT)
+      yield* fetchAfterCommit("second.txt")
+      yield* waitUntil(() => texts().join("|") === "trunk ↓2", "the next fetch", GIT_STATE_WAIT)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 })
 
@@ -517,7 +580,7 @@ describe("git pull request", () => {
       // A commit moves the branch ahead of its upstream: the request is asked again.
       yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
       yield* git(repo, "commit", "-q", "-am", "ahead")
-      yield* waitUntil(() => texts().join("|") === "trunk ↑1|#2 ✓", "the commit", 1_500)
+      yield* waitUntil(() => texts().join("|") === "trunk ↑1|#2 ✓", "the commit", GIT_STATE_WAIT)
       // An edit changes no branch fact: the labels move, gh is not asked.
       yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\n")
       emit(
@@ -531,9 +594,13 @@ describe("git pull request", () => {
       yield* waitUntil(() => texts().join("|") === "trunk ↑1|#2 ✓|1 file +1 -0", "the edit")
       // The next commit is the third ask; an ask for the edit would make it the fourth.
       yield* git(repo, "commit", "-q", "-am", "ahead again")
-      yield* waitUntil(() => texts().join("|") === "trunk ↑2|#3 ✓", "the next commit", 1_500)
+      yield* waitUntil(
+        () => texts().join("|") === "trunk ↑2|#3 ✓",
+        "the next commit",
+        GIT_STATE_WAIT,
+      )
       expect(yield* gh.calls).toBe(3)
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 
   it.live("with no gh on the path the labels show no pull request", () =>
@@ -544,7 +611,11 @@ describe("git pull request", () => {
       const { texts } = yield* mountLabels(repo)
       yield* waitUntil(() => texts().join("|") === "trunk|1 file +0 -1", "the checkout")
       yield* git(repo, "checkout", "-q", "-b", "next")
-      yield* waitUntil(() => texts().join("|") === "next|1 file +0 -1", "the branch move", 1_500)
+      yield* waitUntil(
+        () => texts().join("|") === "next|1 file +0 -1",
+        "the branch move",
+        GIT_STATE_WAIT,
+      )
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
@@ -636,12 +707,12 @@ describe("git status row", () => {
             setup,
             (frame) => statusLine(frame).trim() === `ready · ${label} · ${after}`,
             after,
-            1_500,
+            GIT_STATE_WAIT,
           )
         }).pipe(Effect.scoped)
       yield* follows(`${repo}/sub`, "repo/sub", "trunk", "feature")
       yield* follows(`${root}/worktree`, "worktree", "side", "side-next")
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 })
 
