@@ -181,7 +181,7 @@ a credential. The `FileLock` / `Models` / `State` facets wrap the
 host-internal `FileLockService`, `DecisionModelResolver` and `EventStore` so authors
 never reach into runtime Tags. No facet duplicates an Effect platform
 service: files, paths, processes, ids, and HTTP come from `FileSystem`, `Path`,
-`ChildProcessSpawner`, `Crypto`, and `HttpClient`, and a relative path resolves against
+`ChildProcessSpawner`, `Digest`, `SecureRandom`, and `HttpClient`, and a relative path resolves against
 `ctx.cwd` with `path.resolve(ctx.cwd, p)`. `ctx.State.changed()` uses the current
 extension identity, session, and branch supplied by the host. If an
 extension needs private state, it
@@ -399,7 +399,7 @@ reports it, a close ends it and records nothing, so a restart finds the call
 as a crash leaves it.
 
 The body may yield only the services every root gives a tool: `ExtensionContext`,
-the platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`,
+the platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Digest`, `SecureRandom`,
 `HttpClient`, and the `GentPlatform` that helpers such as `saveToolImage` read),
 the core services of `BranchToolHostServices` (`MessageStorage`,
 `InteractionStorage` and `ToolRunner`, which the branch-tools entry exports,

@@ -27,7 +27,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   Deferred,
   Duration,
   Effect,
@@ -39,6 +38,7 @@ import {
   Schema,
   type Scope,
 } from "effect"
+import { Digest } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import {
   BranchId,
@@ -279,8 +279,8 @@ const nulList = (text: string) => text.split("\0").filter((entry) => entry.lengt
 const utf8Hex = (text: string) => Hex.encode(new TextEncoder().encode(text))
 
 const sha256 = Effect.fn("Checkpoints.sha256")(function* (text: string) {
-  const crypto = yield* Crypto.Crypto
-  return Hex.encode(yield* crypto.digest("SHA-256", new TextEncoder().encode(text)))
+  const crypto = yield* Digest.Digest
+  return Hex.encode(yield* crypto.digest(Digest.sha256, new TextEncoder().encode(text)))
 })
 
 // ── state ───────────────────────────────────────────────────────────────────

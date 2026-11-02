@@ -3,13 +3,16 @@ import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/sql"
 import { SessionStorage, SqliteStorage } from "../../src/storage/storage"
-import { BunServices } from "@effect/platform-bun"
 import { Database } from "bun:sqlite"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { dateFromMillis, Session } from "../../src/domain/message"
 import { AgentName } from "../../src/domain/agent"
 import { SessionId, CurrentWorkspaceId } from "../../src/domain/ids"
-import { makeTempDirectoryScoped, testSqliteStorage } from "../../src/test-utils/harness"
+import {
+  BunTestServices,
+  makeTempDirectoryScoped,
+  testSqliteStorage,
+} from "../../src/test-utils/harness"
 import {
   ensureExtensionTables,
   KERNEL_SCHEMA_OWNER,
@@ -30,7 +33,7 @@ const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 const fileStorage = (dbPath: string) =>
   SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
     Layer.provide(GentPlatform.Test()),
-    Layer.provide(BunServices.layer),
+    Layer.provide(BunTestServices),
   )
 
 const kernelVersion = Effect.gen(function* () {

@@ -98,7 +98,6 @@ import {
   toolCallStep,
 } from "../../src/runtime/provider"
 import { BunProviderLockLive } from "../../src/runtime/gent-platform-bun"
-import { BunServices } from "@effect/platform-bun"
 import { Decision, DecisionModel, Model as AiModel, LanguageModel } from "effect/ai"
 import { test as bunTest } from "bun:test"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
@@ -136,6 +135,7 @@ import {
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import {
+  BunTestServices,
   createRpcHarness,
   fixtureModelCatalog,
   fixtureModelCatalogSource,
@@ -828,9 +828,9 @@ describe("model catalog resolution", () => {
  */
 
 /** The Bun host of `Auth.Live`: its file system and the provider lock file every process honors. */
-const fileLockHost = Layer.provideMerge(BunProviderLockLive, BunServices.layer)
+const fileLockHost = Layer.provideMerge(BunProviderLockLive, BunTestServices)
 /** A host whose process is the only writer of its store: the provider lock stays in memory. */
-const inProcessLockHost = Layer.merge(ProviderLock.InProcess, BunServices.layer)
+const inProcessLockHost = Layer.merge(ProviderLock.InProcess, BunTestServices)
 
 describe("Auth", () => {
   describe("credential sign-in stamp", () => {
@@ -3261,12 +3261,8 @@ describe("classifier credential order", () => {
     method: "decide",
     reason: new AiError.NetworkError({
       reason: "TransportError",
-      request: {
-        method: "POST",
-        url: "http://127.0.0.1/nonexistent/loop-probe-x",
-        urlParams: [],
-        headers: {},
-      },
+      method: "POST",
+      url: "http://127.0.0.1/nonexistent/loop-probe-x",
     }),
   })
 
@@ -5528,10 +5524,7 @@ describe("credential placement", () => {
         expect(yield* open([])).toBe(false)
         yield* TestClock.adjust("61 seconds")
         expect(yield* open([])).toBe(true)
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test())),
-      ),
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(BunTestServices, GentPlatform.Test()))),
   )
 
   it.effect(
@@ -5581,10 +5574,7 @@ describe("credential placement", () => {
         const { buckets } = yield* Ref.get(file)
         expect(yield* sessionsOn).toEqual([{ slot: a, sessions: [long] }])
         expect(buckets.map((bucket) => bucket.costUsd).reduce((sum, cost) => sum + cost, 0)).toBe(4)
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test())),
-      ),
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(BunTestServices, GentPlatform.Test()))),
   )
 
   it.effect(
@@ -5616,10 +5606,7 @@ describe("credential placement", () => {
         expect(yield* placeAfter(Option.none())).toBe(b)
         // A lifetime of an hour: a went cold, so the next reads both as unused.
         expect(yield* placeAfter(Option.some(3_600_000))).toBe(a)
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test())),
-      ),
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(BunTestServices, GentPlatform.Test()))),
   )
 
   it.effect("an account refused until its reset is not placed on before then", () =>
@@ -5677,7 +5664,7 @@ describe("credential placement", () => {
       expect(yield* place("held-default")).toBe(b)
       yield* TestClock.adjust("298 seconds")
       expect(yield* place("after-default")).toBe(a)
-    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test()))),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(BunTestServices, GentPlatform.Test()))),
   )
 
   it.scopedLive(
@@ -5895,7 +5882,7 @@ describe("account lanes", () => {
   const HOUR = 3_600_000
   /** $1 of list price is 200,000 fuel: one fuel is one input token at $5 per million. */
   const usage = Option.some({ inputTokens: 1_000, outputTokens: 100 })
-  const placementLayer = Layer.mergeAll(BunServices.layer, GentPlatform.Test())
+  const placementLayer = Layer.mergeAll(BunTestServices, GentPlatform.Test())
   const plan = ProviderId.make("plan")
   /** An account as a test names it: a label, or a label with the sign-in under it. */
   type Account = CredentialSlot | { readonly slot: CredentialSlot; readonly signedInAt: number }
@@ -7221,7 +7208,7 @@ describe("account lanes", () => {
           Layer.provide(
             Layer.mergeAll(
               RuntimeEnvironment.Live({ cwd: home, home }),
-              BunServices.layer,
+              BunTestServices,
               GentPlatform.Test(),
             ),
           ),
@@ -7306,7 +7293,7 @@ describe("account lanes", () => {
         expect(text).toContain('"burn"')
         expect(text).not.toContain("sk-")
         expect(Exit.isSuccess(Schema.decodeExit(OlderLedger)(text))).toBe(true)
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
 
   it.effect(
@@ -9843,7 +9830,7 @@ describe("account lanes", () => {
         Effect.scoped,
         Effect.provide(
           Layer.mergeAll(
-            BunServices.layer,
+            BunTestServices,
             Layer.effect(
               GentPlatform,
               Effect.gen(function* () {

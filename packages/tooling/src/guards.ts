@@ -3658,14 +3658,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "anyUnknownInErrorContext:off -- extension setup is untyped until this membrane maps its failures to ExtensionLoadError.",
   },
   {
-    file: "packages/tooling/src/check-guide-code.ts",
-    text: "strictEffectProvide:off -- the script's process entry provides the platform once.",
-  },
-  {
-    file: "packages/e2e/src/verify.ts",
-    text: "strictEffectProvide:off -- the script's process entry provides the platform once.",
-  },
-  {
     file: "packages/core/src/runtime/tools.ts",
     text: "anyUnknownInErrorContext:off -- an extension tool fails with unknown until normalizeToolExecutionError maps it.",
   },

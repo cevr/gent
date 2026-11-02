@@ -3,7 +3,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   DateTime,
   Deferred,
   Duration,
@@ -19,31 +18,33 @@ import {
   Sink,
   Stream,
 } from "effect"
+import { Digest } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import { ChildProcessSpawner } from "effect/process"
-import { BunServices } from "@effect/platform-bun"
 import {
+  advanceUntil,
+  BunTestServices,
+  collectTestContributions,
   ConfigService,
-  RuntimeEnvironment,
+  createE2ELayer,
+  createRpcClient,
+  createRpcHarness,
   finishPart,
   interruptAtEachStep,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  RuntimeEnvironment,
+  runToolWithCtx,
+  TEST_MODEL_ID,
+  testLeafContext,
+  testToolContext,
   textDeltaPart,
   textStep,
   toolCallPart,
   toolCallStep,
-  advanceUntil,
-  waitFor,
-  collectTestContributions,
-  createE2ELayer,
-  createRpcClient,
-  createRpcHarness,
-  runToolWithCtx,
-  testLeafContext,
-  testToolContext,
   turnRequestText,
-  TEST_MODEL_ID,
+  waitFor,
+  plainArgs,
 } from "@gent/core/test-utils"
 import { main as builtinAgent } from "../src/agents.js"
 import { e2ePreset } from "./helpers/test-preset"
@@ -655,7 +656,7 @@ describe("wake", () => {
           )
           expect(woken.messages.filter((m) => m.role === "assistant").length).toBe(2)
           expect(yield* fs.exists(file)).toBe(false)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("12 seconds")),
       ),
     15_000,
   )
@@ -697,7 +698,7 @@ describe("wake", () => {
           )
           expect(textOf(wakeOf(woken.messages))).toContain("check the build at start")
           expect(yield* storedEntries(home, branchId)).toEqual([])
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
       ),
     25_000,
   )
@@ -746,7 +747,7 @@ describe("wake", () => {
           )
           expect(hasWake(after.messages)).toBe(false)
           expect(yield* controls.callCount).toBe(1)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
       ),
     25_000,
   )
@@ -782,7 +783,7 @@ describe("wake", () => {
           expect(textOf(wakeOf(woken.messages))).toContain("check the build")
           expect(yield* controls.callCount).toBe(1)
           expect(yield* fs.exists(file)).toBe(false)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
       ),
     25_000,
   )
@@ -820,7 +821,7 @@ describe("wake", () => {
           expect(after.runtime._tag).toBe("Idle")
           expect(after.messages.length).toBe(opened.messages.length)
           expect(yield* controls.callCount).toBe(0)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
       ),
     25_000,
   )
@@ -888,7 +889,7 @@ describe("wake", () => {
               message.role === "user" && message.metadata?.customType === WAKE_MESSAGE_TYPE,
           )
           expect(wakes.length).toBe(1)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
       ),
     25_000,
   )
@@ -917,7 +918,7 @@ describe("wake", () => {
           expect(text).toContain("matched after")
           expect(text).toContain("build 42 green")
           expect(text).toContain("read the result file")
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("12 seconds")),
       ),
     15_000,
   )
@@ -944,7 +945,7 @@ describe("wake", () => {
           expect(text).toContain("matched after 1 checks")
           expect(text).toContain("yyy\nLAST-MARK")
           expect(text).not.toContain("xxx")
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("12 seconds")),
       ),
     15_000,
   )
@@ -968,7 +969,7 @@ describe("wake", () => {
             label: "the monitor woke the loop",
           })
           expect(text).toContain("timed out after")
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("12 seconds")),
       ),
     15_000,
   )
@@ -1290,7 +1291,7 @@ describe("notices", () => {
           )
           const fs = yield* FileSystem.FileSystem
           expect(yield* fs.exists(wakeFile(home, branchId))).toBe(false)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("12 seconds")),
       ),
     15_000,
   )
@@ -1333,7 +1334,7 @@ describe("notices", () => {
         // The turn read the earlier notice and answered, so it is gone; the
         // alarm row stays, and so does the notice the turn never showed.
         expect((yield* turn.stored).map((entry) => entry.wakeId)).toEqual(["later", "unread"])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
     10_000,
   )
 
@@ -1361,7 +1362,7 @@ describe("notices", () => {
         expect(shown.text).toContain("stand up")
         yield* turn.end(shown.keys)
         expect(yield* turn.stored).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
     10_000,
   )
 })
@@ -1401,9 +1402,12 @@ const makeCoreRecords = (): CoreRecords =>
 /** One record's source, as the extension names it: the SHA-256 of the entry's id. */
 const sourceOf = (wakeId: string) =>
   Effect.gen(function* () {
-    const digest = yield* (yield* Crypto.Crypto).digest("SHA-256", new TextEncoder().encode(wakeId))
+    const digest = yield* (yield* Digest.Digest).digest(
+      Digest.sha256,
+      new TextEncoder().encode(wakeId),
+    )
     return `wake:${Hex.encode(digest)}`
-  }).pipe(Effect.provide(BunServices.layer), Effect.orDie)
+  }).pipe(Effect.provide(BunTestServices), Effect.orDie)
 
 const contextWith = (
   home: string,
@@ -1518,7 +1522,7 @@ const stoppingWrites = (stopped: Ref.Ref<boolean>) =>
       rename: (from, to) => unlessStopped(fs.rename(from, to)),
       remove: (path, options) => unlessStopped(fs.remove(path, options)),
     })
-  }).pipe(Effect.provide(BunServices.layer))
+  }).pipe(Effect.provide(BunTestServices))
 
 const stoppedRecordWrite = (operation: string) =>
   Effect.fail(
@@ -1615,7 +1619,7 @@ const writeWakeFile = (
 ) => writeWakeText(home, encodeAlarms(entries), branch)
 
 const readFile = (home: string, branch: BranchId = branchId) =>
-  readStoredFile(wakeFile(home, branch)).pipe(Effect.provide(BunServices.layer))
+  readStoredFile(wakeFile(home, branch)).pipe(Effect.provide(BunTestServices))
 
 /** The branch file's entries, decoded as the store reads them. */
 const storedEntries = (home: string, branch: BranchId = branchId) =>
@@ -1626,7 +1630,7 @@ const wakeFileExists = (home: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     return yield* fs.exists(wakeFile(home))
-  }).pipe(Effect.provide(BunServices.layer))
+  }).pipe(Effect.provide(BunTestServices))
 
 /**
  * A store test runs on the live alarms, the Bun platform and a virtual clock,
@@ -1635,7 +1639,7 @@ const wakeFileExists = (home: string) =>
  */
 const storeTest = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
-    Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+    Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunTestServices, TestClock.layer())),
     Effect.timeout("8 seconds"),
   )
 
@@ -1809,7 +1813,7 @@ describe("monitor command", () => {
           const searchMillis = yield* uncutSearchMillis(backtrackingUntil, monitorOutput)
           expect(settledMillis).toBeLessThan(searchMillis / 2)
         }).pipe(
-          Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer)),
+          Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunTestServices)),
           Effect.timeout("8 seconds"),
         ),
       10_000,
@@ -1842,7 +1846,7 @@ describe("monitor command", () => {
         expect(message).toContain("timed out after 1 checks")
         expect(message).not.toContain("matched after")
       }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer)),
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunTestServices)),
         Effect.timeout("9 seconds"),
       ),
     12_000,
@@ -2232,7 +2236,7 @@ describe("wake store", () => {
         const spawner = ChildProcessSpawner.make((command) =>
           Effect.gen(function* () {
             if (command._tag === "StandardCommand") {
-              yield* Ref.update(ran, (all) => [...all, command.args.join(" ")])
+              yield* Ref.update(ran, (all) => [...all, plainArgs(command.args).join(" ")])
             }
             return ChildProcessSpawner.makeHandle({
               pid: ChildProcessSpawner.ProcessId(1),
@@ -2574,7 +2578,7 @@ describe("wake across a disable", () => {
           // The user config on disk, read fresh by each resolve.
           configServiceLayer: ConfigService.Live.pipe(
             Layer.provide(RuntimeEnvironment.Live({ cwd: home, home })),
-            Layer.provide(BunServices.layer),
+            Layer.provide(BunTestServices),
           ),
         })
         // A watching client holds the loop resident, as an open TUI does.
@@ -2614,7 +2618,7 @@ describe("wake across a disable", () => {
         )
         expect(rearmed).toEqual(armed)
         expect((yield* pendingOf(client, { sessionId, branchId })).entries).toHaveLength(1)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 })
@@ -2633,7 +2637,7 @@ const writeGentConfig = (root: string, text: string) =>
     const fs = yield* FileSystem.FileSystem
     yield* fs.makeDirectory(`${root}/.gent`, { recursive: true })
     yield* fs.writeFileString(`${root}/.gent/config.json`, text)
-  }).pipe(Effect.provide(BunServices.layer))
+  }).pipe(Effect.provide(BunTestServices))
 
 const AUTO_RESUME_ON = '{"wake":{"autoResume":{}}}'
 
@@ -2879,7 +2883,7 @@ describe("auto-resume", () => {
           expect(after.runtime._tag).toBe("Idle")
           expect(after.messages.length).toBe(opened.messages.length)
           expect(yield* controls.callCount).toBe(0)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
       ),
     25_000,
   )

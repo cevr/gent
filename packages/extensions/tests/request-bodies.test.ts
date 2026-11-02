@@ -3,7 +3,6 @@ import { describe, expect, it } from "effect-bun-test"
 import type { ChildProcessSpawner } from "effect/process"
 import {
   Context,
-  Crypto,
   Effect,
   type FileSystem,
   Layer,
@@ -13,7 +12,9 @@ import {
   Schema,
   SynchronizedRef,
 } from "effect"
-import { BunCrypto, BunServices } from "@effect/platform-bun"
+import type { Digest } from "effect/crypto"
+import { SecureRandom } from "effect/crypto"
+import { BunCrypto } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
 import {
   type ModelDriverContribution,
@@ -23,7 +24,11 @@ import {
   type ReasoningEffort,
   type RunEffort,
 } from "@gent/core/extensions/api"
-import { bunDriverHostServices, modelCatalogFromBodies } from "@gent/core/test-utils"
+import {
+  bunDriverHostServices,
+  BunTestServices,
+  modelCatalogFromBodies,
+} from "@gent/core/test-utils"
 import {
   AnthropicPlatform,
   buildAnthropicModelDriver,
@@ -357,7 +362,9 @@ const catalog = modelCatalogFromBodies({ chat: encodeExternalJson(payload), deci
 
 // ── drivers ─────────────────────────────────────────────────────────────────
 
-const hostCrypto = Effect.service(Crypto.Crypto).pipe(Effect.provide(BunCrypto.layer))
+const hostCrypto = Effect.service(SecureRandom.SecureRandom).pipe(
+  Effect.provide(BunCrypto.layerSecureRandom),
+)
 
 const apiKey = (metadata?: Record<string, string>): ProviderAuthInfo =>
   ProviderAuthInfoSchema.cases.Api.make({ key: "test-key", ...(metadata && { metadata }) })
@@ -381,7 +388,8 @@ const routes = Effect.gen(function* () {
     | FileSystem.FileSystem
     | Path.Path
     | ChildProcessSpawner.ChildProcessSpawner
-    | Crypto.Crypto
+    | Digest.Digest
+    | SecureRandom.SecureRandom
     | HttpClient.HttpClient
   >().pipe(
     Effect.map(
@@ -390,7 +398,7 @@ const routes = Effect.gen(function* () {
         AnthropicPlatform.of({ platform: "linux", home: "/nonexistent/gent-test-home", env: {} }),
       ),
     ),
-    Effect.provide(Layer.merge(BunServices.layer, FetchHttpClient.layer)),
+    Effect.provide(Layer.merge(BunTestServices, FetchHttpClient.layer)),
   )
   const routes: ReadonlyArray<Route> = [
     {

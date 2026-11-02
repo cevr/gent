@@ -1,15 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
-import {
-  ConfigProvider,
-  Crypto,
-  Effect,
-  Layer,
-  Option,
-  Order,
-  Predicate,
-  Schema,
-  Stream,
-} from "effect"
+import { ConfigProvider, Effect, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
+import { SecureRandom } from "effect/crypto"
 import { LanguageModel, Prompt } from "effect/ai"
 import { BunCrypto } from "@effect/platform-bun"
 import {
@@ -58,8 +49,10 @@ import { shippedPreset } from "./helpers/test-preset.js"
  * to a captured fake `fetch`; no test reaches the gateway.
  */
 
-/** The Crypto a host provides; the driver captures it at setup. */
-const hostCrypto = Effect.service(Crypto.Crypto).pipe(Effect.provide(BunCrypto.layer))
+/** The SecureRandom a host provides; the driver captures it at setup. */
+const hostCrypto = Effect.service(SecureRandom.SecureRandom).pipe(
+  Effect.provide(BunCrypto.layerSecureRandom),
+)
 
 const API_KEY = "oc-test-key"
 const apiAuth = ProviderAuthInfo.cases.Api.make({ key: API_KEY })
@@ -1251,7 +1244,7 @@ describe("OpenCode Go usage limits", () => {
               go: go.spendLimits?.(modelName),
             })),
             Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
-            Effect.provideServiceEffect(Crypto.Crypto, hostCrypto),
+            Effect.provideServiceEffect(SecureRandom.SecureRandom, hostCrypto),
           )
         // GLM-5.3: $15 a month on Go, $120 on Go Plus; Zen bills as it goes.
         expect(yield* limitsWith({}, "glm-5.3")).toEqual({
@@ -1283,7 +1276,7 @@ describe("OpenCode Go usage limits", () => {
       Effect.gen(function* () {
         const [zen, go] = yield* openCodeModelDrivers.pipe(
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
-          Effect.provideServiceEffect(Crypto.Crypto, hostCrypto),
+          Effect.provideServiceEffect(SecureRandom.SecureRandom, hostCrypto),
         )
         expect(zen.requestPricing).toBeUndefined()
         const price = go.requestPricing

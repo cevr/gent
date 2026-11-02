@@ -18,7 +18,6 @@ import {
   Clock,
   Config,
   Context,
-  type Crypto,
   Effect,
   Exit,
   Fiber,
@@ -30,6 +29,7 @@ import {
   Schema,
   Scope,
 } from "effect"
+import type { Digest, SecureRandom } from "effect/crypto"
 import { Sharding, SingleRunner, Snowflake } from "effect/cluster"
 import type { SqlClient } from "effect/sql"
 import type * as LanguageModel from "effect/ai/LanguageModel"
@@ -326,7 +326,7 @@ const clientOver = (root: ReturnType<typeof hostedRoot>, cwd: string, scope: Sco
 /** A layer on the hosted client and crypto, built as the root builds its cluster. */
 const clusterRootOver = <A, E>(
   disk: DurableObjectDisk,
-  layer: Layer.Layer<A, E, SqlClient.SqlClient | Crypto.Crypto>,
+  layer: Layer.Layer<A, E, SqlClient.SqlClient | Digest.Digest | SecureRandom.SecureRandom>,
 ) =>
   layer.pipe(
     Layer.provideMerge(Layer.merge(hostedSqlOf(disk.activate("enforce").storage), BunCrypto.layer)),
@@ -753,8 +753,9 @@ describe("Durable-Object-shaped storage", () => {
         const dir = yield* makeTempDirectoryScoped("gent-do-loud-")
         const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
         const cluster = SingleRunner.layer({ runnerStorage: "memory" })
-        const lossyRoot = <A, E>(layer: Layer.Layer<A, E, SqlClient.SqlClient | Crypto.Crypto>) =>
-          clusterRootOver(disk, layer)
+        const lossyRoot = <A, E>(
+          layer: Layer.Layer<A, E, SqlClient.SqlClient | Digest.Digest | SecureRandom.SecureRandom>,
+        ) => clusterRootOver(disk, layer)
         const failureOf = <A, E>(layer: Layer.Layer<A, E>) =>
           Layer.build(layer).pipe(Effect.flip, Effect.map(String))
 

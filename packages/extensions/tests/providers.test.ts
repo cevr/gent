@@ -3,7 +3,6 @@ import { describe, expect, it, test } from "effect-bun-test"
 import {
   ConfigProvider,
   Context,
-  type Crypto,
   Deferred,
   Duration,
   Effect,
@@ -16,6 +15,7 @@ import {
   Semaphore,
   SynchronizedRef,
 } from "effect"
+import type { Digest, SecureRandom } from "effect/crypto"
 import {
   type ApiClassContribution,
   type CatalogModel,
@@ -31,12 +31,13 @@ import {
   type RunEffort,
 } from "@gent/core/extensions/api"
 import {
+  BunTestServices,
   createRpcHarness,
   fixtureModelCatalog,
+  KNOWN_IMAGE_COSTS,
   LanguageModelLayers,
   listModelCatalog,
   modelCatalogFixture,
-  KNOWN_IMAGE_COSTS,
   storedCredentialModel,
   textStep,
 } from "@gent/core/test-utils"
@@ -44,7 +45,6 @@ import { shippedPreset } from "./helpers/test-preset.js"
 import { SHIPPED_API_CLASSES } from "./helpers/api-classes.js"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import { makeFakeFetchState, oneGenerate } from "./helpers/fake-http-client.js"
-import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
 import {
@@ -92,7 +92,8 @@ const anthropicDriverIn = Effect.fn("test.anthropicDriverIn")(function* (
     | FileSystem.FileSystem
     | Path.Path
     | ChildProcessSpawner.ChildProcessSpawner
-    | Crypto.Crypto
+    | Digest.Digest
+    | SecureRandom.SecureRandom
     | HttpClient.HttpClient
   >().pipe(Effect.provide(FetchHttpClient.layer))
   return buildAnthropicModelDriver(
@@ -137,7 +138,7 @@ describe("driver catalog", () => {
           "anthropic/claude-haiku-4-5 200000",
           "anthropic/claude-sonnet-6 1000000",
         ])
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 
   test("a driver's catalog names its provider's prompt-cache lifetime on each model", () => {
@@ -328,7 +329,7 @@ describe("driver catalog", () => {
           // A first run at the default named no top level; the change keeps it unnamed.
           carries("claude-opus-5", ["default"]),
         ]).toEqual([true, true, false, false, true, true, true])
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 
   test("a driver lists only its own provider's models a turn can drive", () => {
@@ -425,7 +426,7 @@ describe("driver catalog", () => {
             ...lifetimeCosts,
           },
         ])
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunTestServices)),
   )
 })
 

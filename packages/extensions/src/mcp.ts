@@ -9,7 +9,6 @@ import {
   Exit,
   Fiber,
   FileSystem,
-  Crypto,
   Equal,
   FiberSet,
   JsonSchema,
@@ -24,6 +23,7 @@ import {
   Scope,
   Semaphore,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { Base64, Base64Url, Hex } from "effect/encoding"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
 import {
@@ -232,8 +232,11 @@ const serverIdentity = (entry: {
 const serverKey = Effect.fn("Mcp.serverKey")(function* (
   entry: Parameters<typeof serverIdentity>[0],
 ) {
-  const crypto = yield* Crypto.Crypto
-  const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(serverIdentity(entry)))
+  const crypto = yield* Digest.Digest
+  const digest = yield* crypto.digest(
+    Digest.sha256,
+    new TextEncoder().encode(serverIdentity(entry)),
+  )
   return Hex.encode(digest)
 })
 
@@ -647,19 +650,8 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
       continue
     }
     const { config, cwd } = runnable.success
-    const key = yield* Effect.result(serverKey({ written, config, source, cwd }))
-    if (Result.isFailure(key)) {
-      yield* Effect.logWarning("mcp.server.key").pipe(
-        Effect.annotateLogs({ server: written, error: key.failure.message }),
-      )
-      misconfigured.push({
-        name,
-        transport: configuredTransport(config),
-        reason: key.failure.message,
-      })
-      continue
-    }
-    servers.push({ name, key: key.success, config, cwd })
+    const key = yield* serverKey({ written, config, source, cwd })
+    servers.push({ name, key, config, cwd })
   }
   return { servers, misconfigured }
 })
@@ -860,7 +852,7 @@ export const makeBlobStore = (directory: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const crypto = yield* Crypto.Crypto
+    const crypto = yield* Digest.Digest
     // The prune of the directory runs once, as its own fiber in the store's
     // scope (`makeStartedMemo`). A save stopped while it waits only stops
     // waiting: the prune goes on, and the next save joins it.
@@ -884,7 +876,7 @@ export const makeBlobStore = (directory: string) =>
           return Option.none<string>()
         }
         yield* prune
-        const digest = Hex.encode(yield* crypto.digest("SHA-256", bytes.success))
+        const digest = Hex.encode(yield* crypto.digest(Digest.sha256, bytes.success))
         const file = path.join(directory, `${digest}.${blobExtension(mimeType)}`)
         // A reuse marks the file as just written, so no prune takes it now; a file gone is written again.
         const now = (yield* Clock.currentTimeMillis) / 1000
@@ -1016,14 +1008,18 @@ const authKey = (server: McpServer, config: HttpServerConfig) => `${server.name}
 /** The login file, and the services a fetch runs its refresh with. */
 interface AuthStore {
   readonly file: string
-  readonly services: Context.Context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>
+  readonly services: Context.Context<
+    FileSystem.FileSystem | Path.Path | Digest.Digest | SecureRandom.SecureRandom
+  >
 }
 
 const makeAuthStore = Effect.fn("Mcp.makeAuthStore")(function* (home: string) {
   const path = yield* Path.Path
   return {
     file: path.join(yield* resolveDataDir(home), "mcp-auth.json"),
-    services: yield* Effect.context<FileSystem.FileSystem | Path.Path | Crypto.Crypto>(),
+    services: yield* Effect.context<
+      FileSystem.FileSystem | Path.Path | Digest.Digest | SecureRandom.SecureRandom
+    >(),
   }
 })
 
@@ -1529,7 +1525,7 @@ const startLogin = (
   scope: Scope.Scope,
 ) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto
+    const crypto = yield* SecureRandom.SecureRandom
     const state = Base64Url.encode(yield* crypto.randomBytes(24))
     const code = yield* Deferred.make<string, McpError>()
     const port = yield* serveRedirect(server, state, code).pipe(Scope.provide(scope))
@@ -2247,7 +2243,8 @@ const mcpClientsLive = ({
   Layer.effect(
     McpClients,
     Effect.gen(function* () {
-      const crypto = yield* Crypto.Crypto
+      const digest = yield* Digest.Digest
+      const random = yield* SecureRandom.SecureRandom
       // The host's loopback listener, for the redirect of a login.
       const platform = yield* GentPlatform
       const blobStore = yield* makeBlobStore(blobs)
@@ -2563,7 +2560,8 @@ const mcpClientsLive = ({
               const scope = yield* Scope.fork(layerScope)
               const started = yield* restore(
                 startLogin(state.entry.server, config, auth, scope).pipe(
-                  Effect.provideService(Crypto.Crypto, crypto),
+                  Effect.provideService(Digest.Digest, digest),
+                  Effect.provideService(SecureRandom.SecureRandom, random),
                   Effect.provideService(GentPlatform, platform),
                   Effect.mapError((error) => {
                     if (error._tag === "McpError") return error

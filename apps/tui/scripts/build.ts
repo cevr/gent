@@ -1,6 +1,7 @@
-import { BunRuntime, BunServices } from "@effect/platform-bun"
+import { BunCrypto, BunRuntime, BunServices } from "@effect/platform-bun"
 import solidTransformPlugin from "@opentui/solid/bun-plugin"
-import { Config, Crypto, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { Config, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { SecureRandom } from "effect/crypto"
 
 class BuildError extends Schema.TaggedError<BuildError, { readonly brand: unique symbol }>()(
   "BuildError",
@@ -32,6 +33,27 @@ const compileTarget = Config.option(
   ),
 )
 
+/**
+ * Effect's `NodeWS` is `export * from "ws"`, and `ws` is a Bun built-in that
+ * the bundle keeps external. Bun 1.4 emits that star re-export with no binding
+ * for the module: the binary throws `ws is not defined` as it loads
+ * (`NodeSocketServer`, reached through the `@effect/platform-bun` namespace
+ * that extensions import). Named re-exports bind. The names are the ones both
+ * the `ws` package and Bun's built-in export; Effect reads `WebSocketServer`.
+ */
+const namedWsReexports: Bun.BunPlugin = {
+  name: "named-ws-reexports",
+  setup(builder) {
+    builder.onLoad(
+      { filter: /[/\\]@effect[/\\]platform-node-shared[/\\]dist[/\\]NodeWS\.js$/ },
+      () => ({
+        contents: `export { createWebSocketStream, extension, Receiver, Sender, subprotocol, WebSocket, WebSocketServer } from "ws"\n`,
+        loader: "js",
+      }),
+    )
+  },
+}
+
 /** `__GENT_BUILD__`: an object literal the bundler puts where the source names it. */
 const encodeBuildDefine = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ id: Schema.String, version: Schema.String })),
@@ -40,7 +62,7 @@ const encodeBuildDefine = Schema.encodeSync(
 const build = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const crypto = yield* Crypto.Crypto
+  const crypto = yield* SecureRandom.SecureRandom
   const rootDir = path.resolve(yield* path.fromFileUrl(new URL("..", import.meta.url)))
   const binDir = path.join(rootDir, "bin")
 
@@ -64,7 +86,7 @@ const build = Effect.gen(function* () {
   // The build names itself: a fresh id per build and the version this app's
   // package.json ships as. Discovery attaches only to a server of the same
   // build, and the builtin extensions name their artifact by the id.
-  const id = yield* crypto.randomUUIDv4()
+  const id = yield* crypto.uuidV4()
   const { version } = yield* fs
     .readFileString(path.join(rootDir, "package.json"))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageVersion)))
@@ -79,7 +101,7 @@ const build = Effect.gen(function* () {
       // needs ESM output: OpenTUI awaits at module top level.
       format: "esm",
       bytecode: true,
-      plugins: [solidTransformPlugin],
+      plugins: [namedWsReexports, solidTransformPlugin],
       minify: false,
       define: {
         __GENT_BUILD__: encodeBuildDefine({ id, version }),
@@ -112,5 +134,11 @@ const build = Effect.gen(function* () {
 
 // The layer runs the build once as it is built; the scope closes after it.
 BunRuntime.runMain(
-  Effect.scoped(Layer.build(Layer.effectDiscard(build).pipe(Layer.provide(BunServices.layer)))),
+  Effect.scoped(
+    Layer.build(
+      Layer.effectDiscard(build).pipe(
+        Layer.provide(Layer.merge(BunServices.layer, BunCrypto.layerSecureRandom)),
+      ),
+    ),
+  ),
 )

@@ -1267,6 +1267,5 @@ export const runVerifyCli = Effect.fn("Verify.cli")(function* (args: ReadonlyArr
 
 if (import.meta.main) {
   const main = Stdio.Stdio.use(({ args }) => Effect.flatMap(args, runVerifyCli))
-  // @effect-diagnostics-next-line strictEffectProvide:off -- the script's process entry provides the platform once.
   BunRuntime.runMain(main.pipe(Effect.provide(BunPlatformLive)))
 }

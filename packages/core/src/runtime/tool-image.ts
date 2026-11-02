@@ -15,7 +15,6 @@
  */
 import {
   Clock,
-  Crypto,
   Duration,
   Effect,
   FileSystem,
@@ -26,6 +25,7 @@ import {
   Random,
   Schema,
 } from "effect"
+import { Digest } from "effect/crypto"
 import { Base64, Hex } from "effect/encoding"
 import type * as Prompt from "effect/ai/Prompt"
 import { ExtensionContext } from "../domain/extension.js"
@@ -669,9 +669,9 @@ const storeToolImage = Effect.fn("ToolImage.store")(
     const { bytes } = fitted
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const crypto = yield* Crypto.Crypto
+    const crypto = yield* Digest.Digest
     const directory = yield* toolImageDirectory(home)
-    const sha256 = Hex.encode(yield* crypto.digest("SHA-256", bytes))
+    const sha256 = Hex.encode(yield* crypto.digest(Digest.sha256, bytes))
     const image = ToolImage.make({
       sha256,
       mediaType: fitted.mediaType,

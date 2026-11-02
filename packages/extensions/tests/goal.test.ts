@@ -19,18 +19,19 @@ import {
 } from "effect"
 import {
   advanceUntil,
+  BunTestServices,
+  createRpcHarness,
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  runToolWithCtx,
+  testLeafContext,
+  testToolContext,
   textDeltaPart,
   textStep,
   toolCallPart,
   toolCallStep,
   waitFor,
-  createRpcHarness,
-  runToolWithCtx,
-  testLeafContext,
-  testToolContext,
 } from "@gent/core/test-utils"
 import {
   AgentName,
@@ -68,7 +69,6 @@ import {
   type GoalState,
   GoalTool,
 } from "../src/goal.js"
-import { BunServices } from "@effect/platform-bun"
 import * as AiError from "effect/ai/AiError"
 import { TestClock } from "effect/testing"
 
@@ -346,7 +346,7 @@ describe("goal store", () => {
         yield* fs.readFileString(`${home}/.gent/goals/${branchId}.json`),
       )
       expect(Option.fromUndefinedOr(snapshot.goal?.status)).toEqual(Option.some("complete"))
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a file removed while it is being read reads as no goal", () =>
@@ -367,7 +367,7 @@ describe("goal store", () => {
         Effect.provideService(FileSystem.FileSystem, vanishing),
       )
       expect(read.goal).toBeUndefined()
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a run with its own data directory keeps branch state there, not in home", () =>
@@ -395,7 +395,7 @@ describe("goal store", () => {
       const fs = yield* FileSystem.FileSystem
       expect(yield* fs.readDirectory(`${dataDir}/goals`)).toEqual([`${branchId}.json`])
       expect(yield* fs.exists(`${home}/.gent`)).toBe(false)
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a write the disk rejects mid-flight leaves no staging file behind", () =>
@@ -437,7 +437,7 @@ describe("goal store", () => {
       expect(Exit.isFailure(created)).toBe(true)
       // The failed write leaves nothing: no target, no staging sibling.
       expect(yield* fs.readDirectory(`${home}/.gent/goals`)).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 })
 
@@ -805,7 +805,7 @@ describe("goal resume fire", () => {
         sends: yield* Ref.get(sends),
         wakes: yield* Ref.get(wakes),
       }
-    }).pipe(Effect.provide(Layer.mergeAll(BunServices.layer, TestClock.layer())))
+    }).pipe(Effect.provide(Layer.mergeAll(BunTestServices, TestClock.layer())))
 
   const fire = (sourceId: string, cause: "due" | "start") =>
     goalResumeDue({ sourceId, at: Option.some(90_000), cause })

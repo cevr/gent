@@ -24,7 +24,6 @@ import {
   Stream,
 } from "effect"
 import { Base64 } from "effect/encoding"
-import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/rpc/RpcClientError"
 import { SocketCloseError } from "effect/socket/Socket"
@@ -64,9 +63,12 @@ import {
   ExtensionHealthIssue,
 } from "@gent/core/protocol"
 import {
+  BunTestServices,
+  plainArgs,
   createRpcHarness,
   emptyQueueSnapshot,
   EventId,
+  ExtensionHealth,
   ExtensionStatusScope,
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -75,7 +77,6 @@ import {
   textStep,
   toolCallStep,
   waitFor,
-  ExtensionHealth,
 } from "@gent/core/test-utils"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { WakeEntry } from "@gent/extensions/client"
@@ -3796,7 +3797,7 @@ describe("App drafts, queue restore and forks across session switches", () => {
         yield* waitForFrame(view.setup, () => sends.length === 6, "sent again")
         expect(sends[5]?.content).toBe(sends[0]?.content)
         expect(sends[5]?.requestId).not.toBe(sends[0]?.requestId)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("12 seconds")),
     15_000,
   )
   // Refused sends come back in send order at the draft's start. Queue text
@@ -6325,7 +6326,7 @@ describe("App clipboard", () => {
                 const chunks = yield* Stream.runCollect(input)
                 stdin = new TextDecoder().decode(Buffer.concat(chunks))
               }
-              runs.push({ args: command.args, stdin })
+              runs.push({ args: plainArgs(command.args), stdin })
               const [program, ...args] = standIn
               const child = yield* real.spawn(
                 ChildProcess.make(program, args, {
@@ -8894,7 +8895,7 @@ export default defineClientExtension("@test/hello", {
           () => commandIds().includes("hello-v22") && !commandIds().includes("hello-v1"),
           "the edit after the shell's reload",
         )
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
   )
   it.live("a client reload keeps the widgets of an extension it kept mounted", () =>
     Effect.gen(function* () {
@@ -8942,7 +8943,7 @@ export default defineClientExtension("@test/added", {
       yield* waitUntil(() => ext.commands().some((command) => command.id === "added"), "the reload")
       expect(renderFrame(setup)).toContain("counted widget")
       expect(mounts).toBe(1)
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    }).pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
   )
   // The pane turns an extension off in the configs of the session in view,
   // and the server loads that session's project: a move to a session rooted
@@ -9007,7 +9008,7 @@ export default defineClientExtension("@test/there", {
       expect(commandIds()).not.toContain("there")
       client.switchSession(there, BranchId.make("branch-place-there"), "There")
       yield* waitUntil(() => commandIds().includes("there"), "the project of the session in view")
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
   )
   it.scopedLive("a turn's end in the session in view reads extension health again", () =>
     Effect.gen(function* () {

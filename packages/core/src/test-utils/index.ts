@@ -7,6 +7,8 @@ export {
   apiKeyAuth,
   baseLocalLayer,
   baseLocalLayerWithProvider,
+  BunTestServices,
+  plainArgs,
   captureTurnTools,
   collectTestContributions,
   createE2ELayer,

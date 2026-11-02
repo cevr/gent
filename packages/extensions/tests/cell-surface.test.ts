@@ -18,37 +18,37 @@ import {
 import { GentPlatform, MessageStorage } from "@gent/core/host"
 import { BunPlatformLive } from "@gent/core/host-bun"
 import {
-  type LoadedExtension,
+  ApprovalService,
+  BunTestServices,
   captureTurnTools,
   collectTestContributions,
+  ConfigService,
   createE2ELayer,
-  plantInFlightTurn,
-  plantToolCallBinding,
+  createRpcClient,
   createRpcHarness,
+  CurrentWorkspaceId,
   ensureStorageParents,
   finishPart,
   LanguageModelLayers,
+  type LoadedExtension,
   multiToolCallStep,
+  plantInFlightTurn,
+  plantToolCallBinding,
+  RuntimeEnvironment,
   type SequenceStep,
+  systemTextOf,
+  TEST_MODEL_ID,
+  testLeafContext,
+  testToolContext,
   textDeltaPart,
   textStep,
   toolCallPart,
   toolCallStep,
-  waitFor,
-  RuntimeEnvironment,
-  CurrentWorkspaceId,
-  WorkspaceId,
-  createRpcClient,
   toolResultMessageIdForTurn,
-  ApprovalService,
   turnRequestText,
-  systemTextOf,
-  ConfigService,
-  testLeafContext,
-  testToolContext,
-  TEST_MODEL_ID,
+  waitFor,
+  WorkspaceId,
 } from "@gent/core/test-utils"
-import { BunServices } from "@effect/platform-bun"
 import { FetchHttpClient } from "effect/http"
 import { Base64 } from "effect/encoding"
 import * as Prompt from "effect/ai/Prompt"
@@ -410,7 +410,9 @@ const storedApiKey = (info: ProviderAuthInfo): Option.Option<string> => {
 }
 
 /** The judge's answer: the first label, the highest level, and 0.25. */
-const judgeAnswer = Match.type<Decision.Any>().pipe(
+const judgeAnswer = Match.type<
+  Decision.Classify<string> | Decision.Rate<string> | Decision.Probability
+>().pipe(
   Match.tagsExhaustive({
     Classify: (decision): DecisionModel.ProviderAnswer => {
       const labels = Object.keys(decision.criteria)
@@ -1993,7 +1995,7 @@ describe("saved cell recovery through RPC", () => {
           // Threads, the `delegate` agent and their hooks, as the builtin loads them.
           const sessionTools = yield* collectTestContributions(SessionToolsExtension.setup).pipe(
             Effect.provide(
-              Layer.mergeAll(BunServices.layer, GentPlatform.Test(), FetchHttpClient.layer),
+              Layer.mergeAll(BunTestServices, GentPlatform.Test(), FetchHttpClient.layer),
             ),
           )
           const extensions: ReadonlyArray<LoadedExtension> = [
@@ -2910,7 +2912,7 @@ describe("tool signatures", () => {
       expect(signatures.length).toBeGreaterThan(shippedSignatures.length)
       expect(signatures.filter((line) => /: Promise<object(\[\])?>/.test(line))).toEqual([])
     }).pipe(
-      Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test(), FetchHttpClient.layer)),
+      Effect.provide(Layer.mergeAll(BunTestServices, GentPlatform.Test(), FetchHttpClient.layer)),
     ),
   )
 

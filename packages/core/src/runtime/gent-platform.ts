@@ -1,7 +1,6 @@
 import {
   Config,
   Context,
-  Crypto,
   Duration,
   Effect,
   Exit,
@@ -16,6 +15,7 @@ import {
   Schema,
   Stream,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { HttpClient, HttpServer, HttpServerError } from "effect/http"
 import { causeMessage } from "../domain/guards.js"
@@ -45,7 +45,7 @@ import { causeMessage } from "../domain/guards.js"
  *   - `transcodeImage`   — decode an image, fit it inside a square, encode it
  *   - `loopbackServer`   — an HTTP listener on 127.0.0.1, for a sign-in redirect
  *
- * Random bytes come from Effect `Crypto`, and `file://` URLs become paths
+ * Random bytes come from Effect `SecureRandom`, and `file://` URLs become paths
  * through Effect `Path.fromFileUrl`; neither is a platform fact.
  *
  * The `GentPlatform.Test(prefix)` layer mints deterministic ids
@@ -282,7 +282,8 @@ export type ExtensionPlatformServices =
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | HttpClient.HttpClient
   | GentPlatform
 
@@ -303,7 +304,8 @@ export const extensionPlatformServicesLive: Layer.Layer<
     ChildProcessSpawner.ChildProcessSpawner,
     Effect.service(ChildProcessSpawner.ChildProcessSpawner),
   ),
-  Layer.effect(Crypto.Crypto, Effect.service(Crypto.Crypto)),
+  Layer.effect(Digest.Digest, Effect.service(Digest.Digest)),
+  Layer.effect(SecureRandom.SecureRandom, Effect.service(SecureRandom.SecureRandom)),
   Layer.effect(HttpClient.HttpClient, Effect.service(HttpClient.HttpClient)),
   Layer.effect(GentPlatform, Effect.service(GentPlatform)),
 )

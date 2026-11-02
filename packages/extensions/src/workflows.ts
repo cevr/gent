@@ -6,7 +6,8 @@
  * definition the command writes through the checks of `machine.define`.
  */
 
-import { Crypto, Effect, Path, Schema } from "effect"
+import { Effect, Path, Schema } from "effect"
+import { SecureRandom } from "effect/crypto"
 import {
   defineExtension,
   ExtensionContext,
@@ -423,10 +424,10 @@ const resultPath = Effect.fn("Workflows.resultPath")(function* (
  */
 const queuePrompt = Effect.fn("Workflows.queuePrompt")(function* (id: string, content: string) {
   const ctx = yield* ExtensionContext
-  const crypto = yield* Crypto.Crypto
+  const crypto = yield* SecureRandom.SecureRandom
   yield* ctx.Session.send({
     delivery: "queue",
-    sourceId: `${id}:${yield* crypto.randomUUIDv7()}`,
+    sourceId: `${id}:${yield* crypto.uuidV7()}`,
     content,
     wake: true,
   })

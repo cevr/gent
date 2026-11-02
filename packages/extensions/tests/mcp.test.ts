@@ -18,7 +18,7 @@ import {
   Stream,
 } from "effect"
 import { crc32, deflateSync } from "node:zlib"
-import { BunHttpServer, BunServices } from "@effect/platform-bun"
+import { BunHttpServer } from "@effect/platform-bun"
 import {
   FetchHttpClient,
   HttpClient,
@@ -30,14 +30,15 @@ import type * as Prompt from "effect/ai/Prompt"
 import { Base64 } from "effect/encoding"
 import {
   BunGentPlatformLive,
+  BunTestServices,
   collectTestContributions,
   createRpcHarness,
   LanguageModelLayers,
   type SequenceStep,
+  systemTextOf,
   textStep,
   toolCallStep,
   waitFor,
-  systemTextOf,
 } from "@gent/core/test-utils"
 import {
   AgentDefinition,
@@ -279,7 +280,7 @@ process.stdin.on("data", (chunk) => {
 })
 `
 
-const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
+const platformLayer = Layer.merge(BunTestServices, BunGentPlatformLive)
 
 /** The shipped extensions without `@gent/mcp`: a test's inline servers stand in for it, and both would claim `/mcp`. */
 const shippedWithoutMcp = shippedPreset.extensionInputs.filter(
@@ -1929,7 +1930,21 @@ const commandSession = (oauth: OAuthFixtureState, type: "auto" | "sse" = "auto")
       waitFor(texts, (all) => all.some((text) => text.includes(needle)), 10_000, needle).pipe(
         Effect.map((all) => all.filter((text) => text.includes(needle)).at(-1) ?? ""),
       )
-    return { request, shown }
+    /**
+     * `/mcp` asked again until it shows a healthy server: a login sets the
+     * health after it reloads the places whose cache it changed, so the
+     * cache file lands first.
+     */
+    const healthy = waitFor(
+      request("").pipe(
+        Effect.andThen(texts),
+        Effect.map((all) => all.filter((text) => text.startsWith("# MCP servers")).at(-1) ?? ""),
+      ),
+      (text) => text.includes("healthy"),
+      10_000,
+      "healthy",
+    )
+    return { request, shown, healthy }
   })
 
 /** Stores a login whose token `token-0` expires in 30 s, inside the 60 s skew. */
@@ -1963,7 +1978,7 @@ const loginThroughCommand = (oauth: OAuthFixtureState, catalogFile: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const http = yield* HttpClient.HttpClient
-    const { request, shown } = yield* commandSession(oauth)
+    const { request, shown, healthy } = yield* commandSession(oauth)
     // Setup could not list: the server wants a login.
     yield* request("")
     const before = yield* shown("- secure")
@@ -1978,8 +1993,7 @@ const loginThroughCommand = (oauth: OAuthFixtureState, catalogFile: string) =>
       10_000,
       "the login lists the tools into the cache",
     )
-    yield* request("")
-    const after = yield* shown("healthy")
+    const after = yield* healthy
     return { before, prompt, landing, after }
   }).pipe(Effect.provide(FetchHttpClient.layer))
 
@@ -2106,7 +2120,7 @@ describe("mcp oauth", () => {
         const data = yield* makeDataDir
         const catalogFile = path.join(data.directory, "mcp-catalog.json")
         yield* Effect.gen(function* () {
-          const { request, shown } = yield* commandSession(oauth)
+          const { request, shown, healthy } = yield* commandSession(oauth)
           yield* request("login secure")
           const prompt = yield* shown("/authorize?")
           expect(prompt).toContain("/mcp login secure <address>")
@@ -2133,8 +2147,7 @@ describe("mcp oauth", () => {
             10_000,
             "the pasted login lists the tools into the cache",
           )
-          yield* request("")
-          expect(yield* shown("healthy")).toContain(
+          expect(yield* healthy).toContain(
             "- secure (streamable-http): healthy, 2 tools, connected",
           )
           // With no login waiting, a pasted redirect has nothing to finish.

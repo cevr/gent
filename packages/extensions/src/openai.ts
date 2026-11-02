@@ -2,7 +2,6 @@ import {
   Array as Arr,
   Cause,
   Clock,
-  Crypto,
   Context,
   Deferred,
   Duration,
@@ -22,6 +21,7 @@ import {
   Semaphore,
   SynchronizedRef,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { Base64Url } from "effect/encoding"
 import {
   FetchHttpClient,
@@ -200,7 +200,6 @@ export class OAuthError extends Schema.TaggedError<OAuthError, { readonly brand:
       "missing-code",
       "state-mismatch",
       "callback-timeout",
-      "pkce-failed",
       "server-failed",
       "device-code-failed",
       "device-code-denied",
@@ -277,16 +276,6 @@ interface OpenAIAuthorizationFlow {
   readonly grant: (manualInput?: string) => Effect.Effect<AuthorizationGrant, OAuthError>
   readonly exchange: (grant: AuthorizationGrant) => Effect.Effect<OpenAIOAuthTokens, OAuthError>
 }
-const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = generatePkce.pipe(
-  Effect.mapError(
-    (error) =>
-      new OAuthError({
-        reason: "pkce-failed",
-        message: `PKCE generation failed: ${error.message}`,
-      }),
-  ),
-)
-
 const parseJwtClaims = (token: string): Option.Option<typeof JwtClaimsSchema.Type> => {
   const parts = token.split(".")
   if (parts.length !== 3) return Option.none()
@@ -604,18 +593,10 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
 const authorizeOpenAI: Effect.Effect<
   OpenAIAuthorizationFlow,
   OAuthError,
-  Scope.Scope | Crypto.Crypto | GentPlatform
+  Scope.Scope | Digest.Digest | SecureRandom.SecureRandom | GentPlatform
 > = Effect.gen(function* () {
-  const pkce = yield* generatePKCE
-  const state = yield* generateOAuthState.pipe(
-    Effect.mapError(
-      (error) =>
-        new OAuthError({
-          reason: "pkce-failed",
-          message: `OAuth state generation failed: ${error.message}`,
-        }),
-    ),
-  )
+  const pkce = yield* generatePkce
+  const state = yield* generateOAuthState
   const port = yield* OAuthRedirectPort
   const redirectUri = `http://localhost:${port}/auth/callback`
   const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
@@ -2225,14 +2206,14 @@ const explainedClientLayer = (
 /**
  * Build the model-driver contribution over a credential cache cell the
  * caller allocated once: every `resolveModel` call shares it. `hostServices` are the
- * host's Crypto and `GentPlatform`, captured at setup; the browser OAuth flow
+ * host's `Digest`, `SecureRandom` and `GentPlatform`, captured at setup; the browser OAuth flow
  * draws its PKCE and state from the one and its redirect listener from the other.
  */
 export const buildOpenAIModelDriver = (
   credentialCellRef: CredentialCacheCellRef<OpenAICredentials>,
   pendingCallbacks: Map<string, PendingCallbackEntry>,
   envApiKey: Option.Option<string>,
-  hostServices: Context.Context<Crypto.Crypto | GentPlatform>,
+  hostServices: Context.Context<Digest.Digest | SecureRandom.SecureRandom | GentPlatform>,
 ): ModelDriverContribution & Required<Pick<ModelDriverContribution, "resolveModel">> => {
   const cellFor = credentialCells(credentialCellRef)
   // The keys whose organization OpenAI refused a reasoning summary.
@@ -2573,9 +2554,10 @@ export const OpenAIExtension = defineExtension({
     const pendingCallbacks = new Map<string, PendingCallbackEntry>()
 
     const envApiKey = yield* readOptionalEnv("OPENAI_API_KEY")
-    // The host's Crypto and platform, not the driver's own: a shipped provider is
+    // The host's Digest, SecureRandom and platform, not the driver's own: a shipped provider is
     // never more privileged than a user extension.
-    const hostServices = Context.make(Crypto.Crypto, yield* Crypto.Crypto).pipe(
+    const hostServices = Context.make(Digest.Digest, yield* Digest.Digest).pipe(
+      Context.add(SecureRandom.SecureRandom, yield* SecureRandom.SecureRandom),
       Context.add(GentPlatform, yield* GentPlatform),
     )
 

@@ -2,7 +2,6 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Clock,
   Context,
-  Crypto,
   DateTime,
   Effect,
   Exit,
@@ -16,7 +15,7 @@ import {
   type Scope,
   Stream,
 } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { Digest } from "effect/crypto"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import type * as Prompt from "effect/ai/Prompt"
 import { Hex } from "effect/encoding"
@@ -32,6 +31,8 @@ import {
   runProcess,
 } from "@gent/core/extensions/api"
 import {
+  BunTestServices,
+  plainArgs,
   collectTestContributions,
   ConfigService,
   createE2ELayer,
@@ -251,7 +252,7 @@ const platformWith = (answers: {
           (command.command === "stat" || command.command === "mount") &&
           Predicate.isNotUndefined(answers.fs)
         ) {
-          return real.spawn(fileSystemProcess(answers.fs, command.command, command.args))
+          return real.spawn(fileSystemProcess(answers.fs, command.command, plainArgs(command.args)))
         }
         if (command._tag === "StandardCommand" && command.command === "df" && answers.noFreeSpace) {
           return real.spawn(
@@ -263,7 +264,7 @@ const platformWith = (answers: {
         return real.spawn(command)
       })
     }),
-  ).pipe(Layer.provide(BunServices.layer))
+  ).pipe(Layer.provide(BunTestServices))
 
 interface Parent {
   readonly sessionId: SessionId
@@ -374,7 +375,7 @@ const recordOf = (file: string) =>
   }).pipe(Effect.orDie)
 
 const live = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("20 seconds"))
+  effect.pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("20 seconds"))
 
 // ── the worktree copy ───────────────────────────────────────────────────────
 
@@ -1538,9 +1539,9 @@ const WorkOfRoundEnd = Schema.Struct({
  */
 const threadCreateKey = (starter: Parent, toolCallId: string) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto
+    const crypto = yield* Digest.Digest
     const identity = ["thread.create", starter.sessionId, starter.branchId, toolCallId].join("\n")
-    const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(identity))
+    const digest = yield* crypto.digest(Digest.sha256, new TextEncoder().encode(identity))
     return `thread:${Hex.encode(digest).slice(0, 32)}`
   }).pipe(Effect.orDie)
 
@@ -1618,7 +1619,7 @@ describe("a snapshot thread", () => {
           (session) => session.parentSessionId === harness.sessionId,
         )
         expect(thread?.cwd).toBe(planted.cwd)
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("25 seconds")),
     30_000,
   )
 
@@ -1667,7 +1668,7 @@ describe("a snapshot thread", () => {
           .filter((part) => part.type === "tool-result")
         expect(results.map((part) => part.isFailure)).toEqual([true])
         expect(encodeJson(results[0]?.result)).toContain("outside this agent's paths")
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("25 seconds")),
     30_000,
   )
 
@@ -1713,7 +1714,7 @@ describe("a snapshot thread", () => {
           .pipe(Effect.orElseSucceed(() => []))
         expect(worktrees).toEqual([])
         expect(yield* sh(origin, "git for-each-ref refs/gent")).toBe("")
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("25 seconds")),
     30_000,
   )
 
@@ -1761,7 +1762,7 @@ describe("a snapshot thread", () => {
           (session) => session.parentSessionId === harness.sessionId,
         )
         expect(threads).toEqual([])
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("25 seconds")),
     30_000,
   )
 
@@ -1798,7 +1799,7 @@ describe("a snapshot thread", () => {
         // Read at once: the failed start holds no lane.
         const lanes = yield* harness.client.accounts.lanes()
         expect(lanes.providers.map((provider) => provider.load)).toEqual([0])
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("25 seconds")),
     30_000,
   )
 
@@ -1845,7 +1846,7 @@ describe("a snapshot thread", () => {
           )
         }
         expect(yield* worktreeCount(origin)).toBe("3")
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("40 seconds")),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("40 seconds")),
     45_000,
   )
 

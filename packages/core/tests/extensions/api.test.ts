@@ -1451,7 +1451,7 @@ describe("Effect-purity locks (compile-time)", () => {
     type Ctx = PublicExtensionApi.ExtensionContextService
     // @ts-expect-error -- the Files facet was removed; extensions yield FileSystem.FileSystem and Path.Path
     type _Files = Ctx["Files"]
-    // @ts-expect-error -- the Process facet was removed; extensions run commands over ChildProcessSpawner and mint ids with Crypto
+    // @ts-expect-error -- the Process facet was removed; extensions run commands over ChildProcessSpawner and mint ids with SecureRandom
     type _Process = Ctx["Process"]
     expect(true).toBe(true)
   })

@@ -3,7 +3,6 @@ import {
   Cause,
   Clock,
   Context,
-  type Crypto,
   DateTime,
   Deferred,
   Duration,
@@ -20,6 +19,7 @@ import {
   Queue,
   Random,
   Record,
+  Redacted,
   Ref,
   Scheduler,
   Schema,
@@ -27,6 +27,8 @@ import {
   Stream,
   TxRef,
 } from "effect"
+import type { Digest, SecureRandom } from "effect/crypto"
+import type { CommandLine } from "effect/process"
 import type { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import {
@@ -170,7 +172,7 @@ import {
 } from "../domain/event.js"
 import { LanguageModel, Model as AiModel } from "effect/ai"
 import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
-import { BunCrypto, BunHttpServer } from "@effect/platform-bun"
+import { BunCrypto, BunHttpServer, BunServices } from "@effect/platform-bun"
 import {
   BunGentPlatformLive,
   BunPlatformLive,
@@ -574,7 +576,7 @@ export const collectTestContributions = <E, R>(
 
 /**
  * In-memory SQLite storage with its platform closed: deterministic ids from
- * `GentPlatform.Test()` and the Bun `Crypto` the host would provide. Storage
+ * `GentPlatform.Test()` and the Bun `Digest` and `SecureRandom` the host would provide. Storage
  * tests yield it without wiring a platform layer; product callers use
  * `SqliteStorage.WithSql` over the host's client under the host's platform.
  */
@@ -2187,12 +2189,34 @@ export const createRpcClient = <E, R>(
 // ── stored-credential model ─────────────────────────────────────────────────
 
 /**
+ * A command's words as plain strings, for a test fake that matches on them:
+ * a redacted word (effect 4.1) reads as its value.
+ */
+export const plainArgs = (args: ReadonlyArray<CommandLine.Word>): ReadonlyArray<string> =>
+  args.map((word) => {
+    if (Redacted.isRedacted(word)) return Redacted.value(word)
+    return word
+  })
+
+/**
+ * The Bun services a test provides: `BunServices` (files, paths, processes,
+ * the terminal and stdio) and the digest and secure random every extension
+ * yields, which effect 4.1 moved out of `BunServices`.
+ */
+export const BunTestServices = Layer.mergeAll(
+  BunServices.layer,
+  BunCrypto.layerDigest,
+  BunCrypto.layerSecureRandom,
+)
+
+/**
  * The host services a provider driver captures at setup, as the Bun host
- * gives them: its `Crypto`, and its `GentPlatform` (the loopback listener a
+ * gives them: its `Digest` and `SecureRandom`, and its `GentPlatform` (the loopback listener a
  * sign-in redirect opens).
  */
-export const bunDriverHostServices: Effect.Effect<Context.Context<Crypto.Crypto | GentPlatform>> =
-  Effect.scoped(Layer.build(Layer.merge(BunCrypto.layer, BunGentPlatformLive)))
+export const bunDriverHostServices: Effect.Effect<
+  Context.Context<Digest.Digest | SecureRandom.SecureRandom | GentPlatform>
+> = Effect.scoped(Layer.build(Layer.merge(BunCrypto.layer, BunGentPlatformLive)))
 
 /**
  * The language model a turn resolves for `modelId` through the production

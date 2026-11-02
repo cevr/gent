@@ -17,30 +17,30 @@ import {
 } from "effect"
 import { GentPlatform, MessageStorage } from "@gent/core/host"
 import {
-  type LoadedExtension,
+  ApprovalService,
+  BunTestServices,
   captureTurnTools,
   collectTestContributions,
   createE2ELayer,
+  createRpcClient,
+  createRpcHarness,
+  CurrentWorkspaceId,
+  ensureStorageParents,
+  EventStore,
+  LanguageModelLayers,
+  type LoadedExtension,
+  multiToolCallStep,
   provideToolDispatch,
   recordInteractionDecision,
+  SqliteStorage,
   staticToolBinding,
   storedEvents,
-  createRpcHarness,
-  ensureStorageParents,
   testToolContext,
-  LanguageModelLayers,
-  multiToolCallStep,
   textStep,
   toolCallStep,
   waitFor,
-  ApprovalService,
-  SqliteStorage,
-  EventStore,
-  CurrentWorkspaceId,
   WorkspaceId,
-  createRpcClient,
 } from "@gent/core/test-utils"
-import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
 import {
   BranchId,
@@ -1139,10 +1139,7 @@ const host = testToolContext({
   branchId: branchIdToolCall,
   toolCallId,
 })
-const base = Layer.provideMerge(
-  Layer.mergeAll(ToolRunner.Live, EventStore.Memory),
-  BunServices.layer,
-)
+const base = Layer.provideMerge(Layer.mergeAll(ToolRunner.Live, EventStore.Memory), BunTestServices)
 
 /** The message of the `StorageError` a refused storage call fails with. */
 const refusal = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -1804,7 +1801,7 @@ describe("recorded host operations", () => {
             }).pipe(Effect.provideContext(context))
           }),
         )
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25000,
   )
 
@@ -1929,7 +1926,7 @@ describe("recorded host operations", () => {
             }).pipe(Effect.provideContext(context))
           }),
         )
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25000,
   )
 
@@ -1997,7 +1994,7 @@ describe("recorded host operations", () => {
           expect(yield* Ref.get(judged)).toBe(1)
           expect(yield* Ref.get(calls)).toBe(0)
         }).pipe(Effect.provideContext(context))
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     18000,
   )
 
@@ -2098,7 +2095,7 @@ describe("recorded host operations", () => {
             }).pipe(Effect.provideContext(context))
           }),
         )
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25000,
   )
 })
@@ -2287,7 +2284,7 @@ describe("cell execution storage", () => {
             }).pipe(Effect.provideContext(context))
           }),
         )
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 })
 
@@ -2717,6 +2714,6 @@ describe("cell tool operation storage", () => {
             }).pipe(Effect.provideContext(context))
           }),
         )
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 })

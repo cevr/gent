@@ -10001,14 +10001,26 @@ const toolkitForPart = (
 const encodePart = (
   options: ProviderOptions,
   part: Response.Part<LanguageModelToolMap>,
-): Response.PartEncoded =>
-  Schema.encodeUnknownSync(Response.Part(toolkitForPart(options, part)))(part)
+): Response.PartEncoded => {
+  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- `AiTool.Any` types its schemas' services as unknown; a gent tool's schemas need none (effect 4.0 typed this codec so).
+  const codec = Response.Part(toolkitForPart(options, part)) as Schema.Codec<
+    Response.Part<LanguageModelToolMap>,
+    Response.PartEncoded
+  >
+  return Schema.encodeUnknownSync(codec)(part)
+}
 
 const encodeStreamPart = (
   options: ProviderOptions,
   part: LanguageModelStreamPart,
-): Response.StreamPartEncoded =>
-  Schema.encodeUnknownSync(Response.StreamPart(toolkitForPart(options, part)))(part)
+): Response.StreamPartEncoded => {
+  // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- `AiTool.Any` types its schemas' services as unknown; a gent tool's schemas need none (effect 4.0 typed this codec so).
+  const codec = Response.StreamPart(toolkitForPart(options, part)) as Schema.Codec<
+    LanguageModelStreamPart,
+    Response.StreamPartEncoded
+  >
+  return Schema.encodeUnknownSync(codec)(part)
+}
 
 export const aiError = (method: string, message: string) =>
   AiError.make({

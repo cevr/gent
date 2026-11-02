@@ -3,7 +3,6 @@ import { chainCompactors, ModelContextCompactor } from "./model-context.js"
 import {
   Cause,
   Context,
-  Crypto,
   DateTime,
   Duration,
   Effect,
@@ -26,6 +25,7 @@ import {
   Semaphore,
   Stream,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import {
   type AnyExtensionHook,
   type AnyResourceContribution,
@@ -181,6 +181,7 @@ import * as EffectEntry from "effect"
 import * as EffectAi from "effect/ai"
 import * as EffectAiError from "effect/ai/AiError"
 import * as EffectResponse from "effect/ai/Response"
+import * as EffectCrypto from "effect/crypto"
 import * as EffectEncoding from "effect/encoding"
 import * as EffectHttp from "effect/http"
 import * as EffectHttpClientError from "effect/http/HttpClientError"
@@ -1989,6 +1990,7 @@ export const extensionEntryModules: ReadonlyMap<string, RuntimeModuleSource> = n
   ["effect/ai/Prompt", () => Prompt],
   ["effect/ai/Response", () => EffectResponse],
   ["effect/ai/Tool", () => AiTool],
+  ["effect/crypto", () => EffectCrypto],
   ["effect/encoding", () => EffectEncoding],
   ["effect/http", () => EffectHttp],
   ["effect/http/HttpClientError", () => EffectHttpClientError],
@@ -2970,7 +2972,8 @@ export class SessionProfileCache extends Context.Service<
         const fs = yield* FileSystem.FileSystem
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
-        const crypto = yield* Crypto.Crypto
+        const digest = yield* Digest.Digest
+        const random = yield* SecureRandom.SecureRandom
         const httpClient = yield* HttpClient.HttpClient
         const platform = yield* GentPlatform
         const sql = yield* SqlClient.SqlClient
@@ -2987,7 +2990,8 @@ export class SessionProfileCache extends Context.Service<
           Context.add(FileSystem.FileSystem, fs),
           Context.add(Path.Path, pathSvc),
           Context.add(ChildProcessSpawner, spawner),
-          Context.add(Crypto.Crypto, crypto),
+          Context.add(Digest.Digest, digest),
+          Context.add(SecureRandom.SecureRandom, random),
           Context.add(HttpClient.HttpClient, httpClient),
           Context.add(ConfigService, configService),
           Context.add(GentPlatform, platform),

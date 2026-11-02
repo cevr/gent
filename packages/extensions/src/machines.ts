@@ -35,7 +35,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   DateTime,
   Duration,
   Effect,
@@ -58,6 +57,7 @@ import {
   Scope,
   Semaphore,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { Tool } from "effect/ai"
 import { Hex } from "effect/encoding"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
@@ -2668,7 +2668,8 @@ type DriverServices =
   | MachineDrivers
   | FileSystem.FileSystem
   | Path.Path
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | ChildProcessSpawner
   | GentPlatform
 
@@ -5914,7 +5915,8 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
     | MachineStore
     | FileSystem.FileSystem
     | Path.Path
-    | Crypto.Crypto
+    | Digest.Digest
+    | SecureRandom.SecureRandom
     | ChildProcessSpawner
     | GentPlatform
   >()
@@ -6734,8 +6736,8 @@ const definitionPath = Effect.fn("Machines.definitionPath")(function* (name: str
 })
 
 const sha256Hex = Effect.fn("Machines.sha256")(function* (text: string) {
-  const crypto = yield* Crypto.Crypto
-  return Hex.encode(yield* crypto.digest("SHA-256", new TextEncoder().encode(text)))
+  const crypto = yield* Digest.Digest
+  return Hex.encode(yield* crypto.digest(Digest.sha256, new TextEncoder().encode(text)))
 })
 
 const DefineResult = Schema.Struct({
@@ -6837,7 +6839,7 @@ export const shipDefinition = Effect.fn("Machines.shipDefinition")(function* (
   )
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const crypto = yield* Crypto.Crypto
+  const crypto = yield* SecureRandom.SecureRandom
   const { text, marked, ...target } = yield* definitionText(decoded)
   const result = (outcome: DefinitionWrite) => ({ ...target, outcome })
   // The file holds this definition, as a ship or as machine.define wrote it.
@@ -6851,7 +6853,7 @@ export const shipDefinition = Effect.fn("Machines.shipDefinition")(function* (
     if (found.outcome === "unchanged" || !(yield* untouchedShipped(before.value))) return found
   }
   yield* fs.makeDirectory(path.dirname(target.path), { recursive: true })
-  const staged = `${target.path}.${yield* crypto.randomUUIDv7()}.tmp`
+  const staged = `${target.path}.${yield* crypto.uuidV7()}.tmp`
   const publish = Option.match(before, {
     // A hard link fails on a file that appeared since the read.
     onNone: () =>

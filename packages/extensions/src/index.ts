@@ -1,4 +1,5 @@
-import { type Crypto, type FileSystem, Option, type Path, Result, Schema } from "effect"
+import { type FileSystem, Option, type Path, Result, Schema } from "effect"
+import type { Digest, SecureRandom } from "effect/crypto"
 import {
   type ExtensionHost,
   type GentPlatform,
@@ -61,7 +62,8 @@ const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Result.tr
 export const BuiltinExtensions: ReadonlyArray<
   GentExtension<
     | ChildProcessSpawner
-    | Crypto.Crypto
+    | Digest.Digest
+    | SecureRandom.SecureRandom
     | ExtensionHost
     | FileSystem.FileSystem
     | GentPlatform

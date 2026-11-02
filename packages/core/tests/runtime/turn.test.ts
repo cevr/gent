@@ -1,4 +1,3 @@
-import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   Clock,
@@ -137,6 +136,7 @@ import {
 } from "../../src/runtime/tools"
 import {
   apiKeyAuth,
+  BunTestServices,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
@@ -2776,25 +2776,19 @@ describe("credential order", () => {
 
   const failWith = (reason: AiError.AiError["reason"]): Stream.Stream<never, AiError.AiError> =>
     Stream.fail(AiError.make({ module: "Fallback", method: "streamText", reason }))
-  const httpRequest = {
-    method: "POST" as const,
-    url: "http://127.0.0.1/nonexistent/loop-probe-x",
-    urlParams: [],
-    headers: {},
-  }
   /** The provider answered 401: the key is refused. */
   const refusal = () =>
     failWith(
       new AiError.AuthenticationError({
         kind: "InvalidKey",
-        http: { request: httpRequest, response: { status: 401, headers: {} } },
+        http: { response: { status: 401, headers: {} } },
       }),
     )
   /** The provider answered 429: the account's quota is spent. */
   const quotaSpent = () =>
     failWith(
       new AiError.QuotaExhaustedError({
-        http: { request: httpRequest, response: { status: 429, headers: {} } },
+        http: { response: { status: 429, headers: {} } },
       }),
     )
   const answer =
@@ -3174,7 +3168,7 @@ describe("credential order", () => {
       })
       expect(run.sent).toEqual(["sk-a", "sk-b"])
       expect(yield* lostLoginsOf(placement)).toEqual([[DEFAULT_CREDENTIAL_SLOT, "Rejected"]])
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
 
   it.live("a pinned run's refused credential is a lost login too, and a spent quota is not", () =>
@@ -3201,7 +3195,7 @@ describe("credential order", () => {
         replies: { "sk-b": quotaSpent },
       })
       expect(yield* lostLoginsOf(spent)).toEqual([])
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
 
   it.live("a step served on a refused credential clears its lost login", () =>
@@ -3226,7 +3220,7 @@ describe("credential order", () => {
         [personal, "Answered"],
       ])
       expect(yield* lostLoginsOf(placement)).toEqual([])
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
 
   it.live("a run pinned to a credential sends every request on it, whatever the authOrder", () =>
@@ -3669,7 +3663,14 @@ describe("credential order", () => {
   for (const [name, reply] of [
     [
       "a network fault",
-      () => failWith(new AiError.NetworkError({ reason: "TransportError", request: httpRequest })),
+      () =>
+        failWith(
+          new AiError.NetworkError({
+            reason: "TransportError",
+            method: "POST",
+            url: "http://127.0.0.1/nonexistent/loop-probe-x",
+          }),
+        ),
     ],
     [
       "an overload",
@@ -3680,7 +3681,7 @@ describe("credential order", () => {
       () =>
         failWith(
           new AiError.InvalidRequestError({
-            http: { request: httpRequest, response: { status: 400, headers: {} } },
+            http: { response: { status: 400, headers: {} } },
           }),
         ),
     ],
@@ -5229,7 +5230,7 @@ describe("credential order", () => {
       failWith(
         new AiError.RateLimitError({
           retryAfter: Duration.minutes(10),
-          http: { request: httpRequest, response: { status: 429, headers: {} } },
+          http: { response: { status: 429, headers: {} } },
         }),
       )
     const compactedOf = (events: ReadonlyArray<AgentEvent>) =>
@@ -5961,7 +5962,8 @@ describe("credential order", () => {
             failWith(
               new AiError.NetworkError({
                 reason: "EncodeError",
-                request: httpRequest,
+                method: "POST",
+                url: "http://127.0.0.1/nonexistent/loop-probe-x",
                 description: "the sign-in could not be refreshed",
               }),
             ),
@@ -6807,7 +6809,7 @@ describe("credential order", () => {
             Layer.provide(
               Layer.mergeAll(
                 RuntimeEnvironment.Live({ cwd: home, home }),
-                BunServices.layer,
+                BunTestServices,
                 GentPlatform.Test(),
               ),
             ),
@@ -6849,7 +6851,7 @@ describe("credential order", () => {
           )
           expect(ledger).toContain('"slot":"a"')
           expect(ledger).not.toContain("sk-")
-        }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+        }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
     )
 
     it.effect("the usage ledger is written as each hour closes, with no step after it", () =>
@@ -6861,7 +6863,7 @@ describe("credential order", () => {
           Layer.provide(
             Layer.mergeAll(
               RuntimeEnvironment.Live({ cwd: home, home }),
-              BunServices.layer,
+              BunTestServices,
               GentPlatform.Test(),
             ),
           ),
@@ -6884,7 +6886,7 @@ describe("credential order", () => {
             expect(yield* fs.readFileString(file)).toContain('"costUsd":2')
           }),
         )
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
     )
 
     it.effect("a usage ledger write that fails is made again at the next write", () =>
@@ -6897,7 +6899,7 @@ describe("credential order", () => {
           Layer.provide(
             Layer.mergeAll(
               RuntimeEnvironment.Live({ cwd: home, home }),
-              BunServices.layer,
+              BunTestServices,
               GentPlatform.Test(),
             ),
           ),
@@ -6916,7 +6918,7 @@ describe("credential order", () => {
             expect(yield* fs.readFileString(file)).toContain('"costUsd":2')
           }),
         )
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
     )
   })
 })
@@ -11637,7 +11639,7 @@ describe("tool binding replay", () => {
   const bindingLayerFor = (extensions: ReadonlyArray<LoadedExtension>) =>
     Layer.mergeAll(
       ExtensionRegistry.fromResolved(resolveExtensions(extensions)),
-      ToolRunner.Live.pipe(Layer.provide(BunServices.layer)),
+      ToolRunner.Live.pipe(Layer.provide(BunTestServices)),
       GentPlatform.Test(),
     )
 
@@ -11722,7 +11724,7 @@ describe("tool binding replay", () => {
         const capability = makeTool()
         const layer = Layer.mergeAll(
           ExtensionRegistry.fromResolved(resolveExtensions([makeExtension(capability)])),
-          ToolRunner.Live.pipe(Layer.provide(BunServices.layer)),
+          ToolRunner.Live.pipe(Layer.provide(BunTestServices)),
           GentPlatform.Test(),
         )
         const context = yield* Layer.build(layer)

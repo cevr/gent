@@ -1963,12 +1963,15 @@ const DecideInput = Schema.Struct({
 
 const ModelsOperation = Schema.Literals(["decide"])
 
+/** A decision about a JSON input: the cell asks no image location. */
+type TextDecision = Decision.Classify<string> | Decision.Rate<string> | Decision.Probability
+
 /** Effect's constructor for one decision; it throws on fewer than two labels or a repeated level. */
 const decisionOf = Match.type<DecisionSpec>().pipe(
   Match.tagsExhaustive({
-    Classify: (spec): Decision.Any => Decision.classify(spec),
-    Rate: (spec): Decision.Any => Decision.rate(spec),
-    Probability: (spec): Decision.Any => Decision.probability(spec),
+    Classify: (spec): TextDecision => Decision.classify(spec),
+    Rate: (spec): TextDecision => Decision.rate(spec),
+    Probability: (spec): TextDecision => Decision.probability(spec),
   }),
 )
 

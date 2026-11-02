@@ -37,7 +37,6 @@
 import {
   Clock,
   Context,
-  Crypto,
   Duration,
   Effect,
   FileSystem,
@@ -50,6 +49,7 @@ import {
   Schema,
   Stream,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import {
   BranchId,
@@ -734,8 +734,8 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     })
 
   const sha256 = Effect.fn("Workspaces.sha256")(function* (text: string) {
-    const crypto = yield* Crypto.Crypto
-    const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(text)).pipe(asError)
+    const crypto = yield* Digest.Digest
+    const digest = yield* crypto.digest(Digest.sha256, new TextEncoder().encode(text)).pipe(asError)
     return Hex.encode(digest)
   })
 
@@ -935,7 +935,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
   const writeMarker = Effect.fn("Workspaces.writeMarker")(function* (record: CopyRecord) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const crypto = yield* Crypto.Crypto
+    const crypto = yield* SecureRandom.SecureRandom
     const gitDir = yield* copyGitDirectory(record)
     if (Result.isFailure(gitDir)) {
       return yield* new WorkspaceError({
@@ -952,7 +952,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     const digest = yield* markerDigest(record)
     const staged = path.join(
       gitDir.success,
-      `${WORKSPACE_MARKER_FILE}.${yield* crypto.randomULID.pipe(asError)}`,
+      `${WORKSPACE_MARKER_FILE}.${yield* crypto.ulid.pipe(asError)}`,
     )
     yield* fs.writeFileString(staged, `${digest}\n`, { flag: "wx" }).pipe(
       Effect.andThen(fs.rename(staged, marker)),
@@ -1894,7 +1894,7 @@ type WorkspacesApi = ReturnType<typeof makeWorkspaces>
  * branch, and holds the file lock, and a process resource builds before any
  * leaf runs.
  *
- * @effect-expect-leaking ExtensionContext | FileSystem | Path | ChildProcessSpawner | Crypto
+ * @effect-expect-leaking ExtensionContext | FileSystem | Path | ChildProcessSpawner | Digest | SecureRandom
  */
 export class Workspaces extends Context.Service<Workspaces, WorkspacesApi>()(
   "@gent/extensions/src/workspaces",

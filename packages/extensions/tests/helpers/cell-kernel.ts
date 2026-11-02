@@ -4,15 +4,15 @@ import { Context, Effect, Fiber, FileSystem, Layer, Path, Predicate, Stream } fr
 import { ChildProcess } from "effect/process"
 import { GentPlatform, BranchStorage, MessageStorage, SessionStorage } from "@gent/core/host"
 import {
-  type createRpcHarness,
-  testToolContext,
-  testLeafContext,
   BunGentPlatformLive,
+  BunTestServices,
+  type createRpcHarness,
   SqliteStorage,
+  testLeafContext,
   testSqliteStorage,
+  testToolContext,
   waitFor,
 } from "@gent/core/test-utils"
-import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/ai/Prompt"
 import {
   BranchId,
@@ -98,7 +98,7 @@ export const buildCellExecutable = Effect.gen(function* () {
 
 // ── recorded cell execution ─────────────────────────────────────────────────
 
-export const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)
+export const platform = Layer.merge(BunTestServices, BunGentPlatformLive)
 export const sessionId = SessionId.make("cell-execution-session")
 export const branchId = BranchId.make("cell-execution-branch")
 export const now = dateFromMillis(1_767_225_600_000)

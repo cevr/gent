@@ -3,7 +3,6 @@ import {
   Clock,
   Config,
   Context,
-  Crypto,
   Duration,
   Effect,
   Exit,
@@ -16,6 +15,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import {
   acceptedEfforts,
   type CredentialSlot,
@@ -46,6 +46,7 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
+  HttpMethod,
 } from "effect/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/http/HttpClientError"
 import { Base64Url } from "effect/encoding"
@@ -507,17 +508,21 @@ export const ModelHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.effect(
  * fresh headers map. The public `setHeaders` combinator only merges; it
  * cannot remove, so overriding a baseline header needs a full
  * reconstruction via the public `make(method)(url, options)` constructor.
+ * A method outside `HttpMethod` (a request converted from a Web request;
+ * gent builds none) cannot be rebuilt, so its headers merge instead.
  */
 export const withHeaders = (
   req: HttpClientRequest.HttpClientRequest,
   headers: Headers.Headers,
-): HttpClientRequest.HttpClientRequest =>
-  HttpClientRequest.make(req.method)(req.url, {
+): HttpClientRequest.HttpClientRequest => {
+  if (!HttpMethod.isHttpMethod(req.method)) return HttpClientRequest.setHeaders(req, headers)
+  return HttpClientRequest.make(req.method)(req.url, {
     headers,
     body: req.body,
     urlParams: req.urlParams,
     hash: Option.getOrUndefined(req.hash),
   })
+}
 
 /**
  * Convert a credential failure into the `HttpClientError` the SDK's
@@ -946,17 +951,18 @@ const PKCE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567
 
 /** A fresh PKCE pair: 43 random unreserved characters and their SHA-256 in base64url. */
 export const generatePkce = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto
-  const bytes = yield* crypto.randomBytes(43)
+  const random = yield* SecureRandom.SecureRandom
+  const digest = yield* Digest.Digest
+  const bytes = yield* random.randomBytes(43)
   const verifier = Array.from(bytes, (byte) => PKCE_CHARS[byte % PKCE_CHARS.length]).join("")
-  const hash = yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier))
+  const hash = yield* digest.digest(Digest.sha256, new TextEncoder().encode(verifier))
   const codes: PkceCodes = { verifier, challenge: Base64Url.encode(hash) }
   return codes
 })
 
 /** A login's `state`: 32 random bytes in base64url, which its code must come back with. */
 export const generateOAuthState = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto
+  const crypto = yield* SecureRandom.SecureRandom
   return Base64Url.encode(yield* crypto.randomBytes(32))
 })
 

@@ -12,17 +12,18 @@ import {
   SkillsExtension,
   SkillsRpc,
 } from "../src/skills.js"
-import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner } from "@effect/platform-bun"
 import { ExtensionContext, getToolId, ref } from "@gent/core/extensions/api"
 import { GentPlatform } from "@gent/core/host"
 import { BuiltinExtensions } from "../src/index.js"
 import {
-  LanguageModelLayers,
-  textStep,
+  BunTestServices,
   collectTestContributions,
   createRpcHarness,
+  LanguageModelLayers,
   testLeafContext,
   testToolContext,
+  textStep,
 } from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 import { main as builtinAgent } from "../src/agents.js"
@@ -342,7 +343,7 @@ describe("SkillsExtension via RPC", () => {
             path.join(path.dirname(skill.filePath), "references/redesign-from-first-principles.md"),
           ),
         ).toContain("# Redesign From First Principles")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("12 seconds")),
     15_000,
   )
   it.live(
@@ -413,7 +414,7 @@ describe("SkillsExtension via RPC", () => {
             ["effect-v4", "global"],
           ])
           expect(plantedSkills(reply)[1]?.filePath).toBe(globalFile)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
       ),
     10_000,
   )
@@ -453,7 +454,7 @@ describe("SkillsExtension via RPC", () => {
           const reply = yield* decodeRequestReply(Schema.Array(SkillEntry))(rawReply)
           expect(plantedSkills(reply).map((s) => s.name)).toEqual(["react", "effect-v4"])
           yield* controls.emitAll(0)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+        }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
       ),
     10_000,
   )
@@ -475,7 +476,7 @@ describe("bundled skills", () => {
       for (const [file, text] of rows) {
         expect(yield* fs.readFileString(path.join(root, file))).toBe(text)
       }
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a bundled skill sends the model only to tools and skills gent ships", () =>
@@ -506,8 +507,8 @@ describe("bundled skills", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          BunServices.layer,
-          BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+          BunTestServices,
+          BunChildProcessSpawner.layer.pipe(Layer.provide(BunTestServices)),
           GentPlatform.Test(),
           FetchHttpClient.layer,
         ),
@@ -528,7 +529,7 @@ describe("bundled skills", () => {
         expect(yield* fs.readFileString(path.join(roots[0], relativePath))).toBe(content)
       }
       expect(yield* fs.readDirectory(path.dirname(roots[0]))).toHaveLength(1)
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a dangling link or unreadable entry is skipped, not fatal", () =>
@@ -558,7 +559,7 @@ describe("bundled skills", () => {
       expect(names).toContain("good")
       expect(names).not.toContain("broken")
       expect(names).not.toContain("unreadable")
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("an unwritable bundle cache leaves out the bundled skills, not the rest", () =>
@@ -579,7 +580,7 @@ describe("bundled skills", () => {
         return (yield* skills.list).map((skill) => skill.name)
       }).pipe(Effect.provide(Skills.Live({ home, cwd: home })))
       expect(names).toEqual(["mine"])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("an unsearchable ancestor of the working directory is not fatal", () =>
@@ -604,7 +605,7 @@ describe("bundled skills", () => {
         return (yield* skills.list).map((skill) => skill.name)
       }).pipe(Effect.provide(Skills.Live({ home, cwd: path.join(locked, "project") })))
       expect(names).toContain("mine")
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a session in the home directory lists each skill once", () =>
@@ -623,7 +624,7 @@ describe("bundled skills", () => {
         return (yield* skills.list).filter((skill) => skill.name === "mine").map((s) => s.level)
       }).pipe(Effect.provide(Skills.Live({ home, cwd: home })))
       expect(levels).toEqual(["global"])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -656,6 +657,6 @@ describe("bundled skills", () => {
           expect(texts[0]).toContain("LOCAL-PRINCIPLES")
           expect(texts[1]).toContain("GLOBAL-PRINCIPLES")
         }).pipe(Effect.provide(Skills.Live({ home, cwd })))
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 })

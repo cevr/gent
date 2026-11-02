@@ -55,9 +55,9 @@ import {
 import type { ToolRenderer, ToolRendererProps } from "../../src/tool-renderers"
 import { writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- the logger callback is synchronous, so it writes the gate file directly.
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
-import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
-import { collectTestContributions } from "@gent/core/test-utils"
+import { BunTestServices, collectTestContributions } from "@gent/core/test-utils"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
@@ -641,7 +641,7 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
       yield* fs.writeFileString(path.join(userDir, "../config.json"), grant)
       yield* loadTuiExtensions({ userDir, projectDir, runtime })
       expect(yield* fs.readFileString(marker)).toBe("ran")
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("launched from home, a trusted home imports its client files once, as user", () =>
@@ -672,7 +672,7 @@ export default { id: "home-client", setup: Effect.succeed({}) };
       const result = yield* loadTuiExtensions({ userDir, projectDir: userDir, runtime })
       expect(result.failures).toEqual([])
       expect(yield* fs.readFileString(imports)).toBe("x")
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a contribution key outside the known buckets fails the extension by name", () =>
@@ -700,7 +700,7 @@ export default {
       expect(result.failures).toEqual([
         { id: "@user/stale-labels", reason: 'unknown contribution "borderLabels"' },
       ])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -768,7 +768,7 @@ export default {
           { id: "@user/object-widgets", reason: 'malformed contribution "widgets"' },
           { id: "@user/string-tools", reason: 'malformed contribution "renderers"' },
         ])
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -817,7 +817,7 @@ export default {
         expect(result.widgets.map((w) => w.id)).toEqual(["shifting"])
         expect(result.failures.map((failure) => failure.id)).toEqual(["@user/throwing"])
         expect(result.failures[0]?.reason).toContain("broken")
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -889,7 +889,7 @@ export default { id: "@user/instance", setup: Effect.succeed(new Contributions()
         expect(result.widgets.map((w) => w.id).toSorted()).toEqual(["instance", "once"])
         expect(result.failures.map((failure) => failure.id)).toEqual(["@user/nested"])
         expect(result.failures[0]?.reason).toContain("nested broken")
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 
   // The compiled binary has no node_modules. A client extension outside the
@@ -1022,7 +1022,7 @@ export default tui.defineClientExtension("@user/client-entries", {
             )
             .pipe(
               Effect.andThen(importFile(path.join(serverDir, file))),
-              Effect.map(() => "resolved"),
+              Effect.as("resolved"),
               Effect.catch((error) => Effect.succeed(String(error.cause))),
             )
         expect(yield* serverImport("api.ts", "@gent/core/extensions/api")).toBe("resolved")
@@ -1039,7 +1039,7 @@ export default tui.defineClientExtension("@user/client-entries", {
         expect(yield* serverImport("shipped.ts", "@gent/extensions/client")).toContain(
           "Cannot find package '@gent/extensions'",
         )
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   // A shipped client extension is never more privileged than a user one: every
@@ -1068,7 +1068,7 @@ export default tui.defineClientExtension("@user/client-entries", {
           (specifier) => !Object.hasOwn(clientEntries, specifier),
         )
         expect(unbound).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.live("an extension setup reads the file system and contributes its rows", () =>
@@ -1209,7 +1209,7 @@ export default defineClientExtension("@test/overlap", {
         { id: path.join(userDir, "c-broken.client.ts"), reason: "missing id" },
       ])
       expect(commandsOf(result).map((command) => command.id)).toContain("overlap")
-    }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
+    }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunTestServices)),
   )
 })
 
@@ -1518,7 +1518,7 @@ export default defineClientExtension("@test/override-bash", {
     commandModule("@test/prebuilt", "prebuilt"),
   )
   return { fixtureDir, fixtureUserDir, fixtureProjectDir, write }
-}).pipe(Effect.provide(BunServices.layer))
+}).pipe(Effect.provide(BunTestServices))
 describe("loadTuiExtensions", () => {
   it.scopedLive(
     "with an active session and no user or project extensions, the builtin surfaces load, /revert among them",
@@ -1574,7 +1574,7 @@ describe("loadTuiExtensions", () => {
         expect(
           resolved.statusLabels.map((label) => `${label.priority} ${label.anchor}`).toSorted(),
         ).toEqual(["0 left", "30 pane", "31 pane", "40 left", "40 pane", "50 pane", "55 right"])
-      }).pipe(Effect.provide(BunServices.layer))
+      }).pipe(Effect.provide(BunTestServices))
     },
   )
   it.scopedLive("disabling @gent/interaction-tools drops the handoff renderer with its tool", () =>
@@ -1821,7 +1821,7 @@ describe("tool renderer reach", () => {
       expect(loaded.renderers.has("thread.start")).toBe(true)
       expect([...loaded.renderers.keys()].filter((name) => !toolIds.has(name))).toEqual([])
     }).pipe(
-      Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test(), FetchHttpClient.layer)),
+      Effect.provide(Layer.mergeAll(BunTestServices, GentPlatform.Test(), FetchHttpClient.layer)),
     ),
   )
 })
@@ -1894,7 +1894,7 @@ const runFresh = (
 
 const freshProcessLayer = Layer.mergeAll(
   BunPlatformLive,
-  BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+  BunChildProcessSpawner.layer.pipe(Layer.provide(BunTestServices)),
 )
 
 // ── extension reload ────────────────────────────────────────────────────────
@@ -1984,7 +1984,7 @@ describe("client extension reload", () => {
       expect([...second.setUp]).toEqual([])
       expect(commandIds(second)).toEqual(["logged-v1-plain"])
       expect(yield* fixture.readLog).toEqual(["setup:v1"])
-    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -2009,7 +2009,7 @@ describe("client extension reload", () => {
         ])
         yield* fixture.dispose
         expect((yield* fixture.readLog).slice(4)).toEqual(["cleanup:v22", "released:v22"])
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a removed file and a disabled extension end their lifetimes", () =>
@@ -2034,7 +2034,7 @@ describe("client extension reload", () => {
       yield* removed.retire
       expect(commandIds(removed)).toEqual(["other"])
       expect((yield* fixture.readLog).slice(3)).toEqual(["setup:v1", "cleanup:v1", "released:v1"])
-    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -2063,7 +2063,7 @@ export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused
           /^setup failed: Error: setup refused; version [0-9a-f]{12} still runs$/,
         )
         expect(yield* fixture.readLog).toEqual(["setup:v1"])
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -2083,7 +2083,7 @@ export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused
         const reload = yield* fixture.load
         expect(commandIds(reload)).toEqual(["logged-v1-second!"])
         expect(yield* fixture.stale).toBe(false)
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a save of the same bytes is a change to look at, and the extension stays", () =>
@@ -2102,7 +2102,7 @@ export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused
       expect([...reload.setUp]).toEqual([])
       expect(yield* fixture.stale).toBe(false)
       expect(yield* fixture.readLog).toEqual(["setup:v1"])
-    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   // An in-place save sets the mtime before it copies the bytes, so a stamp in
@@ -2133,7 +2133,7 @@ export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused
       expect(yield* fixture.stale).toBe(false)
       const setups = (yield* fixture.readLog).filter((line) => line.startsWith("setup:"))
       expect(setups).toEqual(["setup:v1", "setup:v2"])
-    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -2158,7 +2158,7 @@ export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused
         const fixed = yield* fixture.load
         expect(commandIds(fixed)).toEqual(["logged-v1-fixed"])
         expect(fixed.resolved.failures).toEqual([])
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   // Bun reads a module the file imports, then a save lands before the loader
@@ -2190,7 +2190,7 @@ export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused
         yield* fixture.loadWith(saveOnFirstLook)
         expect(yield* Ref.get(saved)).toBe(true)
         expect(commandIds(yield* fixture.load)).toEqual(["logged-v1-second!"])
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -2233,7 +2233,7 @@ export default {
         yield* fs.remove(fixture.file("logged.client.ts"))
         expect(reasons(yield* fixture.load)).toEqual([])
         expect(yield* fixture.readLog).toEqual(["setup:v1", "refused", "refused"])
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -2256,7 +2256,7 @@ export default { id: "@test/refused", setup: Effect.fail(new Error("setup refuse
         expect(reasons(yield* fixture.load)).toEqual([])
         yield* Ref.set(fixture.disabled, [])
         expect(reasons(yield* fixture.load)).toEqual(["setup failed: Error: setup refused"])
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -2294,7 +2294,7 @@ export default { id: "@test/renamed", setup: Effect.fail(new Error("setup refuse
         expect(claimed.resolved.failures).toEqual([
           { id: "@test/renamed", reason: "setup failed: Error: setup refused" },
         ])
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   // The pane turns an extension off in the config of the session in view,
@@ -2355,6 +2355,6 @@ export default { id: "@test/renamed", setup: Effect.fail(new Error("setup refuse
       expect(yield* stale).toBe(true)
       expect(yield* load).toEqual(["mine", "second"])
       expect(yield* stale).toBe(false)
-    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 })

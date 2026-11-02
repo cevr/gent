@@ -4,7 +4,6 @@ import {
   Cause,
   Clock,
   Context,
-  type Crypto,
   Effect,
   Exit,
   Fiber,
@@ -18,8 +17,8 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect"
+import type { Digest, SecureRandom } from "effect/crypto"
 import { crc32, deflateSync } from "node:zlib"
-import { BunServices } from "@effect/platform-bun"
 import { LanguageModel } from "effect/ai"
 import * as Prompt from "effect/ai/Prompt"
 import type { ChildProcessSpawner } from "effect/process"
@@ -42,6 +41,8 @@ import {
   ToolImageError,
 } from "@gent/core/extensions/api"
 import {
+  bunDriverHostServices,
+  BunTestServices,
   createRpcHarness,
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -52,7 +53,6 @@ import {
   textStep,
   toolCallStep,
   waitFor,
-  bunDriverHostServices,
 } from "@gent/core/test-utils"
 import {
   AnthropicPlatform,
@@ -437,7 +437,7 @@ describe("tool image store", () => {
         const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.${fixture.ext}`)
         expect(Buffer.from(stored).equals(Buffer.from(fixture.bytes))).toBe(true)
       }
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("the same bytes saved twice keep one file, and a path saves from the cwd", () =>
@@ -456,7 +456,7 @@ describe("tool image store", () => {
       expect(yield* fs.readDirectory(path.join(home, ".gent", "blobs"))).toEqual([
         `${first.image.sha256}.png`,
       ])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("bytes no codec decodes fail and store nothing", () =>
@@ -495,7 +495,7 @@ describe("tool image store", () => {
       expect(yield* fs.exists(`${home}/.gent/blobs`)).toBe(false)
       // Inside both limits the store keeps the bytes as they are, with no decode.
       expect(yield* failureOf({ base64: base64(pngBytes(2000, 2000)) })).toBe("stored")
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -557,7 +557,7 @@ describe("tool image store", () => {
             format: fixture.ext,
           })
         }
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -578,7 +578,7 @@ describe("tool image store", () => {
         expect([image.width, image.height]).toEqual([1800, 1800])
         expect(image.originalWidth).toBeUndefined()
         expect(yield* imageMetadata(stored)).toEqual({ width: 1800, height: 1800, format: "jpeg" })
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -639,7 +639,7 @@ describe("tool image store", () => {
             format: fixture.format,
           })
         }
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -657,7 +657,7 @@ describe("tool image store", () => {
         const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.jpg`)
         expect([image.width, image.height]).toEqual([2000, 500])
         expect(Buffer.from(stored).includes("ICC_PROFILE")).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -697,7 +697,7 @@ describe("tool image store", () => {
             format: "jpeg",
           })
         }
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -728,7 +728,7 @@ describe("tool image store", () => {
             sha256: sha256Hex(bytes),
           })
         }
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25_000,
   )
 
@@ -805,7 +805,7 @@ describe("tool images through a turn", () => {
         const fs = yield* FileSystem.FileSystem
         expect(yield* fs.exists(`${home}/.gent/blobs/${sha256Hex(bytes)}.png`)).toBe(true)
         yield* controls.assertDone
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("10 seconds")),
     15_000,
   )
 
@@ -865,7 +865,7 @@ describe("tool images through a turn", () => {
           waitFor(fs.exists(referenced), (exists) => !exists, 5_000, "the released blob removed"),
         )
         expect(yield* fs.exists(fresh)).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
     25_000,
   )
 })
@@ -970,7 +970,8 @@ const anthropicModel = Effect.gen(function* () {
       | FileSystem.FileSystem
       | Path.Path
       | ChildProcessSpawner.ChildProcessSpawner
-      | Crypto.Crypto
+      | Digest.Digest
+      | SecureRandom.SecureRandom
       | HttpClient.HttpClient
     >().pipe(Effect.provide(FetchHttpClient.layer)),
     AnthropicPlatform,
@@ -978,7 +979,7 @@ const anthropicModel = Effect.gen(function* () {
   )
   const driver = buildAnthropicModelDriver(credentialCellRef, Option.none(), services, "1h")
   return yield* driver.resolveModel("claude-sonnet-4-5", apiKey)
-}).pipe(Effect.provide(BunServices.layer))
+}).pipe(Effect.provide(BunTestServices))
 
 const responsesModel = Effect.gen(function* () {
   const credentialCellRef =
@@ -990,7 +991,7 @@ const responsesModel = Effect.gen(function* () {
     yield* bunDriverHostServices,
   )
   return yield* driver.resolveModel("gpt-5.4", apiKey)
-}).pipe(Effect.provide(BunServices.layer))
+}).pipe(Effect.provide(BunTestServices))
 
 const chatCompletionsModel = CHAT_COMPLETIONS_CLASS.resolveModel({
   providerId: "compat",
@@ -1050,7 +1051,7 @@ describe("tool images in a request", () => {
           { type: "text", value: "Image from save_image shot.png 64x32:" },
           { type: "file", value: `data:image/png;base64,${SHOT_DATA}` },
         ])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("10 seconds")),
     15_000,
   )
 
@@ -1077,7 +1078,7 @@ describe("tool images in a request", () => {
             image: { width: 2000, height: 1000, originalWidth: 4000, originalHeight: 2000 },
           },
         })
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -1104,7 +1105,7 @@ describe("tool images in a request", () => {
           // Rounding the height to whole pixels leaves the two factors apart in the third decimal.
           "Image from save_image strip.png 2000x499, scaled from 4006x1000 (multiply x by 2.003 and y by 2.004 to map to the original):",
         ])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -1174,7 +1175,7 @@ describe("tool images in a request", () => {
           { type: "text", text: "Image from save_image shot.png 64x32:" },
           { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
         ])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -1203,7 +1204,7 @@ describe("tool images in a request", () => {
             value: "[image not shown: this model takes no image input: save_image shot.png 64x32]",
           },
         ])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("10 seconds")),
     15_000,
   )
 
@@ -1259,7 +1260,7 @@ describe("tool images in a request", () => {
         expect(partsOf(next)).toEqual([
           { type: "text", value: "[image no longer stored: save_image lost.png 64x32]" },
         ])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("10 seconds")),
     15_000,
   )
 })
@@ -1340,7 +1341,7 @@ describe("tool image bound in a turn", () => {
         for (const image of references) {
           expect(yield* fs.exists(`${home}/.gent/blobs/${image.sha256}.png`)).toBe(true)
         }
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("40 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("40 seconds")),
     45_000,
   )
 })

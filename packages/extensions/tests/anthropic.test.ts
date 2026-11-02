@@ -28,7 +28,6 @@ import {
   Clock,
   ConfigProvider,
   Context,
-  Crypto,
   FileSystem,
   Deferred,
   type Duration,
@@ -49,25 +48,28 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
-import { BunCrypto, BunServices } from "@effect/platform-bun"
+import { BunCrypto } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { Base64Url } from "effect/encoding"
 import { ChildProcessSpawner } from "effect/process"
 import {
-  captureProviderReport,
-  storedCredentialModel,
-  storeRotationLock,
-  createRpcClient,
-  ConfigService,
-  modelCatalogFixture,
   BunGentPlatformLive,
   BunProviderLockLive,
-  testAgent,
+  BunTestServices,
+  captureProviderReport,
+  plainArgs,
+  ConfigService,
+  createRpcClient,
   fixtureModelCatalog,
-  testHostFacts,
   hostContextUpdateText,
+  modelCatalogFixture,
   promptForModel,
+  storedCredentialModel,
+  storeRotationLock,
+  testAgent,
+  testHostFacts,
   toPrompt,
   turnNoticesText,
 } from "@gent/core/test-utils"
@@ -565,7 +567,7 @@ const credentialCache = (io: AnthropicCredentialIO) => {
   )
   return SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
     Effect.flatMap((cellRef) => makeAnthropicCredentialCache(cellRef, io)),
-    Effect.provide(Layer.mergeAll(BunServices.layer, platformLayer, FetchHttpClient.layer)),
+    Effect.provide(Layer.mergeAll(BunTestServices, platformLayer, FetchHttpClient.layer)),
   )
 }
 const validCredsIO = (label: string): AnthropicCredentialIO => ({
@@ -1425,7 +1427,8 @@ const driverServices = (platform: typeof testPlatform) =>
     | FileSystem.FileSystem
     | Path.Path
     | ChildProcessSpawner.ChildProcessSpawner
-    | Crypto.Crypto
+    | Digest.Digest
+    | SecureRandom.SecureRandom
     | HttpClient.HttpClient
   >().pipe(
     Effect.map(Context.add(AnthropicPlatform, platform)),
@@ -1446,7 +1449,7 @@ const buildAnthropicModelDriver = (
     Effect.map((services) =>
       buildAnthropicModelDriverLive(credentialCellRef, envApiKey, services, promptCacheTtl),
     ),
-    Effect.provide(BunServices.layer),
+    Effect.provide(BunTestServices),
   )
 // The Claude Code path reads the keychain, never the gent store.
 const makeOAuthInfo = (): ProviderAuthInfo =>
@@ -1591,8 +1594,8 @@ describe("Anthropic stop reason", () => {
           Effect.scoped,
         ),
       )
-      // Effect AI's map lacks the reason, so the finish part alone cannot tell.
-      expect(finishes).toEqual(["unknown"])
+      // Effect AI maps the reason to `length`; the loop still reads the raw one.
+      expect(finishes).toEqual(["length"])
       expect(reported.stopReason).toEqual(Option.some("model_context_window_exceeded"))
     }),
   )
@@ -1761,7 +1764,7 @@ describe("Anthropic cache warming", () => {
           })
         expect(yield* quotaOf(makeOAuthInfo())).toEqual(["5h", "7d"])
         expect(yield* quotaOf(makeApiAuthInfo("test-key"))).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.live("a read past the lifetime answers its writes by lifetime", () =>
@@ -1811,7 +1814,9 @@ describe("Anthropic cache warming", () => {
         )
         expect(generated.cacheWarmer).toEqual(Option.none())
         // The gateway's request marks its cache as the driver's own does.
-        const crypto = yield* Effect.service(Crypto.Crypto).pipe(Effect.provide(BunCrypto.layer))
+        const crypto = yield* Effect.service(SecureRandom.SecureRandom).pipe(
+          Effect.provide(BunCrypto.layerSecureRandom),
+        )
         const gatewayModel = yield* resolveShipped(
           buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, Option.none(), crypto),
           fixtureModelCatalog(),
@@ -1967,7 +1972,7 @@ describe("Anthropic quota windows", () => {
         const refused = yield* reportFor(makeOAuthInfo(), () => refusal, streamed)
         expect([fixture.file, refused.quota]).toEqual([fixture.file, fixture.quota])
       }
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.live(
@@ -1991,7 +1996,7 @@ describe("Anthropic quota windows", () => {
           { window: "5h", utilization: 0.42, resetAt: FIVE_HOUR_RESET_S * 1000, rejected: false },
           { window: "7d", utilization: 1, resetAt: SEVEN_DAY_RESET_S * 1000, rejected: true },
         ])
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.live("an answer the limiter did not run on, or an API key's, reports no window", () =>
@@ -2012,7 +2017,7 @@ describe("Anthropic quota windows", () => {
         streamed,
       )
       expect(apiKey.quota).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 })
 
@@ -2835,7 +2840,7 @@ describe("buildAnthropicModelDriver — the host's platform", () => {
         .pipe(Effect.provide(fakeFetchLayer(fetchState, () => anthropicHappyResponse())))
       yield* runOne(model, fetchState)
       expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer host-access")
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 describe("buildAnthropicModelDriver — refresh token order", () => {
@@ -2897,7 +2902,7 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
         .map((request) => /refresh_token=([^&]*)/.exec(request.body ?? "")?.[1])
       expect(refreshTokens).toEqual(["keychain-refresh", "held-refresh"])
       expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer held-new-access")
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
 })
 describe("buildAnthropicModelDriver — refresh writes only the keychain", () => {
@@ -3008,7 +3013,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
               fetchState.captured.filter((request) => request.url.endsWith("/v1/oauth/token")),
             ).toHaveLength(1)
           }).pipe(Effect.provide(TestClock.layer()))
-        }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("3 seconds")),
+        }).pipe(Effect.scoped, Effect.provide(BunTestServices), Effect.timeout("3 seconds")),
       5000,
     )
   }
@@ -3067,7 +3072,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       expect(storeWrites).toBe(0)
       const keychain = yield* fs.readFileString(path.join(home, ".claude", ".credentials.json"))
       expect(keychain).toContain("refreshed-refresh")
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
   it.live(
     "a refresh replaces the credentials file whole, owner-only, with no staging file left",
@@ -3122,7 +3127,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         expect(after.mode & 0o777).toBe(0o600)
         expect(yield* fs.readDirectory(claudeDir)).toEqual([".credentials.json"])
         expect(yield* fs.readFileString(credentialsFile)).toContain("refreshed-refresh")
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
   it.live("a sign-in stopped after the token endpoint rotated the token still writes it back", () =>
     Effect.gen(function* () {
@@ -3182,7 +3187,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       yield* Fiber.join(stopping)
 
       expect(yield* fs.readFileString(credentialsFile)).toContain("refreshed-refresh")
-    }).pipe(Effect.timeout("5 seconds"), Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.timeout("5 seconds"), Effect.scoped, Effect.provide(BunTestServices)),
   )
   for (const persistFails of [false, true]) {
     let name = "a stopped sign-in retains its rotation when write-back fails"
@@ -3283,7 +3288,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         expect(
           fetchState.captured.filter((request) => request.url.endsWith("/v1/oauth/token")),
         ).toHaveLength(1)
-      }).pipe(Effect.timeout("5 seconds"), Effect.scoped, Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("5 seconds"), Effect.scoped, Effect.provide(BunTestServices)),
     )
   }
   it.live("a sign-in written during the refresh survives, and the request uses it", () =>
@@ -3341,7 +3346,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       const keychain = yield* fs.readFileString(credentialsFile)
       expect(keychain).toContain("signed-in-refresh")
       expect(keychain).not.toContain("refreshed-refresh")
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
   it.live("a sign-in to the held account during the stored account's refresh survives", () =>
     Effect.gen(function* () {
@@ -3404,7 +3409,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
           (request) => request.headers["authorization"] === "Bearer a-new-access",
         ),
       ).toBe(false)
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
   it.live(
     "a store that could not be read before the refresh and holds the held credential after it takes the refresh",
@@ -3456,7 +3461,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         const stored = yield* fs.readFileString(credentialsFile)
         expect(stored).toContain("refreshed-refresh")
         expect(stored).not.toContain("held-refresh")
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
   )
 })
 describe("buildAnthropicModelDriver — credential order", () => {
@@ -4548,8 +4553,9 @@ const fakeKeychain = (initial: ReadonlyArray<readonly [string, KeychainEntry]>) 
     spawner: ChildProcessSpawner.make((command) =>
       Effect.sync(() => {
         if (command._tag !== "StandardCommand") return processAnswer(1)
-        calls.push([command.command, ...command.args])
-        return answer(command.command, command.args)
+        const args = plainArgs(command.args)
+        calls.push([command.command, ...args])
+        return answer(command.command, args)
       }),
     ),
     /** Claude Code writes `entry` to `service`, as its own refresh or sign-in does. */
@@ -4869,7 +4875,7 @@ describe("linked Claude Code directory", () => {
         expect(keychain.calls.every((call) => call[0] === "security")).toBe(true)
         expect(sent.authorization).toBe("Bearer fake-linked")
         expect(sent.refreshTokens).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -4914,7 +4920,7 @@ describe("linked Claude Code directory", () => {
         expect(callsOn(keychain.calls, PRIMARY_SERVICE)).toEqual([])
         expect(keychain.calls.some((call) => call[0] === "claude")).toBe(false)
         expect(keychain.entries.get(PRIMARY_SERVICE)?.[0]?.blob).toBe(claudeBlob("fake-primary", 0))
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("off darwin a linked slot reads and writes the directory's .credentials.json", () =>
@@ -4937,7 +4943,7 @@ describe("linked Claude Code directory", () => {
       expect(written).toContain('"subscriptionType":"max"')
       expect((yield* fs.stat(linked.file)).mode & 0o777).toBe(0o600)
       expect(processes.calls).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5026,7 +5032,7 @@ describe("linked Claude Code directory", () => {
         const unlinked = yield* Effect.flip(link(darwin, "/nonexistent/gent-link/claude-none"))
         expect(Schema.is(ProviderAuthError)(unlinked)).toBe(true)
         expect(persisted.length).toBe(3)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("a named slot stored without a directory fails closed and asks for a link", () =>
@@ -5057,7 +5063,7 @@ describe("linked Claude Code directory", () => {
       ).toBe(true)
       expect(refreshes).toBe(0)
       expect(keychain.calls).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5091,7 +5097,7 @@ describe("linked Claude Code directory", () => {
         ).toEqual([PRIMARY_SERVICE])
         expect(keychain.entries.get(PRIMARY_SERVICE)?.[0]?.blob).toContain("fake-rotated-access")
         expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toBe(claudeBlob("fake-linked", 0))
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -5120,7 +5126,7 @@ describe("linked Claude Code write-back", () => {
         const again = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), rotatingEndpoint())
         expect(again.authorization).toBe("Bearer fake-claude-code")
         expect(again.refreshTokens).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5145,7 +5151,7 @@ describe("linked Claude Code write-back", () => {
         expect(sent.refreshTokens).toEqual(["fake-expired-refresh"])
         expect(yield* fs.readFileString(linked.file)).toBe(theirs)
         expect(sent.authorization).toBe("Bearer fake-claude-code")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5169,7 +5175,7 @@ describe("linked Claude Code write-back", () => {
         const again = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), rotatingEndpoint())
         expect(again.authorization).toBe("Bearer fake-rotated-access")
         expect(again.refreshTokens).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5196,7 +5202,7 @@ describe("linked Claude Code write-back", () => {
         expect(Option.map(failure, (error) => error.credentialFailure)).toEqual(
           Option.some("Unavailable"),
         )
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5229,7 +5235,7 @@ describe("linked Claude Code write-back", () => {
         )
         expect(result.sent).toEqual([])
         expect(writesOf(keychain.calls)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("a linked refresh with no account on its keychain entry spends no token", () =>
@@ -5259,7 +5265,7 @@ describe("linked Claude Code write-back", () => {
       expect(result.sent).toEqual([])
       expect(writesOf(keychain.calls)).toEqual([])
       expect(keychain.entries.get(LINKED_SERVICE)).toEqual([original])
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5296,7 +5302,7 @@ describe("linked Claude Code write-back", () => {
         ).toEqual([true])
         // Both rotations landed: the store holds nothing beyond the source.
         expect(heldAccess(processStore)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5329,7 +5335,7 @@ describe("linked Claude Code write-back", () => {
           "Bearer fake-rotated-2-access",
         ])
         expect(keychain.entries.get(LINKED_SERVICE)).toEqual([original])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5354,7 +5360,7 @@ describe("linked Claude Code write-back", () => {
         expect(sent.authorization).toBe("Bearer fake-claude-code")
         expect(writesOf(keychain.calls)).toEqual([])
         expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -5425,7 +5431,7 @@ describe("linked rotation: reads", () => {
         )
         expect(sent).toEqual([])
         expect(writesOf(keychain.calls)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5451,7 +5457,7 @@ describe("linked rotation: reads", () => {
         ).toBe(true)
         expect(result.sent).toEqual([])
         expect(writesOf(keychain.calls)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5476,7 +5482,7 @@ describe("linked rotation: reads", () => {
           expect(later.authorization).toBe("Bearer fake-current")
           expect(later.refreshTokens).toEqual([])
         }),
-      ).pipe(Effect.provide(BunServices.layer)),
+      ).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -5490,7 +5496,7 @@ describe("linked rotation: reads", () => {
         expect(sent.authorization).toBe("Bearer fake-rotated-1-access")
         expect(sent.refreshTokens).toEqual([])
         expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5509,7 +5515,7 @@ describe("linked rotation: reads", () => {
         expect(sent.refreshTokens).toEqual([])
         expect(writesOf(keychain.calls).length).toBe(writes)
         expect(heldAccess(store)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5528,7 +5534,7 @@ describe("linked rotation: reads", () => {
         expect(writesOf(keychain.calls).length).toBe(writes)
         expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
         expect(heldAccess(store)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5546,7 +5552,7 @@ describe("linked rotation: reads", () => {
         expect(writesOf(keychain.calls).length).toBe(writes)
         expect(keychain.entries.has(LINKED_SERVICE)).toBe(false)
         expect(heldAccess(store)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -5572,7 +5578,7 @@ describe("linked rotation: refreshes", () => {
       // It landed: the store holds nothing beyond the source.
       expect(heldAccess(store)).toEqual([])
       expect(writtenAccess(keychain.calls)).toEqual(["fake-rotated-1-access"])
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5592,7 +5598,7 @@ describe("linked rotation: refreshes", () => {
         expect(sent.authorization).toBe("Bearer fake-rotated-1-access")
         expect(writtenAccess(keychain.calls)).toEqual(["fake-rotated-1-access"])
         expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain("fake-rotated-1-refresh")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5624,7 +5630,7 @@ describe("linked rotation: refreshes", () => {
         expect(after.refreshTokens).toEqual([])
         expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain("fake-rotated-2-refresh")
         expect(heldAccess(store)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5659,7 +5665,7 @@ describe("linked rotation: refreshes", () => {
         expect(after.refreshTokens).toEqual([])
         expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
         expect(heldAccess(store)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5683,7 +5689,7 @@ describe("linked rotation: refreshes", () => {
         expect(result.sent).toEqual(["fake-rotated-1-refresh"])
         expect(Option.exists(result.request, (text) => text.includes("503"))).toBe(true)
         expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -5756,7 +5762,7 @@ describe("linked rotation: a store that cannot hold it on disk", () => {
           const spent = [first, second, third, fourth].flatMap((sent) => sent.refreshTokens)
           expect(spent.filter((token) => token === "fake-expired-refresh")).toHaveLength(1)
         }),
-      ).pipe(Effect.provide(BunServices.layer)),
+      ).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -5775,7 +5781,7 @@ describe("linked rotation: a store that cannot hold it on disk", () => {
           )
           expect(yield* store.heldNow).toEqual(Option.none())
         }),
-      ).pipe(Effect.provide(BunServices.layer)),
+      ).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive(
@@ -5797,7 +5803,7 @@ describe("linked rotation: a store that cannot hold it on disk", () => {
           expect(yield* store.heldNow).toEqual(Option.none())
           expect(yield* store.rotationFileExists).toBe(false)
         }),
-      ).pipe(Effect.provide(BunServices.layer)),
+      ).pipe(Effect.provide(BunTestServices)),
   )
 })
 
@@ -5873,7 +5879,7 @@ describe("linked rotation: a held rotation gent cannot read", () => {
         expect(fourth.refreshTokens).toEqual(["fake-new-login-refresh"])
         expect(fourth.authorization).toBe("Bearer fake-rotated-1-access")
         expect(yield* fs.readFileString(aside)).toBe("{torn")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5932,7 +5938,7 @@ describe("linked rotation: a held rotation gent cannot read", () => {
         expect(cleared.refreshTokens).toEqual(["fake-new-login-refresh"])
         expect(cleared.authorization).toBe("Bearer fake-rotated-1-access")
         expect(yield* fs.readFileString(kept)).toBe("{torn")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -5993,7 +5999,7 @@ describe("linked rotation: a held rotation gent cannot read", () => {
         expect(yield* siblings).toEqual(kept)
         expect(yield* fs.readFileString(aside)).toBe("{torn")
         expect(writesOf(keychain.calls)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -6028,7 +6034,7 @@ describe("linked rotation: failures that may pass", () => {
           ),
         ).toBe(true)
         expect(writesOf(keychain.calls)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -6054,7 +6060,7 @@ describe("linked rotation: failures that may pass", () => {
         expect(message).toContain("no token was spent")
         expect(message).not.toContain("Check your network connection")
         expect(writesOf(keychain.calls)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -6089,7 +6095,7 @@ describe("linked rotation: a source that changes or reads torn around a held rot
         expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
         expect(second.authorization).toBe("Bearer fake-claude-code")
         expect(heldAccess(processStore)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -6127,7 +6133,7 @@ describe("linked rotation: a source that changes or reads torn around a held rot
         expect(landed.authorization).toBe("Bearer fake-rotated-1-access")
         expect(heldAccess(store)).toEqual([])
         expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain("fake-rotated-1-refresh")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -6166,7 +6172,7 @@ describe("linked rotation: a source that changes or reads torn around a held rot
         expect(second.request).toEqual(Option.none())
         expect(writtenAccess(keychain.calls)).toEqual(["fake-rotated-1-access"])
         expect(heldAccess(store)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -6209,7 +6215,7 @@ describe("linked rotation: a source that changes or reads torn around a held rot
         expect(written).toContain("fake-rotated-1-refresh")
         expect(written).toContain('"subscriptionType":"max"')
         expect(heldAccess(store)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -6239,7 +6245,7 @@ describe("linked rotation: two credential stores over one auth directory", () =>
         modelId: "anthropic/claude-opus-4-6",
         catalog: fixtureModelCatalog(),
         credentialSlot: LINKED_SLOT,
-      }).pipe(Layer.provide(BunServices.layer)),
+      }).pipe(Layer.provide(BunTestServices)),
     )
 
   const sentBy = (state: ReturnType<typeof makeFakeFetchState>) => ({
@@ -6280,7 +6286,7 @@ describe("linked rotation: two credential stores over one auth directory", () =>
         expect(
           yield* fs.exists(path.join(authDirectory, ".rotations", "anthropic", LINKED_KEY)),
         ).toBe(false)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
   )
 
   it.scopedLive(
@@ -6320,7 +6326,7 @@ describe("linked rotation: two credential stores over one auth directory", () =>
         })
         expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain("fake-rotated-1-refresh")
         expect(yield* fs.exists(rotationFile)).toBe(false)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("20 seconds")),
   )
 })
 
@@ -6367,7 +6373,7 @@ describe("linked Claude Code credential cache", () => {
       expect(yield* viaDarwin(makeOAuthInfo())).toBe("Bearer fake-primary")
       expect(yield* viaDarwin(linkedSignIn(LINKED_DIRECTORY))).toBe("Bearer fake-linked")
       expect(yield* viaDarwin(makeOAuthInfo())).toBe("Bearer fake-primary")
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -6397,7 +6403,7 @@ describe("linked Claude Code credential cache", () => {
         expect(callsOn(keychain.calls, PRIMARY_SERVICE)).toEqual([])
         expect(keychain.calls.every((call) => call[0] === "security")).toBe(true)
         expect(keychain.calls.some((call) => call[1] === "add-generic-password")).toBe(false)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -6420,7 +6426,7 @@ describe("linked Claude Code credential cache", () => {
         )
         expect(sentTokens).toEqual(["fake-revoked-refresh"])
         expect(keychain.calls.some((call) => call[0] === "claude")).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("a primary refresh reply without a token leaves the credential unmarked", () =>
@@ -6439,7 +6445,7 @@ describe("linked Claude Code credential cache", () => {
       expect(
         Option.exists(failure, (error) => Predicate.isUndefined(error.credentialFailure)),
       ).toBe(true)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("a linked refresh reply without a token leaves the credential unmarked", () =>
@@ -6469,7 +6475,7 @@ describe("linked Claude Code credential cache", () => {
       ).toBe(true)
       // The directory keeps the login it had.
       expect(yield* fs.readFileString(linked.file)).toBe(claudeBlob("fake-garbled", 0))
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -6541,7 +6547,7 @@ describe("linked Claude Code credential cache", () => {
           expect(state.captured).toEqual([])
         }
         expect(processes.calls).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -6603,9 +6609,9 @@ const linkCommitRig = (sharedDirectory: Option.Option<string> = Option.none<stri
     }
     const basePlatform = yield* Layer.build(
       Layer.mergeAll(
-        BunServices.layer,
+        BunTestServices,
         BunGentPlatformLive,
-        BunProviderLockLive.pipe(Layer.provide(BunServices.layer)),
+        BunProviderLockLive.pipe(Layer.provide(BunTestServices)),
       ),
     )
     const platform = Layer.succeedContext(Context.add(basePlatform, FileSystem.FileSystem, fs))
@@ -6739,7 +6745,7 @@ describe("link persistence and publication", () => {
         )
         expect(Exit.isFailure(missing)).toBe(true)
         expect(yield* rig.requestUses("fake-b")).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("10 seconds")),
   )
 
   it.scopedLive("links cancel before commit while actual provider or SQLite locks are held", () =>
@@ -6783,7 +6789,7 @@ describe("link persistence and publication", () => {
         yield* rig.importFrom(rig.sourceB)
         expect(yield* rig.requestUses("fake-b")).toBe(true)
       }
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
   )
 
   it.scopedLive("an interrupted landed link never leaves the old link's warm account serving", () =>
@@ -6808,7 +6814,7 @@ describe("link persistence and publication", () => {
       yield* Fiber.join(interrupting)
       rig.gateRename(() => Effect.void)
       expect(yield* rig.requestUses("fake-b")).toBe(true)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("10 seconds")),
   )
 
   it.scopedLive(
@@ -6838,7 +6844,7 @@ describe("link persistence and publication", () => {
         expect(yield* rig.requestUses("fake-a")).toBe(true)
         yield* rig.importFrom(rig.sourceB)
         expect(yield* rig.requestUses("fake-b")).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("10 seconds")),
   )
 
   it.scopedLive(
@@ -6876,7 +6882,7 @@ describe("link persistence and publication", () => {
         expect(yield* rig.requestUses("fake-b")).toBe(true)
         yield* rig.importFrom(rig.sourceA)
         expect(yield* rig.requestUses("fake-a")).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("10 seconds")),
   )
 
   it.scopedLive(
@@ -6893,7 +6899,7 @@ describe("link persistence and publication", () => {
         rig.failRename(false)
         yield* rig.importFrom(rig.sourceB)
         expect(yield* rig.requestUses("fake-b")).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("10 seconds")),
   )
 })
 
@@ -7046,9 +7052,9 @@ describe("Claude account sign-in", () => {
           client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
         })
         // The exchange carries the verifier the page's challenge was made from.
-        const crypto = yield* Crypto.Crypto
+        const crypto = yield* Digest.Digest
         const digest = yield* crypto.digest(
-          "SHA-256",
+          Digest.sha256,
           new TextEncoder().encode(body["code_verifier"] ?? ""),
         )
         expect(Base64Url.encode(digest)).toBe(url.searchParams.get("code_challenge") ?? "absent")
@@ -7070,7 +7076,7 @@ describe("Claude account sign-in", () => {
         expect(again.message).toContain("start it again")
         // No keychain, no Claude Code login is read or written.
         expect(keychain.calls).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7093,7 +7099,7 @@ describe("Claude account sign-in", () => {
           }),
         )
         expect(refused.message).toContain("named credential slot")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7123,7 +7129,7 @@ describe("Claude account sign-in", () => {
         expect(expired.writes.map((record) => record.refresh)).toEqual(["fake-rotated-refresh"])
         expect(keychain.calls).toEqual([])
         expect(heldAccess(processStore)).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7148,7 +7154,7 @@ describe("Claude account sign-in", () => {
           Option.some(expect.stringContaining("links no Claude Code directory")),
         )
         expect(record.writes).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -7234,7 +7240,7 @@ describe("Claude plan quota", () => {
         expect(captured[0]?.headers["user-agent"]).toBe("claude-cli/2.1.316 (external, cli)")
         expect(record.writes).toEqual([])
         expect(keychain.calls).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7263,7 +7269,7 @@ describe("Claude plan quota", () => {
         expect(captured[1]?.headers["authorization"]).toBe("Bearer fake-rotated-access")
         expect(expired.writes.map((written) => written.refresh)).toEqual(["fake-rotated-refresh"])
         expect(keychain.calls).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("a plan with no five-hour window reads its week alone", () =>
@@ -7296,7 +7302,7 @@ describe("Claude plan quota", () => {
           ],
         }),
       )
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7334,7 +7340,7 @@ describe("Claude plan quota", () => {
         expect(yield* readOf({ five_hour: externalWireNull, seven_day: week })).toEqual(
           Option.none(),
         )
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7370,7 +7376,7 @@ describe("Claude plan quota", () => {
           message: Option.some("Anthropic usage read failed: HTTP 500"),
           urls: [USAGE_URL],
         })
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("an API-key sign-in reads no window and sends no request", () =>
@@ -7383,7 +7389,7 @@ describe("Claude plan quota", () => {
       )
       expect(exit).toEqual(Exit.succeed({ readings: [] }))
       expect(captured).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7497,7 +7503,7 @@ describe("Claude plan quota", () => {
             Exit.succeed({ resets: Option.none(), windows: 1 }),
           )
         }
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 })
 
@@ -7535,7 +7541,7 @@ describe("Claude account sign-in — races", () => {
           expect(fetches.captured.filter((request) => request.url === TOKEN_URL)).toEqual([])
           expect(record.writes).toEqual([])
         }
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7563,7 +7569,7 @@ describe("Claude account sign-in — races", () => {
         ])
         expect(sent.flatMap((one) => one.refreshTokens)).toEqual(["fake-expired-refresh"])
         expect(record.writes.map((write) => write.refresh)).toEqual(["fake-rotated-1-refresh"])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -7585,7 +7591,7 @@ describe("Claude account sign-in — races", () => {
         yield* Deferred.await(reached)
         yield* Fiber.interrupt(fiber)
         expect(persisted).toMatchObject([{ type: "oauth", refresh: "fake-signed-in-refresh" }])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("8 seconds")),
   )
 
   it.scoped("a started sign-in lasts 10 minutes", () =>
@@ -7606,7 +7612,7 @@ describe("Claude account sign-in — races", () => {
       )
       expect(expired.message).toContain("expired")
       expect(late.persisted).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 })
 

@@ -1,11 +1,12 @@
 import { FetchHttpClient } from "effect/http"
 import {
+  BunTestServices,
   collectTestContributions,
   ExtensionHealth,
   makeTempDirectoryScoped,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { BunChildProcessSpawner, BunFileSystem, BunPath, BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunFileSystem, BunPath } from "@effect/platform-bun"
 import {
   AuthMethod,
   defineExtension,
@@ -293,7 +294,7 @@ describe("inspect logs", () => {
       expect(logs.dir).toBe(dir)
       expect(logs.latestServer).toBe(newer)
       expect(logs.latestClient).toBe(client)
-    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 })
 
@@ -373,7 +374,7 @@ describe("local health", () => {
       const storage = yield* inspectStorage(home)
       expect(storage.status).toBe("stale")
       expect(storage.schemaVersion).toEqual(Option.some(KERNEL_SCHEMA_VERSION + 1))
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("a database with no kernel schema version is stale", () =>
@@ -402,7 +403,7 @@ describe("local health", () => {
       expect(report).toContain("The next server start wipes it")
       expect(report).toContain("Extensions:")
       expect(report).toContain("Status: No server for this data directory.")
-    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+    }).pipe(Effect.provide(Layer.merge(BunTestServices, GentPlatform.Test()))),
   )
 
   // A lock whose database path is longer than any default column.
@@ -521,7 +522,7 @@ describe("local health", () => {
       // The run writes its logs beside its database, so the doctor names that directory.
       expect(report.logs.dir).toBe(`${dataDir}/logs`)
       expect(formatDoctorReport(report)).toContain(`Directory: ${dataDir}/logs`)
-    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+    }).pipe(Effect.provide(Layer.merge(BunTestServices, GentPlatform.Test()))),
   )
 
   it.scopedLive("doctor report includes degraded extension resource health", () =>
@@ -554,7 +555,7 @@ describe("local health", () => {
       expect(report).toContain("degraded (1 degraded, 0 healthy)")
       expect(report).toContain("@test/broken-resource:")
       expect(report).toContain("activation failed during startup: resource start boom")
-    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+    }).pipe(Effect.provide(Layer.merge(BunTestServices, GentPlatform.Test()))),
   )
 
   it.scopedLive(
@@ -596,7 +597,7 @@ describe("local health", () => {
           "activation failed during setup: setup boom; version 0123456789ab still runs",
         )
         expect(report).toContain("  Disabled: @user/off")
-      }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+      }).pipe(Effect.provide(Layer.merge(BunTestServices, GentPlatform.Test()))),
   )
 
   it.scopedLive("archives storage files on reset", () =>
@@ -618,7 +619,7 @@ describe("local health", () => {
       for (const file of result.archived) {
         expect(yield* fs.exists(file)).toBe(true)
       }
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("storage reset refuses while a server holds the database", () =>
@@ -657,7 +658,7 @@ describe("local health", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          BunServices.layer,
+          BunTestServices,
           GentPlatform.Test(),
           Stdio.layerTest({
             stdout: () => captureTo("stdout"),
@@ -709,7 +710,7 @@ describe("local health", () => {
       expect(result.archived.length).toBeGreaterThan(0)
       expect(startsDuringMove).toEqual(result.archived.map(() => false))
       expect(yield* serverStart).toBe(true)
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("storage reset is idempotent when no db files exist", () =>
@@ -719,7 +720,7 @@ describe("local health", () => {
       const result = yield* resetStorage(home)
       expect(result.archiveDir).toBeUndefined()
       expect(result.archived).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("the doctor reads the database GENT_DATA_DIR names, not the one under home", () =>
@@ -740,7 +741,7 @@ describe("local health", () => {
       expect(storage.exists).toBe(true)
       expect(storage.status).toBe("ok")
       expect(storage.schemaVersion).toEqual(Option.some(KERNEL_SCHEMA_VERSION))
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 
   it.scopedLive("storage reset archives the database GENT_DATA_DIR names", () =>
@@ -761,7 +762,7 @@ describe("local health", () => {
         expect(file.startsWith(dataDir)).toBe(true)
         expect(yield* fs.exists(file)).toBe(true)
       }
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
 })
 
@@ -799,8 +800,8 @@ const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        BunServices.layer,
-        BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+        BunTestServices,
+        BunChildProcessSpawner.layer.pipe(Layer.provide(BunTestServices)),
         GentPlatform.Test(),
         FetchHttpClient.layer,
       ),
@@ -921,6 +922,8 @@ const typingTerminal = (typed: string) =>
     Terminal.make({
       columns: Effect.succeed(80),
       rows: Effect.succeed(24),
+      // The size never changes: no resize is ever offered.
+      size: Queue.unbounded<Terminal.Size, Cause.Done>(),
       readInput: Effect.gen(function* () {
         const queue = yield* Queue.unbounded<Terminal.UserInput, Cause.Done>()
         const key = (name: string) => ({ name, ctrl: false, meta: false, shift: false })

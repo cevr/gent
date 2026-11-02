@@ -1,15 +1,5 @@
-import {
-  Cause,
-  Clock,
-  Crypto,
-  DateTime,
-  Effect,
-  FileSystem,
-  Option,
-  Path,
-  Predicate,
-  Schema,
-} from "effect"
+import { Cause, Clock, DateTime, Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import {
   type BranchId,
@@ -485,9 +475,9 @@ export const questionAnswerText = (
  */
 const answerRequestId = (ids: ReadonlyArray<string>) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto
+    const crypto = yield* Digest.Digest
     const digest = yield* crypto
-      .digest("SHA-256", new TextEncoder().encode([...ids].sort().join("\n")))
+      .digest(Digest.sha256, new TextEncoder().encode([...ids].sort().join("\n")))
       .pipe(Effect.orDie)
     return `question-answer:${Hex.encode(digest)}`
   })
@@ -555,9 +545,9 @@ export const AskUserAsyncTool = tool({
     const ctx = yield* ExtensionContext
     const askedAt = yield* Clock.currentTimeMillis
     // A call always has an id when the loop runs it; a direct run gets a fresh one.
-    const crypto = yield* Crypto.Crypto
+    const crypto = yield* SecureRandom.SecureRandom
     const callId = yield* Option.match(Option.fromUndefinedOr(ctx.toolCallId), {
-      onNone: () => crypto.randomUUIDv7(),
+      onNone: () => crypto.uuidV7(),
       onSome: (id) => Effect.succeed(String(id)),
     })
     const asked = params.questions.map((question, index): OpenQuestion => ({

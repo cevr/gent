@@ -1,4 +1,5 @@
-import { Crypto, DateTime, Effect, Option, Path, Predicate, Schema, Struct } from "effect"
+import { DateTime, Effect, Option, Path, Predicate, Schema, Struct } from "effect"
+import { SecureRandom } from "effect/crypto"
 import {
   BranchId,
   defineExtension,
@@ -300,7 +301,7 @@ const dequeueGoalMessage = (goal: GoalState) =>
 const createGoal = (input: string, start: boolean) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const crypto = yield* Crypto.Crypto
+    const crypto = yield* SecureRandom.SecureRandom
     const objective = yield* validateObjective(input)
     const goal = yield* modifyGoal((current) =>
       Effect.gen(function* () {
@@ -311,7 +312,7 @@ const createGoal = (input: string, start: boolean) =>
         }
         const time = yield* now
         const created: GoalState = {
-          goalId: yield* crypto.randomUUIDv7(),
+          goalId: yield* crypto.uuidV7(),
           branchId: ctx.branchId,
           objective,
           status: "active",

@@ -21,6 +21,7 @@ import {
   Stream,
 } from "effect"
 import { ChildProcessSpawner } from "effect/process"
+import { plainArgs } from "@gent/core/test-utils"
 
 export const REPO = "cevr/gent"
 export const KEY = { repo: REPO, ref: "main" }
@@ -455,9 +456,10 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
     }
     const spawner = ChildProcessSpawner.make((command) => {
       if (command._tag !== "StandardCommand") return Effect.die("piped command")
-      if (command.command === "gh") return gh(command.args)
-      if (command.command === "git") return git(command.args)
-      return unexpected(command.command, command.args)
+      const args = plainArgs(command.args)
+      if (command.command === "gh") return gh(args)
+      if (command.command === "git") return git(args)
+      return unexpected(command.command, args)
     })
     /** A real push that exits 0 lands on the fake's head, as GitHub would read it. */
     const landed = (args: ReadonlyArray<string>, handle: ChildProcessSpawner.ChildProcessHandle) =>
@@ -479,9 +481,10 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
             if (command._tag !== "StandardCommand") return real.spawn(command)
             if (command.command === "gh") return spawner.spawn(command)
             if (command.command !== "git") return real.spawn(command)
-            if (fakes(command.args)) return spawner.spawn(command)
-            if (command.args[0] === "push") {
-              return Effect.map(real.spawn(command), (handle) => landed(command.args, handle))
+            const args = plainArgs(command.args)
+            if (fakes(args)) return spawner.spawn(command)
+            if (args[0] === "push") {
+              return Effect.map(real.spawn(command), (handle) => landed(args, handle))
             }
             return real.spawn(command)
           }),

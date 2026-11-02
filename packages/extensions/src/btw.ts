@@ -1,6 +1,5 @@
 import {
   Context,
-  Crypto,
   type Duration,
   Effect,
   Equal,
@@ -14,6 +13,7 @@ import {
   Schema,
   Stream,
 } from "effect"
+import { Digest } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import {
   type AgentEvent,
@@ -391,9 +391,9 @@ export const forkMergePrompt = (text: string): string => {
  * for message ids of any length.
  */
 const mergeRequestId = Effect.fn("Btw.mergeRequestId")(function* (details: ForkMergeDetails) {
-  const crypto = yield* Crypto.Crypto
+  const crypto = yield* Digest.Digest
   const digest = yield* crypto.digest(
-    "SHA-256",
+    Digest.sha256,
     new TextEncoder().encode(`${details.fork.sessionId}\n${details.replyId}`),
   )
   return `btw-merge:${Hex.encode(digest).slice(0, 32)}`

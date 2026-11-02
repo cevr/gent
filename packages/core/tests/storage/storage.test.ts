@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import * as Prompt from "effect/ai/Prompt"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunFileSystem } from "@effect/platform-bun"
 import {
   Cause,
   Clock,
@@ -66,7 +66,11 @@ import {
   ToolSourceRevision,
 } from "../../src/domain/capability"
 import { StorageError } from "../../src/domain/errors"
-import { ensureStorageParents, testSqliteStorage } from "../../src/test-utils/harness"
+import {
+  BunTestServices,
+  ensureStorageParents,
+  testSqliteStorage,
+} from "../../src/test-utils/harness"
 import type { InteractionRequestRecord } from "../../src/domain/interaction"
 
 // ── session storage ─────────────────────────────────────────────────────────
@@ -275,7 +279,7 @@ describe("Sessions", () => {
       const dir = yield* fs.makeTempDirectoryScoped()
       const layer = SqliteStorage.WithSql(BunSqlite.file(path.join(dir, "gent.db"))).pipe(
         Layer.provide(BunFileSystem.layer),
-        Layer.provide(BunServices.layer),
+        Layer.provide(BunTestServices),
         Layer.provide(GentPlatform.Test()),
       )
       yield* Effect.gen(function* () {
@@ -301,7 +305,7 @@ describe("Sessions", () => {
         expect(walAutocheckpoint[0]?.wal_autocheckpoint).toBe(1000)
         expect(foreignKeys[0]?.foreign_keys).toBe(1)
       }).pipe(Effect.provide(layer))
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(BunTestServices)),
   )
   it.live("rejects orphan branch, message, event, queue, and durable operation rows", () =>
     Effect.gen(function* () {

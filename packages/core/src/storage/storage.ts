@@ -2,7 +2,6 @@ import {
   Array as Arr,
   Clock,
   Context,
-  type Crypto,
   DateTime,
   Effect,
   SchemaGetter as Getter,
@@ -12,6 +11,7 @@ import {
   Ref,
   Schema,
 } from "effect"
+import type { Digest, SecureRandom } from "effect/crypto"
 import { SqlClient, SqlError } from "effect/sql"
 import type * as Prompt from "effect/ai/Prompt"
 import {
@@ -2843,7 +2843,7 @@ type FocusedStorage =
  */
 const provideFocusedRepositories = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
-): Layer.Layer<FocusedStorage, E, R | GentPlatform | Crypto.Crypto> =>
+): Layer.Layer<FocusedStorage, E, R | GentPlatform | Digest.Digest | SecureRandom.SecureRandom> =>
   Layer.provideMerge(
     Layer.mergeAll(
       SessionStorage.Live,
@@ -2878,6 +2878,9 @@ export const SqliteStorage = {
    */
   WithSql: <E, R>(
     sql: Layer.Layer<SqlClient.SqlClient, E, R>,
-  ): Layer.Layer<FocusedStorage, E | StorageError, R | GentPlatform | Crypto.Crypto> =>
-    provideFocusedRepositories(StorageInitLive.pipe(Layer.provideMerge(sql))),
+  ): Layer.Layer<
+    FocusedStorage,
+    E | StorageError,
+    R | GentPlatform | Digest.Digest | SecureRandom.SecureRandom
+  > => provideFocusedRepositories(StorageInitLive.pipe(Layer.provideMerge(sql))),
 }

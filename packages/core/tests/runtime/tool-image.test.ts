@@ -1,4 +1,3 @@
-import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import {
   Clock,
@@ -24,7 +23,12 @@ import {
 } from "../../src/runtime/tool-image"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { runToolWithCtx, testLeafContext, testToolContext } from "../../src/test-utils/harness"
+import {
+  BunTestServices,
+  runToolWithCtx,
+  testLeafContext,
+  testToolContext,
+} from "../../src/test-utils/harness"
 
 /** A 1x1 PNG, base64. */
 const DOT_PNG =
@@ -68,7 +72,7 @@ const heldFileSystem = (
         remove: (path, options) => hold(fs.remove(path, options)),
       })
     }),
-  ).pipe(Layer.provide(BunServices.layer))
+  ).pipe(Layer.provide(BunTestServices))
 
 describe("tool image sweep", () => {
   for (const [point, story] of [
@@ -267,7 +271,7 @@ describe("tool image scaling", () => {
           originalWidth: 4000,
           originalHeight: 1000,
         })
-      }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunTestServices)),
     15_000,
   )
 
@@ -302,7 +306,7 @@ describe("tool image scaling", () => {
         })
         expect(image.bytes).toBeLessThanOrEqual(TOOL_IMAGE_MAX_BYTES)
         expect(yield* Ref.get(count)).toBeLessThanOrEqual(5)
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
     25_000,
   )
 })
@@ -339,7 +343,7 @@ describe("a tool run by the test harness", () => {
           originalWidth: 4000,
           originalHeight: 1000,
         })
-      }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunTestServices)),
     15_000,
   )
 })

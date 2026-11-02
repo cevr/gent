@@ -93,7 +93,7 @@
           "nonObjectEffectServiceType": "error",
           "outdatedApi": "error",
           "overriddenSchemaConstructor": "error",
-          "preferSchemaOverJson": "error",
+          "globalJsonInEffect": "error",
           "processEnv": "off",
           "processEnvInEffect": "off",
           "redundantSchemaTagIdentifier": "error",

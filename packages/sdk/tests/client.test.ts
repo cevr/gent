@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
-import { ConfigProvider, Crypto, Effect, FileSystem, Option, Predicate, Schema } from "effect"
+import { ConfigProvider, Effect, FileSystem, Option, Predicate, Schema } from "effect"
+import { SecureRandom } from "effect/crypto"
 import { FetchHttpClient, HttpClient } from "effect/http"
 import { BunServices } from "@effect/platform-bun"
 import {
@@ -96,12 +97,12 @@ describe("Gent.server options", () => {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-// A user-shaped extension whose setup mints an id with Effect `Crypto`. The
+// A user-shaped extension whose setup mints an id with Effect `SecureRandom`. The
 // TUI and `gent server start` both build their root through `Gent.server`.
 const cryptoSetupExtension = defineExtension({
   id: "crypto-setup",
   setup: Effect.gen(function* () {
-    const id = yield* (yield* Crypto.Crypto).randomUUIDv7().pipe(Effect.orDie)
+    const id = yield* (yield* SecureRandom.SecureRandom).uuidV7().pipe(Effect.orDie)
     const host = yield* ExtensionHost
     yield* host.register(
       "request",
@@ -119,7 +120,7 @@ const cryptoSetupExtension = defineExtension({
 
 describe("Gent.server extension setup", () => {
   it.live(
-    "gives setup the Crypto service",
+    "gives setup the SecureRandom service",
     () =>
       Effect.scoped(
         Effect.gen(function* () {

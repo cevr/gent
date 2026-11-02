@@ -4,7 +4,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   DateTime,
   Deferred,
   Duration,
@@ -25,6 +24,7 @@ import {
   Semaphore,
   Stream,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { SqlClient } from "effect/sql"
 import { Hex } from "effect/encoding"
 import { countOf } from "./fs-tools.js"
@@ -665,7 +665,7 @@ interface BackgroundBashTarget {
   readonly branchId: ExtensionContextService["branchId"]
   readonly toolCallId: ToolCallId
   readonly Session: Pick<ExtensionContextService["Session"], "getSession" | "listBranches" | "send">
-  /** Resolved before ownership transfer: the job fiber has no ExtensionContext or Crypto. */
+  /** Resolved before ownership transfer: the job fiber has no ExtensionContext, Digest or SecureRandom. */
   readonly outputFile: string
 }
 
@@ -744,9 +744,9 @@ const jobOutputFile = Effect.fn("ExecTools.jobOutputFile")(function* (
   dataDir: string,
   key: BackgroundBashJobKeyFields,
 ) {
-  const crypto = yield* Crypto.Crypto
+  const crypto = yield* Digest.Digest
   const digest = yield* crypto.digest(
-    "SHA-256",
+    Digest.sha256,
     new TextEncoder().encode(encodeCallIdentity(key.toolCallId)),
   )
   return path.resolve(
@@ -1177,7 +1177,7 @@ interface CommandRecording<E> {
 
 /** A new launch, with its receipt under `<data dir>/command-processes/`. */
 export const commandLaunch = Effect.fn("ExecTools.commandLaunch")(function* (dataDir: string) {
-  const token = yield* (yield* Crypto.Crypto).randomUUIDv4()
+  const token = yield* (yield* SecureRandom.SecureRandom).uuidV4()
   const path = yield* Path.Path
   const launch: CommandLaunch = {
     token,
@@ -1347,7 +1347,7 @@ const spawnBashCommand = <E>(
       const path = yield* Path.Path
       yield* fs.makeDirectory(path.dirname(launch.receipt), { recursive: true })
     } else {
-      token = yield* (yield* Crypto.Crypto).randomUUIDv4()
+      token = yield* (yield* SecureRandom.SecureRandom).uuidV4()
     }
     const handle = yield* ChildProcess.make("bash", args, {
       cwd: Option.getOrUndefined(cwd),
@@ -1729,7 +1729,8 @@ interface BackgroundBashSupervisorService {
     | ChildProcessSpawner.ChildProcessSpawner
     | FileSystem.FileSystem
     | Path.Path
-    | Crypto.Crypto
+    | Digest.Digest
+    | SecureRandom.SecureRandom
     | ExtensionContext
   >
 }
@@ -1870,9 +1871,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         }
         const path = yield* Path.Path
         const dataDir = yield* resolveDataDir(ctx.home)
-        const file = yield* jobOutputFile(path, dataDir, keyFields).pipe(
-          Effect.catchTag("PlatformError", (e) => new BackgroundBashError({ message: e.message })),
-        )
+        const file = yield* jobOutputFile(path, dataDir, keyFields)
         const target: BackgroundBashTarget = {
           ...keyFields,
           Session: ctx.Session,
@@ -1886,12 +1885,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         // fork is interruptible independently of this transfer mask.
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
-            const launch = yield* commandLaunch(dataDir).pipe(
-              Effect.catchTag(
-                "PlatformError",
-                (e) => new BackgroundBashError({ message: e.message }),
-              ),
-            )
+            const launch = yield* commandLaunch(dataDir)
             const claim = yield* storage.claimStart({
               ...keyFields,
               command: job.command,
@@ -1916,7 +1910,8 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               | ChildProcessSpawner.ChildProcessSpawner
               | FileSystem.FileSystem
               | Path.Path
-              | Crypto.Crypto
+              | Digest.Digest
+              | SecureRandom.SecureRandom
             >()
             // forkIn inherits the parent fiber's full context, and provideContext
             // would only merge on top — request-scoped tags carried by the caller
@@ -1927,7 +1922,8 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               ChildProcessSpawner.ChildProcessSpawner,
               FileSystem.FileSystem,
               Path.Path,
-              Crypto.Crypto,
+              Digest.Digest,
+              SecureRandom.SecureRandom,
               References.CurrentLoggers,
               References.MinimumLogLevel,
             )(fullContext)
@@ -1996,7 +1992,8 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
                     | ChildProcessSpawner.ChildProcessSpawner
                     | FileSystem.FileSystem
                     | Path.Path
-                    | Crypto.Crypto
+                    | Digest.Digest
+                    | SecureRandom.SecureRandom
                   >,
                 ) => jobContext,
               ),
@@ -2116,9 +2113,7 @@ export const BashTool = tool({
         sessionId: ctx.sessionId,
         branchId: ctx.branchId,
         toolCallId: ctx.toolCallId,
-      }).pipe(
-        Effect.catchTag("PlatformError", (e) => new BashError({ command, message: e.message })),
-      )
+      })
       spill = Option.some({ file, mode: "spill" })
     }
     const admitted = yield* Deferred.make<void, BashError | PlatformError.PlatformError>()

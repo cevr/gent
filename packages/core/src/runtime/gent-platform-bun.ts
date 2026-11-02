@@ -38,7 +38,7 @@ import { SqlClient } from "effect/sql"
 import { causeMessage } from "../domain/guards.js"
 import { storageError, type StorageError } from "../domain/errors.js"
 import * as EffectPlatformBun from "@effect/platform-bun"
-import { BunHttpServer, BunServices } from "@effect/platform-bun"
+import { BunCrypto, BunHttpServer, BunServices } from "@effect/platform-bun"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { AuthError, ProviderLock } from "./provider.js"
 import { FetchHttpClient } from "effect/http"
@@ -487,6 +487,8 @@ export const BunSqlite = {
  */
 export const BunPlatformLive = Layer.mergeAll(
   BunServices.layer,
+  BunCrypto.layerDigest,
+  BunCrypto.layerSecureRandom,
   // Fresh: `FetchHttpClient.layer` captures the `Fetch` of the context it is
   // built in, and a shared build would hand this one to a model client built
   // later over its own `Fetch`.

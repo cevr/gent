@@ -23,7 +23,6 @@ import { SqlClient } from "effect/sql"
 import { ChildProcessSpawner } from "effect/process"
 import { AiError } from "effect/ai"
 import { TestClock } from "effect/testing"
-import { BunServices } from "@effect/platform-bun"
 import { BunSqlite } from "@gent/core/host-bun"
 import type * as Prompt from "effect/ai/Prompt"
 import { workspaceIdForCwd } from "@gent/core/host"
@@ -52,6 +51,9 @@ import {
   WakeNext,
 } from "@gent/core/extensions/api"
 import {
+  advanceUntil,
+  BunTestServices,
+  plainArgs,
   ConfigService,
   createE2ELayer,
   createRpcClient,
@@ -64,7 +66,6 @@ import {
   testToolContext,
   textDeltaPart,
   UserConfig,
-  advanceUntil,
   waitFor,
 } from "@gent/core/test-utils"
 import type { Session } from "@gent/core/protocol"
@@ -972,7 +973,7 @@ describe("a machine run", () => {
         ).pipe(
           Layer.provide(MachineStore.Live),
           Layer.provide(BunSqlite.file(`${home.home}/gent.db`)),
-          Layer.provide(BunServices.layer),
+          Layer.provide(BunTestServices),
         )
         const stub = testToolContext().Session
         // oxlint-disable-next-line effect/noNullish -- the facade's absent-session answer
@@ -1278,7 +1279,7 @@ describe("a machine command across a clean stop", () => {
           // The process is recorded at its spawn: the stop waits until the command ran.
           yield* waitFor(
             Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(`${home.cwd}/ran.log`)).pipe(
-              Effect.provide(BunServices.layer),
+              Effect.provide(BunTestServices),
               Effect.orDie,
             ),
             (exists) => exists,
@@ -1312,7 +1313,7 @@ describe("a machine command across a clean stop", () => {
       // The command ran once: the restart asked instead of running it again.
       const ran = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
         fs.readFileString(`${home.cwd}/ran.log`),
-      ).pipe(Effect.provide(BunServices.layer))
+      ).pipe(Effect.provide(BunTestServices))
       expect(ran.trim().split("\n")).toEqual(["ran"])
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
@@ -1530,7 +1531,7 @@ const shipInto = (
   return Option.match(fs, {
     onNone: () => shipped,
     onSome: (layer) => Effect.provide(shipped, layer),
-  }).pipe(Effect.provide(BunServices.layer))
+  }).pipe(Effect.provide(BunTestServices))
 }
 
 /**
@@ -1547,7 +1548,7 @@ const racingFileSystem = (file: string, racer: string) =>
         return Effect.andThen(fs.writeFileString(file, racer), fs.open(path, options))
       },
     })),
-  ).pipe(Layer.provide(BunServices.layer))
+  ).pipe(Layer.provide(BunTestServices))
 
 /** A file's text, and its inode and modification time: a write that replaces it changes them. */
 const fileState = (file: string) =>
@@ -1555,16 +1556,16 @@ const fileState = (file: string) =>
     const fs = yield* FileSystem.FileSystem
     const info = yield* fs.stat(file)
     return { text: yield* fs.readFileString(file), ino: info.ino, mtime: info.mtime }
-  }).pipe(Effect.provide(BunServices.layer))
+  }).pipe(Effect.provide(BunTestServices))
 
 const writeText = (file: string, text: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.writeFileString(file, text)).pipe(
-    Effect.provide(BunServices.layer),
+    Effect.provide(BunTestServices),
   )
 
 const scratchCwd = Effect.flatMap(FileSystem.FileSystem, (fs) =>
   fs.makeTempDirectoryScoped({ prefix: "gent-shipped-" }),
-).pipe(Effect.provide(BunServices.layer))
+).pipe(Effect.provide(BunTestServices))
 
 describe("a shipped definition's project file", () => {
   it.live(
@@ -1650,7 +1651,7 @@ describe("a shipped definition's project file", () => {
         expect((yield* fileState(file)).text).toBe("appeared\n")
         // A shipped file nobody edited at the read: the upgrade renames over only that text.
         yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(file)).pipe(
-          Effect.provide(BunServices.layer),
+          Effect.provide(BunTestServices),
         )
         expect((yield* shipInto(cwd, SHIPPED)).outcome).toBe("written")
         const changed = yield* shipInto(
@@ -1741,7 +1742,7 @@ describe("a stopped machine command with no process to stop", () => {
         expect(receipt).not.toBe("")
         yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
           fs.writeFileString(receipt, "not a process\n"),
-        ).pipe(Effect.provide(BunServices.layer))
+        ).pipe(Effect.provide(BunTestServices))
         yield* Effect.scoped(
           Effect.gen(function* () {
             yield* createRpcClient(home.layerFor(machineModels(models)))
@@ -1846,7 +1847,7 @@ describe("machine answers", () => {
       ).pipe(
         Layer.provide(MachineStore.Live),
         Layer.provide(BunSqlite.file(`${home.home}/gent.db`)),
-        Layer.provide(BunServices.layer),
+        Layer.provide(BunTestServices),
       )
       // No server reads the kick: each answer is admitted, and nothing runs after it.
       const stub = testToolContext().Session
@@ -2986,7 +2987,7 @@ const stopWithWakes = (
     Effect.provide(
       MachineStore.Live.pipe(
         Layer.provide(BunSqlite.file(`${home.home}/gent.db`)),
-        Layer.provide(BunServices.layer),
+        Layer.provide(BunTestServices),
       ),
     ),
   )
@@ -5530,7 +5531,7 @@ const ranLines = (cwd: string) =>
         (text) => text.split("\n").filter((line) => line.length > 0).length,
       )
     }),
-  ).pipe(Effect.provide(BunServices.layer))
+  ).pipe(Effect.provide(BunTestServices))
 
 describe("the machine boot budget", () => {
   it.live(
@@ -5644,7 +5645,7 @@ describe("the machine boot budget", () => {
       // The gate opens: the four end, and the fifth runs and ends too.
       yield* FileSystem.FileSystem.pipe(
         Effect.flatMap((fs) => fs.writeFileString(`${home.cwd}/gate`, "")),
-        Effect.provide(BunServices.layer),
+        Effect.provide(BunTestServices),
       )
       yield* Effect.forEach(runs, (run) =>
         waitFor(home.sql(runRow(run)), isSettled, 15_000, `${run}'s end was told`),
@@ -5675,7 +5676,7 @@ describe("the machine boot budget", () => {
       expect(yield* ranLines(home.cwd)).toBe(4)
       yield* FileSystem.FileSystem.pipe(
         Effect.flatMap((fs) => fs.writeFileString(`${home.cwd}/gate`, "")),
-        Effect.provide(BunServices.layer),
+        Effect.provide(BunTestServices),
       )
       yield* Effect.forEach(running, (run) =>
         waitFor(home.sql(runRow(run)), isSettled, 15_000, `${run}'s end was told`),
@@ -5713,7 +5714,7 @@ describe("the machine boot budget", () => {
         yield* waitFor(ranLines(home.cwd), (count) => count >= 5, 10_000, "the new command started")
         yield* FileSystem.FileSystem.pipe(
           Effect.flatMap((fs) => fs.writeFileString(`${home.cwd}/gate`, "")),
-          Effect.provide(BunServices.layer),
+          Effect.provide(BunTestServices),
         )
         yield* waitFor(home.sql(runRow(fresh)), isSettled, 15_000, "the new command's end was told")
       }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
@@ -5765,7 +5766,7 @@ const commandBoundary = Effect.gen(function* () {
       }
       let label = "bash"
       if (command.args[2] === "gent-command") {
-        const receipt = Option.getOrThrow(Option.fromUndefinedOr(command.args[3]))
+        const receipt = Option.getOrThrow(Option.fromUndefinedOr(plainArgs(command.args)[3]))
         yield* fs.writeFileString(receipt, "4242\nfixture-start\n")
         label = "machine"
       }
@@ -5918,7 +5919,7 @@ describe("machine command named permits", () => {
       expect(Option.map(yield* home.sql(runRow(run)), (row) => row.status)).toEqual(
         Option.some("final"),
       )
-    }).pipe(Effect.provide(BunServices.layer), Effect.scoped, Effect.timeout("20 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.scoped, Effect.timeout("20 seconds")),
   )
 
   it.live("a mismatched command permit becomes a typed machine fault before spawning", () =>
@@ -5959,7 +5960,7 @@ describe("machine command named permits", () => {
       expect(boundary.events).toEqual([])
       expect((yield* client.permits.list())[0]?.holders).toHaveLength(1)
       yield* Fiber.interrupt(held)
-    }).pipe(Effect.provide(BunServices.layer), Effect.scoped, Effect.timeout("20 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.scoped, Effect.timeout("20 seconds")),
   )
 })
 
@@ -5987,7 +5988,7 @@ it.live("bash and a machine command share one named limit through process cleanu
     expect(boundary.events).toEqual(["machine:start", "machine:end", "bash:start", "bash:end"])
     expect(yield* client.permits.list()).toEqual([])
     yield* waitForEnd(client, owner)
-  }).pipe(Effect.provide(BunServices.layer), Effect.scoped, Effect.timeout("12 seconds")),
+  }).pipe(Effect.provide(BunTestServices), Effect.scoped, Effect.timeout("12 seconds")),
 )
 
 // ── integrate states ────────────────────────────────────────────────────────
@@ -6567,12 +6568,12 @@ const unitRun = (
     const home = yield* restartableHome
     const dir = `${home.cwd}/unit`
     yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(dir)).pipe(
-      Effect.provide(BunServices.layer),
+      Effect.provide(BunTestServices),
     )
     const models = yield* makeModels(unitWorker(verdicts, options.extras, options.acts, home.cwd))
     // The merge pushes, so machine.start checks its remote; the unit's gate spawns for real.
     const github = yield* fakeGitHub()
-    const processes = Layer.provide(github.layerOverReal, BunServices.layer)
+    const processes = Layer.provide(github.layerOverReal, BunTestServices)
     const { client } = yield* createRpcClient(
       home.layerFor(machineModels(models), {
         ...unitTiers(),
@@ -6588,7 +6589,7 @@ const unitRun = (
 
 const fileExists = (file: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(file)).pipe(
-    Effect.provide(BunServices.layer),
+    Effect.provide(BunTestServices),
   )
 
 /** A diagnosis with text under both headings the decide ask requires. */
@@ -6609,7 +6610,7 @@ const DIAGNOSIS = [
 const writeDiagnosis = (dir: string, content: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     fs.writeFileString(`${dir}/diagnosis.md`, content),
-  ).pipe(Effect.provide(BunServices.layer))
+  ).pipe(Effect.provide(BunTestServices))
 
 /** Moves the file's mtime `ahead` seconds past now, its text kept: a touch. */
 const touchFile = (file: string, ahead: number) =>
@@ -6617,12 +6618,12 @@ const touchFile = (file: string, ahead: number) =>
     const fs = yield* FileSystem.FileSystem
     const at = (yield* Clock.currentTimeMillis) / 1000 + ahead
     yield* fs.utimes(file, at, at)
-  }).pipe(Effect.provide(BunServices.layer))
+  }).pipe(Effect.provide(BunTestServices))
 
 /** Removes a file or a dir and all it holds. */
 const removePath = (target: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(target, { recursive: true })).pipe(
-    Effect.provide(BunServices.layer),
+    Effect.provide(BunTestServices),
   )
 
 /** Answers `ask` with `choice`, and returns the call's result, refused or not. */
@@ -7667,7 +7668,7 @@ describe("the shipped orchestrate machine", () => {
         })
         expect(again.requires?.file).toBe(`${dir}/diagnosis.md`)
         yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(dir)).pipe(
-          Effect.provide(BunServices.layer),
+          Effect.provide(BunTestServices),
         )
         const refused = yield* tryAnswer(client, owner, again, "rewrite", "rewrite-early")
         expect(refused?.failed).toBe(true)
@@ -7767,7 +7768,7 @@ describe("the shipped orchestrate machine", () => {
         // The empty gate never parsed: the engine's log of the gate holds only bash's refusal.
         const log = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
           fs.readFileString(`${dir}/merge-gate-1.log`),
-        ).pipe(Effect.provide(BunServices.layer))
+        ).pipe(Effect.provide(BunTestServices))
         expect(log).toContain("syntax error")
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
@@ -7792,7 +7793,7 @@ describe("the shipped orchestrate machine", () => {
         // The merge-only legs run once here, after the round gate.
         const log = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
           fs.readFileString(`${dir}/merge-gate-1.log`),
-        ).pipe(Effect.provide(BunServices.layer))
+        ).pipe(Effect.provide(BunTestServices))
         expect(log.trim().split("\n")).toEqual(["gate-ran", "slow-ran"])
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
@@ -7838,7 +7839,7 @@ describe("the shipped orchestrate machine", () => {
           )
           const log = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
             fs.readFileString(`${dir}/merge-gate-1.log`),
-          ).pipe(Effect.provide(BunServices.layer))
+          ).pipe(Effect.provide(BunTestServices))
           expect(log.split("\n").filter((line) => line.length > 0)).toEqual(red.log)
         }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
       45_000,
@@ -7936,7 +7937,7 @@ const unitGit = (cwd: string, args: ReadonlyArray<string>) =>
       if (result.exitCode === 0) return Effect.succeed(result.stdout.trim())
       return Effect.die(`git ${args.join(" ")}: ${result.stderr}`)
     }),
-    Effect.provide(BunServices.layer),
+    Effect.provide(BunTestServices),
     Effect.orDie,
   )
 
@@ -7947,7 +7948,7 @@ const writeFiles = (root: string, files: Readonly<Record<string, string>>) =>
     for (const [name, content] of Object.entries(files)) {
       yield* fs.writeFileString(`${root}/${name}`, content)
     }
-  }).pipe(Effect.provide(BunServices.layer), Effect.orDie)
+  }).pipe(Effect.provide(BunTestServices), Effect.orDie)
 
 /** Writes `files` in the checkout and commits them. */
 const commitFiles = (cwd: string, files: Readonly<Record<string, string>>, message: string) =>
@@ -7959,7 +7960,7 @@ const commitFiles = (cwd: string, files: Readonly<Record<string, string>>, messa
 
 const readUnitFile = (file: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(file)).pipe(
-    Effect.provide(BunServices.layer),
+    Effect.provide(BunTestServices),
   )
 
 /** The repeat test's name, which its output prints, as a reporter that lists tests does. */
@@ -8907,7 +8908,7 @@ type FakeGitHub = Effect.Success<ReturnType<typeof fakeGitHub>>
 const restackLayer = (home: Effect.Success<typeof restartableHome>, github: FakeGitHub) =>
   Effect.map(makeModels(trackWorker), (models) =>
     home.layerFor(machineModels(models), {
-      extensionInputs: [githubBoundary(Layer.provide(github.layerOverRealGit, BunServices.layer))],
+      extensionInputs: [githubBoundary(Layer.provide(github.layerOverRealGit, BunTestServices))],
     }),
   )
 

@@ -2,7 +2,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   DateTime,
   Duration,
   Effect,
@@ -19,6 +18,7 @@ import {
   Semaphore,
   Stream,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import type { ChildProcessSpawner } from "effect/process"
 import {
@@ -461,7 +461,8 @@ type WakeWorkServices =
   | WakeAlarms
   | FileSystem.FileSystem
   | Path.Path
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | ChildProcessSpawner.ChildProcessSpawner
 
 type WakeWorkError = ExtensionServiceError | PlatformError.PlatformError | WakeError
@@ -604,7 +605,10 @@ const WAKE_SOURCE_PREFIX = "wake:"
  * opened its turn, and a resumed turn's opener is named by the resume line.
  */
 const wakeSourceOf = Effect.fn("Wake.sourceOf")(function* (wakeId: string) {
-  const digest = yield* (yield* Crypto.Crypto).digest("SHA-256", new TextEncoder().encode(wakeId))
+  const digest = yield* (yield* Digest.Digest).digest(
+    Digest.sha256,
+    new TextEncoder().encode(wakeId),
+  )
   return `${WAKE_SOURCE_PREFIX}${Hex.encode(digest)}`
 })
 
@@ -642,7 +646,11 @@ const armMonitor = Effect.fn("WakeTool.arm")(function* (entry: MonitorEntry) {
   const ctx = yield* ExtensionContext
   // The poll outlives this call, so it keeps the services it runs against.
   const platform = yield* Effect.context<
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Digest.Digest
+    | SecureRandom.SecureRandom
   >()
   const alarms = yield* WakeAlarms
   // A settled fire moved its own row; a failed one drops the pending entry here.
@@ -1234,7 +1242,7 @@ export const WakeTool = tool({
     }
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.alarm.make({
-      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7(),
+      wakeId: yield* (yield* SecureRandom.SecureRandom).uuidV7(),
       dueAt,
       note: params.note,
       ...omitUndefined({ everySeconds: params.everySeconds, mode: params.mode }),
@@ -1349,7 +1357,7 @@ export const MonitorTool = tool({
     const deadline = now + timeoutSeconds * 1000
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.monitor.make({
-      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7(),
+      wakeId: yield* (yield* SecureRandom.SecureRandom).uuidV7(),
       command: params.command,
       cwd,
       everySeconds,

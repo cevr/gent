@@ -1,4 +1,5 @@
-import { Crypto, DateTime, Effect, Option, Predicate, Schema } from "effect"
+import { DateTime, Effect, Option, Predicate, Schema } from "effect"
+import { SecureRandom } from "effect/crypto"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import {
   AuthMethod,
@@ -257,7 +258,7 @@ const gatewayApiKey = (
 
 /**
  * One gateway's model driver. `envApiKey` is `OPENCODE_API_KEY`, read at
- * setup; a stored key wins over it. `crypto` is the host's, captured at setup:
+ * setup; a stored key wins over it. `random` is the host's, captured at setup:
  * it names a request that carries no conversation (`ProviderHints.cacheKey`
  * absent: the compaction summary) with a session id of its own, since the
  * gateway refuses a request without one. Core lists the gateway's catalog
@@ -266,7 +267,7 @@ const gatewayApiKey = (
 export const buildOpenCodeModelDriver = (
   gateway: Gateway,
   envApiKey: Option.Option<string>,
-  crypto: Crypto.Crypto,
+  random: SecureRandom.SecureRandom["Service"],
   plan: Pick<ModelDriverContribution, "spendLimits" | "requestPricing"> = {},
 ): ModelDriverContribution => ({
   id: gateway.id,
@@ -294,7 +295,7 @@ export const buildOpenCodeModelDriver = (
           Option.fromUndefinedOr(value.cacheKey),
         ),
         {
-          onNone: () => crypto.randomUUIDv4().pipe(Effect.orDie),
+          onNone: () => random.uuidV4().pipe(Effect.orDie),
           onSome: Effect.succeed,
         },
       )
@@ -312,7 +313,7 @@ export const buildOpenCodeModelDriver = (
   resolveDecisionModel: (modelName, authInfo) =>
     Effect.gen(function* () {
       const apiKey = yield* gatewayApiKey(gateway, Option.fromNullishOr(authInfo), envApiKey)
-      const sessionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie)
+      const sessionId = yield* random.uuidV4().pipe(Effect.orDie)
       return typeSafeDecisionModel(modelName, {
         apiKey,
         apiUrl: `${gateway.origin}/v1`,
@@ -325,12 +326,12 @@ export const buildOpenCodeModelDriver = (
 export const openCodeModelDrivers = Effect.gen(function* () {
   const envApiKey = yield* readOptionalEnv(ENV_CREDENTIAL)
   const goPlan = yield* readOptionalEnv(ENV_GO_PLAN)
-  // The host's Crypto, not one of the driver's own: a shipped provider is
+  // The host's SecureRandom, not one of the driver's own: a shipped provider is
   // never more privileged than a user extension.
-  const crypto = yield* Crypto.Crypto
+  const random = yield* SecureRandom.SecureRandom
   return [
-    buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, envApiKey, crypto),
-    buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, crypto, {
+    buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, envApiKey, random),
+    buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, random, {
       spendLimits: goSpendLimits(goPlan),
       requestPricing: goRequestPricing,
     }),

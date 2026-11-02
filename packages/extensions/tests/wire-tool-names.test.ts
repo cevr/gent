@@ -10,7 +10,6 @@ import { FetchHttpClient, type HttpClient } from "effect/http"
 import { describe, expect, it } from "effect-bun-test"
 import {
   Context,
-  type Crypto,
   Effect,
   Fiber,
   FileSystem,
@@ -23,7 +22,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import type { Digest, SecureRandom } from "effect/crypto"
 import type { ChildProcessSpawner } from "effect/process"
 import type { LanguageModel } from "effect/ai"
 import {
@@ -46,12 +45,13 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import {
+  bunDriverHostServices,
+  BunTestServices,
   createRpcHarness,
   makeTempDirectoryScoped,
   modelCatalogFromBodies,
   testAgent,
   testTurnExtension,
-  bunDriverHostServices,
 } from "@gent/core/test-utils"
 import { resolveShipped } from "./helpers/api-classes.js"
 import {
@@ -141,7 +141,8 @@ const anthropicModel = Effect.gen(function* () {
       | FileSystem.FileSystem
       | Path.Path
       | ChildProcessSpawner.ChildProcessSpawner
-      | Crypto.Crypto
+      | Digest.Digest
+      | SecureRandom.SecureRandom
       | HttpClient.HttpClient
     >().pipe(Effect.provide(FetchHttpClient.layer)),
     AnthropicPlatform,
@@ -153,7 +154,7 @@ const anthropicModel = Effect.gen(function* () {
   )
   const driver = buildAnthropicModelDriver(credentialCellRef, Option.none(), services, "1h")
   return yield* driver.resolveModel("claude-sonnet-4-5", apiKey)
-}).pipe(Effect.provide(BunServices.layer))
+}).pipe(Effect.provide(BunTestServices))
 
 // ── openai ──────────────────────────────────────────────────────────────────
 
@@ -227,7 +228,7 @@ const openaiModel = Effect.gen(function* () {
     yield* bunDriverHostServices,
   )
   return yield* driver.resolveModel("gpt-5.4", apiKey)
-}).pipe(Effect.provide(BunServices.layer))
+}).pipe(Effect.provide(BunTestServices))
 
 // ── chat completions ────────────────────────────────────────────────────────
 
@@ -583,15 +584,15 @@ const runTurn = (
 const PINNED_DECLARATIONS = new Map([
   [
     "anthropic",
-    '{"tools":[{"name":"shapes","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"Free text"},"count":{"anyOf":[{"anyOf":[{"type":"number"},{"type":"null"}]},{"type":"null"}]},"mode":{"type":"string","enum":["fast","slow"]},"tags":{"type":"array","items":{"type":"string"}},"nested":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},"note":{"anyOf":[{"anyOf":[{"anyOf":[{"type":"string"},{"type":"null"}]},{"type":"null"}]},{"type":"null"}]},"limits":{"type":"array","items":{"type":"object","properties":{"0":{"type":"string"},"1":{"type":"number"}},"required":["0","1"],"additionalProperties":false,"description":"Tuple encoded as an object with numeric string keys (\'0\', \'1\', ...). If present, \'__rest__\' contains remaining elements"},"description":"Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object"}},"required":["text","count","mode","tags","nested","note","limits"],"additionalProperties":false},"description":"Every shape","strict":true},{"name":"plain__note","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"description":"A dotted id","strict":true},{"name":"todo","input_schema":{"type":"object","properties":{"todo":{"type":"string"},"done":{"type":"boolean"}},"required":["todo","done"],"additionalProperties":false},"description":"Add a todo","strict":true}],"tool_choice":{"type":"auto"}}',
+    '{"tools":[{"name":"shapes","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"Free text"},"count":{"anyOf":[{"type":"number"},{"type":"null"},{"type":"null"}]},"mode":{"type":"string","enum":["fast","slow"]},"tags":{"type":"array","items":{"type":"string"}},"nested":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},"note":{"anyOf":[{"type":"string"},{"type":"null"},{"type":"null"},{"type":"null"}]},"limits":{"type":"array","items":{"type":"object","properties":{"0":{"type":"string"},"1":{"type":"number"}},"required":["0","1"],"additionalProperties":false,"description":"Tuple encoded as an object with numeric string keys (\'0\', \'1\', ...). If present, \'__rest__\' contains remaining elements"},"description":"Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object"}},"required":["text","count","mode","tags","nested","note","limits"],"additionalProperties":false},"description":"Every shape","strict":true},{"name":"plain__note","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"description":"A dotted id","strict":true},{"name":"todo","input_schema":{"type":"object","properties":{"todo":{"type":"string"},"done":{"type":"boolean"}},"required":["todo","done"],"additionalProperties":false},"description":"Add a todo","strict":true}],"tool_choice":{"type":"auto"}}',
   ],
   [
     "openai",
-    '{"tools":[{"type":"function","name":"shapes","parameters":{"type":"object","properties":{"text":{"type":"string","description":"Free text"},"count":{"anyOf":[{"anyOf":[{"type":"number"},{"type":"null"}]},{"type":"null"}]},"mode":{"type":"string","enum":["fast","slow"]},"tags":{"type":"array","items":{"type":"string"}},"nested":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},"note":{"anyOf":[{"anyOf":[{"anyOf":[{"type":"string"},{"type":"null"}]},{"type":"null"}]},{"type":"null"}]},"limits":{"type":"array","items":{"type":"object","properties":{"0":{"type":"string"},"1":{"type":"number"}},"required":["0","1"],"additionalProperties":false,"description":"Tuple encoded as an object with numeric string keys (\'0\', \'1\', ...). If present, \'__rest__\' contains remaining elements"},"description":"Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object"}},"required":["text","count","mode","tags","nested","note","limits"],"additionalProperties":false},"strict":true,"description":"Every shape"},{"type":"function","name":"plain__note","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"strict":true,"description":"A dotted id"},{"type":"function","name":"todo","parameters":{"type":"object","properties":{"todo":{"type":"string"},"done":{"type":"boolean"}},"required":["todo","done"],"additionalProperties":false},"strict":true,"description":"Add a todo"}],"tool_choice":"auto"}',
+    '{"tools":[{"type":"function","name":"shapes","parameters":{"type":"object","properties":{"text":{"type":"string","description":"Free text"},"count":{"anyOf":[{"type":"number"},{"type":"null"},{"type":"null"}]},"mode":{"type":"string","enum":["fast","slow"]},"tags":{"type":"array","items":{"type":"string"}},"nested":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},"note":{"anyOf":[{"type":"string"},{"type":"null"},{"type":"null"},{"type":"null"}]},"limits":{"type":"array","items":{"type":"object","properties":{"0":{"type":"string"},"1":{"type":"number"}},"required":["0","1"],"additionalProperties":false,"description":"Tuple encoded as an object with numeric string keys (\'0\', \'1\', ...). If present, \'__rest__\' contains remaining elements"},"description":"Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object"}},"required":["text","count","mode","tags","nested","note","limits"],"additionalProperties":false},"strict":true,"description":"Every shape"},{"type":"function","name":"plain__note","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"strict":true,"description":"A dotted id"},{"type":"function","name":"todo","parameters":{"type":"object","properties":{"todo":{"type":"string"},"done":{"type":"boolean"}},"required":["todo","done"],"additionalProperties":false},"strict":true,"description":"Add a todo"}],"tool_choice":"auto"}',
   ],
   [
     "chat-completions",
-    '{"tools":[{"type":"function","function":{"name":"shapes","description":"Every shape","parameters":{"type":"object","properties":{"text":{"type":"string","description":"Free text"},"count":{"anyOf":[{"anyOf":[{"type":"number"},{"type":"null"}]},{"type":"null"}]},"mode":{"type":"string","enum":["fast","slow"]},"tags":{"type":"array","items":{"type":"string"}},"nested":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},"note":{"anyOf":[{"anyOf":[{"anyOf":[{"type":"string"},{"type":"null"}]},{"type":"null"}]},{"type":"null"}]},"limits":{"type":"array","items":{"type":"object","properties":{"0":{"type":"string"},"1":{"type":"number"}},"required":["0","1"],"additionalProperties":false,"description":"Tuple encoded as an object with numeric string keys (\'0\', \'1\', ...). If present, \'__rest__\' contains remaining elements"},"description":"Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object"}},"required":["text","count","mode","tags","nested","note","limits"],"additionalProperties":false},"strict":false}},{"type":"function","function":{"name":"plain__note","description":"A dotted id","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"strict":false}},{"type":"function","function":{"name":"todo","description":"Add a todo","parameters":{"type":"object","properties":{"todo":{"type":"string"},"done":{"type":"boolean"}},"required":["todo","done"],"additionalProperties":false},"strict":false}}],"tool_choice":"auto"}',
+    '{"tools":[{"type":"function","function":{"name":"shapes","description":"Every shape","parameters":{"type":"object","properties":{"text":{"type":"string","description":"Free text"},"count":{"anyOf":[{"type":"number"},{"type":"null"},{"type":"null"}]},"mode":{"type":"string","enum":["fast","slow"]},"tags":{"type":"array","items":{"type":"string"}},"nested":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},"note":{"anyOf":[{"type":"string"},{"type":"null"},{"type":"null"},{"type":"null"}]},"limits":{"type":"array","items":{"type":"object","properties":{"0":{"type":"string"},"1":{"type":"number"}},"required":["0","1"],"additionalProperties":false,"description":"Tuple encoded as an object with numeric string keys (\'0\', \'1\', ...). If present, \'__rest__\' contains remaining elements"},"description":"Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object"}},"required":["text","count","mode","tags","nested","note","limits"],"additionalProperties":false},"strict":false}},{"type":"function","function":{"name":"plain__note","description":"A dotted id","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"strict":false}},{"type":"function","function":{"name":"todo","description":"Add a todo","parameters":{"type":"object","properties":{"todo":{"type":"string"},"done":{"type":"boolean"}},"required":["todo","done"],"additionalProperties":false},"strict":false}}],"tool_choice":"auto"}',
   ],
 ])
 
@@ -817,7 +818,7 @@ describe("tools with no arguments on the wire", () => {
             expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
               { streamFailed: false },
             ])
-          }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+          }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
         ),
     )
   }
@@ -997,7 +998,7 @@ describe("tools that take any key on the wire", () => {
               expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
                 { streamFailed: false },
               ])
-            }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+            }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
           ),
       )
     }

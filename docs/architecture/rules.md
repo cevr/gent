@@ -151,7 +151,7 @@ commit.
     Receipt: `packages/extensions/src/threads.ts` (a `starter` round's end).
 15. **Platform edges stay explicit.** Extensions reach files, paths,
     processes, ids, and HTTP through the Effect platform services
-    (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`, `HttpClient`) and resolve
+    (`FileSystem`, `Path`, `ChildProcessSpawner`, `Digest`, `SecureRandom`, `HttpClient`) and resolve
     relative paths against `ctx.cwd`; `runProcess` is the one command helper.
     `ExtensionPlatformServices` names that set with `GentPlatform`, and
     `extensionPlatformServicesLive` re-provides it: the server root and the

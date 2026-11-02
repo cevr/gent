@@ -67,6 +67,8 @@ import {
   ProviderId,
 } from "../../src/domain/agent"
 import {
+  advanceUntil,
+  BunTestServices,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
@@ -81,7 +83,6 @@ import {
   testSqliteStorage,
   testTurnExtension,
   turnRequestText,
-  advanceUntil,
   waitFor,
 } from "../../src/test-utils/harness"
 import {
@@ -185,7 +186,7 @@ import {
 } from "../../src/runtime/model-context"
 import { omitUndefined } from "../../src/domain/guards"
 import { e2ePreset, testAgents } from "../helpers/test-preset"
-import { BunCrypto, BunServices } from "@effect/platform-bun"
+import { BunCrypto } from "@effect/platform-bun"
 import { type ModelDriverContribution, ProviderAuthError } from "../../src/domain/driver"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -2329,12 +2330,6 @@ const limitedForHours = (calls: Ref.Ref<number>) =>
           reason: new AiError.RateLimitError({
             retryAfter: Duration.hours(5),
             http: {
-              request: {
-                method: "POST",
-                url: "https://model.test/v1/responses",
-                urlParams: [],
-                headers: {},
-              },
               response: { status: 429, headers: { "retry-after": "18000" } },
             },
           }),
@@ -3387,7 +3382,7 @@ describe("branch resources follow the profile", () => {
           "acquire:beta-two",
           "release:alpha",
         ])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 })
@@ -3741,7 +3736,7 @@ describe("branch resources over process services", () => {
           5_000,
           "the old override released",
         )
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("12 seconds")),
     15_000,
   )
 })
@@ -3971,7 +3966,7 @@ export default defineExtension({
           "the old profile's process Resource released",
         )
         expect(lines).toContain("release:one")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -4002,7 +3997,7 @@ export default defineExtension({
         expect(yield* read).toBe("two")
         const after = yield* readLog
         expect(after.filter((line) => line.startsWith("open:"))).toEqual(["open:one", "open:two"])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -4083,7 +4078,7 @@ export default defineExtension({
         yield* fs.rename(away, opener)
         expect(yield* ping).toBe("pong")
         yield* waitFor(opens, (count) => count === 2, 5_000, "loopOpen ran when it came back")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -4122,7 +4117,7 @@ export default defineExtension({
         expect(lines.indexOf("release:one")).toBeGreaterThan(-1)
         expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
         expect(lines.filter((line) => line.startsWith("open:"))).toEqual(["open:one", "open:two"])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -4146,7 +4141,7 @@ export default defineExtension({
         yield* write("two")
         yield* fs.utimes(file, tick, tick)
         expect(yield* read).toBe("two")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -4175,7 +4170,7 @@ export default defineExtension({
         expect(lines.indexOf("release:one")).toBeGreaterThan(-1)
         expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
         expect(lines.filter((line) => line === "hang")).toEqual(["hang"])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -4206,7 +4201,7 @@ export default defineExtension({
         expect(stopped).toBeLessThan(lines.indexOf("release:one"))
         expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
         expect(lines).not.toContain("open-stopped:two")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunTestServices), Effect.timeout("15 seconds")),
     20_000,
   )
 })
@@ -4864,7 +4859,7 @@ const makeRuntimeLayer = (
   const eventStoreLayer = EventStore.Memory
   const storageLayer = testSqliteStorage
   let toolRunnerLayer = ToolRunner.Test()
-  if (tools.length > 0) toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(BunServices.layer))
+  if (tools.length > 0) toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(BunTestServices))
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -4879,7 +4874,7 @@ const makeRuntimeLayer = (
       home: "/nonexistent/gent-test-home",
     }),
     ConfigService.Test(),
-    BunServices.layer,
+    BunTestServices,
     ModelRegistry.Test(),
     DecisionModelResolver.Live.pipe(
       Layer.provide(Auth.Test()),
@@ -7866,8 +7861,6 @@ describe("provider retry in a turn", () => {
                     modelId: "test",
                     // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
                     timestamp: undefined,
-                    // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-                    request: undefined,
                   }),
                   Response.makePart("text-start", { id: "text-before-output" }),
                 ]),

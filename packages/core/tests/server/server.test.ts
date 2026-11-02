@@ -48,6 +48,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { StorageError } from "../../src/domain/errors.js"
 import { omitUndefined } from "../../src/domain/guards"
 import {
+  BunTestServices,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
@@ -119,7 +120,7 @@ import {
   ToolCallStarted,
   TurnCompleted,
 } from "../../src/domain/event"
-import { BunHttpServer, BunServices } from "@effect/platform-bun"
+import { BunHttpServer } from "@effect/platform-bun"
 import { HttpRouter, HttpServer } from "effect/http"
 import { Socket } from "effect/socket"
 import { SqlClient } from "effect/sql"
@@ -299,7 +300,7 @@ const sessionMutationsTestLayer = (
     ConfigService.Test(),
     CredentialPlacement.Memory,
     ModelRegistry.Test(),
-    BunServices.layer,
+    BunTestServices,
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
 }
@@ -2369,7 +2370,7 @@ describe("requestId idempotency", () => {
   const makePersistentSessionMutationsLayer = (dbPath: string) =>
     sessionMutationsTestLayer({
       storage: SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
-        Layer.provide(BunServices.layer),
+        Layer.provide(BunTestServices),
         Layer.provide(GentPlatform.Test()),
       ),
       governance: AgentLoopSessionGovernance.Live,
@@ -2423,7 +2424,7 @@ describe("requestId idempotency", () => {
             ConfigService.Test(),
             CredentialPlacement.Memory,
             ModelRegistry.Test(),
-            BunServices.layer,
+            BunTestServices,
           ),
         )
         const create = (registry: Layer.Layer<ExtensionRegistry>, requestId: string) =>
@@ -2500,7 +2501,7 @@ describe("requestId idempotency", () => {
           ConfigService.Test(),
           CredentialPlacement.Memory,
           ModelRegistry.Test(),
-          BunServices.layer,
+          BunTestServices,
         )
         // The caller holds only SessionMutations: the check reads the cache
         // the service captured, not one from the caller's context.
@@ -2832,7 +2833,7 @@ describe("requestId idempotency", () => {
       expect(second.sessionId).toBe(first.sessionId)
       expect(second.branchId).toBe(first.branchId)
       expect(sessions).toHaveLength(1)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("4 seconds")),
   )
 
   it.scoped("createSession requestId replays durable result after mutations layer restart", () =>
@@ -2846,7 +2847,7 @@ describe("requestId idempotency", () => {
 
       const makeLayer = (failPrompt: boolean) => {
         const storageLayer = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
-          Layer.provide(BunServices.layer),
+          Layer.provide(BunTestServices),
           Layer.provide(GentPlatform.Test()),
         )
         const runtimeLayer = sessionRuntimeLayer({
@@ -2899,7 +2900,7 @@ describe("requestId idempotency", () => {
       expect(sessions[0]?.id).toBe(second.sessionId)
       expect(sessions[0]?.activeBranchId).toBe(second.branchId)
       expect(deliveredPrompts).toEqual(["stored prompt:session.create:req-create-restart:initial"])
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("4 seconds")),
   )
 
   it.scoped("createBranch requestId replays durable result after mutations layer restart", () =>
@@ -2949,7 +2950,7 @@ describe("requestId idempotency", () => {
 
       expect(second.branchId).toBe(first.branchId)
       expect(branches).toHaveLength(2)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("4 seconds")),
   )
 
   it.scoped("switchBranch requestId replays durable result after mutations layer restart", () =>
@@ -3009,7 +3010,7 @@ describe("requestId idempotency", () => {
       }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       expect(session?.activeBranchId).toBe(toBranchId)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("4 seconds")),
   )
 
   it.scoped("forkBranch requestId replays durable result after mutations layer restart", () =>
@@ -3080,7 +3081,7 @@ describe("requestId idempotency", () => {
 
       expect(second.branchId).toBe(first.branchId)
       expect(branches).toHaveLength(2)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+    }).pipe(Effect.provide(BunTestServices), Effect.timeout("4 seconds")),
   )
 })
 

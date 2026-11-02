@@ -1,7 +1,6 @@
 import {
   Cause,
   Context,
-  Crypto,
   Data,
   DateTime,
   Deferred,
@@ -24,10 +23,12 @@ import {
   Stream,
   Schema as S,
 } from "effect"
+import { SecureRandom } from "effect/crypto"
 import * as EffectEntry from "effect"
 import * as EffectAiEntry from "effect/ai"
 import * as EffectAiErrorEntry from "effect/ai/AiError"
 import * as EffectResponseEntry from "effect/ai/Response"
+import * as EffectCryptoEntry from "effect/crypto"
 import * as EffectEncodingEntry from "effect/encoding"
 import * as EffectHttpEntry from "effect/http"
 import * as EffectHttpClientErrorEntry from "effect/http/HttpClientError"
@@ -4612,12 +4613,12 @@ describe("extension activation isolation", () => {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-// A user-shaped extension whose setup mints an id with Effect `Crypto` and
+// A user-shaped extension whose setup mints an id with Effect `SecureRandom` and
 // names its slash command's description after it.
 const cryptoSetupExtension = defineExtension({
   id: "crypto-setup",
   setup: Effect.gen(function* () {
-    const id = yield* (yield* Crypto.Crypto).randomUUIDv7().pipe(Effect.orDie)
+    const id = yield* (yield* SecureRandom.SecureRandom).uuidV7().pipe(Effect.orDie)
     const host = yield* ExtensionHost
     yield* host.register(
       "request",
@@ -4634,7 +4635,7 @@ const cryptoSetupExtension = defineExtension({
 })
 
 describe("setup platform services", () => {
-  it.live("the loader gives setup the Crypto service", () =>
+  it.live("the loader gives setup the SecureRandom service", () =>
     Effect.gen(function* () {
       const result = yield* setupExtensions({
         extensions: [{ extension: cryptoSetupExtension, scope: "user", sourcePath: "/tmp/c.ts" }],
@@ -4648,7 +4649,7 @@ describe("setup platform services", () => {
     }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live("the E2E root gives setup the Crypto service", () =>
+  it.live("the E2E root gives setup the SecureRandom service", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { client, sessionId } = yield* createRpcHarness({
@@ -5457,6 +5458,7 @@ const boundEntries = {
   "effect/ai/Prompt": Prompt,
   "effect/ai/Response": EffectResponseEntry,
   "effect/ai/Tool": AiTool,
+  "effect/crypto": EffectCryptoEntry,
   "effect/encoding": EffectEncodingEntry,
   "effect/http": EffectHttpEntry,
   "effect/http/HttpClientError": EffectHttpClientErrorEntry,

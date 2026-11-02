@@ -35,7 +35,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   Duration,
   Effect,
   Layer,
@@ -45,6 +44,7 @@ import {
   Predicate,
   Schema,
 } from "effect"
+import { Digest } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import { SqlClient } from "effect/sql"
 import {
@@ -726,8 +726,8 @@ const WRITE_TRIES = 3
 
 /** The gate's wake record: derived from its key, so a repeat arm writes the same record. */
 const gateSourceOf = Effect.fn("Integration.sourceOf")(function* (key: GateKey) {
-  const digest = yield* (yield* Crypto.Crypto).digest(
-    "SHA-256",
+  const digest = yield* (yield* Digest.Digest).digest(
+    Digest.sha256,
     new TextEncoder().encode(`${key.repo}\u0000${key.ref}`),
   )
   return `${SOURCE_PREFIX}${Hex.encode(digest)}`
@@ -1437,7 +1437,7 @@ type IntegrationApi = ReturnType<typeof makeIntegration>
  * The gate for other extensions: a machine pushes with `poller: "caller"`
  * and polls it itself. Read it with `Effect.serviceOption`.
  *
- * @effect-expect-leaking ExtensionContext | ChildProcessSpawner | Crypto
+ * @effect-expect-leaking ExtensionContext | ChildProcessSpawner | Digest | SecureRandom
  */
 export class Integration extends Context.Service<Integration, IntegrationApi>()(
   "@gent/extensions/src/integration",

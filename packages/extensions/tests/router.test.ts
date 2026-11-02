@@ -8,7 +8,6 @@ import { FetchHttpClient, type HttpClient } from "effect/http"
 import { describe, expect, it } from "effect-bun-test"
 import {
   Context,
-  type Crypto,
   Effect,
   FileSystem,
   Layer,
@@ -20,7 +19,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import type { Digest, SecureRandom } from "effect/crypto"
 import { DecisionModel, LanguageModel, type Prompt } from "effect/ai"
 import type { ChildProcessSpawner } from "effect/process"
 import {
@@ -40,6 +39,8 @@ import {
 } from "@gent/core/extensions/api"
 import { type AgentEvent, ExtensionHealthIssue, ExtensionStatusScope } from "@gent/core/protocol"
 import {
+  bunDriverHostServices,
+  BunTestServices,
   collectTestContributions,
   createRpcHarness,
   fixtureModelCatalog,
@@ -50,7 +51,6 @@ import {
   testTurnExtension,
   textStep,
   waitFor,
-  bunDriverHostServices,
 } from "@gent/core/test-utils"
 import {
   AnthropicPlatform,
@@ -347,7 +347,7 @@ describe("router config", () => {
         expect(state.length).toBeLessThan(4_200)
         expect(state).toContain("please redesign the parser")
         expect(state).toContain("debug the lexer")
-      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunTestServices)),
     20_000,
   )
 
@@ -401,7 +401,7 @@ describe("router config", () => {
           `Model router "${AUTO}": choices 1 and 2 are each marked "default": true; mark one`,
         ])
         expect(routedEvents(events)).toEqual([])
-      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunTestServices)),
     20_000,
   )
 
@@ -436,7 +436,7 @@ describe("router config", () => {
           }),
         )
         expect(yield* labels).toEqual(["Project"])
-      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunTestServices)),
     20_000,
   )
 })
@@ -470,7 +470,7 @@ describe("router stickiness", () => {
         expect(routedEvents(events).map((event) => event.model)).toEqual([LIGHT, LIGHT, STRONG])
         expect(routedEvents(events)[1]?.reason).toContain("held anthropic/claude-haiku-4-5")
         expect(stepModels(events)).toEqual([LIGHT, LIGHT, STRONG])
-      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunTestServices)),
     20_000,
   )
 
@@ -513,7 +513,7 @@ describe("router stickiness", () => {
         const held = yield* long.afterTurns(2)
         expect(routedEvents(held).map((event) => event.model)).toEqual([STRONG, STRONG])
         expect(routedEvents(held)[1]?.reason).toContain("costs more than the switch saves")
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
     25_000,
   )
 
@@ -557,7 +557,7 @@ describe("router stickiness", () => {
         expect(messages.some((message) => message.metadata?.customType === "model-change")).toBe(
           false,
         )
-      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunTestServices)),
     20_000,
   )
 })
@@ -650,7 +650,7 @@ describe("effort auto", () => {
         // The effort router is not a model: the catalog does not list it.
         const models = yield* session.client.model.list({ sessionId: session.sessionId })
         expect(models.some((model) => model.id === EFFORT)).toBe(false)
-      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunTestServices)),
     20_000,
   )
 
@@ -711,7 +711,7 @@ describe("effort auto", () => {
         expect(routedEvents(unrouted.events)).toEqual([])
         // The main agent's own level.
         expect(stepLevels(unrouted.events)).toEqual(["high"])
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
     25_000,
   )
 
@@ -763,7 +763,7 @@ describe("effort auto", () => {
         ).toEqual([Option.none(), Option.none()])
         expect(stepModels(events)).toEqual([STRONG])
         expect(stepLevels(events)).toEqual(["high"])
-      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(BunTestServices)),
     20_000,
   )
 })
@@ -850,7 +850,8 @@ const anthropicModelNamed = Effect.fn("test.anthropicModelNamed")(function* (
       | FileSystem.FileSystem
       | Path.Path
       | ChildProcessSpawner.ChildProcessSpawner
-      | Crypto.Crypto
+      | Digest.Digest
+      | SecureRandom.SecureRandom
       | HttpClient.HttpClient
     >().pipe(Effect.provide(FetchHttpClient.layer)),
     AnthropicPlatform,
@@ -863,7 +864,7 @@ const anthropicModelNamed = Effect.fn("test.anthropicModelNamed")(function* (
     Option.getOrUndefined(hints),
     fixtureModelCatalog(),
   )
-}, Effect.provide(BunServices.layer))
+}, Effect.provide(BunTestServices))
 
 const anthropicModel = anthropicModelNamed("claude-sonnet-5")
 
@@ -1050,7 +1051,7 @@ const replayOnSol = Effect.fn("test.replayOnSol")(function* (
     )
   }
   return state.captured.map((request) => decodeWireBody(request.body ?? ""))
-}, Effect.provide(BunServices.layer))
+}, Effect.provide(BunTestServices))
 
 /** A Responses body without its input. */
 const withoutInput = (body: Schema.JsonObject): Schema.Json =>
@@ -1175,7 +1176,7 @@ describe("router on the wire", () => {
         expect(routed.bodies).toEqual(byHand.bodies)
         // No prefill: each request ends on the user's message or a tool result.
         expect(routed.bodies.map(lastInput)).toEqual(["user:text", "user:text", "user:tool_result"])
-      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunTestServices)),
     30_000,
   )
 
@@ -1264,7 +1265,7 @@ describe("router on the wire", () => {
         // The real driver sends each step's prompt with the hints the turn
         // resolved; the change rides as a marker ahead of the turn it applies to.
         expectEffortRidesInside(yield* replayOnOpus(sent, sessionId), "low", "high")
-      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunTestServices)),
     30_000,
   )
 
@@ -1330,7 +1331,7 @@ describe("router on the wire", () => {
           [Option.some("high"), [Option.some("low")]],
         ])
         expectEffortRidesInside(yield* replayOnOpus(sent, sessionId), "low", "high")
-      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunTestServices)),
     30_000,
   )
   it.scopedLive(
@@ -1389,7 +1390,7 @@ describe("router on the wire", () => {
           [Option.some("none"), []],
           [Option.some("none"), [Option.some("none")]],
         ])
-      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunTestServices)),
     30_000,
   )
   it.scopedLive(
@@ -1465,7 +1466,7 @@ describe("router on the wire", () => {
           Option.none(),
           Option.none(),
         ])
-      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(BunTestServices)),
     30_000,
   )
 })

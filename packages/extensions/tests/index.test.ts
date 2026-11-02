@@ -3,12 +3,13 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Option, Path } from "effect"
 import { getToolId, runProcess } from "@gent/core/extensions/api"
 import { BuiltinExtensionModules } from "../src/index.js"
-import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { extensionEntryModules, GentPlatform } from "@gent/core/host"
 import { BunPlatformLive } from "@gent/core/host-bun"
 import {
+  BunTestServices,
   collectTestContributions,
   createRpcHarness,
   LanguageModelLayers,
@@ -71,7 +72,7 @@ describe("builtin peer modules", () => {
           }
           expect({ specifier, same: bound === resolved }).toEqual({ specifier, same: true })
         }
-      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunTestServices)),
   )
 
   // A test process has loaded the SDKs and bound no module, so these run in a
@@ -156,7 +157,7 @@ const runFresh = (
 
 const freshProcessLayer = Layer.mergeAll(
   BunPlatformLive,
-  BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+  BunChildProcessSpawner.layer.pipe(Layer.provide(BunTestServices)),
 )
 
 // ── tool schemas ────────────────────────────────────────────────────────────
@@ -199,8 +200,8 @@ describe("builtin tool schemas", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          BunServices.layer,
-          BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+          BunTestServices,
+          BunChildProcessSpawner.layer.pipe(Layer.provide(BunTestServices)),
           GentPlatform.Test(),
           FetchHttpClient.layer,
         ),

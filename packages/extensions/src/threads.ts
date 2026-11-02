@@ -37,7 +37,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   Effect,
   Exit,
   FiberMap,
@@ -57,6 +56,7 @@ import {
   Semaphore,
   Stream,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import type { ChildProcessSpawner } from "effect/process"
 import { SqlClient } from "effect/sql"
@@ -1087,9 +1087,9 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
  */
 const identityDigest = Effect.fn("Threads.identityDigest")(function* (kind: string, key: string) {
   const ctx = yield* ExtensionContext
-  const crypto = yield* Crypto.Crypto
+  const crypto = yield* Digest.Digest
   const identity = [kind, ctx.sessionId, ctx.branchId, key].join("\n")
-  return Hex.encode(yield* crypto.digest("SHA-256", new TextEncoder().encode(identity)))
+  return Hex.encode(yield* crypto.digest(Digest.sha256, new TextEncoder().encode(identity)))
 })
 
 /** The host-owned tool call, which makes a start or a send durable-once. */
@@ -2146,7 +2146,8 @@ const queueRound = Effect.fn("Threads.queueRound")(function* (round: RoundRow, l
     | ExtensionContext
     | ThreadRounds
     | ChildProcessSpawner.ChildProcessSpawner
-    | Crypto.Crypto
+    | Digest.Digest
+    | SecureRandom.SecureRandom
     | FileSystem.FileSystem
     | Path.Path
   >()
@@ -2217,8 +2218,8 @@ const dropSessionRounds = Effect.fn("Threads.dropSessionRounds")(function* (sess
 
 /** A random id no earlier request shares, for a request that must not repeat one. */
 const randomNonce = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto
-  return yield* crypto.randomUUIDv4()
+  const crypto = yield* SecureRandom.SecureRandom
+  return yield* crypto.uuidV4()
 })
 
 /**
@@ -2439,7 +2440,8 @@ const stopRoundsWaking: (
   | ExtensionContext
   | ThreadRounds
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
 > = Effect.fn("Threads.stopRoundsWaking")(function* (thread: string, place: Place) {
@@ -3596,7 +3598,7 @@ type ThreadsApi = ReturnType<typeof makeThreads>
  * `subscribeRoundEnds`. Read it with `Effect.serviceOption`, as threads
  * read `Workspaces`.
  *
- * @effect-expect-leaking ExtensionContext | Path | Crypto | FileSystem | ChildProcessSpawner
+ * @effect-expect-leaking ExtensionContext | Path | Digest | SecureRandom | FileSystem | ChildProcessSpawner
  */
 export class Threads extends Context.Service<Threads, ThreadsApi>()(
   "@gent/extensions/src/threads",

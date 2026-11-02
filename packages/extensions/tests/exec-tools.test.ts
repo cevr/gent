@@ -43,29 +43,31 @@ import {
   Session,
 } from "@gent/core/protocol"
 import {
-  finishPart,
-  interruptAtEachStep,
-  LanguageModelLayers,
-  textDeltaPart,
-  textStep,
-  toolCallPart,
-  multiToolCallStep,
-  toolCallStep,
-  waitFor,
+  ApprovalService,
+  BunTestServices,
+  plainArgs,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  finishPart,
+  interruptAtEachStep,
+  LanguageModelLayers,
   makeTempDirectoryScoped,
+  multiToolCallStep,
   runToolWithCtx,
+  SqliteStorage,
   testToolContext,
   type TestToolContext,
+  textDeltaPart,
+  textStep,
+  toolCallPart,
+  toolCallStep,
   turnRequestText,
-  SqliteStorage,
-  ApprovalService,
+  waitFor,
 } from "@gent/core/test-utils"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
-import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunCrypto, BunFileSystem } from "@effect/platform-bun"
 import { GentPlatform } from "@gent/core/host"
 import { BunSqlite, BunPlatformLive } from "@gent/core/host-bun"
 import {
@@ -89,7 +91,7 @@ import * as AiError from "effect/ai/AiError"
 /** SQLite storage in the file at `path`, so a later layer reads what an earlier one wrote. */
 const fileStorage = (path: string) =>
   SqliteStorage.WithSql(BunSqlite.file(path)).pipe(
-    Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+    Layer.provide(Layer.merge(BunTestServices, BunPlatformLive)),
   )
 
 /** The storage and the platform services a background supervisor needs. */
@@ -256,7 +258,7 @@ describe("background shell through a cell", () => {
 
   // The read tool resolves a relative path against the session cwd, not the
   // server's, so the notice names the file by its absolute path.
-  it.scopedLive.layer(BunServices.layer)(
+  it.scopedLive.layer(BunTestServices)(
     "a relative data directory still gives the notice an absolute file path",
     () =>
       Effect.gen(function* () {
@@ -281,7 +283,7 @@ describe("background shell through a cell", () => {
     30_000,
   )
 
-  it.scopedLive.layer(BunServices.layer)(
+  it.scopedLive.layer(BunTestServices)(
     "a job whose file cannot be written still reports its ends",
     () =>
       Effect.gen(function* () {
@@ -1383,7 +1385,7 @@ describe("background job output", () => {
   for (const recover of [false, true]) {
     let behavior = "a retry"
     if (recover) behavior = "an interruption notice"
-    it.scopedLive.layer(BunServices.layer)(
+    it.scopedLive.layer(BunTestServices)(
       `${behavior} never assigns an older colliding file to a job whose output has not opened`,
       () =>
         Effect.gen(function* () {
@@ -1488,7 +1490,7 @@ describe("background job output", () => {
         ids: ["call/a", "a883c4294550dd476c83701ebac2824f923f1e7cf1cad0bbc009e66b6dbf4d18"],
       },
     ]) {
-      it.scopedLive.layer(BunServices.layer)(
+      it.scopedLive.layer(BunTestServices)(
         `${mode} keeps independent output files for ${entry.name}`,
         () =>
           Effect.gen(function* () {
@@ -1717,7 +1719,7 @@ describe("a command's recorded process", () => {
       }
     })
 
-  it.scopedLive.layer(BunServices.layer)(
+  it.scopedLive.layer(BunTestServices)(
     "a run reports the process group it leads with that process's start time, and a later server's stop ends the group and its children",
     () =>
       Effect.gen(function* () {
@@ -1749,7 +1751,7 @@ describe("a command's recorded process", () => {
     30_000,
   )
 
-  it.scopedLive.layer(BunServices.layer)(
+  it.scopedLive.layer(BunTestServices)(
     "a command's processes inherit the token its record names",
     () =>
       Effect.gen(function* () {
@@ -1981,7 +1983,7 @@ describe("a command's recorded process", () => {
 })
 
 describe("foreground command output", () => {
-  it.scopedLive.layer(BunServices.layer)(
+  it.scopedLive.layer(BunTestServices)(
     "a cut that lands inside an emoji leaves the whole emoji out",
     () =>
       Effect.gen(function* () {
@@ -2459,7 +2461,7 @@ describe("a background job the server stopped", () => {
     { name: "completion", failed: false },
     { name: "failure", failed: true },
   ]) {
-    it.scopedLive.layer(BunServices.layer)(
+    it.scopedLive.layer(BunTestServices)(
       `interruption after durable ${entry.name} keeps the undelivered outcome`,
       () =>
         Effect.gen(function* () {
@@ -2493,7 +2495,7 @@ describe("a background job the server stopped", () => {
           ).pipe(Layer.provideMerge(BackgroundBashStorage.Live))
           const processLayer = BackgroundBashSupervisorLive.pipe(
             Layer.provideMerge(interruptedStorage),
-            Layer.provideMerge(Layer.merge(storageLayer, BunServices.layer)),
+            Layer.provideMerge(Layer.merge(storageLayer, BunTestServices)),
           )
           const scope = yield* Scope.make()
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
@@ -2531,7 +2533,7 @@ describe("a background job the server stopped", () => {
     )
   }
 
-  it.scopedLive.layer(BunServices.layer)(
+  it.scopedLive.layer(BunTestServices)(
     "an interruption at any step after a durable start claim leaves a scope-owned job",
     () =>
       interruptAtEachStep(
@@ -2569,7 +2571,7 @@ describe("a background job the server stopped", () => {
           ).pipe(Layer.provideMerge(BackgroundBashStorage.Live))
           const processLayer = BackgroundBashSupervisorLive.pipe(
             Layer.provideMerge(claimingStorage),
-            Layer.provideMerge(Layer.merge(storageLayer, BunServices.layer)),
+            Layer.provideMerge(Layer.merge(storageLayer, BunTestServices)),
           )
           const scope = yield* Scope.make()
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
@@ -2819,8 +2821,12 @@ describe("a background job the server stopped", () => {
             if (command._tag !== "StandardCommand" || command.command !== "kill") {
               return answer(0, `${startedAt}\n`, "")
             }
-            signals.push(command.args.join(" "))
-            return answer(1, "", `kill: (${command.args.at(-1) ?? ""}): Operation not permitted\n`)
+            signals.push(plainArgs(command.args).join(" "))
+            return answer(
+              1,
+              "",
+              `kill: (${plainArgs(command.args).at(-1) ?? ""}): Operation not permitted\n`,
+            )
           }),
         )
         const storageLayer = fileStorage(`${directory}/gent.db`)
@@ -3063,7 +3069,7 @@ const permittedProcessBoundary = Effect.gen(function* () {
       if (command._tag !== "StandardCommand" || command.command !== "bash")
         return yield* Effect.die("Expected bash")
       if (command.args[2] === "gent-command") {
-        const receipt = Option.getOrThrow(Option.fromUndefinedOr(command.args[3]))
+        const receipt = Option.getOrThrow(Option.fromUndefinedOr(plainArgs(command.args)[3]))
         yield* fs.writeFileString(receipt, "4242\nfixture-start\n")
       }
       events.push("start")
@@ -3161,7 +3167,7 @@ describe("bash named permits", () => {
     )
   }
 
-  it.scopedLive.layer(BunServices.layer)(
+  it.scopedLive.layer(BunTestServices)(
     "a foreground timeout starts after its permit queue wait",
     () =>
       Effect.gen(function* () {
@@ -3208,7 +3214,7 @@ describe("bash named permits", () => {
       }).pipe(Effect.timeout("6 seconds")),
   )
 
-  it.scopedLive.layer(BunServices.layer)(
+  it.scopedLive.layer(BunTestServices)(
     "a foreground timeout keeps its permit through detached process cleanup",
     () =>
       Effect.gen(function* () {
@@ -3250,7 +3256,7 @@ describe("bash named permits", () => {
       }).pipe(Effect.timeout("6 seconds")),
   )
 
-  it.scopedLive.layer(BunServices.layer)(
+  it.scopedLive.layer(BunTestServices)(
     "a TERM-resistant foreground group ends before the next permitted command starts",
     () =>
       Effect.gen(function* () {
@@ -3290,7 +3296,7 @@ describe("bash named permits", () => {
   )
 })
 
-it.scopedLive.layer(BunServices.layer)(
+it.scopedLive.layer(BunTestServices)(
   "a queued background bash keeps its permit after its turn until process cleanup ends",
   () =>
     Effect.gen(function* () {

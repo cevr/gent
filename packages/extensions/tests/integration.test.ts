@@ -43,7 +43,7 @@ import {
 
 // ── harness ─────────────────────────────────────────────────────────────────
 
-/** The Bun platform the server gives the extension: files, paths and `Crypto`. */
+/** The Bun platform the server gives the extension: files, paths, `Digest` and `SecureRandom`. */
 const Platform = Layer.merge(BunServices.layer, BunCrypto.layer)
 
 interface PushParams {

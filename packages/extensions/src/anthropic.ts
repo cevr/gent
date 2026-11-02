@@ -2,7 +2,6 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
   DateTime,
   Duration,
   Effect,
@@ -16,6 +15,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect"
+import { Digest, SecureRandom } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import {
   type ApiClassContribution,
@@ -376,11 +376,13 @@ export const extractFirstUserMessageText = (messages: ReadonlyArray<object>): st
  * Hex SHA-256 of `text` (UTF-8). A digest of an in-memory buffer does not
  * fail on a working runtime, so a failure is a defect.
  */
-const sha256Hex = (text: string): Effect.Effect<string, never, Crypto.Crypto> =>
+const sha256Hex = (
+  text: string,
+): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto
+    const crypto = yield* Digest.Digest
     const digest = yield* crypto
-      .digest("SHA-256", new TextEncoder().encode(text))
+      .digest(Digest.sha256, new TextEncoder().encode(text))
       .pipe(Effect.orDie)
     return Hex.encode(digest)
   })
@@ -391,7 +393,9 @@ const sha256Hex = (text: string): Effect.Effect<string, never, Crypto.Crypto> =>
  * doesn't match the first user message we send, so this MUST be
  * recomputed per request.
  */
-const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Crypto> =>
+const computeCch = (
+  messageText: string,
+): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
   sha256Hex(messageText).pipe(Effect.map((hex) => hex.slice(0, 5)))
 
 /**
@@ -404,7 +408,7 @@ const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Cr
 const computeVersionSuffix = (
   messageText: string,
   version: string,
-): Effect.Effect<string, never, Crypto.Crypto> =>
+): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
   Effect.gen(function* () {
     const sampled = [4, 7, 20]
       .map((index) => Option.getOrElse(Option.fromNullishOr(messageText[index]), () => "0"))
@@ -422,7 +426,7 @@ export const buildBillingHeaderValue = (
   messages: ReadonlyArray<object>,
   version: string,
   entrypoint: string,
-): Effect.Effect<string, never, Crypto.Crypto> =>
+): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
   Effect.gen(function* () {
     const text = extractFirstUserMessageText(messages)
     const suffix = yield* computeVersionSuffix(text, version)
@@ -606,7 +610,11 @@ const PRIMARY_SOURCE: ClaudeCodeSource = ClaudeCodeSource.cases.Primary.make({})
  */
 const linkedSource = (
   input: string,
-): Effect.Effect<LinkedSource, ProviderAuthError, Crypto.Crypto | Path.Path> =>
+): Effect.Effect<
+  LinkedSource,
+  ProviderAuthError,
+  Digest.Digest | SecureRandom.SecureRandom | Path.Path
+> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     if (!path.isAbsolute(input)) {
@@ -1354,7 +1362,10 @@ const rotateAndWriteBack = (base: RefreshBase) =>
 // `refreshLinked` are the whole state machine; docs/architecture/credentials.md
 // (Credential slots) states it, with the windows that stay and the bounds.
 
-type LinkedIORequirements = AnthropicCredentialIORequirements | Crypto.Crypto
+type LinkedIORequirements =
+  | AnthropicCredentialIORequirements
+  | Digest.Digest
+  | SecureRandom.SecureRandom
 
 /**
  * What a read of a linked source found. `SignedOut` is a confirmed absence
@@ -1450,7 +1461,9 @@ const writeLinkedSource = (
   })
 
 /** One login at one rotation: what `compareAndWrite` compares, as a fingerprint gent may store. */
-const loginFingerprint = (creds: ClaudeCredentials): Effect.Effect<string, never, Crypto.Crypto> =>
+const loginFingerprint = (
+  creds: ClaudeCredentials,
+): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
   sha256Hex(`${creds.accessToken}\n${creds.refreshToken}\n${creds.expiresAt}`)
 
 const sameLogin = Schema.toEquivalence(ClaudeCredentials)
@@ -1998,7 +2011,9 @@ const realIO: AnthropicCredentialIO = {
  * once at setup, plus the Claude Code platform facts. The driver provides no
  * platform of its own, so a test host's services reach the keychain reads.
  */
-type AnthropicDriverServices = Context.Context<AnthropicCredentialIORequirements | Crypto.Crypto>
+type AnthropicDriverServices = Context.Context<
+  AnthropicCredentialIORequirements | Digest.Digest | SecureRandom.SecureRandom
+>
 
 /** The production credential cache over the Claude Code keychain and the host's platform. */
 const buildLiveCredentialCache = (
@@ -2266,7 +2281,7 @@ const linkedDirectory = (
  * out of the generic provider boundary.
  */
 
-type KeychainTransformRequirements = Crypto.Crypto | AnthropicPlatform
+type KeychainTransformRequirements = Digest.Digest | SecureRandom.SecureRandom | AnthropicPlatform
 
 // ── Constants ──
 
@@ -3333,7 +3348,9 @@ const UUID_VARIANT_DIGITS = "89ab"
  * a restart as well, and no store holds it. A gent session id is a version 7
  * UUID, whose version digit and leading timestamp no Claude Code session has.
  */
-const claudeCodeSessionId = (root: SessionId): Effect.Effect<string, never, Crypto.Crypto> =>
+const claudeCodeSessionId = (
+  root: SessionId,
+): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
   Effect.map(sha256Hex(`gent-claude-code-session\u0000${root}`), (hex) => {
     const variant = UUID_VARIANT_DIGITS.charAt(Number.parseInt(hex.charAt(16), 16) % 4)
     return [
@@ -4664,18 +4681,7 @@ export const buildAnthropicModelDriver = (
               return yield* new ProviderAuthError({
                 message: "Signing in to a Claude account needs a named credential slot",
               })
-            const begun = yield* Effect.all({
-              pkce: generatePkce,
-              state: generateOAuthState,
-            }).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAuthError({
-                    message: `Claude sign-in could not start: ${cause.message}`,
-                    cause,
-                  }),
-              ),
-            )
+            const begun = yield* Effect.all({ pkce: generatePkce, state: generateOAuthState })
             const now = yield* Clock.currentTimeMillis
             // A sign-in nobody finished leaves with the next one that starts.
             for (const [id, pending] of pendingSignIns) {
@@ -4862,7 +4868,8 @@ export const AnthropicExtension = defineExtension({
       yield* FileSystem.FileSystem,
     ).pipe(
       Context.add(Path.Path, yield* Path.Path),
-      Context.add(Crypto.Crypto, yield* Crypto.Crypto),
+      Context.add(Digest.Digest, yield* Digest.Digest),
+      Context.add(SecureRandom.SecureRandom, yield* SecureRandom.SecureRandom),
       Context.add(
         ChildProcessSpawner.ChildProcessSpawner,
         yield* ChildProcessSpawner.ChildProcessSpawner,

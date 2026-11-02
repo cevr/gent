@@ -2,7 +2,6 @@
 /// <reference path="./skills/markdown.d.ts" />
 import {
   Context,
-  Crypto,
   Effect,
   FileSystem,
   Layer,
@@ -12,6 +11,8 @@ import {
   Result,
   Schema,
 } from "effect"
+import type { SecureRandom } from "effect/crypto"
+import { Digest } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import { parse as parseYaml } from "yaml"
 import {
@@ -114,11 +115,11 @@ export const bundledSkillFiles: ReadonlyArray<readonly [string, string]> = [
 export const installBundledSkills = Effect.fn("Skills.installBundled")(function* (home: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const crypto = yield* Crypto.Crypto
+  const crypto = yield* Digest.Digest
   const manifest = yield* Schema.encodeEffect(
     Schema.fromJsonString(Schema.Array(Schema.Tuple([Schema.String, Schema.String]))),
   )(bundledSkillFiles).pipe(Effect.orDie)
-  const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(manifest))
+  const digest = yield* crypto.digest(Digest.sha256, new TextEncoder().encode(manifest))
   const parent = path.join(home, ".cache", "gent", "skills")
   const root = path.join(parent, Hex.encode(digest))
   if (yield* fs.exists(root)) return root
@@ -181,7 +182,11 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
   static Live = (options: {
     cwd: string
     home: string
-  }): Layer.Layer<Skills, never, FileSystem.FileSystem | Path.Path | Crypto.Crypto> =>
+  }): Layer.Layer<
+    Skills,
+    never,
+    FileSystem.FileSystem | Path.Path | Digest.Digest | SecureRandom.SecureRandom
+  > =>
     Layer.effect(
       Skills,
       Effect.gen(function* () {
