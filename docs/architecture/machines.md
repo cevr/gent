@@ -139,27 +139,42 @@
     waiting driver rereads the committed run after arming its timer, before
     sleeping, so a stale arm cannot hide a committed stop.
   - An `ask` state's optional `requires` (`{ choices, after, file, headings }`)
-    makes some answers wait for a file. It applies on a visit the run
-    entered by one of `after`: the move's verdict (`Moved.verdict`, kept on a
+    makes some answers wait for a file. A visit the run entered by one of
+    `after` owes the file: the move's verdict (`Moved.verdict`, kept on a
     round's verdict move and on an answer that chose a thread state's
-    verdict), else its `by` (`exhausted` for a cap). On such a visit the ask
-    names the file and its headings, and an answer in `choices` is refused
-    (`unmet`, the run stays at the ask) until `file` (a template, resolved
-    from the run's cwd) has an mtime at or after the ask's `Dispatched`
-    step and non-blank text under each heading (a markdown heading of any
-    level, case-insensitive, up to the next heading). The refusal names the
-    file and each gap: `no file`, `written before the ask`, `no heading X`,
-    `nothing under X`. `machine.define` refuses a `choices` entry that is
-    not a key of `on` and checks `file`'s slots. The run's memo keeps its
-    last `Moved` step (`lastMove`), which also gives `{{visit.note}}`. The
-    orchestrate machines' decide requires `{{input.dir}}/diagnosis.md`, with
-    Premise and Counterexample, before `changes`, `replan` or `rewrite` after
-    the fix cap (`exhausted`) or a `stuck` verdict: each starts a new
-    direction, which could rest on the premise that failed. A size stop
-    (its note is the diagnosis), a check error and an ordinary decide need
-    none, nor do `fix`, `merge`, `drop` and `recheck`. The planner reads
-    diagnosis.md first when the unit dir holds one, and a rewrite's new unit
-    dir gets a copy (the orchestrator recipe).
+    verdict), else its `by` (`exhausted` for any cap). The debt is in the
+    run's memo (`RunMemo.owed`, folded from the steps): an ask dispatched
+    with its requirement adds its state, an answer that met it
+    (`Moved.met: true`) removes it, and while it is owed every visit of that
+    ask owes the file, whatever edge entered it. On a visit that owes it,
+    the ask's dispatch records the file resolved from the run's cwd and the
+    SHA-256 of its text, or none, in the pending `Ask` action and its
+    `Dispatched` step (`AppliedRequirement`), so the record survives a
+    restart. The ask names the file, its headings and the choices it guards,
+    in its text and in its details (`requires`), and an answer in `choices`
+    is refused (`unmet`, the run stays at the ask) until the file's digest
+    differs from the recorded one and it has non-blank text under each
+    heading (a markdown heading of any level, case-insensitive, read
+    trimmed, up to the next heading). No clock: a touched or copied stale
+    file is refused. The refusal names the file and each gap: `no file`,
+    `unchanged since the ask`, `no heading X`, `nothing under X`. A visit
+    that owes the file with no record refuses the guarded answer and names
+    the missing record. `machine.define` refuses a `choices` entry that is
+    not a key of `on`, an `after` entry that is neither a move kind
+    (`exhausted`, `oversize`, `verdict`, `pass`, `fail`, `error`, `green`,
+    `red`, `answer`) nor a verdict some thread state's `on` names, and a
+    heading with a space at either end; it checks `file`'s slots. The run's
+    memo keeps its last `Moved` step (`lastMove`), which also gives
+    `{{visit.note}}`. The orchestrate machines' decide requires
+    `{{input.dir}}/diagnosis.md`, with Premise and Counterexample, before
+    `changes`, `replan` or `rewrite` at a cap (`exhausted`) or after a
+    `stuck` verdict: each starts a new direction, which could rest on the
+    premise that failed. A size stop (its note is the diagnosis), a check
+    error and an ordinary decide owe none unless an earlier visit's debt is
+    unpaid, and `fix`, `merge`, `drop` and `recheck` never need it. The
+    planner and the implementor read diagnosis.md first when the unit dir
+    holds one, and a rewrite's new unit dir gets a copy (the orchestrator
+    recipe).
   - An `integrate` state pushes the run's head through the integration gate
     and moves by `on.green` or `on.red` (Integration gate in `shipped-extensions.md`).
   - A definition can ship files (`files`, a name to its text, each at most
@@ -182,10 +197,14 @@
     <n>|timed out after <s> seconds|did not start, so it gave no verdict`
     and the output's last 1,000 characters. An error move is not a check
     move: the quality tally counts it as neither `pass` nor `fail`. A run
-    state with `judges: false` screens and judges no round: its move keeps
-    `Moved.judged: false`, counts in no model's `checks` and leaves the
-    rounds since the last check to the next check that judges (the merge
-    gate, after the orchestrate machines' repeat-test check).
+    state with `screen: true` (the orchestrate machines' repeat-test check)
+    screens before a review: its pass (and its SKIP, which exits 0) judges
+    no round, keeps `Moved.judged: false`, counts in no model's `checks` and
+    leaves the rounds since the last check to the next check that judges
+    (the merge gate); its fail judges those rounds as any check's fail does
+    and clears them, since a wrong test is the implementor's own failure.
+    Runs recorded before `screen` counted every repeat-check pass and fail
+    as a judging check, so older quality history mixes the two rules.
   - The orchestrate machines' `repeats` state (`fix-repeats` in the light
     one) runs the shipped `repeat-tests.ts` (`packages/extensions/src`,
     embedded by a Bun text import) as `{{bun}} "{{files.repeat-tests.ts}}"

@@ -230,12 +230,12 @@ const RunState = Schema.Struct({
   timeoutSeconds: Schema.optionalKey(PositiveInt),
   on: Schema.Struct({ pass: StateName, fail: StateName, error: Schema.optionalKey(StateName) }),
   /**
-   * Whether the command judges the work of the rounds since the run's last
-   * check (`ModelQuality.checks`); default true. A screen before a review
-   * (the repeat-test check) says false: its pass or fail counts for no
-   * model, and the next check that judges still counts those rounds.
+   * A screen before a review (the repeat-test check): its pass judges no
+   * round, so the rounds since the run's last check wait for the next check
+   * (`ModelQuality.checks`); its fail judges them as any check's does.
+   * Default false: every pass and fail judges.
    */
-  judges: Schema.optionalKey(Schema.Boolean),
+  screen: Schema.optionalKey(Schema.Boolean),
   ...VisitCap,
 })
 type RunState = typeof RunState.Type
@@ -257,17 +257,22 @@ const IntegrateState = Schema.Struct({
 })
 type IntegrateState = typeof IntegrateState.Type
 
-/** A markdown heading's text, as `## Premise` names it: one line with no `#`. */
-const HeadingText = Schema.String.check(Schema.isPattern(/^[^#\r\n]*[^#\s][^#\r\n]*$/)).check(
+/**
+ * A markdown heading's text, as `## Premise` names it: one line with no `#`
+ * and no space at either end, since a file's heading is read trimmed.
+ */
+const HeadingText = Schema.String.check(Schema.isPattern(/^[^#\s](?:[^#\r\n]*[^#\s])?$/)).check(
   Schema.isMaxLength(80),
 )
 
 /**
- * A file some answers need. On a visit the run entered by one of `after` (the
- * move's edge: `exhausted` for a cap, a round's verdict for a verdict move),
- * each of `choices` is refused until `file` (a template, from the run's cwd)
- * was written after the ask and holds text under each of `headings`. A visit
- * entered any other way needs no file.
+ * A file some answers need. A visit the run entered by one of `after` (the
+ * move's edge: `exhausted` for a cap, a round's verdict for a verdict move)
+ * owes the file, and so does every later visit of the ask, by any edge,
+ * until an answer meets it (`RunMemo.owed`). On a visit that owes it, each
+ * of `choices` is refused until `file` (a template, from the run's cwd)
+ * changed since the ask (`AppliedRequirement.digest`) and holds text under
+ * each of `headings`.
  */
 const AnswerRequirement = Schema.Struct({
   choices: Schema.NonEmptyArray(Verdict),
@@ -276,6 +281,20 @@ const AnswerRequirement = Schema.Struct({
   headings: Schema.NonEmptyArray(HeadingText),
 })
 type AnswerRequirement = typeof AnswerRequirement.Type
+
+/**
+ * A requirement as one ask applied it, recorded in its `Dispatched` step and
+ * the run's pending action: `file` resolved, and the SHA-256 hex of its text
+ * at the ask (absent: no file then). An answer in `choices` needs a file
+ * whose digest differs.
+ */
+const AppliedRequirement = Schema.Struct({
+  choices: Schema.NonEmptyArray(Verdict),
+  file: Schema.String,
+  headings: Schema.NonEmptyArray(HeadingText),
+  digest: Schema.optionalKey(Schema.String),
+})
+type AppliedRequirement = typeof AppliedRequirement.Type
 
 const AskState = Schema.Struct({
   kind: Schema.Literal("ask"),
@@ -422,6 +441,8 @@ const PendingAction = Schema.TaggedUnion({
     /** An interrupted command whose process group a restart could not show gone. */
     mayStillRun: Schema.optionalKey(Schema.Boolean),
     deliveredAt: Schema.optionalKey(Schema.Finite),
+    /** The ask state's `requires`, on a visit that owes its file. */
+    requires: Schema.optionalKey(AppliedRequirement),
   },
 })
 type PendingAction = typeof PendingAction.Type
@@ -524,8 +545,13 @@ const MachineStep = Schema.TaggedUnion({
     to: StateName,
     by: Schema.String,
     note: Schema.optionalKey(Schema.String),
-    /** A command's move: its state's `judges`, when it names one; false, its `pass` or `fail` judged no round. */
+    /** False on a screen's pass (`RunState.screen`), which judged no round. */
     judged: Schema.optionalKey(Schema.Boolean),
+    /**
+     * True on an answer whose choice its ask's `requires` guarded, and whose
+     * file met them: the run owes that ask's file no more.
+     */
+    met: Schema.optionalKey(Schema.Boolean),
     /**
      * The verdict that moved the run: a round's (`by: "verdict"`), or an
      * answer to a thread state's ask that chose one of its verdicts.
@@ -562,7 +588,8 @@ class MachineError extends Schema.TaggedError<MachineError, { readonly brand: un
  * An answer the run refuses. `conflict`: the ask was answered with another
  * choice. `stale`: the ask was never answered and is no longer the current
  * one. `invalid`: the current ask does not offer the choice. `unmet`: the
- * choice needs a file (the state's `requires`) the run's cwd does not hold yet.
+ * choice needs a file (the state's `requires`) the run's cwd does not hold,
+ * changed since the ask, yet.
  */
 class MachineAnswerRefused extends Schema.TaggedError<
   MachineAnswerRefused,
@@ -660,6 +687,29 @@ const exhaustedOf = (state: MachineState): Option.Option<StateName> => {
   return Option.none()
 }
 
+/**
+ * The `by` of every move the engine makes; a round's verdict move is matched
+ * by its verdict instead (`Moved.verdict`), and `verdict` is left only for a
+ * thread state with `next`.
+ */
+const MOVE_KINDS: ReadonlySet<string> = new Set([
+  "exhausted",
+  "oversize",
+  "verdict",
+  "pass",
+  "fail",
+  "error",
+  "green",
+  "red",
+  "answer",
+])
+
+/** The verdicts a thread state's `on` names: the edges a round's verdict move can take. */
+const threadVerdictsOf = (state: MachineState): ReadonlyArray<string> => {
+  if (state.kind !== "thread") return []
+  return Object.keys(state.on ?? {})
+}
+
 /** The edges, roles, caps and reserved keys of one state. */
 const stateProblems = (
   definition: MachineDefinition,
@@ -691,6 +741,10 @@ const stateProblems = (
     const guarded = state.requires?.choices ?? []
     const unknown = guarded.filter((choice) => !Object.hasOwn(state.on, choice))
     problems.push(...unknown.map((choice) => `${name}: requires names no choice ${choice}`))
+    const verdicts = new Set(Object.values(definition.states).flatMap(threadVerdictsOf))
+    const edges = state.requires?.after ?? []
+    const unreachable = edges.filter((edge) => !MOVE_KINDS.has(edge) && !verdicts.has(edge))
+    problems.push(...unreachable.map((edge) => `${name}: requires after names no move ${edge}`))
   }
   return problems
 }
@@ -1021,6 +1075,12 @@ interface RunMemo {
   readonly context: RunContext
   /** The run's last move: how its current visit was entered, and that move's note. */
   readonly lastMove: Option.Option<MovedStep>
+  /**
+   * The ask states whose `requires` file the run owes: an ask dispatched with
+   * its requirement adds its state, an answer that met it (`Moved.met`)
+   * removes it.
+   */
+  readonly owed: ReadonlySet<string>
 }
 
 type Run = RunRecord & RunMemo
@@ -1438,7 +1498,12 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
               if (updated.length === 0) return Option.none<Run>()
               yield* insertSteps(before.run, before.seq, steps)
               const memo = foldSteps(
-                { visits: before.visits, context: before.context, lastMove: before.lastMove },
+                {
+                  visits: before.visits,
+                  context: before.context,
+                  lastMove: before.lastMove,
+                  owed: before.owed,
+                },
                 steps,
               )
               return Option.some<Run>({ ...after, ...memo, seq })
@@ -1809,6 +1874,19 @@ const EMPTY_MEMO: RunMemo = {
   visits: { counts: {}, grants: {} },
   context: { last: {}, all: {} },
   lastMove: Option.none(),
+  owed: new Set(),
+}
+
+/** The owed ask states after `step`: a dispatch with `requires` adds, a met answer removes. */
+const owedAfter = (owed: ReadonlySet<string>, step: MachineStep): ReadonlySet<string> => {
+  if (step._tag === "Dispatched" && step.action._tag === "Ask") {
+    if (Predicate.isUndefined(step.action.requires) || owed.has(step.action.state)) return owed
+    return new Set([...owed, step.action.state])
+  }
+  if (step._tag === "Moved" && step.met === true && owed.has(step.from)) {
+    return new Set([...owed].filter((state) => state !== step.from))
+  }
+  return owed
 }
 
 /**
@@ -1821,10 +1899,11 @@ const foldStep = (memo: RunMemo, step: MachineStep): RunMemo => {
   switch (step._tag) {
     case "Dispatched": {
       const action = step.action
-      if (action._tag === "Ask" && action.reason === "exhausted") return memo
-      if (action.visit <= visitsOf(memo.visits, action.state)) return memo
+      const owed = owedAfter(memo.owed, step)
+      if (action._tag === "Ask" && action.reason === "exhausted") return { ...memo, owed }
+      if (action.visit <= visitsOf(memo.visits, action.state)) return { ...memo, owed }
       const counts = { ...memo.visits.counts, [action.state]: action.visit }
-      return { ...memo, visits: { ...memo.visits, counts } }
+      return { ...memo, owed, visits: { ...memo.visits, counts } }
     }
     case "Finished":
       return { ...memo, visits: visited(memo.visits, step.state) }
@@ -1836,7 +1915,7 @@ const foldStep = (memo: RunMemo, step: MachineStep): RunMemo => {
     case "Saved":
       return { ...memo, context: saved(memo.context, step.state, step.value) }
     case "Moved":
-      return { ...memo, lastMove: Option.some(step) }
+      return { ...memo, lastMove: Option.some(step), owed: owedAfter(memo.owed, step) }
     default:
       return memo
   }
@@ -1904,8 +1983,6 @@ const isFresh = (state: ThreadState, visit: number) => {
 }
 
 const askIdOf = (run: RunId, seq: number) => AskId.make(`${run}:${seq}`)
-/** The seq of the ask's `Dispatched` step: `askIdOf`'s second part. */
-const askSeqOf = (askId: AskId) => Number(askId.slice(askId.lastIndexOf(":") + 1))
 
 /** The pending ask, its steps with its `Dispatched` step last, committed as one move. */
 const askingRun = (
@@ -1917,6 +1994,8 @@ const askingRun = (
     readonly reason: AskReason
     readonly lead: ReadonlyArray<MachineStep>
     readonly mayStillRun?: boolean
+    /** The ask state's requirement as this visit applies it (`appliedRequirement`). */
+    readonly requires?: AppliedRequirement
   },
 ) => {
   const mayStillRun = input.mayStillRun === true
@@ -1929,6 +2008,7 @@ const askingRun = (
     choices: choicesOf(input.state, input.reason, mayStillRun),
     ...omitUndefined({
       mayStillRun: Option.getOrUndefined(Option.liftPredicate(mayStillRun, Boolean)),
+      requires: input.requires,
     }),
   })
   steps.push(MachineStep.cases.Dispatched.make({ action }))
@@ -2612,7 +2692,15 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
       ])
       return
     case "ask": {
-      const asking = askingRun(run, { state, name, visit, reason: "asked", lead: [] })
+      const requires = yield* appliedRequirement(run, state, name, visit)
+      const asking = askingRun(run, {
+        state,
+        name,
+        visit,
+        reason: "asked",
+        lead: [],
+        ...omitUndefined({ requires: Option.getOrUndefined(requires) }),
+      })
       yield* commitMove(run, asking.after, asking.steps)
       return
     }
@@ -3880,7 +3968,13 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
             from: action.state,
             to,
             by,
-            ...omitUndefined({ note: Option.getOrUndefined(note), judged: state.judges }),
+            ...omitUndefined({
+              note: Option.getOrUndefined(note),
+              // A screen's pass judges no round: the next check judges them.
+              judged: Option.getOrUndefined(
+                Option.liftPredicate(false, () => state.screen === true && by === "pass"),
+              ),
+            }),
           }),
         ],
       }
@@ -4126,14 +4220,11 @@ const deliverAsk = Effect.fn("Machines.deliverAsk")(function* (run: Run, action:
   const state = yield* stateIn(definition, action.state)
   const scope = templateScope(run, action.visit)
   const line = reasonLine(action, state, scope)
-  const path = yield* Path.Path
-  const required = Option.map(requirementOf(run, state), (requires) =>
-    requirementLine(requires, path.resolve(run.cwd, render(requires.file, scope))),
-  )
+  const required = Option.fromUndefinedOr(action.requires)
   const content = [
     `Machine ${run.machine} (${run.run}) asks at ${action.state} (${action.reason}).`,
     line,
-    ...Option.toArray(required),
+    ...Option.toArray(Option.map(required, requirementLine)),
     `Choices: ${action.choices.join(" | ")}`,
     `Answer with machine.answer({ run: "${run.run}", askId: "${action.askId}", choice }).`,
   ].join("\n")
@@ -4144,7 +4235,16 @@ const deliverAsk = Effect.fn("Machines.deliverAsk")(function* (run: Run, action:
     state: action.state,
     reason: action.reason,
     choices: [...action.choices],
-    ...omitUndefined({ mayStillRun: action.mayStillRun }),
+    ...omitUndefined({
+      mayStillRun: action.mayStillRun,
+      requires: Option.getOrUndefined(
+        Option.map(required, (requires) => ({
+          file: requires.file,
+          headings: [...requires.headings],
+          choices: [...requires.choices],
+        })),
+      ),
+    }),
   }
   yield* deliver(
     run,
@@ -4249,19 +4349,58 @@ const moveFor = (state: MachineState, action: AskAction, choice: Verdict) => {
 }
 
 /**
- * The ask state's requirement, when the run entered this visit by one of its
- * `after` edges: a verdict move by its verdict, any other move by its `by`.
+ * The ask state's requirement, when this visit owes its file: the run owes it
+ * from an earlier visit (`RunMemo.owed`), or entered this one by one of its
+ * `after` edges (a verdict move by its verdict, any other move by its `by`).
  */
-const requirementOf = (run: Run, state: MachineState): Option.Option<AnswerRequirement> => {
+const requirementOf = (
+  run: Run,
+  state: MachineState,
+  name: StateName,
+): Option.Option<AnswerRequirement> => {
   if (state.kind !== "ask") return Option.none()
   const entry = Option.map(
-    Option.filter(run.lastMove, (move) => move.to === run.state),
+    Option.filter(run.lastMove, (move) => move.to === name),
     (move) => move.verdict ?? move.by,
   )
-  return Option.filter(Option.fromUndefinedOr(state.requires), (requires) =>
-    Option.exists(entry, (edge) => requires.after.some((after) => after === edge)),
+  return Option.filter(
+    Option.fromUndefinedOr(state.requires),
+    (requires) =>
+      run.owed.has(name) ||
+      Option.exists(entry, (edge) => requires.after.some((after) => after === edge)),
   )
 }
+
+/** The file's text, or none when the run's cwd holds no file there. */
+const fileText = Effect.fn("Machines.fileText")(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem
+  return yield* fs.readFileString(file).pipe(Effect.option)
+})
+
+/**
+ * The requirement as the ask of this visit applies it, when the visit owes
+ * the file: the file resolved from the run's cwd, and the digest of its text
+ * at the ask, the mark an answer's file must differ from.
+ */
+const appliedRequirement = Effect.fn("Machines.appliedRequirement")(function* (
+  run: Run,
+  state: MachineState,
+  name: StateName,
+  visit: number,
+) {
+  const requires = requirementOf(run, state, name)
+  if (Option.isNone(requires)) return Option.none<AppliedRequirement>()
+  const path = yield* Path.Path
+  const file = path.resolve(run.cwd, render(requires.value.file, templateScope(run, visit)))
+  const text = yield* fileText(file)
+  const digest = yield* Effect.transposeOption(Option.map(text, sha256Hex))
+  return Option.some<AppliedRequirement>({
+    choices: requires.value.choices,
+    file,
+    headings: requires.value.headings,
+    ...omitUndefined({ digest: Option.getOrUndefined(digest) }),
+  })
+})
 
 /** The text under each markdown heading of `content`, by its lowercased heading. */
 const sectionsOf = (content: string): ReadonlyMap<string, string> => {
@@ -4283,42 +4422,70 @@ const sectionsOf = (content: string): ReadonlyMap<string, string> => {
 }
 
 /**
- * What the requirement's file lacks for this ask: none when it was written at
- * or after the ask and holds text under each heading.
+ * What the requirement's file lacks for its ask: none when its text changed
+ * since the ask (a digest that differs from the recorded one, so a touched or
+ * copied stale file does not pass) and holds text under each heading.
  */
 const requirementGaps = Effect.fn("Machines.requirementGaps")(function* (
-  run: Run,
-  action: AskAction,
-  requires: AnswerRequirement,
+  requires: AppliedRequirement,
 ) {
-  const store = yield* MachineStore
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const file = path.resolve(run.cwd, render(requires.file, templateScope(run, action.visit)))
-  const info = yield* fs.stat(file).pipe(Effect.option)
-  if (Option.isNone(info)) return { file, gaps: ["no file"] }
-  const seq = askSeqOf(action.askId)
-  const [asked] = yield* store.visitSteps(run.run, { since: seq, through: seq })
-  const askedAt = asked?.at ?? 0
-  const written = Option.getOrElse(
-    Option.map(info.value.mtime, (date) => date.getTime()),
-    () => 0,
-  )
-  if (written < askedAt) return { file, gaps: ["written before the ask"] }
-  const content = yield* fs.readFileString(file).pipe(Effect.option)
-  const sections = sectionsOf(Option.getOrElse(content, () => ""))
-  const gaps = requires.headings.flatMap((heading) => {
+  const content = yield* fileText(requires.file)
+  if (Option.isNone(content)) return ["no file"]
+  const digest = yield* sha256Hex(content.value)
+  if (digest === requires.digest) return ["unchanged since the ask"]
+  const sections = sectionsOf(content.value)
+  return requires.headings.flatMap((heading) => {
     const text = sections.get(heading.toLowerCase())
     if (Predicate.isUndefined(text)) return [`no heading ${heading}`]
     if (text.trim().length === 0) return [`nothing under ${heading}`]
     return []
   })
-  return { file, gaps }
 })
 
 /** The ask's line on a requirement: which choices need which file. */
-const requirementLine = (requires: AnswerRequirement, file: string) =>
-  `Before ${requires.choices.join(", ")}: write ${file} with text under the headings ${requires.headings.join(", ")}; the run refuses those choices until it holds them, written after this ask.`
+const requirementLine = (requires: AppliedRequirement) =>
+  `Before ${requires.choices.join(", ")}: write ${requires.file} with text under the headings ${requires.headings.join(", ")}; the run refuses those choices until it holds them, changed since this ask.`
+
+/**
+ * Whether the answer meets the ask's requirement: true when `choice` is one
+ * it guards and the recorded file changed and holds every heading, false when
+ * it guards nothing here. Refuses (`unmet`) a guarded choice whose file has
+ * a gap, and one on a visit that owes the file but whose ask kept no record.
+ */
+const requirementMet = Effect.fn("Machines.requirementMet")(function* (
+  run: Run,
+  state: MachineState,
+  action: AskAction,
+  choice: Verdict,
+) {
+  const ask = { askId: action.askId, choices: action.choices }
+  const owes = Option.isSome(
+    Option.filter(requirementOf(run, state, action.state), (requires) =>
+      requires.choices.includes(choice),
+    ),
+  )
+  // The ask records what it applied; a visit that owes the file with no record refuses.
+  if (owes && Predicate.isUndefined(action.requires)) {
+    return yield* new MachineAnswerRefused({
+      message: `Answer refused (unmet): ${choice} needs the file ${action.state}'s requires names, and ask ${action.askId} kept no record of it at its dispatch`,
+      reason: "unmet",
+      ask,
+    })
+  }
+  const required = Option.filter(Option.fromUndefinedOr(action.requires), (requires) =>
+    requires.choices.includes(choice),
+  )
+  if (Option.isNone(required)) return false
+  const gaps = yield* requirementGaps(required.value)
+  if (gaps.length > 0) {
+    return yield* new MachineAnswerRefused({
+      message: `Answer refused (unmet): ${choice} needs ${required.value.file} with text under ${required.value.headings.join(", ")}, changed since this ask: ${gaps.join("; ")}`,
+      reason: "unmet",
+      ask,
+    })
+  }
+  return true
+})
 
 /** `machine.answer`'s input; exported, with the tool, for a test that runs two answers at once. */
 export const AnswerParams = Schema.Struct({
@@ -4385,19 +4552,7 @@ const answer = Effect.fn("Machines.answer")(function* (params: AnswerParams) {
     const state = yield* stateIn(definition, action.state).pipe(
       Effect.mapError((fault) => new MachineError({ message: fault.message })),
     )
-    const required = Option.filter(requirementOf(run, state), (requires) =>
-      requires.choices.includes(params.choice),
-    )
-    if (Option.isSome(required)) {
-      const { file, gaps } = yield* requirementGaps(run, action, required.value)
-      if (gaps.length > 0) {
-        return yield* new MachineAnswerRefused({
-          message: `Answer refused (unmet): ${params.choice} needs ${file} with text under ${required.value.headings.join(", ")}, written after this ask: ${gaps.join("; ")}`,
-          reason: "unmet",
-          ask: { askId: action.askId, choices: action.choices },
-        })
-      }
-    }
+    const met = yield* requirementMet(run, state, action, params.choice)
     const move = moveFor(state, action, params.choice)
     // An answer that chose a thread state's verdict moves the run as that verdict would.
     const verdict = Option.liftPredicate(
@@ -4424,7 +4579,10 @@ const answer = Effect.fn("Machines.answer")(function* (params: AnswerParams) {
         from: action.state,
         to: move.to,
         by: "answer",
-        ...omitUndefined({ verdict: Option.getOrUndefined(verdict) }),
+        ...omitUndefined({
+          verdict: Option.getOrUndefined(verdict),
+          met: Option.getOrUndefined(Option.liftPredicate(met, Boolean)),
+        }),
       }),
     ]
     if (move.stop) {
@@ -4718,7 +4876,7 @@ const runView = (run: Run): MachineRunView => ({
 
 /**
  * How one model fared in one state of a machine, over every run of it. A
- * check (a command's `pass` or `fail`, unless its state `judges` nothing)
+ * check (a command's `pass` or `fail`, except a screen's pass: `RunState.screen`)
  * and a gate (`green` or `red`) count for each model that ran a round since
  * the run's last one. `accepted`: the
  * runs it had rounds in that reached a final state that accepts the work,
@@ -4794,7 +4952,7 @@ const tallyMove = (step: MovedStep, run: RunTally): void => {
   const by = step.by
   // A size stop moves off the round that ended just before it.
   if (by === "oversize") for (const row of Option.toArray(run.latest)) row.oversize += 1
-  // A screen (`judged: false`) leaves the rounds to the next check that judges them.
+  // A screen's pass (`judged: false`) leaves the rounds to the next check that judges them.
   if (isCheckMove(by) && step.judged !== false) {
     for (const row of run.sinceCheck) row.checks[by] += 1
     run.sinceCheck.clear()

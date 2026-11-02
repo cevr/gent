@@ -398,6 +398,7 @@ const StepView = Schema.Struct({
   by: Schema.optionalKey(Schema.String),
   note: Schema.optionalKey(Schema.String),
   verdict: Schema.optionalKey(Schema.String),
+  met: Schema.optionalKey(Schema.Boolean),
   handedOffTokens: Schema.optionalKey(Schema.Finite),
   windowTokens: Schema.optionalKey(Schema.Finite),
   askId: Schema.optionalKey(Schema.String),
@@ -497,6 +498,13 @@ const AskDetails = Schema.Struct({
   reason: Schema.String,
   choices: Schema.Array(Schema.String),
   mayStillRun: Schema.optionalKey(Schema.Boolean),
+  requires: Schema.optionalKey(
+    Schema.Struct({
+      file: Schema.String,
+      headings: Schema.Array(Schema.String),
+      choices: Schema.Array(Schema.String),
+    }),
+  ),
 })
 const decodeAsk = Schema.decodeUnknownSync(AskDetails)
 
@@ -2121,7 +2129,7 @@ describe("a round too big for its thread", () => {
   )
 
   it.live(
-    "a definition whose ask requires a file for a choice it lacks, or by a slot no run holds, is refused",
+    "a definition whose ask requires a file for a choice it lacks, after a move no run makes, by a slot no run holds, or under a padded heading, is refused",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
@@ -2129,26 +2137,206 @@ describe("a round too big for its thread", () => {
         const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
         const owner = ownerOf(yield* client.session.create({}))
         const requires = {
-          choices: ["go", "redo"],
-          after: ["exhausted"],
-          file: "{{nowhere.dir}}/why.md",
+          choices: ["go"],
+          after: ["exhausted", "oversize", "done"],
+          file: "{{input.dir}}/why.md",
           headings: ["Why"],
         }
-        const definition = {
+        const withRequires = (changed: Readonly<Record<string, Schema.Json>>) => ({
           ...SIZE,
           states: {
             ...SIZE.states,
-            decide: { kind: "ask", ask: "SIZE", on: { go: "end" }, requires },
+            decide: {
+              kind: "ask",
+              ask: "SIZE",
+              on: { go: "end" },
+              requires: { ...requires, ...changed },
+            },
           },
-        }
-        const [refused] = yield* call(client, owner, [
-          ["machine.define", "define-requires", { definition }],
-        ])
+        })
+        const define = (id: string, changed: Readonly<Record<string, Schema.Json>>) =>
+          Effect.map(
+            call(client, owner, [["machine.define", id, { definition: withRequires(changed) }]]),
+            ([result]) => result,
+          )
+        // A move kind and a verdict a thread state's on names are both edges.
+        expect((yield* define("define-requires-ok", {}))?.failed).toBe(false)
+        const refused = yield* define("define-requires", {
+          choices: ["go", "redo"],
+          after: ["exhausted", "exhaustd"],
+          file: "{{nowhere.dir}}/why.md",
+        })
         expect(refused?.failed).toBe(true)
         const text = encodeJson(refused?.result)
         expect(text).toContain("decide: requires names no choice redo")
+        expect(text).toContain("decide: requires after names no move exhaustd")
+        expect(text).not.toContain("names no move exhausted")
         expect(text).toContain("decide: {{nowhere.dir}} names no state")
+        // A file's heading is read trimmed: a padded one could never match.
+        for (const [index, heading] of [" Why", "Why ", "Why\t"].entries()) {
+          const padded = yield* define(`define-heading-${index}`, { headings: [heading] })
+          expect(padded?.failed).toBe(true)
+        }
       }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live("a decide entered by a size stop owes no diagnosis: its guarded choice is admitted", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const worker = yield* scriptedWorker(["cut", "reply", "text"])
+      const models = yield* makeModels(worker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      // The shipped decide's edges, on a machine whose round can say stuck.
+      const shipped = ORCHESTRATE_MACHINE.states["decide"]
+      if (shipped?.kind !== "ask") return yield* Effect.die("the shipped decide is an ask")
+      const after = shipped.requires?.after ?? []
+      expect(after).toEqual(["exhausted", "stuck"])
+      const definition = {
+        ...SIZE,
+        states: {
+          ...SIZE.states,
+          work: { ...SIZE.states.work, on: { done: "end", stuck: "decide" } },
+          decide: {
+            ...SIZE.states.decide,
+            requires: { choices: ["go"], after, file: "{{input.dir}}/why.md", headings: ["Why"] },
+          },
+        },
+      }
+      const run = yield* startRun(client, owner, definition, "size", { pad: PAD, dir: home.cwd })
+      const ask = yield* askDetails(client, owner, 1)
+      expect(ask).toMatchObject({ state: "decide", reason: "asked" })
+      expect(ask.requires).toBeUndefined()
+      const [answered] = yield* call(client, owner, [
+        ["machine.answer", "go-sized", { run: ask.run, askId: ask.askId, choice: "go" }],
+      ])
+      expect(answered?.failed).toBe(false)
+      yield* waitForEnd(client, owner)
+      expect(moves(yield* home.sql(stepsOf(run)))).toEqual(["work→decide", "decide→end"])
+      expect(yield* fileExists(`${home.cwd}/why.md`)).toBe(false)
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+})
+
+// ── an ask that requires a file ─────────────────────────────────────────────
+
+/** work asks to go again; past its one visit it moves to decide by `exhausted`, where redo needs why.md. */
+const REQUIRES = {
+  name: "requires",
+  threads: { worker: {} },
+  start: "work",
+  states: {
+    work: {
+      kind: "thread",
+      thread: "worker",
+      say: "STATE work {{visit}}",
+      on: { again: "work" },
+      maxVisits: 1,
+      exhausted: "decide",
+    },
+    decide: {
+      kind: "ask",
+      ask: "Decide.",
+      on: { redo: "done", go: "done" },
+      requires: {
+        choices: ["redo"],
+        after: ["exhausted"],
+        file: "{{input.dir}}/why.md",
+        headings: ["Why"],
+      },
+    },
+    done: { kind: "final" },
+  },
+}
+
+const WHY = "# Why\n\nThe round asks again for the same reason.\n"
+
+const againWorker = (round: RoundCall) => Effect.succeed(replyWith(round, { next: "again" }))
+
+describe("an ask that requires a file", () => {
+  it.live(
+    "a guarded answer needs the file changed since the ask: a stale, a touched or a restarted one is refused",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels(againWorker)
+        const layer = () => home.layerFor(machineModels(models))
+        const file = `${home.cwd}/why.md`
+        // A file from an earlier visit is there before the ask.
+        yield* writeFiles(home.cwd, { "why.md": WHY })
+        const first = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layer())
+            const owner = ownerOf(yield* client.session.create({}))
+            const run = yield* startRun(client, owner, REQUIRES, "requires", { dir: home.cwd })
+            const ask = yield* askDetails(client, owner, 1)
+            expect(ask).toMatchObject({
+              state: "decide",
+              requires: { file, headings: ["Why"], choices: ["redo"] },
+            })
+            const stale = yield* tryAnswer(client, owner, ask, "redo", "stale")
+            expect(stale?.failed).toBe(true)
+            expect(encodeJson(stale?.result)).toContain(
+              `(unmet): redo needs ${file} with text under Why, changed since this ask: unchanged since the ask`,
+            )
+            // A touch gives the file a new mtime and keeps its text.
+            yield* touchFile(file, 120)
+            const touched = yield* tryAnswer(client, owner, ask, "redo", "touched")
+            expect(touched?.failed).toBe(true)
+            expect(encodeJson(touched?.result)).toContain("unchanged since the ask")
+            return { owner, run, ask }
+          }),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layer())
+            // A new server reads the digest the ask recorded.
+            const restarted = yield* tryAnswer(client, first.owner, first.ask, "redo", "restarted")
+            expect(restarted?.failed).toBe(true)
+            expect(encodeJson(restarted?.result)).toContain("unchanged since the ask")
+            yield* writeFiles(home.cwd, { "why.md": `${WHY}It reads the same file each visit.\n` })
+            const admitted = yield* tryAnswer(client, first.owner, first.ask, "redo", "rewritten")
+            expect(admitted?.failed).toBe(false)
+            yield* waitForEnd(client, first.owner)
+          }),
+        )
+        const steps = yield* home.sql(stepsOf(first.run))
+        expect(steps.filter((step) => step._tag === "Moved").at(-1)).toMatchObject({
+          from: "decide",
+          to: "done",
+          by: "answer",
+          met: true,
+        })
+      }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
+    65_000,
+  )
+
+  it.live("an ask that owes its file but kept no record of it refuses the guarded answer", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(againWorker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, REQUIRES, "requires", { dir: home.cwd })
+      const ask = yield* askDetails(client, owner, 1)
+      expect(ask.requires?.choices).toEqual(["redo"])
+      yield* home.sql(
+        Effect.flatMap(
+          SqlClient.SqlClient,
+          (sql) => sql`UPDATE machine_runs
+            SET pending_json = json_remove(pending_json, '$.requires') WHERE run = ${run}`,
+        ),
+      )
+      yield* writeFiles(home.cwd, { "why.md": WHY })
+      const refused = yield* tryAnswer(client, owner, ask, "redo", "unrecorded")
+      expect(refused?.failed).toBe(true)
+      expect(encodeJson(refused?.result)).toContain(
+        `ask ${ask.askId} kept no record of it at its dispatch`,
+      )
+      // A choice the requirement does not guard is still admitted.
+      yield* answerAsk(client, owner, 1, "go")
+      yield* waitForEnd(client, owner)
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
 })
 
@@ -6027,16 +6215,25 @@ const DIAGNOSIS = [
   "",
 ].join("\n")
 
-/** Writes the unit dir's diagnosis.md, its mtime `aged` seconds back when given. */
-const writeDiagnosis = (dir: string, content: string, aged?: number) =>
+/** Writes the unit dir's diagnosis.md. */
+const writeDiagnosis = (dir: string, content: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs.writeFileString(`${dir}/diagnosis.md`, content),
+  ).pipe(Effect.provide(BunServices.layer))
+
+/** Moves the file's mtime `ahead` seconds past now, its text kept: a touch. */
+const touchFile = (file: string, ahead: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const file = `${dir}/diagnosis.md`
-    yield* fs.writeFileString(file, content)
-    if (Predicate.isUndefined(aged)) return
-    const at = (yield* Clock.currentTimeMillis) / 1000 - aged
+    const at = (yield* Clock.currentTimeMillis) / 1000 + ahead
     yield* fs.utimes(file, at, at)
   }).pipe(Effect.provide(BunServices.layer))
+
+/** Removes a file or a dir and all it holds. */
+const removePath = (target: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(target, { recursive: true })).pipe(
+    Effect.provide(BunServices.layer),
+  )
 
 /** Answers `ask` with `choice`, and returns the call's result, refused or not. */
 const tryAnswer = (
@@ -6252,43 +6449,58 @@ describe("the shipped orchestrate machine", () => {
   )
 
   it.live(
-    "at the fix cap, rewrite waits for a diagnosis written for this decide, with text under both headings",
+    "at the fix cap, rewrite waits for a diagnosis changed since this decide, with text under both headings",
     () =>
       Effect.gen(function* () {
-        const { home, client, owner, run, dir } = yield* unitRun({
-          "review:1": "changes",
-          "verify:1": "fail",
-          "review:3": "changes",
-        })
+        const file = (dir: string) => `${dir}/diagnosis.md`
+        const { home, client, owner, run, dir } = yield* unitRun(
+          { "review:1": "changes", "verify:1": "fail", "review:3": "changes" },
+          // A diagnosis from an earlier approach is in the unit dir before the ask.
+          {
+            acts: {
+              "review:3": (_cwd, unitDir) => Effect.orDie(writeDiagnosis(unitDir, DIAGNOSIS)),
+            },
+          },
+        )
         yield* answerAsk(client, owner, 1, "go")
         const decide = yield* askDetails(client, owner, 2)
         expect(decide.state).toBe("decide")
-        // The ask names the file and its headings.
-        const file = `${dir}/diagnosis.md`
+        // The ask names the file, its headings and the choices it guards, in its text and details.
         expect(askText((yield* client.session.getSnapshot(owner)).messages)).toContain(
-          `Before changes, replan, rewrite: write ${file} with text under the headings Premise, Counterexample`,
+          `Before changes, replan, rewrite: write ${file(dir)} with text under the headings Premise, Counterexample; the run refuses those choices until it holds them, changed since this ask.`,
         )
+        expect(decide.requires).toEqual({
+          file: file(dir),
+          headings: ["Premise", "Counterexample"],
+          choices: ["changes", "replan", "rewrite"],
+        })
         const refusal = (id: string) =>
           Effect.map(tryAnswer(client, owner, decide, "rewrite", id), (result) => {
             expect(result?.failed).toBe(true)
             return encodeJson(result?.result)
           })
-        const none = yield* refusal("none")
-        expect(none).toContain(`(unmet): rewrite needs ${file}`)
-        expect(none).toContain("no file")
+        const stale = yield* refusal("stale")
+        expect(stale).toContain(
+          `(unmet): rewrite needs ${file(dir)} with text under Premise, Counterexample, changed since this ask: unchanged since the ask`,
+        )
+        // A touch gives the stale text a new mtime: still the same text.
+        yield* touchFile(file(dir), 120)
+        expect(yield* refusal("touched")).toContain("unchanged since the ask")
+        yield* removePath(file(dir))
+        expect(yield* refusal("none")).toContain("no file")
         yield* writeDiagnosis(dir, DIAGNOSIS.slice(0, DIAGNOSIS.indexOf("## Counterexample")))
         expect(yield* refusal("no-counterexample")).toContain("no heading Counterexample")
         yield* writeDiagnosis(dir, `${DIAGNOSIS.slice(0, DIAGNOSIS.indexOf("A line"))}\n## Notes\n`)
         expect(yield* refusal("empty-counterexample")).toContain("nothing under Counterexample")
-        // A diagnosis from before this decide visit is a stale one.
-        yield* writeDiagnosis(dir, DIAGNOSIS, 60)
-        expect(yield* refusal("stale")).toContain("written before the ask")
+        // The stale text copied back is the text the ask saw.
+        yield* writeDiagnosis(dir, DIAGNOSIS)
+        expect(yield* refusal("copied")).toContain("unchanged since the ask")
         // Each refusal kept the run at the same ask.
         expect(Option.getOrThrow(yield* home.sql(runRow(run)))).toMatchObject({
           state: "decide",
           status: "asking",
         })
-        yield* writeDiagnosis(dir, DIAGNOSIS)
+        yield* writeDiagnosis(dir, `${DIAGNOSIS}The second approach split lines the same way.\n`)
         yield* answerAsk(client, owner, 2, "rewrite")
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         expect(moves(yield* home.sql(stepsOf(run))).slice(-2)).toEqual([
@@ -6359,9 +6571,109 @@ describe("the shipped orchestrate machine", () => {
         ])
         const texts = new Map(yield* Ref.get(models.texts))
         expect(texts.get("implement:2")).toContain("split the parser")
+        // The new implementor reads the diagnosis, so its approach leaves the failed premise.
+        expect(texts.get("implement:2")).toContain(
+          "read the spec, state.md, diagnosis.md when the unit dir holds it,",
+        )
         const [, impl1, , impl2, , fix1] = roundThreads(steps)
         expect(impl2).not.toBe(impl1)
         expect(fix1).toBe(impl2)
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a diagnosis owed at the fix cap is owed at the next decide too, though a check error entered it",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run, dir } = yield* unitRun({
+          "review:1": "changes",
+          "verify:1": "fail",
+          "review:3": "changes",
+        })
+        yield* answerAsk(client, owner, 1, "go")
+        expect((yield* askDetails(client, owner, 2)).requires?.choices).toContain("rewrite")
+        expect((yield* home.sql(storedRun(run))).owed).toEqual(new Set(["decide"]))
+        // The unit dir is lost, so the recheck cannot run: decide again, by error.
+        yield* removePath(dir)
+        yield* answerAsk(client, owner, 2, "recheck")
+        const again = yield* askDetails(client, owner, 3)
+        expect(again.state).toBe("decide")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(steps.filter((step) => step._tag === "Moved").at(-1)).toMatchObject({
+          from: "repeats",
+          to: "decide",
+          by: "error",
+        })
+        expect(again.requires?.file).toBe(`${dir}/diagnosis.md`)
+        yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(dir)).pipe(
+          Effect.provide(BunServices.layer),
+        )
+        const refused = yield* tryAnswer(client, owner, again, "rewrite", "rewrite-early")
+        expect(refused?.failed).toBe(true)
+        expect(encodeJson(refused?.result)).toContain("no file")
+        yield* writeDiagnosis(dir, DIAGNOSIS)
+        yield* answerAsk(client, owner, 3, "rewrite")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run))).slice(-4)).toEqual([
+          "fix→decide",
+          "decide→repeats",
+          "repeats→decide",
+          "decide→rewrite",
+        ])
+        // The answer that met it paid the debt.
+        expect((yield* home.sql(storedRun(run))).owed).toEqual(new Set())
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a decide after a check error with no diagnosis owed admits rewrite with no file",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run, dir } = yield* unitRun(
+          {},
+          // The unit dir is lost before the first repeat-test check.
+          { acts: { "implement:1": (_cwd, unitDir) => Effect.orDie(removePath(unitDir)) } },
+        )
+        yield* answerAsk(client, owner, 1, "go")
+        const decide = yield* answerAsk(client, owner, 2, "rewrite")
+        expect(decide.state).toBe("decide")
+        expect(decide.requires).toBeUndefined()
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run))).slice(-2)).toEqual([
+          "repeats→decide",
+          "decide→rewrite",
+        ])
+        expect(yield* fileExists(`${dir}/diagnosis.md`)).toBe(false)
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "the light machine's decide at its fix cap waits for a diagnosis; its decides before the cap do not",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run, dir } = yield* unitRun(
+          { "review:1": "changes" },
+          { definition: ORCHESTRATE_LIGHT_MACHINE },
+        )
+        for (const count of [1, 2]) {
+          const decide = yield* answerAsk(client, owner, count, "fix", "the check is red")
+          expect(decide.requires).toBeUndefined()
+        }
+        const capped = yield* askDetails(client, owner, 3)
+        expect(capped.requires?.choices).toEqual(["changes", "replan", "rewrite"])
+        const refused = yield* tryAnswer(client, owner, capped, "rewrite", "rewrite-early")
+        expect(refused?.failed).toBe(true)
+        expect(encodeJson(refused?.result)).toContain(`rewrite needs ${dir}/diagnosis.md`)
+        yield* writeDiagnosis(dir, DIAGNOSIS)
+        yield* answerAsk(client, owner, 3, "rewrite")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run))).slice(-2)).toEqual([
+          "fix→decide",
+          "decide→rewrite",
+        ])
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )
@@ -6731,6 +7043,73 @@ describe("the repeat-test check of the orchestrate machine", () => {
           `${TEST_NAME}: ok\n`,
         )
         yield* checkoutsGone(home, dir)
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a failed repeat check judges the implementor's rounds; a passed one leaves them to the merge gate",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run } = yield* unitRun(
+          { "review:1": "changes" },
+          {
+            gate: "true",
+            acts: {
+              "plan:1": (cwd) =>
+                Effect.gen(function* () {
+                  yield* unitGit(cwd, ["init", "-q", "-b", "main"])
+                  yield* commitFiles(
+                    cwd,
+                    { ".gitignore": "unit/\n", "parser.txt": "drops the last line\n" },
+                    "base",
+                  )
+                }),
+              "implement:1": (_cwd, dir) => writeFiles(dir, { "round-1-request.md": "Round 1\n" }),
+              "review:1": (_cwd, dir) =>
+                writeFiles(dir, {
+                  "round-1-findings.md":
+                    "Verdict: CHANGES REQUIRED\n\n## Major\n\n- M2 parser.txt:1 the parser drops the last line after a blank line, repeat of r1 M1.\n",
+                }),
+              // The first fix names no test for the repeat: the check fails it.
+              "fix:1": (_cwd, dir) =>
+                writeFiles(dir, { "round-2-request.md": "Round 2\nM2 fixed\n" }),
+              "fix:2": fixWith(REPEAT_CHECK),
+            },
+          },
+        )
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "merge")
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => moves(steps).includes("gate→merge"),
+          10_000,
+          "the gate passed to the push",
+        )
+        expect(moves(yield* home.sql(stepsOf(run))).slice(2, 10)).toEqual([
+          "implement→repeats",
+          "repeats→review",
+          "review→fix",
+          "fix→repeats",
+          "repeats→fix",
+          "fix→repeats",
+          "repeats→review",
+          "review→verify",
+        ])
+        const status = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), {
+          run: decodeRunId(run),
+        })
+        const checks = status.quality.map((row) => [String(row.state), row.model, row.checks])
+        // The failed check judged every round before it; the passed checks
+        // judged none, so the green gate judged the second fix, the second
+        // review and the verify.
+        expect(checks).toEqual([
+          ["fix", HAIKU, { pass: 1, fail: 1 }],
+          ["implement", HAIKU, { pass: 0, fail: 1 }],
+          ["plan", OPUS, { pass: 0, fail: 1 }],
+          ["review", SOL, { pass: 1, fail: 1 }],
+          ["verify", HAIKU, { pass: 1, fail: 0 }],
+        ])
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )
