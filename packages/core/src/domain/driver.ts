@@ -790,14 +790,16 @@ export const LaneWindow = Schema.Struct({
   resetAt: Schema.Finite,
   readAt: Schema.Finite,
   rejected: Schema.Boolean,
-  /** Fuel per percentage point of this window, its own, else the provider's over every account. */
+  /** Fuel per percentage point of this window: its own fit's, else the pool's over the fits that name one. */
   fuelPerPct: Schema.optionalKey(Schema.Finite),
-  /** The rate's relative uncertainty from the 1% steps (lanes r3): ±0.5 / the points its segments moved. */
+  /** The rate's own fit's standard error from the readings' 1% rounding, as a share of the rate. */
   band: Schema.optionalKey(Schema.Finite),
   /** The segments the rate reads. */
   samples: Schema.Int,
   /** The share of the window's move no fuel of gent's explains: spend outside gent. */
   outsideShare: Schema.Finite,
+  /** The points an hour spend outside gent burns, as the window's fit reads it at its rate; absent with no rate. */
+  outsidePerHour: Schema.optionalKey(Schema.Finite),
   /** The runs the window can carry until its reset; none without a rate. */
   sustainable: Schema.optionalKey(Schema.Finite),
   /**

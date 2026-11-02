@@ -5082,8 +5082,12 @@ describe("AccountsRpcs", () => {
               yield* client.message.send({ sessionId, branchId, content })
               yield* Fiber.join(turnCompleted)
             })
+          // On the test clock the turns are 10 and 50 seconds apart: the
+          // fuel runs apart from time, so the fit can tell the two.
           yield* turn("first", 0)
+          yield* TestClock.adjust("10 seconds")
           yield* turn("second", 1)
+          yield* TestClock.adjust("50 seconds")
           yield* turn("third", 2)
           const { providers } = yield* client.accounts.lanes()
           expect(
@@ -5098,8 +5102,8 @@ describe("AccountsRpcs", () => {
           // Each of the first two steps' 11 fuel moved the window 2 points:
           // two segments that agree name the rate.
           expect(windows?.[0]?.fuelPerPct).toBeCloseTo(5.5, 6)
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
+        }),
+      ).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
   )
 
   it.live(
@@ -5205,10 +5209,11 @@ describe("AccountsRpcs", () => {
             (window) => window.window === "5h" && window.model === TEST_MODEL_ID,
           )
           // Each tool step's 30 fuel moved the route model's window 2 points:
-          // two segments that agree name the rate.
+          // two segments that agree name the rate. On the test clock the
+          // steps take no time, so no spend outside gent explains a move.
           expect(own?.fuelPerPct).toBeCloseTo(15, 6)
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
+        }),
+      ).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
   )
 
   it.live(

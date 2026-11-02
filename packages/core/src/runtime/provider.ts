@@ -3677,18 +3677,44 @@ const QUOTA_SEGMENTS_KEPT = 500
 /** A segment's weight halves for each this many active hours after it. */
 const QUOTA_HALF_LIFE_ACTIVE_HOURS = 24
 /**
- * Percentage points a segment's move may pass what its fuel explains before
- * it reads as spend outside gent (Claude Code, claude.ai): three widths of
- * the 1% step the provider reports in.
+ * Percentage points a segment's move may pass what the fit of the other
+ * kept segments explains before it reads as a burst of spend outside gent
+ * (Claude Code, claude.ai): three widths of the 1% step the provider
+ * reports in.
  */
 const QUOTA_OUTSIDE_POINTS = 3
 /**
- * The kept segments a window's fit needs before it names a rate. One segment
- * has none to judge it by, so outside spend in it would read as gent's: one
- * 12k-token turn across a 1% move Claude Code made set a week at 1.9 M fuel
- * and every lane of the pool to 0 (measured, 2026-11-02).
+ * The kept segments a window's fit needs before it names a rate: one per
+ * term. Outside spend read as gent's set a week at 1.9 M fuel from one
+ * 12k-token turn across a 1% move Claude Code made, and every lane of the
+ * pool to 0 (measured, 2026-11-02).
  */
-const QUOTA_JUDGED_SEGMENTS = 2
+const QUOTA_FIT_MIN_SEGMENTS = 2
+/**
+ * The least spread a fit needs between its segments' fuel and their hours:
+ * `1 − cos²` of the two columns, the Gram determinant over the product of
+ * their norms. At 0 fuel runs in proportion to time, and gent's spend cannot
+ * be told from steady spend outside gent. 0.1 is a cosine of 0.95, a
+ * variance inflation of 10, the common limit for collinear terms: a guess.
+ */
+const QUOTA_FIT_MIN_SPREAD = 0.1
+/**
+ * The standard errors the hours term must pass before a fit keeps it: under
+ * that it is the readings' rounding, and the fit reads fuel alone. A guess.
+ */
+const QUOTA_FIT_HOURS_ERRORS = 2
+/** The variance of a segment's move from its two readings' rounding: each spreads evenly over a point, 1/12. */
+const QUOTA_SEGMENT_VARIANCE = 1 / 6
+/** The largest standard error the fitted rate may keep, as a share of it. A guess. */
+const QUOTA_FIT_MAX_ERROR = 0.5
+/**
+ * The largest weighted RMS residual a fit may leave, in points: a segment's
+ * move is read at two edges, each rounded within ±0.5, so the band of one
+ * move is ±1. Rounding alone leaves √(1/6) ≈ 0.41.
+ */
+const QUOTA_FIT_MAX_RESIDUAL = 1
+/** While its rate is unknown, a window at this fraction or past carries no run. */
+const QUOTA_UNKNOWN_FULL = 0.95
 /**
  * The hours a model's segments must span before its quota weight leaves its
  * list price: whole-percent readings of a short stretch are too coarse to
@@ -3801,6 +3827,13 @@ interface LaneSupply {
   readonly lanes: ProviderLanes
   /** Runs the scope sustains, fractional: the report floors it to `capacity`. None when unknown. */
   readonly supply: Option.Option<number>
+  /**
+   * The runs admission lets the scope carry while `supply` is unknown: each
+   * account its own pace when known, else one run, and none when held, at
+   * its share, rejected or with a window at `QUOTA_UNKNOWN_FULL` or more. An
+   * account that reads no window is unbounded, as no quota is known to exist.
+   */
+  readonly unknownBound: number
 }
 
 /** What placement reads of one pool account. */
@@ -4340,6 +4373,8 @@ const FuelSegment = Schema.Struct({
   signedInAt: Schema.optionalKey(Schema.Finite),
   window: Schema.String,
   model: Schema.optionalKey(ModelId),
+  /** Epoch ms of the reading that opened it; absent on an older ledger, whose segments no fit reads. */
+  openedAt: Schema.optionalKey(Schema.Finite),
   /** Epoch ms of the reading that closed it. */
   endedAt: Schema.Finite,
   fuel: Schema.Finite,
@@ -4469,17 +4504,24 @@ const windowShare = (name: WindowName): number => {
   return 1
 }
 
-/** A window's fuel up to its share, and the part of it still open. */
-const quotaFuel = (window: LaneWindow, fuelPerPct: number) => {
-  const share = windowShare(window)
-  const full = 100 * share * fuelPerPct
-  if (window.rejected) return { full, remaining: 0 }
-  return { full, remaining: Math.max(0, share - window.utilization) * 100 * fuelPerPct }
-}
-
 const quotaHours = (window: LaneWindow, now: number, length: number): number => {
   if (window.resetAt <= now) return length
   return Math.max((window.resetAt - now) / 3_600_000, QUOTA_MIN_HORIZON_MS / 3_600_000)
+}
+
+/**
+ * A window's fuel up to its share, and the part of it still open: each less
+ * the points spend outside gent burns over its hours (`outsidePerHour`), a
+ * fresh window's over its whole length, the open part's to its reset.
+ */
+const quotaFuel = (window: LaneWindow, fuelPerPct: number, now: number) => {
+  const share = windowShare(window)
+  const burn = window.outsidePerHour ?? 0
+  const length = Option.getOrElse(windowLengthMs(window.window), () => 0) / 3_600_000
+  const full = Math.max(0, 100 * share - burn * length) * fuelPerPct
+  if (window.rejected) return { full, remaining: 0 }
+  const open = (share - window.utilization) * 100 - burn * quotaHours(window, now, length)
+  return { full, remaining: Math.max(0, open) * fuelPerPct }
 }
 
 const DAY_MS = 86_400_000
@@ -4639,7 +4681,7 @@ const fiveHourPoolCeiling = (
     }
     if (Predicate.isUndefined(short.fuelPerPct)) return Option.none()
     hasShort = true
-    const { full, remaining } = quotaFuel(short, short.fuelPerPct)
+    const { full, remaining } = quotaFuel(short, short.fuelPerPct, now)
     const hours = quotaHours(short, now, 5)
     if (week.remaining > 0) {
       // Complementary windows on two accounts cannot combine into fuel: an
@@ -4706,15 +4748,166 @@ const referenceFuel = (tokens: FuelTokens) =>
   tokens.cacheRead * FUEL_REFERENCE_WEIGHTS.cacheRead +
   tokens.cacheWrite * FUEL_REFERENCE_WEIGHTS.cacheWrite
 
-/** A window's fuel per percentage point, read from its segments. */
+/**
+ * A window's fuel per percentage point and the points spend outside gent
+ * burns an hour, read from its segments (`fitWindow`). Every rate is none
+ * and `kept` empty when the fit cannot tell the two terms apart.
+ */
 interface WindowFit {
   readonly fuelPerPct: Option.Option<number>
+  /** The rate's standard error from the readings' rounding, as a share of it. */
   readonly band: Option.Option<number>
-  /** The segments the rate reads: those spend outside gent did not move. */
+  /** The segments the fit reads: every timed one but a burst of spend outside gent. */
   readonly kept: ReadonlyArray<FuelSegment>
   readonly outsideShare: number
   /** The rate of the kept segments' fuel at the models' quota weights (`weightedFuel`). */
   readonly mixFuelPerPct: Option.Option<number>
+  /** The points an hour spend outside gent burns. */
+  readonly outsidePerHour: Option.Option<number>
+}
+
+/** The hours a segment spans; none on an older ledger's, which kept no start. */
+const segmentHours = (segment: FuelSegment): Option.Option<number> =>
+  Option.map(
+    Option.fromUndefinedOr(segment.openedAt),
+    (openedAt) => Math.max(0, segment.endedAt - openedAt) / 3_600_000,
+  )
+
+/** One timed segment as a window's fit reads it. */
+interface FitRow {
+  readonly segment: FuelSegment
+  /** Half for every 24 active hours after it (`activeHourWeights`). */
+  readonly weight: number
+  /** Its fuel at the models' quota weights. */
+  readonly fuel: number
+  readonly hours: number
+}
+
+/**
+ * The weighted sums of the fit's normal equations over some rows: `f` the
+ * fuel, `h` the hours, `y` the points moved; `fuelled` and `timed` count the
+ * rows with fuel and with hours, so a sum that lost its last such row reads
+ * none exactly.
+ */
+interface FitSums {
+  readonly count: number
+  readonly fuelled: number
+  readonly timed: number
+  readonly ff: number
+  readonly fh: number
+  readonly hh: number
+  readonly fy: number
+  readonly hy: number
+}
+
+const NO_FIT_SUMS: FitSums = { count: 0, fuelled: 0, timed: 0, ff: 0, fh: 0, hh: 0, fy: 0, hy: 0 }
+
+/** `sums` with `row` added (`sign` 1) or taken out (`sign` -1). */
+const addFitRow = (sums: FitSums, row: FitRow, sign: number): FitSums => {
+  const weight = sign * row.weight
+  const points = row.segment.deltaPct
+  return {
+    count: sums.count + sign,
+    fuelled: sums.fuelled + sign * Number(row.fuel > 0),
+    timed: sums.timed + sign * Number(row.hours > 0),
+    ff: sums.ff + weight * row.fuel * row.fuel,
+    fh: sums.fh + weight * row.fuel * row.hours,
+    hh: sums.hh + weight * row.hours * row.hours,
+    fy: sums.fy + weight * row.fuel * points,
+    hy: sums.hy + weight * row.hours * points,
+  }
+}
+
+/** The fit's two terms, and the standard error of the first. */
+interface FitTerms {
+  /** Points per fuel: one over the rate. */
+  readonly perFuel: number
+  /** Points an hour of spend outside gent. */
+  readonly perHour: number
+  readonly error: number
+}
+
+/**
+ * Solves `points = perFuel × fuel + perHour × hours` by weighted least
+ * squares. Rows that span no time leave the hours term at 0; so does a
+ * negative one, which no spend makes, and one within
+ * `QUOTA_FIT_HOURS_ERRORS` standard errors of 0. None with no fuel, or with
+ * fuel and hours under `QUOTA_FIT_MIN_SPREAD` apart. Each error is a term's
+ * standard error with each row's move off by its rounding
+ * (`QUOTA_SEGMENT_VARIANCE`) over its weight.
+ */
+const solveFitTerms = (sums: FitSums): Option.Option<FitTerms> => {
+  if (sums.fuelled === 0 || !(sums.ff > 0)) return Option.none()
+  const fuelOnly = Option.some({
+    perFuel: sums.fy / sums.ff,
+    perHour: 0,
+    error: Math.sqrt(QUOTA_SEGMENT_VARIANCE / sums.ff),
+  })
+  if (sums.timed === 0 || !(sums.hh > 0)) return fuelOnly
+  const determinant = sums.ff * sums.hh - sums.fh * sums.fh
+  if (!(determinant >= QUOTA_FIT_MIN_SPREAD * sums.ff * sums.hh)) return Option.none()
+  const perHour = (sums.ff * sums.hy - sums.fh * sums.fy) / determinant
+  const hourError = Math.sqrt((QUOTA_SEGMENT_VARIANCE * sums.ff) / determinant)
+  if (!(perHour > QUOTA_FIT_HOURS_ERRORS * hourError)) return fuelOnly
+  return Option.some({
+    perFuel: (sums.hh * sums.fy - sums.fh * sums.hy) / determinant,
+    perHour,
+    error: Math.sqrt((QUOTA_SEGMENT_VARIANCE * sums.hh) / determinant),
+  })
+}
+
+/** The points a row's fuel and hours explain at `terms`. */
+const explained = (terms: FitTerms, row: FitRow) =>
+  terms.perFuel * row.fuel + terms.perHour * row.hours
+
+/** The rows' weighted RMS residual at `terms`, in points. */
+const fitResidual = (rows: ReadonlyArray<FitRow>, terms: FitTerms) => {
+  let squares = 0
+  let weight = 0
+  for (const row of rows) {
+    squares += row.weight * (row.segment.deltaPct - explained(terms, row)) ** 2
+    weight += row.weight
+  }
+  return Math.sqrt(squares / weight)
+}
+
+/**
+ * The points an hour spend outside gent burns in a window whose rate is
+ * `fuelPerPct` (the pool's, its own fit naming none): the hours term alone
+ * by weighted least squares of what gent's fuel leaves of each timed
+ * segment's move, at least 0; 0 with no hours.
+ */
+const outsideBurnAt = (segments: ReadonlyArray<FuelSegment>, fuelPerPct: number) => {
+  const timed = segments.flatMap((segment) =>
+    Option.toArray(Option.map(segmentHours(segment), (hours) => ({ segment, hours }))),
+  )
+  const weightOf = activeHourWeights(timed.map(({ segment }) => segment))
+  let hy = 0
+  let hh = 0
+  for (const { segment, hours } of timed) {
+    const weight = weightOf(segment)
+    hy += weight * hours * (segment.deltaPct - segment.fuel / fuelPerPct)
+    hh += weight * hours * hours
+  }
+  if (!(hh > 0)) return 0
+  return Math.max(0, hy / hh)
+}
+
+/**
+ * The pool's rate of one window name: the rates of the windows whose own
+ * fits name one, each weighted by one over its variance. Never a window's
+ * raw fuel over its points, which spend outside gent inflates.
+ */
+const pooledRate = (fits: ReadonlyArray<WindowFit>): Option.Option<number> => {
+  let sum = 0
+  let precision = 0
+  for (const fit of fits)
+    for (const [rate, band] of Option.toArray(Option.all([fit.fuelPerPct, fit.band]))) {
+      const weight = 1 / (rate * band) ** 2
+      sum += weight * rate
+      precision += weight
+    }
+  return Option.liftPredicate(sum / precision, (rate) => precision > 0 && Number.isFinite(rate))
 }
 
 /**
@@ -4728,24 +4921,6 @@ const weightedFuel = (segment: FuelSegment, weights: ReadonlyMap<ModelId, number
     (sum, { model, fuel }) => sum + (weights.get(model) ?? 1) * fuel,
     segment.fuel - named,
   )
-}
-
-/**
- * `Σ fuel / Σ points` over the segments, each weighted by half for every
- * 24 active hours (hours with a segment) after it; none with no points.
- */
-const weightedRate = (
-  segments: ReadonlyArray<FuelSegment>,
-  fuelOf: (segment: FuelSegment) => number = (segment) => segment.fuel,
-): Option.Option<number> => {
-  const weightOf = activeHourWeights(segments)
-  let fuel = 0
-  let points = 0
-  for (const segment of segments) {
-    fuel += weightOf(segment) * fuelOf(segment)
-    points += weightOf(segment) * segment.deltaPct
-  }
-  return Option.liftPredicate(fuel / points, (rate) => points > 0 && Number.isFinite(rate))
 }
 
 /** Each segment's weight: half for every 24 active hours (hours with a segment) after it. */
@@ -4836,29 +5011,27 @@ const modelSpanHours = (segments: ReadonlyArray<FuelSegment>): ReadonlyMap<Model
 
 /**
  * The fit's rows: each kept segment of an account window that names its
- * models and its edges, its move read at its window's rate of fuel at the
- * weights (`Σ weighted fuel / Σ points` over the window, undecayed: one
- * model's price against another's holds still while a plan's pace drifts).
- * Its variance is each edge's step read as an even spread across its fuel
- * (`fuel² / 12`), a fresh reading's edge as a whole point.
+ * models and its edges, the part of its move spend outside gent leaves
+ * (`outsidePerHour` over its hours) read at its window's rate of fuel at the
+ * weights (`mixFuelPerPct`). Its variance is each edge's step read as an
+ * even spread across its fuel (`fuel² / 12`), a fresh reading's edge as a
+ * whole point.
  */
-const modelFitRows = (
-  windows: ReadonlyArray<ReadonlyArray<FuelSegment>>,
-  weights: ReadonlyMap<ModelId, number>,
-): ReadonlyArray<ModelFitRow> => {
+const modelFitRows = (windows: ReadonlyArray<WindowFit>): ReadonlyArray<ModelFitRow> => {
   const accountOf = (segment: FuelSegment) =>
     placementKey(segment.provider, segment.slot, segment.signedInAt ?? "")
   const shares = new Map<string, number>()
-  for (const first of windows.flatMap((kept) => kept.slice(0, 1)))
+  for (const first of windows.flatMap(({ kept }) => kept.slice(0, 1)))
     shares.set(accountOf(first), (shares.get(accountOf(first)) ?? 0) + 1)
-  return windows.flatMap((kept) => {
-    const points = kept.reduce((sum, segment) => sum + segment.deltaPct, 0)
-    const rate = kept.reduce((sum, segment) => sum + weightedFuel(segment, weights), 0) / points
+  return windows.flatMap(({ kept, mixFuelPerPct, outsidePerHour }) => {
+    const rate = Option.getOrElse(mixFuelPerPct, () => Number.NaN)
+    const burn = Option.getOrElse(outsidePerHour, () => 0)
     if (!(rate > 0) || !Number.isFinite(rate)) return []
     const edge = (fuel: number) => Math.max(fuel, MODEL_FIT_MIN_EDGE_POINTS * rate) ** 2
     return kept.flatMap((segment): Array<ModelFitRow> => {
       const models = segment.models ?? []
-      const { edges, endedAt, deltaPct } = segment
+      const { edges, endedAt } = segment
+      const deltaPct = segment.deltaPct - burn * Option.getOrElse(segmentHours(segment), () => 0)
       if (models.length === 0 || Predicate.isUndefined(edges) || !(deltaPct > 0)) return []
       const named = models.reduce((sum, { fuel }) => sum + fuel, 0)
       return [
@@ -5011,12 +5184,9 @@ const modelFitScale = (
  * rows alone price it within 10%; the rest keep weight 1, and the fit solves
  * again without them. A weight stays within 8 times either way of 1.
  */
-const fitModelWeights = (
-  windows: ReadonlyArray<ReadonlyArray<FuelSegment>>,
-  weights: ReadonlyMap<ModelId, number>,
-): ReadonlyArray<LaneModel> => {
-  const rows = modelFitRows(windows, weights)
-  const spans = modelSpanHours(windows.flat())
+const fitModelWeights = (windows: ReadonlyArray<WindowFit>): ReadonlyArray<LaneModel> => {
+  const rows = modelFitRows(windows)
+  const spans = modelSpanHours(windows.flatMap(({ kept }) => kept))
   const spanHours = (model: ModelId) => spans.get(model) ?? 0
   const all = [...spans.keys()].sort()
   const prior = modelPrior(rows)
@@ -5067,17 +5237,16 @@ const fitProviderWindows = (
   const fitAll = (weights: ReadonlyMap<ModelId, number>) =>
     new Map(listed.map(([key, list]) => [key, fitWindow(list, weights)] as const))
   // A model's window meters its fuel alone: only account windows weigh one model against another.
-  const accountKept = (fits: ReadonlyMap<string, WindowFit>) =>
-    [...fits.values()].flatMap(({ kept }) => {
-      const first = kept[0]
-      if (Predicate.isUndefined(first) || Predicate.isNotUndefined(first.model)) return []
-      return [kept]
+  const accountFits = (fits: ReadonlyMap<string, WindowFit>) =>
+    [...fits.values()].filter((fit) => {
+      const first = fit.kept[0]
+      return Predicate.isNotUndefined(first) && Predicate.isUndefined(first.model)
     })
   let weights: ReadonlyMap<ModelId, number> = new Map()
   let fits = fitAll(weights)
   let models: ReadonlyArray<LaneModel> = []
   for (let pass = 0; pass < MODEL_FIT_PASSES; pass += 1) {
-    models = fitModelWeights(accountKept(fits), weights)
+    models = fitModelWeights(accountFits(fits))
     const next = new Map(models.map(({ model, weight }) => [model, weight] as const))
     const nextFits = fitAll(next)
     const settled =
@@ -5093,60 +5262,109 @@ const fitProviderWindows = (
 }
 
 /**
- * Fits one window. A segment that spent no fuel, or whose move passes what
- * its fuel explains by more than three 1% steps, is spend outside gent; the
- * rate reads the rest. Each segment is judged against the rate of the other
- * kept segments, never one it is part of (outside spend in a segment lowers
- * the rate it would be judged by), with every fuel at the models' quota
- * weights: a dearer model's step is its price, not spend outside gent. The
- * judging repeats until the kept set holds still. A segment with no other
- * kept segment to judge it by stays while the others are judged, but a
- * window that keeps fewer than `QUOTA_JUDGED_SEGMENTS` names no rate and
- * keeps none: the rate, the band, the pool's rate and the model fit read
- * only judged segments. The band is `±0.5 / Σ points` of the kept segments
- * (lanes r3): the half-step of the 1% quantization over the move they span.
+ * Fits one window: `points = fuel / rate + outsidePerHour × hours` over its
+ * timed segments by weighted least squares (`solveFitTerms`), every fuel at
+ * the models' quota weights, each segment halved per 24 active hours after
+ * it. A segment that spent none is kept: its move measures the hours term.
+ * A burst of spend outside gent, a move that passes what the fit of the
+ * other kept segments explains by more than three 1% steps, is left out;
+ * the judging repeats until the kept set holds still. The fit names its
+ * terms only when they can be told apart: at least `QUOTA_FIT_MIN_SEGMENTS`
+ * kept, fuel and hours `QUOTA_FIT_MIN_SPREAD` apart, the rate positive with
+ * a standard error within `QUOTA_FIT_MAX_ERROR` of it, and a weighted RMS
+ * residual within `QUOTA_FIT_MAX_RESIDUAL`. Else every rate is none and it
+ * keeps no segment, so neither the pool's rate nor the model fit reads it.
+ * The band is the rate's standard error over the rate. The outside share is
+ * the hours term's part of the window's move and what gent's fuel at the
+ * rate leaves of each burst; with no rate, the moves of the bursts and of
+ * the segments that spent none.
  */
 const fitWindow = (
   segments: ReadonlyArray<FuelSegment>,
   weights: ReadonlyMap<ModelId, number>,
 ): WindowFit => {
-  const fuelOf = (segment: FuelSegment) => weightedFuel(segment, weights)
-  const totalPoints = segments.reduce((sum, segment) => sum + segment.deltaPct, 0)
-  let kept: ReadonlyArray<FuelSegment> = segments.filter((segment) => segment.fuel > 0)
+  const timed = segments.flatMap((segment) =>
+    Option.toArray(Option.map(segmentHours(segment), (hours) => ({ segment, hours }))),
+  )
+  const weightOf = activeHourWeights(timed.map(({ segment }) => segment))
+  const rows: ReadonlyArray<FitRow> = timed.map(({ segment, hours }) => ({
+    segment,
+    weight: weightOf(segment),
+    fuel: weightedFuel(segment, weights),
+    hours,
+  }))
+  const sumOf = (list: ReadonlyArray<FitRow>) =>
+    list.reduce((sums, row) => addFitRow(sums, row, 1), NO_FIT_SUMS)
+  let kept = rows
   // Each pass drops or restores at least one segment, or holds still.
-  for (let pass = 0; pass <= segments.length; pass += 1) {
-    const keptFuel = kept.reduce((sum, segment) => sum + fuelOf(segment), 0)
-    const keptPointsNow = kept.reduce((sum, segment) => sum + segment.deltaPct, 0)
+  for (let pass = 0; pass <= rows.length; pass += 1) {
+    const sums = sumOf(kept)
     const keptNow = new Set(kept)
-    const outside = (segment: FuelSegment) => {
-      if (segment.fuel <= 0) return true
-      // The rate of the other kept segments: this one left out.
-      const own = Option.liftPredicate(segment, (candidate) => keptNow.has(candidate))
-      const otherFuel = keptFuel - Option.match(own, { onNone: () => 0, onSome: fuelOf })
-      const otherPoints =
-        keptPointsNow - Option.match(own, { onNone: () => 0, onSome: (it) => it.deltaPct })
-      const others = otherFuel / otherPoints
-      if (!(otherPoints > 0) || !(others > 0) || !Number.isFinite(others)) return false
-      return segment.deltaPct - fuelOf(segment) / others > QUOTA_OUTSIDE_POINTS
+    // Judged by the fit of the other kept segments: this one left out.
+    const burst = (row: FitRow) => {
+      let others = sums
+      if (keptNow.has(row)) others = addFitRow(sums, row, -1)
+      return Option.exists(
+        solveFitTerms(others),
+        (terms) => row.segment.deltaPct - explained(terms, row) > QUOTA_OUTSIDE_POINTS,
+      )
     }
-    const next = segments.filter((segment) => !outside(segment))
-    const same = next.length === kept.length && next.every((segment) => keptNow.has(segment))
+    const next = rows.filter((row) => !burst(row))
+    const same = next.length === kept.length && next.every((row) => keptNow.has(row))
     kept = next
     if (same) break
   }
-  const keptPoints = kept.reduce((sum, segment) => sum + segment.deltaPct, 0)
-  let outsideShare = 0
-  if (totalPoints > 0) outsideShare = (totalPoints - keptPoints) / totalPoints
-  // The outside share stands as judged; an unjudged segment is no rate.
-  let judged = kept
-  if (kept.length < QUOTA_JUDGED_SEGMENTS) judged = []
-  const judgedPoints = judged.reduce((sum, segment) => sum + segment.deltaPct, 0)
+  const terms = Option.filter(
+    solveFitTerms(sumOf(kept)),
+    (found) =>
+      kept.length >= QUOTA_FIT_MIN_SEGMENTS &&
+      found.perFuel > 0 &&
+      found.error <= QUOTA_FIT_MAX_ERROR * found.perFuel &&
+      fitResidual(kept, found) <= QUOTA_FIT_MAX_RESIDUAL,
+  )
+  const pointsOf = (list: ReadonlyArray<FitRow>) =>
+    list.reduce((sum, row) => sum + row.segment.deltaPct, 0)
+  const totalPoints = pointsOf(rows)
+  const shareOf = (points: number) => {
+    if (!(totalPoints > 0)) return 0
+    return Math.min(1, Math.max(0, points / totalPoints))
+  }
+  if (Option.isNone(terms)) {
+    const keptNow = new Set(kept)
+    const unexplained = rows.filter((row) => !keptNow.has(row) || !(row.fuel > 0))
+    return {
+      fuelPerPct: Option.none(),
+      band: Option.none(),
+      kept: [],
+      outsideShare: shareOf(pointsOf(unexplained)),
+      mixFuelPerPct: Option.none(),
+      outsidePerHour: Option.none(),
+    }
+  }
+  const { perFuel, perHour, error } = terms.value
+  const mix = 1 / perFuel
+  // The rate at list prices: the kept fuel's own over its fuel at the weights.
+  let listFuel = 0
+  let weighedFuel = 0
+  for (const row of kept) {
+    listFuel += row.weight * row.segment.fuel
+    weighedFuel += row.weight * row.fuel
+  }
+  let fuelPerPct = mix
+  if (weighedFuel > 0) fuelPerPct = (mix * listFuel) / weighedFuel
+  // Outside gent: the hours term over the kept segments, and what gent's fuel leaves of each burst.
+  const keptNow = new Set(kept)
+  const outsidePoints = rows.reduce((sum, row) => {
+    if (keptNow.has(row)) return sum + perHour * row.hours
+    return sum + Math.max(0, row.segment.deltaPct - perFuel * row.fuel)
+  }, 0)
   return {
-    fuelPerPct: weightedRate(judged),
-    band: Option.liftPredicate(0.5 / judgedPoints, () => judgedPoints > 0),
-    kept: judged,
-    outsideShare,
-    mixFuelPerPct: weightedRate(judged, fuelOf),
+    fuelPerPct: Option.some(fuelPerPct),
+    band: Option.some(error / perFuel),
+    kept: kept.map((row) => row.segment),
+    outsideShare: shareOf(outsidePoints),
+    mixFuelPerPct: Option.some(mix),
+    outsidePerHour: Option.some(perHour),
   }
 }
 
@@ -5312,6 +5530,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     string,
     {
       readonly from: number
+      /** Epoch ms of the reading that opened it. */
+      readonly openedAt: number
       readonly model: Option.Option<ModelId>
       readonly fuel: Option.Option<number>
       readonly tokens: FuelTokens
@@ -6508,6 +6728,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     version += 1
     const fresh = {
       from: reading.utilization,
+      openedAt: now,
       model: Option.fromUndefinedOr(reading.model),
       fuel: Option.some(0),
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -6557,6 +6778,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       slot,
       window: reading.window,
       ...omitUndefined({ signedInAt, model: reading.model }),
+      openedAt: open.value.openedAt,
       endedAt: now,
       fuel: open.value.fuel.value,
       deltaPct: moved * 100,
@@ -6660,7 +6882,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * remains quota in hand over time to its own reset, for placement. Pool
    * admission takes max(expiring weekly floor, rolling seven-day supply),
    * capped before each weekly and 5h refill, then floors once in lane units.
-   * A window with no rate of its own reads the provider's over every account.
+   * A window with no rate of its own reads the pool's: the rates of the
+   * windows whose fits name one (`pooledRate`).
    * The lanes are those of a run of `model`: its own windows and the
    * account's count (`meters`), the account's in runs of that model
    * (`runShare`). With no model, the report lists every window and counts
@@ -6684,14 +6907,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     )
     // The account's windows carry runs of `model` at its share of a mean run.
     const accountRunRate = fuelPerHour * runShare(provider, models, model)
-    const pooled = new Map<string, Array<FuelSegment>>()
+    // Only fits that tell gent's fuel from spend outside it name a rate (`fitWindow`).
+    const pooled = new Map<string, Array<WindowFit>>()
     for (const fit of own.values()) {
       const first = fit.kept[0]
       if (Predicate.isUndefined(first)) continue
-      pooled.set(poolKey(first), [...(pooled.get(poolKey(first)) ?? []), ...fit.kept])
+      pooled.set(poolKey(first), [...(pooled.get(poolKey(first)) ?? []), fit])
     }
     const poolRate = new Map(
-      [...pooled].map(([window, kept]) => [window, weightedRate(kept)] as const),
+      [...pooled].map(([window, fits]) => [window, pooledRate(fits)] as const),
     )
     /** Each model's fuel per point of an account window, from its mix's rate at the weights. */
     const modelRates = (reading: WindowName, fit: Option.Option<WindowFit>) =>
@@ -6726,6 +6950,19 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           const fuelPerPct = Option.orElse(ownRate, () =>
             Option.flatten(Option.fromUndefinedOr(poolRate.get(poolKey(reading)))),
           )
+          // The points spend outside gent burns an hour: none on a metered
+          // window, which counts only its own spend; else the fit's own, or
+          // the hours term at the pool's rate.
+          const outsidePerHour = Option.filter(
+            Option.orElse(
+              Option.flatMap(fit, (found) => found.outsidePerHour),
+              () =>
+                Option.map(fuelPerPct, (rate) =>
+                  outsideBurnAt(segments.get(windowKey(provider, slot, reading)) ?? [], rate),
+                ),
+            ),
+            () => Option.isNone(metered),
+          )
           // A window whose reset passed is full again, for its whole length.
           const reset = reading.resetAt <= now
           let horizon = Option.some(Math.max(reading.resetAt - now, QUOTA_MIN_HORIZON_MS))
@@ -6749,8 +6986,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             if (reading.rejected && !reset) return Option.some(0)
             const remaining = Math.max(0, windowShare(reading) - utilization) * 100
             if (remaining === 0) return Option.some(0)
+            // The points outside spend will burn before the horizon are no room for gent.
+            const burn = Option.getOrElse(outsidePerHour, () => 0)
+            const room = Math.max(0, remaining - (burn * ms) / 3_600_000)
             return Option.map(fuelPerPct, (rate) => {
-              const pace = (remaining * rate * 3_600_000) / (runRate * ms)
+              const pace = (room * rate * 3_600_000) / (runRate * ms)
               if (Option.isSome(metered)) return Math.max(1, pace)
               return pace
             })
@@ -6770,6 +7010,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             ...omitUndefined({
               fuelPerPct: Option.getOrUndefined(fuelPerPct),
               band: Option.getOrUndefined(Option.flatMap(fit, (found) => found.band)),
+              outsidePerHour: Option.getOrUndefined(outsidePerHour),
               sustainable: Option.getOrUndefined(sustainable),
               models: Option.getOrUndefined(modelRates(reading, fit)),
             }),
@@ -6810,7 +7051,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         const week = account.windows.find((window) => isAccountWindow(window, "7d"))
         if (Predicate.isUndefined(week) || Predicate.isUndefined(week.fuelPerPct))
           return Option.none()
-        const { full, remaining } = quotaFuel(week, week.fuelPerPct)
+        const { full, remaining } = quotaFuel(week, week.fuelPerPct, now)
         return Option.some({
           account,
           full,
@@ -6864,7 +7105,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               isAccountWindow(window, "7d") && Predicate.isNotUndefined(window.fuelPerPct),
           ),
         )
-        .reduce((sum, week) => sum + quotaFuel(week, week.fuelPerPct ?? 0).full, 0) /
+        .reduce((sum, week) => sum + quotaFuel(week, week.fuelPerPct ?? 0, now).full, 0) /
       openHours(sabbath, now)(168)
     let sustainable = accountCapacity
     // With no weekly reading, the leeway is `high`.
@@ -6887,6 +7128,14 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       (value) => value * (1 + leeway),
     )
     const capacity = Option.map(supply, (value) => Math.floor(value + 1e-9))
+    const unknownBound = scoped.reduce((sum, account) => {
+      const counted = account.windows.filter(counts)
+      if (account.held || account.sustainable === 0) return sum
+      if (counted.some((window) => window.rejected || window.utilization >= QUOTA_UNKNOWN_FULL))
+        return sum
+      if (counted.length === 0) return Number.POSITIVE_INFINITY
+      return sum + (account.sustainable ?? 1)
+    }, 0)
     return {
       lanes: {
         provider,
@@ -6899,6 +7148,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         ...omitUndefined({ capacity: Option.getOrUndefined(capacity) }),
       },
       supply,
+      unknownBound,
     }
   }
   /**
@@ -6975,13 +7225,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     const full = Arr.findFirst(
       [Option.none<ModelId>(), ...Option.toArray(request.model).map(Option.some)],
       (model) => {
-        const { lanes, supply } = providerLanes(
+        const { lanes, supply, unknownBound } = providerLanes(
           request.provider,
           scope,
           model,
           now,
           request.sabbath,
         )
+        // An unknown supply admits up to its bound: one run an account
+        // while no rate is read, never as many as ask.
+        const bound = Option.getOrElse(supply, () => unknownBound)
         const own = ownLoad(request.provider, scope, model, lanes.models, request.asker, now)
         const load = own + peerLoad(request.provider, scope, model, lanes.models, now)
         // The account's windows count the run at its share; a model's own, whole.
@@ -6997,25 +7250,28 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           peerHolding(now) &&
           Option.exists(peer, (view) => Option.isSome(providerFacts(view.facts, request.provider)))
         return Option.filter(
-          Option.map(supply, (lanesFree) => ({
+          Option.some({
             lanes,
             load,
-            supply: lanesFree,
+            supply: bound,
+            known: Option.isSome(supply),
             size,
             pool: Option.isNone(model),
-            capacity: Math.floor(lanesFree + 1e-9),
-          })),
+            capacity: Math.floor(bound + 1e-9),
+          }),
           (check) =>
             check.load + check.size > check.supply + 1e-9 ||
             (halved && own + check.size > check.supply / 2 + 1e-9),
         )
       },
     )
-    return Option.map(full, ({ lanes, load, supply, size, pool, capacity }) => ({
+    return Option.map(full, ({ lanes, load, supply, known, size, pool, capacity }) => ({
       pool,
       // Spent: the windows carry no run of this size even with none running.
+      // An unknown supply is never spent: the run waits for a lane, and the
+      // lone start still admits one.
       spent: Option.map(
-        Option.liftPredicate(size, (needed) => needed > supply + 1e-9),
+        Option.liftPredicate(size, (needed) => known && needed > supply + 1e-9),
         () => {
           const retryAt = Math.max(spentUntil(lanes, now), now + LANE_SPENT_RETRY_MS)
           return new LaneUnavailable({

@@ -26,7 +26,7 @@
     ["keys", "down"],
     ["keys", "down"],
     ["keys", "down"],
-    ["waitFor", "≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%", 10000],
+    ["waitFor", "≡ lanes anthropic 1/1 free · 5h 120k/% ±14% · out 0%", 10000],
     ["settle"],
     ["cap", "71b-lanes-in-status"],
     ["keys", "esc"],

@@ -681,10 +681,11 @@ describe("gent ctl against a running server", () => {
             readAt: now - 60_000,
             rejected: false,
           }
-          const segment = (endedAt: number) => ({
+          const segment = (openedAt: number, endedAt: number) => ({
             provider: "anthropic",
             slot: "default",
             window: "5h",
+            openedAt,
             endedAt,
             fuel: 240_000,
             deltaPct: 2,
@@ -698,7 +699,12 @@ describe("gent ctl against a running server", () => {
             ledger: {
               buckets: [],
               readings: [reading],
-              segments: [segment(now - 600_000), segment(now - 120_000)],
+              // 2 and 8 minutes long: the fuel runs apart from time, and the
+              // fit tells the two.
+              segments: [
+                segment(now - 720_000, now - 600_000),
+                segment(now - 600_000, now - 120_000),
+              ],
               resets: [
                 {
                   provider: "anthropic",
@@ -739,12 +745,13 @@ describe("gent ctl against a running server", () => {
             // A lapsed grant counts none: default keeps its live two, work none at all.
             resets: [{ slot: "default", resets: [{ count: 2 }] }],
           })
-          // 60 points left to the 90% stop at 120k a point over 2 h, at 3.4 M an hour: one run, ±0.5/4 points.
+          // 60 points left to the 90% stop at 120k a point over 2 h, at 3.4 M an hour: one run.
+          // The band is the rate's standard error: √(1/6 / (2² + 2²)), 14%.
           const line = yield* runCtl(seeded.home, ["lanes", "--line"])
           expect(line).toEqual({
             code: CTL_EXIT.ok,
             stdout:
-              "lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%\nresets anthropic default 2\n",
+              "lanes anthropic 1/1 free · 5h 120k/% ±14% · out 0%\nresets anthropic default 2\n",
             stderr: "",
           })
         }).pipe(Effect.timeout("25 seconds")),

@@ -5954,7 +5954,7 @@ describe("account lanes", () => {
       /**
        * Moves `account`'s windows from `from` to `to` (the same windows, in
        * order) on `costUsd`, as two even segments: a window's fit names a rate
-       * from two judged segments, never from one. Each move must span 2 points.
+       * from two segments, never from one. Each move must span 2 points.
        */
       const fit = (
         account: Account,
@@ -6698,23 +6698,23 @@ describe("account lanes", () => {
         yield* TestClock.adjust("1 hour")
         const start = yield* Clock.currentTimeMillis
         // The window resets 2 hours after the last reading.
-        const resetAt = start + 2 * HOUR + 2 * 60_000
+        const resetAt = start + 2 * HOUR + 60_000
         yield* read(a, [{ window: "5h", utilization: 0.1, resetAt }])
         yield* spend(a, Option.some(1))
         yield* TestClock.adjust("1 minute")
         yield* read(a, [{ window: "5h", utilization: 0.11, resetAt }])
-        // A reading that moved less than 1% keeps the segment open.
+        // A reading that moved less than 1% keeps the segment open. Twice
+        // the fuel in no more time: the fit tells it from steady outside spend.
         yield* spend(a, Option.some(1))
         yield* read(a, [{ window: "5h", utilization: 0.112, resetAt }])
         yield* spend(a, Option.some(1))
-        yield* TestClock.adjust("1 minute")
         yield* read(a, [{ window: "5h", utilization: 0.13, resetAt }])
         const window = yield* windowOf([a], a, "5h")
         // 600,000 fuel over 3 points.
         expect(window.fuelPerPct).toBeCloseTo(200_000, 3)
         expect(window.samples).toBe(2)
-        // ±half a 1% step over the 3 points moved.
-        expect(window.band).toBeCloseTo(0.5 / 3, 6)
+        // The rate's standard error from rounding, √(1/6 / Σ fuel²) over 1 and 2 units of fuel.
+        expect(window.band).toBeCloseTo(Math.sqrt(1 / 6 / 5), 6)
         expect(window.outsideShare).toBe(0)
         // 77 points left below 90% at 200,000 fuel each, over 2 hours at 3.4 M fuel an hour.
         expect(window.sustainable).toBeCloseTo((77 * 200_000) / (2 * 3_400_000), 6)
@@ -6846,24 +6846,26 @@ describe("account lanes", () => {
       const window = yield* windowOf([a], a, "5h")
       expect(window.samples).toBe(2)
       expect(window.fuelPerPct).toBeCloseTo(200_000, 3)
-      expect(window.outsideShare).toBeCloseTo(10 / 12, 6)
+      // Of the 12 points, 9 are the burst's past what gent's $1 explains.
+      expect(window.outsideShare).toBeCloseTo(9 / 12, 6)
       // On b, one clean segment of 200,000 fuel a point; then the same
       // fuel moves 6 points, 5 of them outside gent's. Judged by a rate that
       // counts it (400,000 over 7), the move would read as gent's own. The
       // clean one is left alone, with none to judge it by: no rate of b's
-      // own, so b reads the provider's, a's judged 200,000.
+      // own, so b reads the pool's, a's 200,000.
       yield* step(b, 0.1, 0.11, 1)
       yield* step(b, 0.11, 0.17, 1)
       const small = yield* windowOf([b], b, "5h")
       expect(small.samples).toBe(0)
       expect(small.fuelPerPct).toBeCloseTo(200_000, 3)
+      // With no rate, the burst counts whole.
       expect(small.outsideShare).toBeCloseTo(6 / 7, 6)
       // A second clean segment agrees with the first: their rate, the outside one still out.
       yield* step(b, 0.17, 0.18, 1)
-      const judged = yield* windowOf([b], b, "5h")
-      expect(judged.samples).toBe(2)
-      expect(judged.fuelPerPct).toBeCloseTo(200_000, 3)
-      expect(judged.outsideShare).toBeCloseTo(6 / 8, 6)
+      const fitted = yield* windowOf([b], b, "5h")
+      expect(fitted.samples).toBe(2)
+      expect(fitted.fuelPerPct).toBeCloseTo(200_000, 3)
+      expect(fitted.outsideShare).toBeCloseTo(5 / 8, 6)
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -6897,11 +6899,76 @@ describe("account lanes", () => {
       }
       expect((yield* windowOf(pool, a, "7d")).fuelPerPct).toBeUndefined()
       expect((yield* lanes(pool)).capacity).toBeUndefined()
+      // Claude Code goes on: a point every 10 minutes on both windows, and
+      // gent's turns of 20,000 fuel fall in two of the four. Fuel over points
+      // reads 20,000 a point; the fit puts the moves on time, its rate's
+      // error over half the rate: no rate, the lanes still unknown.
+      for (const [index, costUsd] of [0.1, 0, 0.1, 0].entries()) {
+        if (costUsd > 0) yield* spend(g, Option.some(costUsd))
+        yield* TestClock.adjust("10 minutes")
+        yield* read(g, both(0.31 + index / 100, 0.9 + index / 100))
+      }
+      for (const window of ["5h", "7d"]) {
+        const shared = yield* windowOf(pool, g, window)
+        expect(shared.fuelPerPct).toBeUndefined()
+        expect(shared.samples).toBe(0)
+      }
+      expect((yield* lanes(pool)).capacity).toBeUndefined()
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
   it.effect(
-    "the pool rate reads only judged windows: a lone segment neither sets nor skews it",
+    "a fit tells gent's fuel from steady spend outside gent: both terms land within the band",
+    () =>
+      Effect.gen(function* () {
+        const { read, spend, windowOf } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const resetAt = (yield* Clock.currentTimeMillis) + 5 * HOUR
+        // Claude Code burns 6 points an hour. Gent's $1 is 200,000 fuel, a
+        // point, spent apart from the steps' 5, 10 and 15 minutes; a step
+        // with none still moves. Each reading is the whole points so far.
+        const costs = [0, 2, 0, 0.5, 3, 0, 1, 0]
+        let used = 10
+        yield* read(a, [{ window: "5h", utilization: used / 100, resetAt }])
+        for (let step = 0; step < 24; step++) {
+          const minutes = 5 * (1 + (step % 3))
+          const costUsd = costs[step % costs.length] ?? 0
+          if (costUsd > 0) yield* spend(a, Option.some(costUsd))
+          yield* TestClock.adjust(Duration.minutes(minutes))
+          used += (6 * minutes) / 60 + costUsd
+          yield* read(a, [{ window: "5h", utilization: Math.floor(used) / 100, resetAt }])
+        }
+        const window = yield* windowOf([a], a, "5h")
+        const rate = Option.getOrThrow(Option.fromUndefinedOr(window.fuelPerPct))
+        const band = Option.getOrThrow(Option.fromUndefinedOr(window.band))
+        const outside = Option.getOrThrow(Option.fromUndefinedOr(window.outsidePerHour))
+        expect(Math.abs(rate / 200_000 - 1)).toBeLessThanOrEqual(band)
+        // The hours term within the same share of its truth.
+        expect(Math.abs(outside / 6 - 1)).toBeLessThanOrEqual(band)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a workload whose fuel runs in step with time names no rate", () =>
+    Effect.gen(function* () {
+      const { read, spend, windowOf } = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const resetAt = (yield* Clock.currentTimeMillis) + 5 * HOUR
+      yield* read(a, [{ window: "5h", utilization: 0.1, resetAt }])
+      // Every 10 minutes gent spends $1, a point, and Claude Code a point:
+      // the moves fit gent's fuel at half its true rate, or time alone.
+      for (let step = 1; step <= 6; step++) {
+        yield* spend(a, Option.some(1))
+        yield* TestClock.adjust("10 minutes")
+        yield* read(a, [{ window: "5h", utilization: (10 + 2 * step) / 100, resetAt }])
+      }
+      const window = yield* windowOf([a], a, "5h")
+      expect(window.fuelPerPct).toBeUndefined()
+      expect(window.samples).toBe(0)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "the pool rate reads only windows whose fits name a rate: a lone segment or a shared account neither sets nor skews it",
     () =>
       Effect.gen(function* () {
         const { read, spend, windowOf } = yield* accounts()
@@ -6919,13 +6986,65 @@ describe("account lanes", () => {
         // b: one segment of 20,000 fuel over a point.
         yield* step(b, 0.1, 0.11, 0.1)
         yield* read(c, [{ window: "5h", utilization: 0.1, resetAt }])
-        expect((yield* windowOf([a, b, c], a, "5h")).fuelPerPct).toBeCloseTo(200_000, 3)
-        // b and c read a's rate whole: b's own segment is no rate, and no part of the pool's.
-        for (const slot of [b, c]) {
-          const window = yield* windowOf([a, b, c], slot, "5h")
+        // d: shared with Claude Code, a point every 10 minutes, gent's
+        // 20,000 fuel in two of four: 20,000 a point by fuel over points, no
+        // rate by the fit.
+        const d = CredentialSlot.make("d")
+        yield* read(d, [{ window: "5h", utilization: 0.1, resetAt }])
+        for (const [index, costUsd] of [0.1, 0, 0.1, 0].entries()) {
+          if (costUsd > 0) yield* spend(d, Option.some(costUsd))
+          yield* TestClock.adjust("10 minutes")
+          yield* read(d, [{ window: "5h", utilization: (11 + index) / 100, resetAt }])
+        }
+        const pool = [a, b, c, d] as const
+        expect((yield* windowOf(pool, a, "5h")).fuelPerPct).toBeCloseTo(200_000, 3)
+        // b, c and d read a's rate whole: b's and d's segments are no rate,
+        // and no part of the pool's.
+        for (const slot of [b, c, d]) {
+          const window = yield* windowOf(pool, slot, "5h")
           expect(window.fuelPerPct).toBeCloseTo(200_000, 3)
           expect(window.samples).toBe(0)
         }
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "an unknown supply admits one run an account, and none on an account whose week is at 99%",
+    () =>
+      Effect.gen(function* () {
+        const { read, spend, admit, lanes } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const week = (yield* Clock.currentTimeMillis) + 50 * HOUR
+        // a's week moved one point to 99% on one segment: no rate. b read
+        // its week once: no rate either. Neither knows its supply.
+        yield* read(a, [{ window: "7d", utilization: 0.98, resetAt: week }])
+        yield* spend(a, Option.some(1))
+        yield* read(a, [{ window: "7d", utilization: 0.99, resetAt: week }])
+        yield* read(b, [{ window: "7d", utilization: 0.3, resetAt: week }])
+        // The lone start goes; b carries one run, a at 99% none: one in all.
+        expect(yield* admit([a, b], "first")).toBe("admitted")
+        for (const key of ["second", "third"]) expect(yield* admit([a, b], key)).toBe("queued")
+        expect((yield* lanes([a, b])).capacity).toBeUndefined()
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "seven healthy accounts of unknown supply admit seven runs, and a refused one adds none",
+    () =>
+      Effect.gen(function* () {
+        const { read, admit } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const resetAt = (yield* Clock.currentTimeMillis) + 5 * HOUR
+        const healthy = ["h1", "h2", "h3", "h4", "h5", "h6", "h7"].map((slot) =>
+          CredentialSlot.make(slot),
+        )
+        const refused = CredentialSlot.make("refused")
+        for (const slot of healthy) yield* read(slot, [{ window: "5h", utilization: 0.1, resetAt }])
+        yield* read(refused, [{ window: "5h", utilization: 1, resetAt, rejected: true }])
+        const pool = [refused, ...healthy] as const
+        for (let run = 0; run < 7; run++) expect(yield* admit(pool, `run-${run}`)).toBe("admitted")
+        // The eighth waits for a lane: an unknown supply is never spent.
+        expect(yield* admit(pool, "eighth")).toBe("queued")
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -7258,6 +7377,8 @@ describe("account lanes", () => {
         expect(
           (yield* lanes([replaced])).accounts[0]?.windows.map((window) => window.window),
         ).toEqual(["5h"])
+        // With no rate the account carries one run: "after" frees it for this one.
+        yield* placement.freeReservation("after")
         expect(yield* admit([replaced], "late")).toBe("admitted")
         // The new sign-in's own rejection holds it; renamed to c, it still does.
         yield* read(replaced, rejected)
@@ -7297,7 +7418,7 @@ describe("account lanes", () => {
 
   it.effect("two labels whose sign-ins carry one stamp are two accounts", () =>
     Effect.gen(function* () {
-      const { read, admit, place } = yield* accounts()
+      const { placement, read, admit, place } = yield* accounts()
       yield* TestClock.adjust("1 hour")
       const now = yield* Clock.currentTimeMillis
       // Two sign-ins stamped in the same millisecond.
@@ -7308,6 +7429,8 @@ describe("account lanes", () => {
         { window: "7d", utilization: 1, resetAt: now + 48 * HOUR, rejected: true },
       ])
       yield* read(second, [{ window: "7d", utilization: 0.2, resetAt: now + 48 * HOUR }])
+      // With no rate the account carries one run: "both" frees it for this one.
+      yield* placement.freeReservation("both")
       expect(yield* admit([second], "second")).toBe("admitted")
       expect(yield* admit([first], "first")).toBe("Spent")
       expect(yield* place("next")).toEqual([b, a])
@@ -7360,14 +7483,15 @@ describe("account lanes", () => {
         { window: "5h", utilization: 0, resetAt },
         { window: "5h", model: glm, utilization: 0.1, resetAt },
       ])
-      // Two segments of each, as a window's fit needs two, over one minute.
-      for (const [account5h, glm5h] of [
-        [0.02, 0.11],
-        [0.04, 0.12],
+      // Two segments of each over one minute, as a window's fit needs two:
+      // one fuel in unlike times, so the fit tells it from spend outside gent.
+      for (const [account5h, glm5h, seconds] of [
+        [0.02, 0.11, 10],
+        [0.04, 0.12, 50],
       ] as const) {
         yield* fixture.spend(account, Option.some(0.5), usage, runner, glm)
         yield* fixture.spend(account, Option.some(1.5))
-        yield* TestClock.adjust("30 seconds")
+        yield* TestClock.adjust(Duration.seconds(seconds))
         yield* fixture.read(account, [
           { window: "5h", utilization: account5h, resetAt },
           { window: "5h", model: glm, utilization: glm5h, resetAt },
@@ -8358,8 +8482,10 @@ describe("account lanes", () => {
    * `hours` of runs on each account's 7d window, read every 10 minutes in
    * whole percent, each phase four hours. A 1% step of the week spans hours,
    * so a shorter stretch of one mix leaves every segment the same mix, and
-   * no fit can tell the models apart. The plan counts one Haiku fuel at
-   * twice what its list price says, and an account week is 930 M fuel of
+   * no fit can tell the models apart. Every other 8-hour block runs at a
+   * third of the pace, so fuel does not run in proportion to time and the
+   * window's fit tells it from steady spend outside gent. The plan counts one Haiku fuel
+   * at twice what its list price says, and an account week is 930 M fuel of
    * Opus (context-mileage B4). Each account's true points are returned.
    */
   const runWeek = (
@@ -8383,9 +8509,11 @@ describe("account lanes", () => {
       for (let step = 0; step < hours * 6; step += 1) {
         yield* TestClock.adjust("10 minutes")
         for (const [at, { slot, phases, windows }] of runs.entries()) {
-          const [opusShare, haikuShare] = phases[Math.floor(step / 24) % phases.length] ?? [0, 0]
-          const opusFuel = opusShare * stepFuel
-          const haikuFuel = (haikuShare * stepFuel) / 2
+          const phase = Math.floor(step / 24)
+          const [opusShare, haikuShare] = phases[phase % phases.length] ?? [0, 0]
+          const pace = 1 - (2 / 3) * (Math.floor(step / 48) % 2)
+          const opusFuel = opusShare * pace * stepFuel
+          const haikuFuel = (haikuShare * pace * stepFuel) / 2
           // $1 of list price is 200,000 fuel.
           if (opusFuel > 0)
             yield* fixture.spend(slot, Option.some(opusFuel / 200_000), usage, runner, opus)
@@ -8543,14 +8671,15 @@ describe("account lanes", () => {
         const fixture = yield* accounts()
         const resetAt = (yield* Clock.currentTimeMillis) + 200 * HOUR
         // 1.333 M fuel per point for both. Once an hour: 1 M of Opus, and 0.8 M or 1.2 M of Haiku,
-        // so the moves alternate 1.35 and 1.65 points and read as 1 and 2.
+        // so the moves alternate 1.35 and 1.65 points and read as 1 and 2. Every third hour is
+        // idle, so fuel does not run in proportion to time.
         const perPoint = 4_000_000 / 3
         let points = 0
         yield* fixture.read(a, [{ window: "7d", utilization: 0, resetAt }])
         for (let step = 0; step < 60 * 6; step += 1) {
           yield* TestClock.adjust("10 minutes")
           const hour = Math.floor(step / 6)
-          if (step % 6 === 0) {
+          if (step % 6 === 0 && hour % 3 !== 2) {
             let haikuFuel = 1_200_000
             if (hour % 2 === 0) haikuFuel = 800_000
             yield* fixture.spend(a, Option.some(1_000_000 / 200_000), usage, runner, opus)
@@ -8570,7 +8699,9 @@ describe("account lanes", () => {
 
   it.effect("a model's quota weight stays at its list price until its segments span a day", () =>
     Effect.gen(function* () {
-      const fixture = yield* mixedWeek(12)
+      // Twice the pace of a week's run, so 18 hours make enough segments for a rate.
+      const fixture = yield* accounts()
+      yield* runWeek(fixture, [{ slot: a, phases: opusThenHaiku }], 18, 0.14)
       const report = yield* fixture.lanes([a])
       expect(weightOf(report, opus)).toMatchObject({ weight: 1, fitted: false })
       expect(weightOf(report, haiku)).toMatchObject({ weight: 1, fitted: false })
@@ -9074,14 +9205,15 @@ describe("account lanes", () => {
             yield* server.read(a, both(u5, u7, r5, r7))
             yield* solo.read(a, both(u5, u7, r5, r7))
           })
+        // Five steps 10 seconds apart, five 50: fuel does not run in proportion to time.
         for (let index = 0; index < 30; index++) {
-          yield* TestClock.adjust("30 seconds")
+          yield* TestClock.adjust(Duration.seconds(10 + 40 * (Math.floor(index / 5) % 2)))
           yield* step(B, A)
         }
         // A's first reading of the account: its sweep.
         yield* A.read(a, both(u5, u7, r5, r7))
         for (let index = 0; index < 20; index++) {
-          yield* TestClock.adjust("30 seconds")
+          yield* TestClock.adjust(Duration.seconds(10 + 40 * (Math.floor(index / 5) % 2)))
           yield* step(A, B)
           yield* step(B, A)
         }
@@ -9096,9 +9228,15 @@ describe("account lanes", () => {
         Effect.gen(function* () {
           const apart = yield* newcomer(false)
           const linked = yield* newcomer(true)
-          // Apart, A reads B's spend as outside its own: 6 and 8 starts beside solo's 12.
-          expect(apart.A + apart.B).toBeGreaterThan(apart.solo)
+          // Apart, B's spend runs in step with A's own, so A's fit takes it
+          // for A's: half the true rate, 6 starts beside solo's 13. B's
+          // weekly fit cannot tell A's spend from its own and is unknown:
+          // the one run an unknown supply carries.
+          expect(apart.A).toBeLessThan(apart.solo)
+          expect(apart.B).toBe(1)
+          // Linked, the two read the true rate and admit what solo does, no more.
           expect(linked.A + linked.B).toBeLessThanOrEqual(linked.solo)
+          expect(linked.A + linked.B).toBeGreaterThan(apart.A + apart.B)
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
 
@@ -9114,7 +9252,8 @@ describe("account lanes", () => {
           yield* relay(A, B, [a])
           yield* relay(B, A, [a])
           for (let index = 0; index < 20; index++) {
-            yield* TestClock.adjust("30 seconds")
+            // Five steps 10 seconds apart, five 50: fuel does not run in proportion to time.
+            yield* TestClock.adjust(Duration.seconds(10 + 40 * (Math.floor(index / 5) % 2)))
             // Each server's step moves the account 1 point on 5h; both read
             // it before either line reaches the other, as a line lags.
             for (const server of [A, B, solo, solo]) yield* server.spend(a, Option.some(10))
@@ -9124,9 +9263,15 @@ describe("account lanes", () => {
             yield* relay(A, B, [a])
             yield* relay(B, A, [a])
           }
-          // $10 is 2 M fuel, and each step moved 1 point.
-          for (const server of [solo, A, B])
-            expect((yield* server.windowOf([a], a, "5h")).fuelPerPct).toBeCloseTo(2_000_000, -3)
+          // $10 is 2 M fuel, and each step moved 1 point. A line that lags
+          // puts the peer's fuel in the next segment, and the fit weighs
+          // those segments by their fuel: the rate lands within its band.
+          for (const server of [solo, A, B]) {
+            const window = yield* server.windowOf([a], a, "5h")
+            const rate = Option.getOrThrow(Option.fromUndefinedOr(window.fuelPerPct))
+            const band = Option.getOrThrow(Option.fromUndefinedOr(window.band))
+            expect(Math.abs(rate / 2_000_000 - 1)).toBeLessThanOrEqual(band)
+          }
           const counted = yield* starts(solo, A, B, (from, to) => relay(from, to, [a]), [a])
           expect(counted.A + counted.B).toBeLessThanOrEqual(counted.solo)
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
@@ -9235,6 +9380,19 @@ describe("account lanes", () => {
         yield* noted(fixture, unpriced)
         yield* fixture.read(a, fiveHour(0.11, resetAt))
         yield* noted(fixture, unpriced)
+        // A clean point after it: the peer's count holds, so its lines spent
+        // nothing unpriced. Kept, the unpriced point would make two segments
+        // that agree, and a rate.
+        const clean = peerLine(
+          "peer",
+          3,
+          [],
+          [{ ...spentOn(a, 0), spend: [{ model: planModel, fuel: 0, unpriced: 1 }] }],
+        )
+        yield* fixture.spend(a, Option.some(10))
+        yield* noted(fixture, clean)
+        yield* fixture.read(a, fiveHour(0.12, resetAt))
+        yield* noted(fixture, clean)
         const window = yield* fixture.windowOf([a], a, "5h")
         expect(window.samples).toBe(0)
         expect(window.fuelPerPct).toBeUndefined()
@@ -9418,13 +9576,13 @@ describe("account lanes", () => {
       Effect.gen(function* () {
         const fixture = yield* accounts()
         yield* fixture.read(a, fiveHour(0.1, yield* resetIn(4)))
-        for (const key of ["own-0", "own-1"])
-          expect(yield* fixture.admit([a], key)).toBe("admitted")
+        // No rate is read yet: the account carries its one run.
+        expect(yield* fixture.admit([a], "own-0")).toBe("admitted")
         yield* noted(fixture, peerLine("peer", 1, [{ accounts: [a], count: 3 }]))
-        expect((yield* fixture.lanes([a])).load).toBe(5)
+        expect((yield* fixture.lanes([a])).load).toBe(4)
         const facts = yield* factsOf(fixture.placement)
         expect(facts.providers.flatMap((entry) => entry.runs)).toEqual([
-          { accounts: [a], model: planModel, count: 2 },
+          { accounts: [a], model: planModel, count: 1 },
         ])
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
@@ -9766,8 +9924,9 @@ describe("account lanes", () => {
           const A = yield* accounts()
           const B = yield* accounts()
           for (const fixture of [A, B]) yield* fixture.read(a, fiveHour(0.1, yield* resetIn(4)))
+          // No rate is read yet: each server's lone start is its one run.
           expect(yield* A.admit([a], "A-0")).toBe("admitted")
-          for (const key of ["B-0", "B-1"]) expect(yield* B.admit([a], key)).toBe("admitted")
+          expect(yield* B.admit([a], "B-0")).toBe("admitted")
           // The command keeps the first line it reads, then prints B's facts,
           // as `gent ctl pool --follow` on B does.
           const script =
@@ -9780,11 +9939,11 @@ describe("account lanes", () => {
             encodeFacts(yield* factsOf(B.placement)),
           ])
           yield* Queue.take(noted)
-          expect((yield* A.lanes([a])).load).toBe(3)
+          expect((yield* A.lanes([a])).load).toBe(2)
           // A's facts reached the command: B notes them, as its ctl does.
           const first = (yield* fs.readFileString(sent)).trim()
           yield* B.placement.notePeer(decodeFacts(first), scopeOf([a]), "peer")
-          expect((yield* B.lanes([a])).load).toBe(3)
+          expect((yield* B.lanes([a])).load).toBe(2)
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
 

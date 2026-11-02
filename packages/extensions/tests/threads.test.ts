@@ -1049,7 +1049,9 @@ describe("threads", () => {
      * The starter's first step reads the week at 10%, its second at 11% and
      * every later one at 12%: two segments of one million fuel per point, 88
      * points left and 20 hours to the reset carry 1.3 runs at the prior's
-     * 3.4 M fuel per run-hour, one lane.
+     * 3.4 M fuel per run-hour, one lane. Its tests run on the test clock:
+     * the steps take no time, so the fit reads fuel alone, whatever the
+     * real machine's pace.
      */
     const oneLane = (now: number) => (step: number) => [
       {
@@ -1131,7 +1133,7 @@ describe("threads", () => {
               "the second thread's round",
             )
             yield* loadIs(rig, 0, "every lane is free once the rounds end")
-          }).pipe(Effect.timeout("12 seconds")),
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
         ),
       15_000,
     )
@@ -1171,7 +1173,7 @@ describe("threads", () => {
             // The admitted round's end gives its lane to the round that waited beside it.
             yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "both rounds ran")
             yield* loadIs(rig, 0, "the lane frees once the rounds end")
-          }).pipe(Effect.timeout("12 seconds")),
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
         ),
       15_000,
     )
@@ -1246,7 +1248,7 @@ describe("threads", () => {
             yield* Deferred.succeed(rig.gate, true)
             yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "the queued round ran")
             yield* loadIs(rig, 0, "every lane is free once the rounds end")
-          }).pipe(Effect.timeout("12 seconds")),
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
         ),
       15_000,
     )
@@ -1265,7 +1267,7 @@ describe("threads", () => {
             // The delete ends the loop under the turn: its end is never heard.
             yield* rig.client.session.delete({ sessionId: running.sessionId })
             yield* loadIs(rig, 0, "the delete frees the lane")
-          }).pipe(Effect.timeout("12 seconds")),
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
         ),
       15_000,
     )
@@ -1292,7 +1294,7 @@ describe("threads", () => {
             yield* waitFor(rig.threadRequests, (sent) => sent >= 3, 4_000, "the waiting rounds ran")
             yield* loadIs(rig, 0, "every lane is free once the rounds end")
             expect(yield* rig.threadRequests).toBe(3)
-          }).pipe(Effect.timeout("12 seconds")),
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
         ),
       15_000,
     )
@@ -1353,7 +1355,7 @@ describe("threads", () => {
             )
             yield* loadIs(rig, 0, "the refused round holds no lane")
             yield* Deferred.succeed(rig.gate, true)
-          }).pipe(Effect.timeout("12 seconds")),
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
         ),
       15_000,
     )
@@ -1400,7 +1402,7 @@ describe("threads", () => {
             )
             expect(yield* rig.threadRequests).toBe(1)
             yield* Deferred.succeed(rig.gate, true)
-          }).pipe(Effect.timeout("12 seconds")),
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
         ),
       15_000,
     )
@@ -1476,7 +1478,7 @@ describe("threads", () => {
             yield* loadIs(rig, 1, "the queued round holds the lane")
             yield* Deferred.succeed(rig.gate, true)
             yield* loadIs(rig, 0, "every lane is free once the rounds end")
-          }).pipe(Effect.timeout("12 seconds")),
+          }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
         ),
       15_000,
     )

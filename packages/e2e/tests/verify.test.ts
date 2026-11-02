@@ -123,12 +123,14 @@ describe("verify helpers", () => {
 
         // `--data` seeds an account ledger the server reads as it starts: one
         // window 30% used, two 2-point segments of 240k fuel, so 120k a point:
-        // 60 points to the 90% stop over 2 h hold one run.
+        // 60 points to the 90% stop over 2 h hold one run. They last 2 and 8
+        // minutes, so the fit tells gent's fuel from time, at ±14%.
         const now = yield* Clock.currentTimeMillis
-        const segment = (endedAt: number) => ({
+        const segment = (openedAt: number, endedAt: number) => ({
           provider: "anthropic",
           slot: "default",
           window: "5h",
+          openedAt,
           endedAt,
           fuel: 240_000,
           deltaPct: 2,
@@ -151,7 +153,10 @@ describe("verify helpers", () => {
                 rejected: false,
               },
             ],
-            segments: [segment(now - 600_000), segment(now - 120_000)],
+            segments: [
+              segment(now - 720_000, now - 600_000),
+              segment(now - 600_000, now - 120_000),
+            ],
           }),
         )
         const launch = yield* verify(["launch", "--dir", dir, "--data", ledger], parent)
@@ -166,7 +171,7 @@ describe("verify helpers", () => {
         const lanes = yield* run(launched.gent, ["ctl", "lanes", "--line"], launched.work)
         expect({ code: lanes.code, stdout: lanes.stdout }).toEqual({
           code: 0,
-          stdout: "lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%\n",
+          stdout: "lanes anthropic 1/1 free · 5h 120k/% ±14% · out 0%\n",
         })
 
         // The run's wrapper reaches its own server, with the run's environment.
