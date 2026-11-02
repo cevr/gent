@@ -127,7 +127,9 @@
     session and branch it ran on, the sender and the sender's thread key,
     the reply it asked for, `notify`, and once it ends the text, the last
     `thread.reply` value, the turn's flags, its error, its usage and cost,
-    and when its end was delivered. The thread's `turnAfter` hook matches the
+    its `handoffs` (the window markers and prune lines the runtime wrote
+    among the round's messages, each one handoff of the window; a machine's
+    size stop reads it), and when its end was delivered. The thread's `turnAfter` hook matches the
     open round's message id (or a message joined into the turn), records the
     end (the first writer wins), then delivers it: `notify: "user"` (the
     default) tells nobody, the user reads the thread; `"starter"` steers a

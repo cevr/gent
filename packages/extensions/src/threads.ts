@@ -84,6 +84,7 @@ import {
   ReasoningEffort,
   RequestId,
   RetryCause,
+  rewritesWindow,
   SessionAccount,
   sessionAccount,
   type SessionReachError,
@@ -369,7 +370,8 @@ const ToolNotify = Schema.Literals(["user", "starter"]).annotate({
  * `turn_message_id` is the turn it runs now, the first until a usage limit
  * makes the round wait, and the lane, the stop and the turn's end are keyed
  * by it. `waits` counts those waits. A round waits while it is open, not
- * stopped, and `retry_at` is set (`isWaiting`).
+ * stopped, and `retry_at` is set (`isWaiting`). `handoffs` counts the
+ * window's handoffs inside the round (`roundHandoffs`), set when it ends.
  */
 const RoundRow = Schema.Struct({
   round: Schema.String,
@@ -402,6 +404,7 @@ const RoundRow = Schema.Struct({
   retry_at: Schema.NullOr(Schema.Finite),
   retry_cause: Schema.NullOr(RetryCause),
   waits: Schema.Finite,
+  handoffs: Schema.Finite,
 })
 type RoundRow = typeof RoundRow.Type
 
@@ -439,6 +442,8 @@ interface RoundEnd {
   /** When the round may run again, and why it may not before (`TurnRetry`). */
   readonly retry: Option.Option<TurnRetry>
   readonly usage: Option.Option<typeof ChildUsage.Type>
+  /** The window's handoffs inside the round (`roundHandoffs`). */
+  readonly handoffs: number
   readonly endedAt: number
 }
 
@@ -692,7 +697,8 @@ const createThreadRounds = Effect.gen(function* () {
         stop_notice_at INTEGER,
         retry_at INTEGER,
         retry_cause TEXT,
-        waits INTEGER NOT NULL DEFAULT 0
+        waits INTEGER NOT NULL DEFAULT 0,
+        handoffs INTEGER NOT NULL DEFAULT 0
       )`,
       `CREATE INDEX thread_rounds_by_thread ON thread_rounds (thread, ended_at)`,
       `CREATE INDEX thread_rounds_open_at ON thread_rounds (session_id, branch_id) WHERE ended_at IS NULL`,
@@ -707,7 +713,7 @@ const createThreadRounds = Effect.gen(function* () {
 
 const ensureThreadRounds = ensureExtensionTables({
   owner: "@gent/threads",
-  version: 3,
+  version: 4,
   tables: ["thread_rounds"],
   create: createThreadRounds,
 }).pipe(Effect.mapError(storageError("Thread table setup failed")))
@@ -845,6 +851,7 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
                   retry_at = ${Option.getOrNull(Option.map(end.retry, (retry) => retry.at))},
                   retry_cause = ${Option.getOrNull(Option.map(end.retry, (retry) => retry.cause))},
                   usage_json = ${Option.getOrNull(usage)},
+                  handoffs = ${end.handoffs},
                   stopped_at = CASE
                     WHEN ${completed} = 1 AND stop_notice_at IS NOT NULL THEN NULL
                     ELSE stopped_at
@@ -1484,6 +1491,14 @@ const roundMessages = <M extends Parameters<typeof startTurnMessages>[0][number]
   return messages.slice(start, messages.indexOf(last) + 1)
 }
 
+/**
+ * The window's handoffs inside a round: each window marker or prune line the
+ * runtime wrote among the round's messages (`rewritesWindow`). The runtime
+ * persists a marker once per id, so two handoffs at one anchor are one.
+ */
+const roundHandoffs = (messages: ReadonlyArray<Parameters<typeof rewritesWindow>[0]>): number =>
+  messages.filter((message) => rewritesWindow(message)).length
+
 /** The place a round's end wakes, once one was saved. */
 const wakeTargetOf = (round: RoundRow) =>
   Option.map(
@@ -1682,11 +1697,13 @@ const endRound = Effect.fn("Threads.endRound")(function* (round: RoundRow, outco
   const rounds = yield* ThreadRounds
   // A closed round holds no lane and waits in no queue.
   yield* cancelLane(MessageId.make(round.turn_message_id))
-  const text = latestAssistantText(roundMessages(yield* branchMessages(round), round))
+  const messages = roundMessages(yield* branchMessages(round), round)
+  const text = latestAssistantText(messages)
   const failed = outcome.interrupted || outcome.streamFailed || outcome.unanswered
   yield* rounds.endRound(round.round, {
     ...outcome,
     text,
+    handoffs: roundHandoffs(messages),
     error: Option.map(
       Option.filter(outcome.error, () => failed),
       (error) => oneLine(error, maximumErrorChars),
@@ -3231,6 +3248,8 @@ const RoundView = Schema.Struct({
   unanswered: Schema.Boolean,
   /** A thread.stop, or the starter's interrupt, closed the round. */
   stopped: Schema.Boolean,
+  /** The window's handoffs inside the round, counted when it ended; 0 while it is open. */
+  handoffs: Schema.Finite,
   error: Schema.optionalKey(Schema.String),
   /**
    * When a round that could not run may run again, in epoch milliseconds: a
@@ -3262,6 +3281,7 @@ const roundView = (round: RoundRow): RoundView => ({
   streamFailed: round.stream_failed === 1,
   unanswered: round.unanswered === 1,
   stopped: Predicate.isNotNull(round.stopped_at),
+  handoffs: round.handoffs,
   ...omitUndefined({
     error: Option.getOrUndefined(Option.fromNullishOr(round.error)),
     retryAt: Option.getOrUndefined(Option.fromNullishOr(round.retry_at)),

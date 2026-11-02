@@ -176,6 +176,15 @@ const RoleSwitch = Schema.Struct({
   visits: Schema.optionalKey(PositiveInt),
 })
 
+/**
+ * A round too big for one thread round: one whose thread handed its window
+ * off `handoffs` times or more (the round's `handoffs`, threads.md) ends as a
+ * size stop, whatever it replied. The run moves to `to`, and the move's note
+ * (`{{visit.note}}` in `to`'s template) names the count, the state and the
+ * role. A state without it never stops on size.
+ */
+const Oversize = Schema.Struct({ handoffs: PositiveInt, to: StateName })
+
 const ThreadState = Schema.Struct({
   kind: Schema.Literal("thread"),
   thread: RoleName,
@@ -192,6 +201,7 @@ const ThreadState = Schema.Struct({
    * in a state that is not fresh continues it, never the thread before it.
    */
   fresh: Schema.optionalKey(Schema.Union([Schema.Boolean, PositiveInt])),
+  oversize: Schema.optionalKey(Oversize),
   ...VisitCap,
 })
 type ThreadState = typeof ThreadState.Type
@@ -405,7 +415,7 @@ const MachineStep = Schema.TaggedUnion({
   /**
    * `role`, `model`, `costUsd` and `tokens`: the role whose thread ran the
    * round, the thread's model, and its turn's priced cost and tokens, when
-   * known.
+   * known. `handoffs`: the window's handoffs inside the round; absent for none.
    */
   RoundEnded: {
     state: StateName,
@@ -418,6 +428,7 @@ const MachineStep = Schema.TaggedUnion({
     model: Schema.optionalKey(ModelId),
     costUsd: Schema.optionalKey(Schema.Finite),
     tokens: Schema.optionalKey(RoundTokens),
+    handoffs: Schema.optionalKey(PositiveInt),
   },
   CommandEnded: {
     state: StateName,
@@ -449,7 +460,13 @@ const MachineStep = Schema.TaggedUnion({
   Saved: { state: StateName, value: Schema.Json },
   /** A `retry` answer to an `exhausted` ask granted the state one visit past its cap. */
   Granted: { state: StateName },
-  Moved: { from: StateName, to: StateName, by: Schema.String },
+  /** `note`: why the run moved, for `to`'s template (`{{visit.note}}`): a size stop's (`Oversize`). */
+  Moved: {
+    from: StateName,
+    to: StateName,
+    by: Schema.String,
+    note: Schema.optionalKey(Schema.String),
+  },
   /** `accepted`: the final state's `accepts`; a step without it accepted. */
   Finished: { state: StateName, accepted: Schema.optionalKey(Schema.Boolean) },
   Failed: { error: Schema.String },
@@ -543,6 +560,7 @@ const targetsOf = (state: MachineState): ReadonlyArray<StateName> => {
         ...Option.toArray(Option.fromUndefinedOr(state.next)),
         ...Object.values(state.on ?? {}),
         ...Option.toArray(Option.fromUndefinedOr(state.exhausted)),
+        ...Option.toArray(Option.fromUndefinedOr(state.oversize?.to)),
       ]
     case "run":
       return [
@@ -808,15 +826,24 @@ const pathInto = (value: Schema.Json, path: ReadonlyArray<string>): Option.Optio
     Option.some(value),
   )
 
+/** What a template reads: `visit` is the state's visit, and `note` the note of the move into it. */
 interface TemplateScope {
   readonly input: Schema.Json
   readonly context: RunContext
   readonly visit: number
+  readonly note: Option.Option<string>
+}
+
+/** `{{visit}}` is the visit's number, `{{visit.note}}` the note of the move into it. */
+const visitSlot = (scope: TemplateScope, rest: ReadonlyArray<string>): Option.Option<string> => {
+  if (rest.length === 0) return Option.some(String(scope.visit))
+  if (rest.length === 1 && rest[0] === "note") return scope.note
+  return Option.none()
 }
 
 const slotValue = (scope: TemplateScope, slot: ReadonlyArray<string>): Option.Option<string> => {
   const [head = "", ...rest] = slot
-  if (head === "visit") return Option.some(String(scope.visit))
+  if (head === "visit") return visitSlot(scope, rest)
   if (head === "input") return Option.map(pathInto(scope.input, rest), jsonText)
   if (head === "all") {
     const [state = "", ...path] = rest
@@ -869,6 +896,8 @@ interface RunRecord {
 interface RunMemo {
   readonly visits: Visits
   readonly context: RunContext
+  /** The note of the run's last move (`Moved.note`): none when it carried none. */
+  readonly moveNote: Option.Option<string>
 }
 
 type Run = RunRecord & RunMemo
@@ -1285,7 +1314,10 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
                 RETURNING run`
               if (updated.length === 0) return Option.none<Run>()
               yield* insertSteps(before.run, before.seq, steps)
-              const memo = foldSteps({ visits: before.visits, context: before.context }, steps)
+              const memo = foldSteps(
+                { visits: before.visits, context: before.context, moveNote: before.moveNote },
+                steps,
+              )
               return Option.some<Run>({ ...after, ...memo, seq })
             }).pipe(sql.withTransaction)
           },
@@ -1649,7 +1681,11 @@ const visited = (visits: Visits, state: StateName): Visits => ({
   counts: { ...visits.counts, [state]: visitsOf(visits, state) + 1 },
 })
 
-const EMPTY_MEMO: RunMemo = { visits: { counts: {}, grants: {} }, context: { last: {}, all: {} } }
+const EMPTY_MEMO: RunMemo = {
+  visits: { counts: {}, grants: {} },
+  context: { last: {}, all: {} },
+  moveNote: Option.none(),
+}
 
 /**
  * One step's change to the memo. A state's visits are the highest visit its
@@ -1675,6 +1711,8 @@ const foldStep = (memo: RunMemo, step: MachineStep): RunMemo => {
     }
     case "Saved":
       return { ...memo, context: saved(memo.context, step.state, step.value) }
+    case "Moved":
+      return { ...memo, moveNote: Option.fromUndefinedOr(step.note) }
     default:
       return memo
   }
@@ -1685,7 +1723,7 @@ const foldSteps = (memo: RunMemo, steps: ReadonlyArray<MachineStep>): RunMemo =>
   steps.reduce(foldStep, memo)
 
 /** The steps `foldStep` reads: a read of the memo loads only these. */
-const MEMO_TAGS = ["Dispatched", "Finished", "Granted", "Saved"] as const
+const MEMO_TAGS = ["Dispatched", "Finished", "Granted", "Saved", "Moved"] as const
 
 /**
  * The steps `stateVisits` reads: a visit's start, its receipts, its rounds,
@@ -2499,6 +2537,7 @@ const templateScope = (run: Run, visit: number): TemplateScope => ({
   input: run.input,
   context: run.context,
   visit,
+  note: run.moveNote,
 })
 
 const threadStateOf = Effect.fn("Machines.threadStateOf")(function* (run: Run, name: StateName) {
@@ -3160,15 +3199,15 @@ const rolePick = Effect.fn("Machines.rolePick")(function* (
 })
 
 /**
- * The round's role, its model, and its turn's priced cost and tokens, as its
- * `RoundEnded` step keeps them. A zero cost over spent tokens is a catalog
- * with no price (a subscription view): unknown, never free, as placement
- * reads fuel.
+ * The round's role, its model, its turn's priced cost and tokens, and its
+ * window's handoffs, as its `RoundEnded` step keeps them. A zero cost over
+ * spent tokens is a catalog with no price (a subscription view): unknown,
+ * never free, as placement reads fuel.
  */
-const roundBill = (
+const roundEndFields = (
   action: RoundAction,
   role: RoleName,
-  view: { readonly usage?: typeof ChildUsage.Type },
+  view: { readonly usage?: typeof ChildUsage.Type; readonly handoffs: number },
 ) => {
   const usage = Option.fromUndefinedOr(view.usage)
   const tokens = Option.map(usage, (spent) => ({
@@ -3191,8 +3230,30 @@ const roundBill = (
     model: action.model,
     costUsd: Option.getOrUndefined(costUsd),
     tokens: Option.getOrUndefined(tokens),
+    handoffs: Option.getOrUndefined(Option.liftPredicate(view.handoffs, (count) => count > 0)),
   })
 }
+
+/**
+ * The size stop a state's `oversize` makes of an ended round: the state the
+ * run moves to and the move's note, none for a round within its size.
+ */
+const sizeStopOf = (
+  name: StateName,
+  state: ThreadState,
+  action: RoundAction,
+  handoffs: number,
+): Option.Option<{ readonly to: StateName; readonly note: string }> =>
+  Option.map(
+    Option.filter(
+      Option.fromUndefinedOr(state.oversize),
+      (oversize) => handoffs >= oversize.handoffs,
+    ),
+    (oversize) => ({
+      to: oversize.to,
+      note: `Size stop: the ${name} round (role ${state.thread}, visit ${action.visit}) handed its context off ${handoffs} times, too big for one round. Split its work smaller; a round of the same size hands off again.`,
+    }),
+  )
 
 /** How long a round waits in a lane queue before it moves to another maker. */
 const PATIENCE = Duration.minutes(10)
@@ -3364,34 +3425,12 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
           state: name,
           round: roundId,
           dead: true,
-          ...roundBill(action, state.thread, view),
+          ...roundEndFields(action, state.thread, view),
         }),
         MachineStep.cases.Interrupted.make({ state: name }),
       ],
     })
     yield* commitMove(run, asking.after, asking.steps)
-    return
-  }
-  if (view.streamFailed && !view.interrupted && Predicate.isNotUndefined(view.retryAt)) {
-    // The key is the `Waiting` step's seq: unique in the run, and short on a second death.
-    const rerun = PendingAction.cases.Round.make({
-      state: action.state,
-      visit: action.visit,
-      key: `machine:${run.run}:${run.seq + 2}`,
-      attempt: action.attempt,
-      fresh: true,
-      ...omitUndefined({ avoid: action.avoid }),
-    })
-    let reason: "quota" | "sabbath" = "quota"
-    if (view.sabbath === true) reason = "sabbath"
-    yield* waitForAccount(run, rerun, { until: view.retryAt, reason }, [
-      MachineStep.cases.RoundEnded.make({
-        state: name,
-        round: roundId,
-        dead: true,
-        ...roundBill(action, state.thread, view),
-      }),
-    ])
     return
   }
   const verdict: Option.Option<Option.Option<Verdict>> = Option.match(
@@ -3411,11 +3450,45 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
     state: name,
     round: roundId,
     dead,
-    ...roundBill(action, state.thread, view),
+    ...roundEndFields(action, state.thread, view),
     ...omitUndefined({
       verdict: Option.getOrUndefined(Option.flatten(verdict)),
     }),
   })
+  const value: Schema.Json = { text: view.text, reply: view.reply }
+  // A round too big for one round stops on size before a retry, a rerun or
+  // its verdict: a round of the same size would hand off again.
+  const sizeStop = sizeStopOf(name, state, action, view.handoffs)
+  if (Option.isSome(sizeStop)) {
+    const { to, note } = sizeStop.value
+    return yield* settleRound(run, state, action, action.thread, to, [
+      ended,
+      MachineStep.cases.Saved.make({ state: name, value }),
+      MachineStep.cases.Moved.make({ from: name, to, by: "oversize", note }),
+    ])
+  }
+  if (view.streamFailed && !view.interrupted && Predicate.isNotUndefined(view.retryAt)) {
+    // The key is the `Waiting` step's seq: unique in the run, and short on a second death.
+    const rerun = PendingAction.cases.Round.make({
+      state: action.state,
+      visit: action.visit,
+      key: `machine:${run.run}:${run.seq + 2}`,
+      attempt: action.attempt,
+      fresh: true,
+      ...omitUndefined({ avoid: action.avoid }),
+    })
+    let reason: "quota" | "sabbath" = "quota"
+    if (view.sabbath === true) reason = "sabbath"
+    yield* waitForAccount(run, rerun, { until: view.retryAt, reason }, [
+      MachineStep.cases.RoundEnded.make({
+        state: name,
+        round: roundId,
+        dead: true,
+        ...roundEndFields(action, state.thread, view),
+      }),
+    ])
+    return
+  }
   if (dead && action.attempt === 1) {
     // A dead worker gave no verdict: the round runs once more, on a new thread.
     const retry = PendingAction.cases.Round.make({
@@ -3443,23 +3516,37 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
     onNone: () => state.next ?? name,
     onSome: (next) => state.on?.[next] ?? name,
   })
-  const value: Schema.Json = { text: view.text, reply: view.reply }
-  const committed = yield* commitMove(run, { ...run, state: to, pending: Option.none() }, [
+  yield* settleRound(run, state, action, action.thread, to, [
     ended,
     MachineStep.cases.Saved.make({ state: name, value }),
     MachineStep.cases.Moved.make({ from: name, to, by: "verdict" }),
   ])
-  if (Option.isSome(committed) && ownThread(state, action)) {
-    yield* threads
-      .stop(action.thread, Option.some(`machine-done:${action.key}`))
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("machines.thread.stop.failed").pipe(
-            Effect.annotateLogs({ run: run.run, cause: Cause.pretty(cause) }),
-          ),
+})
+
+/**
+ * Moves the run off an ended round to `to` with `steps` (its end, its saved
+ * value, its move), then stops the round's `thread` when the round owned it.
+ */
+const settleRound = Effect.fn("Machines.settleRound")(function* (
+  run: Run,
+  state: ThreadState,
+  action: RoundAction,
+  thread: SessionId,
+  to: StateName,
+  steps: ReadonlyArray<MachineStep>,
+) {
+  const committed = yield* commitMove(run, { ...run, state: to, pending: Option.none() }, steps)
+  if (Option.isNone(committed) || !ownThread(state, action)) return
+  const threads = yield* threadsOf
+  yield* threads
+    .stop(thread, Option.some(`machine-done:${action.key}`))
+    .pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("machines.thread.stop.failed").pipe(
+          Effect.annotateLogs({ run: run.run, cause: Cause.pretty(cause) }),
         ),
-      )
-  }
+      ),
+    )
 })
 
 const runStateOf = Effect.fn("Machines.runStateOf")(function* (run: Run, name: StateName) {

@@ -1126,8 +1126,11 @@ export const copyMessagesToBranch = (
   return copies
 }
 
-/** Whether `message` rewrites the window's prefix: a window marker or a prune line. */
-const rewritesWindow = (message: Message): boolean =>
+/**
+ * Whether `message` rewrites the window's prefix: a window marker or a prune
+ * line. Each is one handoff of the window, as the runtime wrote it.
+ */
+export const rewritesWindow = (message: Message): boolean =>
   Option.isSome(contextWindowOf(message)) || Option.isSome(pruneCutoffOf(message))
 
 /** Each part's stub, by the part object, so the stub is built once. */

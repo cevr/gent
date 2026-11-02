@@ -45,6 +45,7 @@ import {
   type QuotaReading,
   ref,
   reportProviderQuota,
+  reportProviderStopReason,
   request,
   tool,
   WakeNext,
@@ -54,11 +55,13 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  finishPart,
   LanguageModelLayers,
   runToolWithCtx,
   TEST_MODEL_ID,
   testLeafContext,
   testToolContext,
+  textDeltaPart,
   UserConfig,
   advanceUntil,
   waitFor,
@@ -391,6 +394,10 @@ const StepView = Schema.Struct({
   dead: Schema.optionalKey(Schema.Boolean),
   from: Schema.optionalKey(Schema.String),
   to: Schema.optionalKey(Schema.String),
+  by: Schema.optionalKey(Schema.String),
+  note: Schema.optionalKey(Schema.String),
+  verdict: Schema.optionalKey(Schema.String),
+  handoffs: Schema.optionalKey(Schema.Finite),
   askId: Schema.optionalKey(Schema.String),
   round: Schema.optionalKey(Schema.String),
   model: Schema.optionalKey(Schema.String),
@@ -1698,6 +1705,162 @@ describe("machine failures the owner decides", () => {
       expect(second).toMatchObject({ run: seven, reason: "no-verdict" })
       // Each run's round ran twice: once, and once more on a new thread.
       expect(yield* Ref.get(models.calls)).toEqual(["judge:1", "judge:1", "judge:1", "judge:1"])
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+})
+
+// ── a round too big for its thread ──────────────────────────────────────────
+
+/** work (thread, stops on size at two handoffs) → end, or decide (ask) → end. */
+const SIZE = {
+  name: "size",
+  threads: { worker: {} },
+  start: "work",
+  states: {
+    work: {
+      kind: "thread",
+      thread: "worker",
+      say: "STATE work {{visit}}",
+      on: { done: "end" },
+      oversize: { handoffs: 2, to: "decide" },
+    },
+    decide: { kind: "ask", ask: "SIZE {{visit.note}}", on: { go: "end", drop: "end" } },
+    end: { kind: "final" },
+  },
+}
+
+/**
+ * A step the window cut: half a reply, then the stop reason Anthropic sends
+ * when the window filled. The turn hands the window off and continues.
+ */
+const windowFullStep = () =>
+  Stream.unwrap(
+    Effect.as(
+      reportProviderStopReason("model_context_window_exceeded"),
+      Stream.fromIterable([
+        textDeltaPart("the first half of the"),
+        finishPart({ finishReason: "unknown", usage: { inputTokens: 1_000, outputTokens: 10 } }),
+      ]),
+    ),
+  )
+
+/**
+ * A worker that plays `script` one worker model call at a step: `cut` is a
+ * step the window cut, `reply` answers `done`, `text` ends the turn. The
+ * round's own header leaves the window at a handoff, so a counter, not the
+ * prompt, picks the step.
+ */
+const scriptedWorker = (script: ReadonlyArray<"cut" | "reply" | "text">) =>
+  Effect.gen(function* () {
+    const step = yield* Ref.make(0)
+    return (): Effect.Effect<WorkerStream> =>
+      Effect.map(
+        Ref.getAndUpdate(step, (count) => count + 1),
+        (index) => {
+          const next = script[index] ?? "text"
+          if (next === "cut") return windowFullStep()
+          if (next === "reply") {
+            return toolCalls([
+              {
+                tool: "thread.reply",
+                id: `reply-size-${index}`,
+                input: { value: { next: "done" } },
+              },
+            ])
+          }
+          return billed("finished")
+        },
+      )
+  })
+
+const askText = (messages: ReadonlyArray<SnapshotMessage>) =>
+  ofType(messages, MACHINE_ASK_TYPE)
+    .flatMap((message) => message.parts)
+    .flatMap((part) => {
+      if (part.type !== "text") return []
+      return [part.text]
+    })
+    .join("\n")
+
+const decodeRoundHandoffs = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ handoffs: Schema.Finite })),
+)
+/** Every thread round's handoff count, oldest first. */
+const roundHandoffCounts = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql`SELECT handoffs FROM thread_rounds ORDER BY started_at`
+  return decodeRoundHandoffs(rows).map((row) => row.handoffs)
+})
+
+describe("a round too big for its thread", () => {
+  it.live("a round that hands its context off twice goes to decide with a size note", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const worker = yield* scriptedWorker(["cut", "reply", "cut", "text"])
+      const models = yield* makeModels(worker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, SIZE, "size")
+      const ask = yield* askDetails(client, owner, 1)
+      expect(ask).toMatchObject({ run, state: "decide", reason: "asked", choices: ["go", "drop"] })
+      const snapshot = yield* client.session.getSnapshot(owner)
+      const text = askText(snapshot.messages)
+      expect(text).toContain("SIZE Size stop: the work round (role worker, visit 1)")
+      expect(text).toContain("handed its context off 2 times")
+      const steps = yield* home.sql(stepsOf(run))
+      // The size stop moves the run, though the round's verdict named `done`.
+      expect(moves(steps)).toEqual(["work→decide"])
+      expect(steps.find((step) => step._tag === "Moved")).toMatchObject({
+        by: "oversize",
+        note: expect.stringContaining("Split its work smaller"),
+      })
+      expect(steps.find((step) => step._tag === "RoundEnded")).toMatchObject({
+        verdict: "done",
+        handoffs: 2,
+      })
+      expect(yield* home.sql(roundHandoffCounts)).toEqual([2])
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a round that hands its context off once moves on its verdict", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const worker = yield* scriptedWorker(["cut", "reply", "text"])
+      const models = yield* makeModels(worker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, SIZE, "size")
+      yield* waitForEnd(client, owner)
+      const steps = yield* home.sql(stepsOf(run))
+      expect(moves(steps)).toEqual(["work→end"])
+      expect(steps.find((step) => step._tag === "Moved")?.by).toBe("verdict")
+      expect(steps.find((step) => step._tag === "RoundEnded")).toMatchObject({
+        verdict: "done",
+        handoffs: 1,
+      })
+      expect(yield* home.sql(roundHandoffCounts)).toEqual([1])
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a definition with no size limit loads, and its round moves on its verdict", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const worker = yield* scriptedWorker(["cut", "reply", "cut", "text"])
+      const models = yield* makeModels(worker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      // The same machine with no `oversize`: decide is reached by the round's verdict.
+      const { oversize: _limit, ...work } = SIZE.states.work
+      const unlimited = {
+        ...SIZE,
+        states: { ...SIZE.states, work: { ...work, on: { done: "end", split: "decide" } } },
+      }
+      const run = yield* startRun(client, owner, unlimited, "size")
+      yield* waitForEnd(client, owner)
+      const steps = yield* home.sql(stepsOf(run))
+      expect(moves(steps)).toEqual(["work→end"])
+      // The round still counts its handoffs; only a limit stops on them.
+      expect(steps.find((step) => step._tag === "RoundEnded")?.handoffs).toBe(2)
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
 })

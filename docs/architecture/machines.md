@@ -33,7 +33,16 @@
     goes out with `notify: "none"`; its `thread.reply` value, decoded, names
     the next state. A dead worker or no verdict runs the round once more on
     a new thread, then asks `no-verdict`; a round stopped from outside asks
-    `interrupted`. A round with no free lane is queued by its send and the
+    `interrupted`. A round too big for its thread stops on size: a thread
+    state's optional `oversize` (`{ handoffs, to }`) moves the run to `to`
+    once the round handed its window off `handoffs` times. The count is
+    `thread_rounds.handoffs` (threads.md), kept on `RoundEnded.handoffs`; the
+    check runs before the account wait, the dead-worker retry and the
+    no-verdict ask, and `RoundEnded.verdict` keeps the model's own word. The
+    move is `Moved { by: "oversize", note }`, and the next state reads the
+    note as `{{visit.note}}` (empty after any other move). A definition with
+    no `oversize` never stops on size, and an older shipped definition that
+    lacks it still loads. A round with no free lane is queued by its send and the
     driver waits for its end as for any open round (a role pick: below). A
     round the account
     refuses as spent (`LaneUnavailable`, at start or send) or whose worker
