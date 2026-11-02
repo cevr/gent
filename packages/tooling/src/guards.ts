@@ -3602,7 +3602,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     // reports the same failure.
     file: "packages/core/tests/extensions/api.test.ts",
     text: "missingEffectContext:off -- the test asserts that this leaf does not compile",
-    count: 7,
+    count: 8,
   },
   {
     // The type tests assert that a resource layer needing a service its

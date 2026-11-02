@@ -74,6 +74,7 @@ import {
   ExtensionHealthSnapshot,
   ExtensionProtocolError,
   type ExtensionRpcRequestInput,
+  type ExtensionServerRequestInput,
   ExtensionStatusScope,
   type ForkBranchInput,
   GentRpcs,
@@ -2121,6 +2122,34 @@ const RpcHandlers = GentRpcs.toLayer(
                   }),
               ),
             ),
+        ),
+
+      // A server request has no session: it runs under the launch profile,
+      // as the accounts do, and reads the resources that profile built.
+      "extension.serverRequest": ({
+        extensionId,
+        capabilityId,
+        input,
+      }: ExtensionServerRequestInput) =>
+        rpc(
+          "extension.serverRequest",
+          { extensionId, capabilityId },
+          Effect.gen(function* () {
+            const profile = yield* profileForCwd(Option.none())
+            return yield* underProfile(
+              profile,
+              profile.registryService
+                .getResolved()
+                .rpcRegistry.runServer(extensionId, capabilityId, input),
+            ).pipe(
+              Effect.mapError((error) => {
+                // The extension's own reason is the message a client shows.
+                let message = `"${extensionId}" has no request "${capabilityId}"`
+                if ("reason" in error) message = error.reason
+                return new ExtensionProtocolError({ extensionId, tag: capabilityId, message })
+              }),
+            )
+          }).pipe(Effect.scoped),
         ),
 
       "extension.listSlashCommands": ({ sessionId }: SessionIdPayload) =>

@@ -395,6 +395,17 @@ export const ExtensionRpcRequestInput = Schema.Struct({
 })
 export type ExtensionRpcRequestInput = typeof ExtensionRpcRequestInput.Type
 
+/**
+ * Input for a server request (`request({ scope: "server" })`): no session and
+ * no branch. The server runs it under its launch profile.
+ */
+export const ExtensionServerRequestInput = Schema.Struct({
+  extensionId: ExtensionId,
+  capabilityId: Schema.String,
+  input: Schema.Unknown,
+})
+export type ExtensionServerRequestInput = typeof ExtensionServerRequestInput.Type
+
 export class SlashCommandInfo extends Schema.Class<
   SlashCommandInfo,
   { readonly brand: unique symbol }
@@ -724,6 +735,11 @@ class ExtensionRpcs extends RpcGroup.make(
   Rpc.make("permits.list", { success: Schema.Array(PermitStatus) }),
   Rpc.make("extension.request", {
     payload: ExtensionRpcRequestInput.fields,
+    success: RequestReply,
+    error: GentRpcError,
+  }),
+  Rpc.make("extension.serverRequest", {
+    payload: ExtensionServerRequestInput.fields,
     success: RequestReply,
     error: GentRpcError,
   }),

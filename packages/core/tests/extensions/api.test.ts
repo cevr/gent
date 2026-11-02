@@ -1338,6 +1338,56 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("a server request has no session: no ExtensionContext, server Resources only", () => {
+    const serverReader = defineResource({
+      id: "server/reader",
+      scope: "server",
+      layer: Layer.succeed(ReadOnlyService, ReadOnlyService.of({ read: Effect.succeed("x") })),
+    })
+    const processReader = defineResource({
+      id: "process/reader",
+      scope: "process",
+      layer: Layer.succeed(ReadOnlyService, ReadOnlyService.of({ read: Effect.succeed("x") })),
+    })
+    // A named server Resource grants its services.
+    request({
+      scope: "server",
+      id: "server-reader",
+      input: NoInput,
+      output: StringOutput,
+      resources: [serverReader],
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    request({
+      scope: "server",
+      id: "server-context",
+      input: NoInput,
+      output: StringOutput,
+      // @ts-expect-error -- a server request has no session, so no ExtensionContext
+      // @effect-diagnostics-next-line missingEffectContext:off -- the test asserts that this leaf does not compile
+      execute: () => Effect.map(ExtensionContext, (ctx) => String(ctx.sessionId)),
+    })
+    request({
+      scope: "server",
+      id: "server-process-resource",
+      input: NoInput,
+      output: StringOutput,
+      // @ts-expect-error -- a process Resource is no server Resource
+      resources: [processReader],
+      execute: () => Effect.succeed("x"),
+    })
+    request({
+      scope: "server",
+      id: "server-slash",
+      input: NoInput,
+      output: StringOutput,
+      // @ts-expect-error -- a server request is no slash command
+      slash: { name: "server-slash" },
+      execute: () => Effect.succeed("x"),
+    })
+    expect(true).toBe(true)
+  })
+
   test("request handlers receive params only", () => {
     const bad: RequestInput<{}, string> = {
       id: "write-core-context",

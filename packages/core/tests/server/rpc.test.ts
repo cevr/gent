@@ -2851,6 +2851,131 @@ describe("extension requests and slash commands", () => {
   )
 })
 
+// ── server requests ─────────────────────────────────────────────────────────
+
+class ServerLedger extends Context.Service<ServerLedger, { readonly name: string }>()(
+  "@gent/core/tests/server/rpc.test/ServerLedger",
+) {}
+
+const SERVER_EXTENSION = ExtensionId.make("@test/server-requests")
+
+const serverLedger = defineResource({
+  id: "test-server-requests/ledger",
+  scope: "server",
+  layer: Layer.succeed(ServerLedger, ServerLedger.of({ name: "server ledger" })),
+})
+
+// A server handler that yields `ExtensionContext` does not compile (the type
+// test in `tests/extensions/api.test.ts`). This one looks for it at run time,
+// where a session request finds it, and names what it found.
+const probeContext = () =>
+  Effect.map(Effect.serviceOption(ExtensionContext), (ctx) =>
+    Option.match(ctx, {
+      onNone: () => "no session",
+      onSome: (found) => `session ${found.sessionId}`,
+    }),
+  )
+
+const ServerRequestsExtension: GentExtension = {
+  manifest: { id: SERVER_EXTENSION },
+  setup: registerContributions({
+    resources: [serverLedger],
+    requests: [
+      request({
+        scope: "server",
+        id: "ledger",
+        input: Schema.Struct({ prefix: Schema.String }),
+        output: Schema.String,
+        resources: [serverLedger],
+        execute: ({ prefix }) =>
+          Effect.gen(function* () {
+            const ledger = yield* ServerLedger
+            return `${prefix} ${ledger.name}`
+          }),
+      }),
+      request({
+        scope: "server",
+        id: "server-context",
+        input: Schema.Struct({}),
+        output: Schema.String,
+        execute: probeContext,
+      }),
+      request({
+        id: "session-context",
+        input: Schema.Struct({}),
+        output: Schema.String,
+        execute: probeContext,
+      }),
+      request({
+        id: "session-only",
+        input: Schema.Struct({}),
+        output: Schema.String,
+        execute: () => Effect.succeed("session"),
+      }),
+    ],
+  }),
+}
+
+describe("server requests", () => {
+  const serverHarness = createRpcHarness({
+    providerLayer: LanguageModelLayers.debug(),
+    agents: [],
+    extensionInputs: [ServerRequestsExtension],
+  })
+
+  it.live("a server request reads its server resource with no session", () =>
+    Effect.gen(function* () {
+      const { client } = yield* serverHarness
+      const reply = yield* client.extension.serverRequest({
+        extensionId: SERVER_EXTENSION,
+        capabilityId: "ledger",
+        input: { prefix: "read by the" },
+      })
+      expect(reply).toEqual(RequestReply.cases.Value.make({ value: "read by the server ledger" }))
+    }).pipe(Effect.scoped, Effect.timeout("4 seconds")),
+  )
+
+  it.live("a server request finds no ExtensionContext where a session request finds one", () =>
+    Effect.gen(function* () {
+      const { client, sessionId, branchId } = yield* serverHarness
+      const onServer = yield* client.extension.serverRequest({
+        extensionId: SERVER_EXTENSION,
+        capabilityId: "server-context",
+        input: {},
+      })
+      expect(onServer).toEqual(RequestReply.cases.Value.make({ value: "no session" }))
+      const onSession = yield* client.extension.request({
+        sessionId,
+        branchId,
+        extensionId: SERVER_EXTENSION,
+        capabilityId: "session-context",
+        input: {},
+      })
+      expect(onSession).toEqual(RequestReply.cases.Value.make({ value: `session ${sessionId}` }))
+    }).pipe(Effect.scoped, Effect.timeout("4 seconds")),
+  )
+
+  it.live("each route refuses the request of the other scope", () =>
+    Effect.gen(function* () {
+      const { client, sessionId, branchId } = yield* serverHarness
+      const onSession = yield* client.extension
+        .request({
+          sessionId,
+          branchId,
+          extensionId: SERVER_EXTENSION,
+          capabilityId: "ledger",
+          input: { prefix: "x" },
+        })
+        .pipe(Effect.flip)
+      expect(onSession.message).toContain("a server request does not answer a session call")
+      const onServer = yield* client.extension
+        .serverRequest({ extensionId: SERVER_EXTENSION, capabilityId: "session-only", input: {} })
+        .pipe(Effect.flip)
+      expect(onServer.message).toContain("a session request does not answer a server call")
+    }).pipe(Effect.scoped, Effect.timeout("4 seconds")),
+  )
+})
+
 describe("extension health", () => {
   it.live("a test root stops at a failed extension and names it", () =>
     Effect.gen(function* () {
@@ -4535,6 +4660,7 @@ describe("session profile lookup", () => {
       "accounts.pool": "it reads the server's accounts, which no session owns",
       "accounts.notePeer":
         "it writes the peer server's facts on the server's accounts, which no session owns",
+      "extension.serverRequest": "a server request answers the server, with no session",
       // Owner question: a required `sessionId` here is a wire change that is not additive.
       "message.list": "it reads a branch by its id; owner question",
     }

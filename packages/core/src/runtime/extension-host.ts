@@ -104,6 +104,7 @@ import {
   type PromptSection,
   type RequestCapability,
   RequestReply,
+  type RequestScope,
   ToolCallVerdict,
   type ToolCapability,
   workingDirectorySection,
@@ -836,6 +837,18 @@ interface CompiledRpcRegistry {
     CapabilityError | CapabilityNotFoundError,
     CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
   >
+  /**
+   * Runs a server request (`request({ scope: "server" })`) with no session:
+   * no host context, no `ExtensionContext`. The caller provides the profile
+   * whose resources the handler reads. A session request fails here, as a
+   * server request fails in `run`.
+   */
+  readonly runServer: (
+    extensionId: ExtensionId,
+    capabilityId: RpcId | string,
+    // oxlint-disable-next-line effect/noUnknownParameters -- The selected capability schema validates this erased transport payload.
+    input: unknown,
+  ) => Effect.Effect<RequestReply, CapabilityError | CapabilityNotFoundError>
 }
 
 /** Compile a keyed bucket from sorted extensions. Later scope wins. */
@@ -1000,18 +1013,41 @@ const compileRpcRegistry = (
       onSome: (entry) => entry.kind === "rpc" && entry.capability.answersDuringTurn === true,
     }),
   run: Effect.fn("CompiledRpcRegistry.run")(function* (extensionId, capabilityId, input) {
-    const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
-    if (Option.isNone(entry) || entry.value.kind !== "rpc") {
-      return yield* new CapabilityNotFoundErrorClass({ extensionId, capabilityId })
-    }
-    return yield* runExtensionCapability(
-      extensionId,
-      capabilityId,
-      entry.value.capability,
-      input,
-    ).pipe(provideExtensionLeaf({ extensionId }))
+    const capability = yield* requestOfScope(entries, extensionId, capabilityId, "session")
+    return yield* runExtensionCapability(extensionId, capabilityId, capability, input).pipe(
+      provideExtensionLeaf({ extensionId }),
+    )
   }),
+  runServer: Effect.fn("CompiledRpcRegistry.runServer")(
+    function* (extensionId, capabilityId, input) {
+      const capability = yield* requestOfScope(entries, extensionId, capabilityId, "server")
+      return yield* runExtensionCapability(extensionId, capabilityId, capability, input)
+    },
+  ),
 })
+
+/** The request an id names, when it answers `scope`; one of the other scope fails. */
+const requestOfScope = (
+  entries: ReadonlyArray<RegisteredCapabilityEntry>,
+  extensionId: ExtensionId,
+  capabilityId: RpcId | string,
+  scope: RequestScope,
+): Effect.Effect<RequestCapability, CapabilityError | CapabilityNotFoundError> => {
+  const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)
+  if (Option.isNone(entry) || entry.value.kind !== "rpc") {
+    return Effect.fail(new CapabilityNotFoundErrorClass({ extensionId, capabilityId }))
+  }
+  if (entry.value.capability.scope !== scope) {
+    return Effect.fail(
+      new CapabilityErrorClass({
+        extensionId,
+        capabilityId,
+        reason: `a ${entry.value.capability.scope} request does not answer a ${scope} call`,
+      }),
+    )
+  }
+  return Effect.succeed(entry.value.capability)
+}
 
 /** An extension's identity as its status names it. */
 const statusIdentity = (extension: DisabledExtension) => ({

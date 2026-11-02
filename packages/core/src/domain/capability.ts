@@ -15,6 +15,7 @@ import type {
   DeclaredResourceServices,
   ExtensionContext,
   RequiredDeclarations,
+  ServerResourceContribution,
   TurnNotice,
 } from "./extension.js"
 import type { ExtensionPlatformServices } from "../runtime/gent-platform.js"
@@ -239,9 +240,18 @@ interface RequestCapabilityApi {
   readonly description?: string
   /** See `RequestInput.answersDuringTurn`. */
   readonly answersDuringTurn?: boolean
+  /** Who the request answers: a session's branch, or the server (`RequestInput.scope`). */
+  readonly scope: RequestScope
   /** The resources the handler names; its extension must register each of these definitions. */
   readonly resources: ReadonlyArray<AnyResourceContribution>
 }
+
+/**
+ * `session`: the request answers a session's branch, through `extension.request`
+ * and the loop. `server`: it answers the server, through `extension.serverRequest`,
+ * with no session.
+ */
+export type RequestScope = "session" | "server"
 
 /**
  * Reference object handed to transport callers so they can route + decode
@@ -284,6 +294,13 @@ export const decodeRequestReply =
  * resource it names.
  */
 type LeafServices = ExtensionContext | ExtensionPlatformServices | BranchToolHostServices
+
+/**
+ * The services a server request's handler gets: the extension platform, and
+ * the services of the server resources it names. It has no session, so no
+ * `ExtensionContext` and no branch service.
+ */
+type ServerLeafServices = ExtensionPlatformServices
 
 // ── request capability ──────────────────────────────────────────────────────
 
@@ -349,7 +366,10 @@ export type RequestInput<
   R = never,
   E extends RequestFailure = CapabilityError,
   Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
-> = RequestInputFields<Input, Output, R, E, Resources> & RequiredDeclarations<Resources>
+  S extends RequestScope = "session",
+> = RequestInputFields<Input, Output, R, E, Resources, S> &
+  RequiredDeclarations<Resources> &
+  ScopeDeclarations<S>
 
 interface RequestInputFields<
   Input,
@@ -357,9 +377,18 @@ interface RequestInputFields<
   R,
   E extends RequestFailure,
   Resources extends ReadonlyArray<AnyResourceContribution>,
+  S extends RequestScope,
 > {
   /** Stable id (capability-local). Used for routing. */
   readonly id: string
+  /**
+   * Who the request answers; `session` when absent. A `server` request
+   * answers with no session: a client calls it through
+   * `extension.serverRequest`, and the loop and `extension.request` refuse it.
+   * Its handler runs under the launch profile, gets `ServerLeafServices` and
+   * names only server Resources.
+   */
+  readonly scope?: S
   /** Schema for validating `input` at the boundary. */
   readonly input: Schema.Codec<Input, unknown, never, never>
   /** Schema for validating `output` at the boundary. */
@@ -397,11 +426,27 @@ interface RequestInputFields<
    * The request handler. It fails with its own tagged error; the factory
    * wraps that into the `CapabilityError` the wire carries, under the id
    * this input names and the extension `defineRequests`/`defineExtension` bind.
-   * It may yield `LeafServices` and the services of its `resources`; a
-   * handler that needs any other service does not compile.
+   * It may yield the services of its scope (`RequestScopeServices`) and the
+   * services of its `resources`; a handler that needs any other service does
+   * not compile.
    */
   readonly execute: CapabilityEffect<Input, Output, R, E>
 }
+
+/** A server request has no turn and no slash command: nothing waits on a branch for it. */
+type ScopeDeclarations<S extends RequestScope> = S extends "server"
+  ? { readonly answersDuringTurn?: never; readonly slash?: never }
+  : unknown
+
+/** The services a handler of `scope` gets beside its resources. */
+type RequestScopeServices<S extends RequestScope> = S extends "server"
+  ? ServerLeafServices
+  : LeafServices
+
+/** The Resources a request of `scope` may name: a server request names server Resources only. */
+type RequestScopeResource<S extends RequestScope> = S extends "server"
+  ? ServerResourceContribution
+  : AnyResourceContribution
 
 /**
  * Lower a `RequestInput` to a typed `RequestCapability<Input, Output>`.
@@ -412,12 +457,14 @@ interface RequestInputFields<
 export function request<
   Input,
   Output,
-  R extends LeafServices | DeclaredResourceServices<Resources> = never,
+  R extends RequestScopeServices<S> | DeclaredResourceServices<Resources> = never,
   E extends RequestFailure = CapabilityError,
-  const Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
->(input: RequestInput<Input, Output, R, E, Resources>): RequestCapability<Input, Output>
+  const Resources extends ReadonlyArray<RequestScopeResource<S>> = ReadonlyArray<never>,
+  const S extends RequestScope = "session",
+>(input: RequestInput<Input, Output, R, E, Resources, S>): RequestCapability<Input, Output>
 export function request(input: {
   readonly id: string
+  readonly scope?: RequestScope
   readonly input: Schema.Codec<unknown, unknown, never, never>
   readonly output: Schema.Codec<unknown, unknown, never, never>
   readonly description?: string
@@ -472,6 +519,7 @@ export function request(input: {
     slash: input.slash,
     description: input.description,
     answersDuringTurn: input.answersDuringTurn,
+    scope: input.scope ?? "session",
     resources: input.resources ?? [],
     input: input.input,
     output: input.output,
