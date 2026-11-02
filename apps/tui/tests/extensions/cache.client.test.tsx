@@ -1051,7 +1051,10 @@ const setupWithCatalog = (
     const timer = find("pane", 30)
     const compacts = find("right", 55)
     const textOf = (entry: Option.Option<(typeof labels)[number]>) => {
-      const items = Option.match(entry, { onNone: () => [], onSome: (found) => found.produce() })
+      const items = Option.match(entry, {
+        onNone: () => [],
+        onSome: (found) => found.produce({ columns: 120 }),
+      })
       if (items.length === 0) return "none"
       return items.map((item) => `${item.text} [${String(item.color)}]`).join(" ")
     }
@@ -1060,7 +1063,11 @@ const setupWithCatalog = (
       setCatalog,
       setSelected,
       rows: () => Option.flatten(Option.fromUndefinedOr(notices?.rows(session))),
-      label: () => Option.match(label, { onNone: () => [], onSome: (found) => found.produce() }),
+      label: () =>
+        Option.match(label, {
+          onNone: () => [],
+          onSome: (found) => found.produce({ columns: 120 }),
+        }),
       /** The pane's clock line, or `none` when it draws nothing. */
       timer: () => textOf(timer),
       timerAnchor: Option.map(timer, (found) => found.anchor),
@@ -1329,7 +1336,7 @@ describe("cache client extension", () => {
       expect(rows[0]?.createdAt).toBe(14 * MINUTE + 10 * SECOND)
       const [label] = contributions.statusLabels ?? []
       // 30k + 2k missed tokens, each re-billed at 2.3 $/M.
-      expect(label?.produce()).toEqual([
+      expect(label?.produce({ columns: 120 })).toEqual([
         { text: "cache hit 31% · waste $0.07", color: "textMuted" },
       ])
       const misses = scanCacheMisses(history.envelopes)
@@ -1350,14 +1357,12 @@ describe("cache client extension", () => {
       })
       yield* waitForTerminal(setup.rendered, (text) => text.includes(`◌ ${IDLE_ROW}`), "miss row")
       // The share and the waste are `/status` detail, never the row. The
-      // pane shows six lines at a time; the cache lines sit past the cwd.
+      // pane shows six lines at a time; the cache lines sit last.
       yield* openStatus(setup.rendered)
-      yield* waitForFrame(setup.rendered, (frame) => frame.includes("cache cold"), "the pane")
-      for (const _line of [1, 2, 3, 4, 5, 6]) setup.rendered.mockInput.pressArrow("down")
-      yield* waitForFrame(
+      yield* scrollStatusUntil(
         setup.rendered,
-        (frame) => frame.includes("cache hit 31% · waste $0.07"),
-        "the pane's cache total",
+        (frame) => frame.includes("cache cold") && frame.includes("cache hit 31% · waste $0.07"),
+        "the pane's cache clock and total",
       )
     }).pipe(Effect.timeout("8 seconds")),
   )
@@ -1425,9 +1430,11 @@ const renderResumed = (opts: {
   readonly extension: AnyExtensionClientModule
   /** Terminal columns; 100 unless the test measures the status row. */
   readonly width?: number
+  /** The branch's events; the two-miss history unless the test needs another. */
+  readonly history?: ReturnType<typeof makeHistory>
 }) =>
   Effect.gen(function* () {
-    const history = twoMissHistory()
+    const history = opts.history ?? twoMissHistory()
     const lastEventId = history.envelopes.length
     let opened = false
     const client = createMockClient({
@@ -1999,6 +2006,21 @@ const openStatus = (setup: RenderSetup) =>
     setup.mockInput.pressEnter()
   })
 
+/**
+ * Scrolls the open `/status` pane down until `until` holds, and answers that
+ * frame. The extensions' lines sit last, and the pane shows six lines at a
+ * time and stops at the end. A line that lands after a scroll grows the list
+ * under the view, so each try presses `down` again before it waits.
+ */
+const scrollStatusUntil = (setup: RenderSetup, until: (frame: string) => boolean, label: string) =>
+  Effect.gen(function* () {
+    yield* waitForFrame(setup, (text) => text.includes("esc close"), "the status pane", 4000)
+    return yield* Effect.suspend(() => {
+      for (const _line of [1, 2, 3, 4, 5, 6, 7, 8]) setup.mockInput.pressArrow("down")
+      return waitForFrame(setup, until, label, 1000)
+    }).pipe(Effect.retry({ times: 5 }))
+  })
+
 describe("cache clock in the /status pane", () => {
   for (const width of [120, 60]) {
     it.scopedLive(
@@ -2017,11 +2039,10 @@ describe("cache clock in the /status pane", () => {
             4000,
           )
           yield* openStatus(setup.rendered)
-          const pane = yield* waitForFrame(
+          const pane = yield* scrollStatusUntil(
             setup.rendered,
             (text) => text.includes("cache cold"),
             "the pane's clock",
-            4000,
           )
           expect(pane).not.toMatch(/cache \d/)
           // The row stays above the pane. With the clock read, a lapsed cache
@@ -2034,6 +2055,50 @@ describe("cache clock in the /status pane", () => {
           expect(row.endsWith("ctx 62k/200k")).toBe(true)
           expect(row).not.toContain("cache")
         }).pipe(Effect.timeout("8 seconds")),
+    )
+  }
+})
+
+describe("a lapsed cache the next turn compacts, on the row", () => {
+  // A long model name: at 60 columns the row cannot hold the warning in full.
+  const named = models.map((model) => {
+    if (model.id !== SONNET) return model
+    return new Model({
+      id: model.id,
+      name: "Claude Sonnet 5 (1M context)",
+      provider: model.provider,
+      pricing: model.pricing,
+      promptCacheTtlMs: model.promptCacheTtlMs,
+    })
+  })
+  // The row holds the warning at any width: a narrow row takes its short
+  // form before the gauge takes its own.
+  const forms = [
+    [120, "cache cold · next turn compacts"],
+    [60, "cold · compacts"],
+  ] as const
+  for (const [width, expected] of forms) {
+    it.scopedLive(`the row warns that the next turn compacts at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const history = cachedFirstStep()
+        history.projected(11 * SECOND, 200_000)
+        const setup = yield* renderResumed({
+          catalog: Effect.succeed(named),
+          extension: cacheExtension,
+          width,
+          history,
+        })
+        const frame = yield* waitForFrame(
+          setup.rendered,
+          (text) => statusLine(text).includes(expected),
+          `the warning on the ${width}-column row`,
+          4000,
+        )
+        const row = statusLine(frame)
+        expect(row.trimEnd().length).toBeLessThanOrEqual(width)
+        expect(row).toContain("ctx ")
+        if (width === 60) expect(row).not.toContain("next turn")
+      }).pipe(Effect.timeout("8 seconds")),
     )
   }
 })

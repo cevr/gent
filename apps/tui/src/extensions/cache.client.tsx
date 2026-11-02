@@ -23,6 +23,7 @@ import {
   type NoticeRow,
   noticeRowContribution,
   onServerClock,
+  STATUS_YIELD,
   statusLabelContribution,
   type StatusLabelItem,
 } from "@gent/tui/extensions"
@@ -684,7 +685,13 @@ export const cacheClockLabel = (
       return { text: `cache ${mark}${Math.ceil(warm.leftMs / MINUTE_MS)}m`, color }
     },
     Expired: (): StatusLabelItem => {
-      if (opts.compactsNext) return { text: "cache cold · next turn compacts", color: "warning" }
+      // A narrow row keeps the warning short, before the gauge takes its own.
+      if (opts.compactsNext)
+        return {
+          text: "cache cold · next turn compacts",
+          color: "warning",
+          short: { text: "cold · compacts", rank: STATUS_YIELD.context - 0.5 },
+        }
       return { text: "cache cold", color: "textMuted" }
     },
     Switched: (): StatusLabelItem => ({ text: "cache cold", color: "textMuted" }),

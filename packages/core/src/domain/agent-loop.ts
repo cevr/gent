@@ -1,5 +1,5 @@
 import { type Context, DateTime, Effect, Match, Option, Predicate, Schema } from "effect"
-import { type AgentEvent, ContextRenter } from "./event.js"
+import { type AgentEvent, ContextRenter, RoleWindowTokens } from "./event.js"
 import {
   Message,
   MessageMetadata,
@@ -120,6 +120,12 @@ export const ModelContextMetrics = Schema.Struct({
   estimatedTokens: Schema.Natural,
   availableInputTokens: Schema.Natural,
   contextLimitTokens: Schema.Natural,
+  /** The output the step kept back from the window. */
+  reservedOutputTokens: Schema.Natural,
+  /** The model's input cap, when its catalog names one. */
+  inputLimitTokens: Schema.optional(Schema.Natural),
+  /** The role's window below the model's, when the role has one: the handoff point. */
+  roleWindow: Schema.optional(RoleWindowTokens),
   omittedMessages: Schema.Natural,
   /** The handoff marker leading the current window; absent after a summary-free window. */
   handoffMessageId: Schema.optional(MessageId),
@@ -338,6 +344,9 @@ export const stepSessionMetrics = (
             estimatedTokens: projected.estimatedTokens,
             availableInputTokens: projected.availableInputTokens,
             contextLimitTokens: projected.contextLimitTokens,
+            reservedOutputTokens: projected.reservedOutputTokens,
+            inputLimitTokens: projected.inputLimitTokens,
+            roleWindow: projected.roleWindow,
             omittedMessages: projected.omittedMessages,
             handoffMessageId: projected.handoffMessageId,
             compactions,

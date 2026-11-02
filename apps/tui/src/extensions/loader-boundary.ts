@@ -45,6 +45,7 @@ import {
   type AutocompleteContribution,
   type AutocompleteItem,
   type StatusLabelAnchor,
+  type StatusLabelFit,
   type StatusLabelItem,
   type ClientContributions,
   ClientContext,
@@ -196,7 +197,7 @@ interface ResolvedStatusLabel {
   readonly extensionId: string
   readonly priority: number
   readonly anchor: StatusLabelAnchor
-  readonly produce: () => ReadonlyArray<StatusLabelItem>
+  readonly produce: (fit: StatusLabelFit) => ReadonlyArray<StatusLabelItem>
 }
 
 /** One extension's transcript rows, under the notice id it won. */

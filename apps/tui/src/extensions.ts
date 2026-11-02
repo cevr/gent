@@ -51,6 +51,7 @@ export {
   type QueuedMessage,
   rendererContribution,
   sessionQuery,
+  STATUS_PANE,
   STATUS_YIELD,
   statusLabelContribution,
   type StatusLabelItem,

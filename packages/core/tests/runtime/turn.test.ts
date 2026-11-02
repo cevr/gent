@@ -7397,6 +7397,7 @@ describe("role context window", () => {
               available: projected[0]?.availableInputTokens ?? 0,
               ceiling: projected[0]?.contextLimitTokens ?? 0,
               reserve: projected[0]?.reservedOutputTokens,
+              roleWindow: projected[0]?.roleWindow,
               maxTokens: turnMaxTokens(root.hints),
             }
           }).pipe(Effect.provide(root.layer), Effect.scoped)
@@ -7414,6 +7415,15 @@ describe("role context window", () => {
       // The step reports the model's window and the reserve it sent as the cap.
       expect(lower.ceiling).toBe(MODEL_WINDOW)
       expect(lower.reserve).toBe(32_000)
+      // The step names the role's window it hands off at, with the messages'
+      // room under it on the same reserves: 80k less than under the model's.
+      expect(lower.roleWindow).toEqual({
+        tokens: 120_000,
+        availableInputTokens: lower.available - 80_000,
+      })
+      // No role window, or one past the model's, names none.
+      expect(none.roleWindow).toBeUndefined()
+      expect(above.roleWindow).toBeUndefined()
     }).pipe(Effect.timeout("20 seconds")),
   )
 

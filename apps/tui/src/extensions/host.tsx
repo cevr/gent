@@ -14,6 +14,7 @@ import {
   coalescedRead,
   type QueuedMessage,
   type StatusLabelAnchor,
+  type StatusLabelFit,
   type StatusLabelItem,
 } from "./client-facets.js"
 import {
@@ -117,7 +118,10 @@ interface ExtensionUIContextValue {
    * `produce` that throws fails its extension (`recordRenderFailure`) and
    * draws nothing.
    */
-  readonly statusLabelItems: (anchor: StatusLabelAnchor) => ReadonlyArray<StatusLabelItem>
+  readonly statusLabelItems: (
+    anchor: StatusLabelAnchor,
+    fit: StatusLabelFit,
+  ) => ReadonlyArray<StatusLabelItem>
   /**
    * An extension's render code threw: it joins `failures` by name, as a setup
    * throw does. Its widgets, status labels and renderers draw no more (the
@@ -300,10 +304,16 @@ export function ExtensionUIProvider(props: {
         [...drawable(boundedRenderers().tools)].map(([name, entry]) => [name, entry.component]),
       ),
   )
-  const statusLabelItems = (anchor: StatusLabelAnchor) =>
+  const statusLabelItems = (anchor: StatusLabelAnchor, fit: StatusLabelFit) =>
     resolved()
       .statusLabels.filter((label) => label.anchor === anchor && !renderFailed(label.extensionId))
-      .flatMap((label) => guarded(label.extensionId, label.produce, () => []))
+      .flatMap((label) =>
+        guarded(
+          label.extensionId,
+          () => label.produce(fit),
+          () => [],
+        ),
+      )
   const stopPending = (): boolean =>
     Option.match(
       Option.fromUndefinedOr(

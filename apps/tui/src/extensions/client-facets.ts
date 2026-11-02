@@ -487,6 +487,13 @@ export interface ClientShell {
   readonly reloadExtensions: () => void
 }
 
+/**
+ * The host's `/status` pane, by the name `PaneOwner.isOpen` answers for it:
+ * an extension whose pane labels need a live read (the git branch) reads only
+ * while the reader looks at them.
+ */
+export const STATUS_PANE = "status"
+
 /** Open and close panes by name; at most one is open. */
 export interface PaneOwner {
   readonly open: (id: string) => void
@@ -928,6 +935,11 @@ export interface StatusLabelItem {
  */
 export type StatusLabelAnchor = "left" | "right" | "pane"
 
+/** What a status label is drawn into: the columns its line may take. */
+export interface StatusLabelFit {
+  readonly columns: number
+}
+
 /**
  * Text on the composer's status row, or in the `/status` pane. The row is
  * one line and says little by default: the model and its effort on the left,
@@ -948,7 +960,12 @@ const StatusLabelContribution = Schema.Struct({
    * `/status` pane only; absent, in the row's left group.
    */
   anchor: Schema.optional(Schema.Literals(["right", "pane"])),
-  produce: contributed<() => ReadonlyArray<StatusLabelItem>>(),
+  /**
+   * The label's items for `columns`, the width a line may take: the row's
+   * width on the row, the pane's line width in the `/status` pane. A label
+   * with forms of several widths picks the longest that fits.
+   */
+  produce: contributed<(fit: StatusLabelFit) => ReadonlyArray<StatusLabelItem>>(),
 })
 type StatusLabelContribution = typeof StatusLabelContribution.Type
 

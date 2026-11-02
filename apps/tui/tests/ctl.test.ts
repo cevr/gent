@@ -897,6 +897,7 @@ describe("gent ctl against a running server", () => {
             heard: { host: "peer-host" },
             runs: 2,
             silent: false,
+            counted: true,
             down: [],
           })
           const line = yield* runCtl(seeded.home, ["lanes", "--line"])

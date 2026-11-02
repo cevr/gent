@@ -228,7 +228,8 @@ quiet 90 s, and `· links down` for both. A narrow row keeps the held runs,
 then the link down, then the age, then the host. With no command of this
 server's own, the row goes 30 minutes after the peer went silent. The JSON
 holds it as `peer`: `heard` (`host`, `at`, epoch ms), `runs`, `silent` and
-`down` (`own`, `peer`), and `serverNow` (epoch ms) is the server's clock as
+`down` (`own`, `peer`) and `counted` (its facts still count, inside the
+30-minute hold), and `serverNow` (epoch ms) is the server's clock as
 it built the report. No free lane is data, not a failure: the call exits 0.
 
 `pool` names no session either. It prints `Pool`: the server's own pool

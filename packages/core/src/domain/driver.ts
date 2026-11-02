@@ -912,7 +912,9 @@ export type PeerLink = typeof PeerLink.Type
  * server last heard it. `heard`: its host and this server's clock at its
  * last line from either link; absent before its first line. `runs`: its
  * runs on the labels of this server's pools, while its facts count. `silent`:
- * no line for 90 s, or none yet. `down`: each link that runs or ran and
+ * no line for 90 s, or none yet. `counted`: its facts still count, within
+ * 90 s of its last line or in the 30-minute hold after it, so it changes
+ * this server's pace and lanes. `down`: each link that runs or ran and
  * brought no line for 90 s: `own` while this server runs its link, `peer`
  * once the peer's link sent a line.
  */
@@ -920,6 +922,7 @@ const LanePeer = Schema.Struct({
   heard: Schema.optionalKey(Schema.Struct({ host: Schema.String, at: Schema.Finite })),
   runs: Schema.Int,
   silent: Schema.Boolean,
+  counted: Schema.Boolean,
   down: Schema.Array(PeerLink),
 })
 

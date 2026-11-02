@@ -2732,8 +2732,8 @@ describe("the status row names the child the reader watches", () => {
         currentSession: () => here,
       })
       const produce = contributions.statusLabels?.[0]?.produce ?? (() => [])
-      yield* waitUntil(() => produce().length > 0, "the watched child's label")
-      return produce()
+      yield* waitUntil(() => produce({ columns: 120 }).length > 0, "the watched child's label")
+      return produce({ columns: 120 })
     })
 
   it.scopedLive("viewing a child session shows ↳ child and its name, then the way back", () =>
@@ -2772,7 +2772,7 @@ describe("the status row names the child the reader watches", () => {
       })
       const produce = contributions.statusLabels?.[0]?.produce ?? (() => [])
       yield* waitUntil(() => replied, "the listing read")
-      expect(produce()).toEqual([])
+      expect(produce({ columns: 120 })).toEqual([])
     }).pipe(Effect.timeout("8 seconds")),
   )
 

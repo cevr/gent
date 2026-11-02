@@ -92,12 +92,14 @@ export {
   userMessageIdForRequest,
 } from "./domain/agent-loop.js"
 export {
+  coldHandoffFloorTokens,
   coldHandoffPays,
   CONTEXT_PRUNE_MESSAGE_TYPE,
   CONTEXT_WINDOW_MESSAGE_TYPE,
   contextWindowOf,
   MODEL_CHANGE_MESSAGE_TYPE,
   modelInputCeilingTokens,
+  outputReserveTokens,
 } from "./runtime/model-context.js"
 export { GentRpcError } from "./server/rpc.js"
 export { cleanReviewText, ReviewMessage, ReviewRecord, ReviewSession } from "./server/rpc.js"

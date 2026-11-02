@@ -712,11 +712,6 @@ export function Session(props: SessionProps) {
         ),
     ),
   )
-  const rootOf = (cwd: string): Option.Option<string> =>
-    root().pipe(
-      Option.filter((known) => known.cwd === cwd),
-      Option.flatMap((known) => known.root),
-    )
 
   const renderer = useRenderer()
   const syntaxStyle = createMemo(() => buildSyntaxStyle(theme, renderer.nativeScene))
@@ -733,9 +728,12 @@ export function Session(props: SessionProps) {
   // Map semantic color names from extensions to resolved theme colors
   const resolveColor = (color: StatusLabelColor): RGBA => resolveThemeColor(theme, color)
 
-  /** The extension status labels of one group, by priority, each with its short form. */
-  const extensionLabels = (anchor: StatusLabelAnchor): StatusRowLabel[] =>
-    ext.statusLabelItems(anchor).map((item) => ({
+  /**
+   * The extension status labels of one group, by priority, each with its
+   * short form, for `columns`: the row's width, or the pane's line width.
+   */
+  const extensionLabels = (anchor: StatusLabelAnchor, columns: number): StatusRowLabel[] =>
+    ext.statusLabelItems(anchor, { columns }).map((item) => ({
       text: item.text,
       color: resolveColor(item.color),
       short: item.short,
@@ -797,7 +795,7 @@ export function Session(props: SessionProps) {
    */
   const rightAnchoredLabels = (): StatusRowLabel[] =>
     [
-      ...extensionLabels("right"),
+      ...extensionLabels("right", dimensions().width),
       ...buildBudgetLabels({ attempts: client.turnModelAttempts(), theme }),
       ...buildContextLabels({
         metrics: client.sessionMetrics(),
@@ -812,9 +810,10 @@ export function Session(props: SessionProps) {
    * newest request went out on, the context's window, cap, held tokens and
    * costliest item, the turn's model calls, the session's cost, the cwd and
    * a past server restart; then every extension's pane labels by priority
-   * (the cache clock and its hit rate, the branch, the lanes, the peer).
+   * (the cache clock and its hit rate, the branch, the lanes, the peer),
+   * each fit to `columns`, the pane's line width.
    */
-  const statusPaneLines = (): StatusRowLabel[] => {
+  const statusPaneLines = (columns: number): StatusRowLabel[] => {
     const muted = (text: string): StatusRowLabel => ({ text, color: theme.textMuted })
     const account = Option.map(client.turnModel(), (turn) =>
       muted(statusAccountLabel(turn, client.lastCredential(), controller.authProviders())),
@@ -827,6 +826,14 @@ export function Session(props: SessionProps) {
       (generation) => muted(`server restart ${generation}`),
     )
     const sessionCwd = client.pathPlace().cwd
+    // The cwd reads `repo/sub` from the root walk: pending until it ends for this cwd.
+    const cwd = Option.match(
+      Option.filter(root(), (known) => known.cwd === sessionCwd),
+      {
+        onNone: () => "cwd …",
+        onSome: (known) => `cwd ${formatCwd(sessionCwd, known.root)}`,
+      },
+    )
     return [
       ...Option.toArray(account),
       ...buildContextDetail({
@@ -836,9 +843,9 @@ export function Session(props: SessionProps) {
       }),
       ...Option.toArray(calls),
       muted(`cost ${formatCost(client.cost())}`),
-      muted(`cwd ${formatCwd(sessionCwd, rootOf(sessionCwd))}`),
+      muted(cwd),
       ...Option.toArray(restart),
-      ...extensionLabels("pane"),
+      ...extensionLabels("pane", columns),
     ].filter((label) => label.text.length > 0)
   }
 
@@ -888,7 +895,7 @@ export function Session(props: SessionProps) {
       ...cueLabels(),
       ...connectionLabels(),
       ...modelLabels(),
-      ...extensionLabels("left"),
+      ...extensionLabels("left", dimensions().width),
       ...rightAnchoredLabels(),
     ]
   }

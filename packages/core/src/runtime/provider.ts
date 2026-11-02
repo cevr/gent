@@ -5599,6 +5599,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         ),
       }),
       runs,
+      counted: Option.isSome(peerCounted(now)),
       silent: Option.match(peer, {
         onNone: () => true,
         onSome: (view) => now - view.heardAt >= PEER_SILENT_MS,

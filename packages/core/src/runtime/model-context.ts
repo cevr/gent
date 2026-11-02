@@ -1436,6 +1436,17 @@ const messageBudget = (budget: ModelContextBudget): number =>
   inputCeiling(budget) - budget.reservedSystemTokens - budget.reservedToolTokens
 
 /**
+ * What the messages may take under a role's window (`planWindow`'s soft
+ * limit): the budget's own reserves and input cap, at the role's window in
+ * place of the model's. The projection's `availableInputTokens` is the same
+ * count at the model's window, so the two compare as like for like.
+ */
+export const roleWindowMessageTokens = (
+  budget: ModelContextBudget,
+  roleWindowTokens: number,
+): number => Math.max(0, messageBudget({ ...budget, contextLimitTokens: roleWindowTokens }))
+
+/**
  * What the provider reported one step's request took, and the reply message
  * that step stored. The request held the messages before that reply, so the
  * next projection counts those at the measured size and estimates the reply
@@ -2971,6 +2982,14 @@ const HANDOFF_MARKER_TOKENS = 1_536
 const COLD_HANDOFF_FLOOR_TOKENS = 150_000
 
 /**
+ * The history a turn on a lapsed cache must hold before a handoff can pay
+ * (`coldHandoffPays`): the floor, or half the input budget when that is
+ * smaller. The `/status` pane names it.
+ */
+export const coldHandoffFloorTokens = (availableInputTokens: number): number =>
+  Math.min(COLD_HANDOFF_FLOOR_TOKENS, Math.floor(availableInputTokens / 2))
+
+/**
  * The share of the resend a handoff must save. A summary is a 150-word
  * bridge: the model reads back by id what it needs, and that costs calls
  * the rule does not count. A handoff that saves at least half the resend
@@ -3008,8 +3027,7 @@ export const coldHandoffPays = (params: {
   /** The lifetime the turn's requests ask for, which picks the write price. */
   readonly cacheTtlMs: number
 }): boolean => {
-  const floor = Math.min(COLD_HANDOFF_FLOOR_TOKENS, Math.floor(params.availableInputTokens / 2))
-  if (params.historyTokens < floor) return false
+  if (params.historyTokens < coldHandoffFloorTokens(params.availableInputTokens)) return false
   return Option.match(params.pricing, {
     onNone: () => true,
     onSome: (pricing) => {

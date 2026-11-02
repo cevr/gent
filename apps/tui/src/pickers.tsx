@@ -1,16 +1,19 @@
 /** @jsxImportSource @opentui/solid */
 import { Effect, Match, Option, Schema } from "effect"
 import { matchSorter } from "match-sorter"
-import { createEffect, createMemo, createSignal, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, Index, Show } from "solid-js"
 import {
+  type KeyHint,
+  keyHint,
   KeyHints,
   PickerFrame,
   plainRow,
   SelectList,
   type SelectListRow,
-  selectable,
+  usePickerBody,
   usePickerGeometry,
 } from "./ui"
+import { useScopedKeyboard } from "./terminal"
 import { useTheme } from "./theme"
 import type { RGBA } from "@opentui/core"
 import { formatError, shortId, truncate } from "./utils"
@@ -602,65 +605,112 @@ interface StatusPaneLine {
   readonly color: RGBA
 }
 
-function StatusPaneRow(props: {
-  readonly id: string
-  readonly selected: boolean
-  readonly line: StatusPaneLine
-  readonly width: number
+/**
+ * The `/status` pane: what the status row leaves out, read on demand. A
+ * docked pane like `/model`, one line each: the account, the context's
+ * caps, the cost, the cwd, then the extensions' pane labels (the cache
+ * clock, the branch, the lanes, the peer). Nothing in it is a choice, so no
+ * line is highlighted: each keeps its own color. Past the rows the pane
+ * has, its last row reads `N more ↓`, and the arrow keys (and ctrl+p, ctrl+n)
+ * scroll it a line at a time, stopping at either end. Enter closes it, as Esc
+ * does. The lines are live: a row is drawn by its place, so a cache clock
+ * counts down in place while the pane is open. `lines` takes the columns a
+ * line may fill, so a label picks its form for the pane's width.
+ */
+export function StatusPane(props: {
+  readonly open: boolean
+  readonly lines: (columns: number) => ReadonlyArray<StatusPaneLine>
+  readonly onClose: () => void
 }) {
-  const { theme } = useTheme()
-  const background = () => {
-    if (props.selected) return theme.primary
-    return "transparent"
-  }
-  const foreground = () => {
-    if (props.selected) return theme.selectedListItemText
-    return props.line.color
+  return (
+    <Show when={props.open}>
+      <StatusPaneBody lines={props.lines} onClose={props.onClose} />
+    </Show>
+  )
+}
+
+function StatusPaneBody(props: {
+  readonly lines: (columns: number) => ReadonlyArray<StatusPaneLine>
+  readonly onClose: () => void
+}) {
+  const { rowWidth } = usePickerGeometry()
+  // A line pads a column on its left.
+  const columns = () => Math.max(0, rowWidth() - 1)
+  const lines = createMemo(() => props.lines(columns()))
+  const [overflows, setOverflows] = createSignal(false)
+  const hints = (): ReadonlyArray<KeyHint> => {
+    const close = KeyHints.close
+    if (overflows()) return [keyHint("↑↓", "scroll"), close]
+    return [close]
   }
   return (
-    <box id={props.id} backgroundColor={background()} paddingLeft={1}>
-      <text wrapMode="none" style={{ fg: foreground() }}>
-        {truncate(props.line.text, props.width)}
-      </text>
-    </box>
+    <PickerFrame error={Option.none()} title="Status" keys={hints()}>
+      <StatusPaneLines
+        lines={lines}
+        columns={columns}
+        onOverflow={setOverflows}
+        onClose={props.onClose}
+      />
+    </PickerFrame>
   )
 }
 
 /**
- * The `/status` pane: what the status row leaves out, read on demand. A
- * docked pane like `/model`, one line each: the account, the context's
- * window and cap, the cost, the cwd, then the extensions' pane labels (the
- * cache clock, the branch, the lanes, the peer). Nothing in it is a choice:
- * the cursor only scrolls a list longer than the pane, and Enter does
- * nothing. The lines are live, so a cache clock counts down while it is open.
+ * The pane's lines in the rows its frame gives them, from the top line the
+ * reader scrolled to. Past those rows the last one is the `N more ↓` cue,
+ * unless the pane has a single row.
  */
-export function StatusPane(props: {
-  readonly open: boolean
+function StatusPaneLines(props: {
   readonly lines: () => ReadonlyArray<StatusPaneLine>
+  readonly columns: () => number
+  readonly onOverflow: (overflows: boolean) => void
   readonly onClose: () => void
 }) {
-  const { rowWidth } = usePickerGeometry()
-  // A line is keyed by its place: the text of a clock changes as it counts.
-  const rows = (): ReadonlyArray<SelectListRow<number>> =>
-    props
-      .lines()
-      .map((line, index) =>
-        selectable(index, (selected, id) => (
-          <StatusPaneRow id={id} selected={selected()} line={line} width={rowWidth() - 1} />
-        )),
-      )
+  const { theme } = useTheme()
+  const count = () => props.lines().length
+  const bodyRows = usePickerBody(() => ({ rows: count(), query: 0, dressed: 1, required: 1 }))
+  const rows = () =>
+    Math.max(
+      0,
+      Option.getOrElse(bodyRows(), () => count()),
+    )
+  const lastTop = () => Math.max(0, count() - rows())
+  const [offset, setOffset] = createSignal(0)
+  // The top line: kept inside the lines when they or the rows shrink.
+  const top = () => Math.min(offset(), lastTop())
+  createEffect(() => props.onOverflow(count() > rows()))
+  const slots = (): ReadonlyArray<StatusPaneLine> => {
+    const shown = props.lines().slice(top(), top() + rows())
+    if (top() >= lastTop() || rows() < 2) return shown
+    const kept = shown.slice(0, rows() - 1)
+    return [...kept, { text: `${count() - top() - kept.length} more ↓`, color: theme.textMuted }]
+  }
+  useScopedKeyboard((event) => {
+    if (event.name === "escape" || event.name === "return") {
+      props.onClose()
+      return true
+    }
+    if (event.name === "up" || (event.ctrl === true && event.name === "p")) {
+      setOffset(Math.max(0, top() - 1))
+      return true
+    }
+    if (event.name === "down" || (event.ctrl === true && event.name === "n")) {
+      setOffset(Math.min(lastTop(), top() + 1))
+      return true
+    }
+    return false
+  })
   return (
-    <Show when={props.open}>
-      <PickerFrame error={Option.none()} title="Status" keys={[KeyHints.move, KeyHints.close]}>
-        <SelectList
-          id="status-pane"
-          open={props.open}
-          rows={rows}
-          rowKey={String}
-          onSelect={() => {}}
-          onDismiss={props.onClose}
-        />
-      </PickerFrame>
-    </Show>
+    <box flexDirection="column" flexShrink={1}>
+      <Index each={slots()}>
+        {(slot) => (
+          <box height={1} flexShrink={0} paddingLeft={1}>
+            <text wrapMode="none" style={{ fg: slot().color }}>
+              {truncate(slot().text, props.columns())}
+            </text>
+          </box>
+        )}
+      </Index>
+    </box>
   )
 }

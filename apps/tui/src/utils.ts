@@ -693,14 +693,18 @@ const resetsRow = (
 }
 
 /**
- * One lanes row: its words, and whether a run can start (`free`), cannot
- * (`none`), or nobody knows; `banked` is a provider's banked resets; the
- * peer row is `linked` while its facts come over both links, `unlinked`
- * while it is silent or a link is down.
+ * One lanes row: its words, the provider it is about (none for the Sabbath,
+ * `lanes unknown` and the peer), and whether a run can start (`free`), waits
+ * on the owner's own runs (`full`: every lane held, nothing refused), cannot
+ * (`none`: a refusal, a usage-limit wait, a lost login, the Sabbath), or
+ * nobody knows; `banked` is a provider's banked resets; the peer row is
+ * `linked` while its facts come over both links, `unlinked` while it is
+ * silent or a link is down.
  */
 export interface LaneRow {
   readonly text: string
-  readonly state: "free" | "none" | "unknown" | "banked" | "linked" | "unlinked"
+  readonly provider: Option.Option<string>
+  readonly state: "free" | "full" | "none" | "unknown" | "banked" | "linked" | "unlinked"
 }
 
 /**
@@ -755,6 +759,7 @@ const peerRow = (peer: NonNullable<LaneReport["peer"]>, now: number, width: numb
   if (peer.silent || Option.isSome(reason)) state = "unlinked"
   return {
     text: forms.find((form) => textWidth(form) <= width) ?? truncate(forms.at(-1) ?? mark, width),
+    provider: Option.none(),
     state,
   }
 }
@@ -766,6 +771,7 @@ const sabbathRow = (end: number, now: number, width: number, zone: DateTime.Time
   return {
     text:
       candidates.find((candidate) => textWidth(candidate) <= width) ?? truncate("sabbath", width),
+    provider: Option.none(),
     state: "none",
   }
 }
@@ -807,26 +813,38 @@ const providerRows = (
 ): ReadonlyArray<LaneRow> => {
   if (report.providers.length === 0) {
     if (resting) return []
-    return [{ text: truncate("lanes unknown", width), state: "unknown" }]
+    return [{ text: truncate("lanes unknown", width), provider: Option.none(), state: "unknown" }]
   }
   return report.providers.flatMap((lanes): ReadonlyArray<LaneRow> => {
+    const provider = Option.some(lanes.provider)
     const lost = lanes.accounts.flatMap((account): ReadonlyArray<LaneRow> => {
       if (Predicate.isUndefined(account.loginLost)) return []
       const text = lostLoginRow(lanes.provider, account.slot, account.loginLost.reason, width)
-      return [{ text, state: "none" }]
+      return [{ text, provider, state: "none" }]
     })
     const text = providerLaneRow(lanes, now, width, zone)
-    let state: LaneRow["state"] = "free"
-    if (Predicate.isUndefined(lanes.capacity)) state = "unknown"
-    else if (freeLanes(lanes.capacity, lanes.load) === 0) state = "none"
     const banked = Option.toArray(
       Option.map(resetsRow(lanes, now, width, zone), (resets): LaneRow => ({
         text: resets,
+        provider,
         state: "banked",
       })),
     )
-    return [{ text, state }, ...lost, ...banked]
+    return [{ text, provider, state: providerLaneState(lanes, now) }, ...lost, ...banked]
   })
+}
+
+/**
+ * A provider row's state: `unknown` with no capacity, `free` with a lane
+ * free; with none, `full` while the owner's own runs hold every lane and no
+ * window waits, `none` for a refusal (no load holds the account) or a
+ * usage-limit wait.
+ */
+const providerLaneState = (lanes: ProviderLanes, now: number): LaneRow["state"] => {
+  if (Predicate.isUndefined(lanes.capacity)) return "unknown"
+  if (freeLanes(lanes.capacity, lanes.load) > 0) return "free"
+  if (Option.isNone(lanesRetryAt(lanes, now)) && lanes.load > 0) return "full"
+  return "none"
 }
 
 // ── error formatting ────────────────────────────────────────────────────────

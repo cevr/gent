@@ -238,6 +238,7 @@ import {
   projectCurrentWindow,
   promptForModel,
   type PromptCache,
+  roleWindowMessageTokens,
   type StepMeasure,
   toolImagePrompt,
   toPrompt,
@@ -4516,6 +4517,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       contextLimitTokens: stepWindow.contextLimit,
       reservedOutputTokens: stepWindow.budget.reservedOutputTokens,
       inputLimitTokens: stepWindow.budget.inputLimitTokens,
+      roleWindow: Option.getOrUndefined(
+        Option.map(stepWindow.roleWindow, (tokens) => ({
+          tokens,
+          availableInputTokens: roleWindowMessageTokens(stepWindow.budget, tokens),
+        })),
+      ),
       omittedMessages: projection.omittedMessageIds.length,
       keptFromMessageId: Option.getOrUndefined(projection.keptFromMessageId),
       handoffMessageId,

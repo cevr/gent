@@ -5513,6 +5513,7 @@ describe("AccountsRpcs", () => {
           heard: { host: "peer-host" },
           runs: 2,
           silent: false,
+          counted: true,
           down: [],
         })
       }).pipe(Effect.timeout("8 seconds")),
@@ -5538,6 +5539,7 @@ describe("AccountsRpcs", () => {
           expect((yield* client.accounts.lanes()).peer).toMatchObject({
             heard: { host: "peer-host" },
             silent: true,
+            counted: true,
             down: ["peer"],
           })
         }),

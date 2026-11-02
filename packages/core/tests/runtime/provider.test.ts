@@ -9456,13 +9456,20 @@ describe("account lanes", () => {
             scopeOf([a, b]),
             "peer",
           )
-          expect(yield* reportedPeer(fixture)).toEqual({ heard, runs: 2, silent: false, down: [] })
+          expect(yield* reportedPeer(fixture)).toEqual({
+            heard,
+            runs: 2,
+            silent: false,
+            counted: true,
+            down: [],
+          })
           // Silent: its runs count through the hold, and its link is down.
           yield* TestClock.adjust("90 seconds")
           expect(yield* reportedPeer(fixture)).toEqual({
             heard,
             runs: 2,
             silent: true,
+            counted: true,
             down: ["peer"],
           })
           // The hold's last moment: still reported, its runs still count.
@@ -9471,6 +9478,7 @@ describe("account lanes", () => {
             heard,
             runs: 2,
             silent: true,
+            counted: true,
             down: ["peer"],
           })
           // The hold ended and this server runs no link: the lanes forget the peer.
@@ -9478,7 +9486,12 @@ describe("account lanes", () => {
           expect(yield* reportedPeer(fixture)).toBeUndefined()
           // Its next line brings it back.
           yield* fixture.placement.notePeer(peerLine("peer", 2, []), scopeOf([a, b]), "peer")
-          expect(yield* reportedPeer(fixture)).toMatchObject({ runs: 0, silent: false, down: [] })
+          expect(yield* reportedPeer(fixture)).toMatchObject({
+            runs: 0,
+            silent: false,
+            counted: true,
+            down: [],
+          })
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
 
@@ -9501,6 +9514,7 @@ describe("account lanes", () => {
             heard,
             runs: 0,
             silent: true,
+            counted: false,
             down: ["own", "peer"],
           })
           // This server's link stopped: nothing left to report.
@@ -9543,25 +9557,48 @@ describe("account lanes", () => {
           const link = yield* Scope.make()
           yield* fixture.placement.runsLink.pipe(Scope.provide(link))
           // Its first 90 s: no line yet, and not down.
-          expect(yield* reportedPeer(fixture)).toEqual({ runs: 0, silent: true, down: [] })
+          expect(yield* reportedPeer(fixture)).toEqual({
+            runs: 0,
+            silent: true,
+            counted: false,
+            down: [],
+          })
           yield* TestClock.adjust("60 seconds")
           // A line of this server's own boot (a link that reached itself) is no peer line.
           yield* fixture.placement.notePeer(own, scopeOf([a, b]), "own")
           yield* TestClock.adjust("30 seconds")
-          expect(yield* reportedPeer(fixture)).toEqual({ runs: 0, silent: true, down: ["own"] })
+          expect(yield* reportedPeer(fixture)).toEqual({
+            runs: 0,
+            silent: true,
+            counted: false,
+            down: ["own"],
+          })
           const heard = { host: "peer-host", at: yield* Clock.currentTimeMillis }
           yield* fixture.placement.notePeer(peerLine("peer", 1, []), scopeOf([a, b]), "own")
-          expect(yield* reportedPeer(fixture)).toEqual({ heard, runs: 0, silent: false, down: [] })
+          expect(yield* reportedPeer(fixture)).toEqual({
+            heard,
+            runs: 0,
+            silent: false,
+            counted: true,
+            down: [],
+          })
           yield* TestClock.adjust("90 seconds")
           expect(yield* reportedPeer(fixture)).toEqual({
             heard,
             runs: 0,
             silent: true,
+            counted: true,
             down: ["own"],
           })
           // The link stopped: the peer's last facts stay, and no link is down.
           yield* Scope.close(link, Exit.void)
-          expect(yield* reportedPeer(fixture)).toEqual({ heard, runs: 0, silent: true, down: [] })
+          expect(yield* reportedPeer(fixture)).toEqual({
+            heard,
+            runs: 0,
+            silent: true,
+            counted: true,
+            down: [],
+          })
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
 

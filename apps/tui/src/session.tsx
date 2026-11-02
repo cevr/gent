@@ -42,6 +42,7 @@ import {
   InteractionPresented,
   interjectionMessageId,
   type MessageId,
+  coldHandoffFloorTokens,
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
@@ -52,6 +53,7 @@ import {
   type ModelContextMetrics,
   type ModelId,
   modelInputCeilingTokens,
+  outputReserveTokens,
   projectMessage,
   EffortSetting,
   ReasoningEffort,
@@ -142,6 +144,7 @@ import {
   type ActiveExtensionSession,
   type DisclosureLevel,
   type NoticeRow,
+  STATUS_PANE,
   STATUS_YIELD,
   type StatusLabelShort,
 } from "./extensions/client-facets"
@@ -186,63 +189,124 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
   return theme.textMuted
 }
 
-/** What the context gauge reads: the tokens held, the cap they count against, and their share. */
+/**
+ * What the context gauge reads: the tokens held, the cap they count against
+ * (where gent hands off), their share, and the limits behind the cap that
+ * the `/status` pane names.
+ */
 interface ContextReading {
   readonly held: number
   readonly cap: number
   readonly pct: number
-  /** The model's whole window, and the projection that measured `held`, when there is one. */
+  /** The model's whole window. */
+  readonly window: number
+  /** The cap under the model's window alone: what a step may never pass. */
+  readonly hardCap: number
+  /** The role's window, when it hands off before the hard cap (`cap` is then its room). */
+  readonly roleWindow: Option.Option<{ readonly tokens: number; readonly cap: number }>
+  /** The system prompt and the tools, which a projection's cap leaves out. */
+  readonly systemAndTools: Option.Option<number>
+  /** The output the window keeps back for the reply. */
+  readonly output: number
+  /** The model's input cap, when it is below the window less the output. */
+  readonly inputCap: Option.Option<number>
+  /** The projection that measured `held`, when there is one. */
   readonly projection: Option.Option<ModelContextMetrics>
 }
 
+type ContextModel = Pick<Model, "contextLength" | "inputLimit" | "outputLimit">
+
 /**
- * The context the next request carries, against the input it may take.
+ * The context the next request carries, against the point gent hands off.
  *
- * With a projection, the messages' tokens against the input the projection
- * lets them take: both leave out the system prompt, the tools and the output
- * reserve, and the estimate is anchored on the last step's measured input,
- * so the gauge reads 100% where the window hands off, also on a model whose
- * input cap is below its window. Before one (a session from before
- * projections), the provider's count against the input one request may
- * carry, the ceiling the turn's budget uses. None while neither is known.
+ * With a projection, the messages' tokens against the room the projection
+ * gives them under the role's window when the role has one below the
+ * model's, else under the model's: both leave out the system prompt, the
+ * tools and the output reserve, and the estimate is anchored on the last
+ * step's measured input, so the gauge reads 100% where the window hands off,
+ * also on a model whose input cap is below its window. Before one (a fresh
+ * session), the provider's count, 0 before a step, against the input one
+ * request may carry under the catalog's limits, the ceiling the turn's
+ * budget uses. None while the model's window is unknown.
  */
 const contextReading = (input: {
   readonly metrics: SessionMetrics
-  readonly model: Option.Option<Pick<Model, "contextLength" | "inputLimit" | "outputLimit">>
+  readonly model: Option.Option<ContextModel>
 }): Option.Option<ContextReading> => {
   const share = (held: number, cap: number) => Math.min(100, Math.round((held / cap) * 100))
+  const bindingInputCap = (window: number, output: number, inputLimit: Option.Option<number>) =>
+    Option.filter(inputLimit, (limit) => limit > 0 && limit < window - output)
   const projected = Option.filter(input.metrics.context, (value) => value.availableInputTokens > 0)
   if (Option.isSome(projected)) {
-    const { estimatedTokens: held, availableInputTokens: cap } = projected.value
-    return Option.some({ held, cap, pct: share(held, cap), projection: projected })
+    const projection = projected.value
+    const window = projection.contextLimitTokens
+    const output = projection.reservedOutputTokens
+    const inputCap = bindingInputCap(
+      window,
+      output,
+      Option.fromUndefinedOr(projection.inputLimitTokens),
+    )
+    const ceiling = Option.getOrElse(inputCap, () => window - output)
+    const hardCap = projection.availableInputTokens
+    const roleWindow = Option.map(
+      Option.filter(
+        Option.fromUndefinedOr(projection.roleWindow),
+        (role) => role.availableInputTokens > 0 && role.availableInputTokens < hardCap,
+      ),
+      (role) => ({ tokens: role.tokens, cap: role.availableInputTokens }),
+    )
+    const cap = Option.match(roleWindow, { onNone: () => hardCap, onSome: (role) => role.cap })
+    const held = projection.estimatedTokens
+    return Option.some({
+      held,
+      cap,
+      pct: share(held, cap),
+      window,
+      hardCap,
+      roleWindow,
+      systemAndTools: Option.some(Math.max(0, ceiling - hardCap)),
+      output,
+      inputCap,
+      projection: projected,
+    })
   }
   const held = input.metrics.latestInputTokens
-  const cap = Option.flatMap(input.model, (model) =>
-    Option.map(Option.fromUndefinedOr(model.contextLength), (window) =>
-      modelInputCeilingTokens({
-        contextLimitTokens: window,
-        inputLimitTokens: Option.fromUndefinedOr(model.inputLimit),
-        outputLimitTokens: Option.fromUndefinedOr(model.outputLimit),
-      }),
+  return Option.flatMap(input.model, (model) =>
+    Option.flatMap(
+      Option.filter(Option.fromUndefinedOr(model.contextLength), (window) => window > 0),
+      (window) => {
+        const limits = {
+          contextLimitTokens: window,
+          inputLimitTokens: Option.fromUndefinedOr(model.inputLimit),
+          outputLimitTokens: Option.fromUndefinedOr(model.outputLimit),
+        }
+        const cap = modelInputCeilingTokens(limits)
+        if (cap <= 0) return Option.none()
+        const output = outputReserveTokens(limits)
+        return Option.some({
+          held,
+          cap,
+          pct: share(held, cap),
+          window,
+          hardCap: cap,
+          roleWindow: Option.none(),
+          systemAndTools: Option.none(),
+          output,
+          inputCap: bindingInputCap(window, output, limits.inputLimitTokens),
+          projection: Option.none(),
+        })
+      },
     ),
-  )
-  return cap.pipe(
-    Option.filter((value) => held > 0 && value > 0),
-    Option.map((value) => ({
-      held,
-      cap: value,
-      pct: share(held, value),
-      projection: Option.none(),
-    })),
   )
 }
 
 /**
  * The context gauge, for the labels anchored to the right edge:
- * `ctx 12k/160k`, the tokens held over the cap they count against, in the
+ * `ctx 12k/160k`, the tokens held over the point gent hands off at, in the
  * warning color from 70% and the error color from 90%. A narrow row reads
- * the share, `ctx 8%` (`STATUS_YIELD.context`). The window, the reserve the
- * cap leaves out and the costliest item held are in the `/status` pane
+ * the share, `ctx 8%` (`STATUS_YIELD.context`). A fresh session reads
+ * `ctx 0/<cap>` from the catalog. The caps behind it, the reserve it leaves
+ * out and the costliest item held are in the `/status` pane
  * ({@link buildContextDetail}).
  *
  * It is split from {@link buildModelLabels} because the two halves sit at
@@ -252,7 +316,7 @@ const contextReading = (input: {
 export function buildContextLabels(input: {
   readonly metrics: SessionMetrics
   /** The session's model, for its catalog limits. */
-  readonly model: Option.Option<Pick<Model, "contextLength" | "inputLimit" | "outputLimit">>
+  readonly model: Option.Option<ContextModel>
   readonly theme: ThemeColors
 }): StatusRowLabel[] {
   return Option.match(contextReading(input), {
@@ -269,41 +333,56 @@ export function buildContextLabels(input: {
 
 /**
  * The context gauge's lines in the `/status` pane: the tokens held against
- * the cap and their share, in the gauge's color; the model's window and
- * what the cap leaves out of it (the system prompt, the tools and the output
- * reserve); the messages the projection left out; and the costliest item
- * still held, by its tool or its kind.
+ * the cap and their share, in the gauge's color; where gent hands off, with
+ * the role's window, the hard cap and the model's window behind it; what the
+ * cap leaves out, from the budget's own fields (a fresh session's catalog
+ * cap leaves out only the output reserve); the history past which a cold
+ * cache hands off; the messages the projection left out; and the costliest
+ * item still held, by its tool or its kind.
  */
 export function buildContextDetail(input: {
   readonly metrics: SessionMetrics
-  readonly model: Option.Option<Pick<Model, "contextLength" | "inputLimit" | "outputLimit">>
+  readonly model: Option.Option<ContextModel>
   readonly theme: ThemeColors
 }): StatusRowLabel[] {
   return Option.match(contextReading(input), {
     onNone: () => [],
     onSome: (reading) => {
       const muted = (text: string): StatusRowLabel => ({ text, color: input.theme.textMuted })
-      const window = Option.match(reading.projection, {
-        onNone: () =>
-          Option.flatMap(input.model, (model) => Option.fromUndefinedOr(model.contextLength)),
-        onSome: (projection) => Option.some(projection.contextLimitTokens),
-      })
       const lines: StatusRowLabel[] = [
         {
           text: `ctx ${formatTokens(reading.held)} held of ${formatTokens(reading.cap)} · ${reading.pct}%`,
           color: pressureColor(reading.pct, input.theme),
         },
       ]
-      Option.map(
-        Option.filter(window, (tokens) => tokens > 0),
-        (tokens) => {
-          const reserve = Math.max(0, tokens - reading.cap)
-          let text = `window ${formatTokens(tokens)}`
-          if (reserve > 0) text += ` · ${formatTokens(reserve)} kept for system, tools and output`
-          lines.push(muted(text))
-        },
+      const window = `window ${formatTokens(reading.window)}`
+      lines.push(
+        muted(
+          Option.match(reading.roleWindow, {
+            onNone: () => `hands off at ${formatTokens(reading.hardCap)} (hard cap) · ${window}`,
+            onSome: (role) =>
+              `hands off at ${formatTokens(role.cap)} (role window ${formatTokens(role.tokens)}) · hard cap ${formatTokens(reading.hardCap)} · ${window}`,
+          }),
+        ),
       )
+      const kept: string[] = []
+      Option.map(
+        Option.filter(reading.systemAndTools, (tokens) => tokens > 0),
+        (tokens) => kept.push(`system and tools ${formatTokens(tokens)}`),
+      )
+      if (reading.output > 0) kept.push(`output ${formatTokens(reading.output)}`)
+      const leftOut: string[] = []
+      if (kept.length > 0) leftOut.push(`kept for ${kept.join(", ")}`)
+      Option.map(reading.inputCap, (tokens) =>
+        leftOut.push(`input capped at ${formatTokens(tokens)}`),
+      )
+      if (leftOut.length > 0) lines.push(muted(leftOut.join(" · ")))
       Option.map(reading.projection, (projection) => {
+        lines.push(
+          muted(
+            `a cold cache hands off past ${formatTokens(coldHandoffFloorTokens(projection.availableInputTokens))}`,
+          ),
+        )
         if (projection.omittedMessages > 0)
           lines.push(muted(`left out ${plural(projection.omittedMessages, "message")}`))
         Option.map(Option.fromUndefinedOr(projection.renters[0]), (renter) =>
@@ -3407,8 +3486,10 @@ export function createSessionController(props: {
     Option.some({
       open: (id) => dispatchSessionUi(SessionUiEvent.cases.OpenPane.make({ id })),
       close: (id) => dispatchSessionUi(SessionUiEvent.cases.ClosePane.make({ id })),
+      // The host's own `/status` pane answers to `STATUS_PANE`.
       isOpen: (id) => {
         const overlay = uiState().overlay
+        if (id === STATUS_PANE) return overlay._tag === "status"
         return overlay._tag === "pane" && overlay.id === id
       },
     }),

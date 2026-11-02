@@ -32,6 +32,7 @@ import {
   SelectList,
   type SelectListRow,
   sessionQuery,
+  STATUS_PANE,
   statusLabelContribution,
   type StatusLabelItem,
   textWidth,
@@ -43,9 +44,9 @@ import {
 } from "@gent/tui/extensions"
 
 /**
- * `@gent/git` — the checkout of the session in view, on the composer's status
- * row: the branch with ahead/behind, and the files changed against `HEAD`
- * with their `+/-` line counts.
+ * `@gent/git` — the checkout of the session in view, in the `/status` pane
+ * and the `/git` pane: the branch with ahead/behind, and the files changed
+ * against `HEAD` with their `+/-` line counts.
  *
  * It reads git in the session's directory and sends nothing to the model and
  * stores nothing. It asks the server one thing: a turn's patch, for `/diff
@@ -54,14 +55,16 @@ import {
  * from the agent's own `git commit`, and every diff passes `--no-ext-diff
  * --no-textconv`, so repository config chooses no program to run.
  *
- * A read runs on a session or branch move, on a write git makes to the
- * checkout's git files (checked every 500 ms: `HEAD`, `index`, `MERGE_HEAD`,
- * `ORIG_HEAD`, `FETCH_HEAD`, the refs of the branch and its upstream,
- * `packed-refs`, `config`, a reftable's `tables.list`), 1 s after the last
- * tool call of a burst ends (any tool can write files), at a turn's end and
- * on a message (a `!git commit` arrives as one). One read runs at a time (`sessionQuery`);
- * triggers during a read fold into one more. The work tree is not followed:
- * an edit made in another program shows at the next trigger.
+ * It reads only while one of the two panes is open: as one opens, on a
+ * session or branch move, on a write git makes to the checkout's git files
+ * (checked every 500 ms: `HEAD`, `index`, `MERGE_HEAD`, `ORIG_HEAD`,
+ * `FETCH_HEAD`, the refs of the branch and its upstream, `packed-refs`,
+ * `config`, a reftable's `tables.list`), 1 s after the last tool call of a
+ * burst ends (any tool can write files), at a turn's end and on a message (a
+ * `!git commit` arrives as one). With both closed it runs no program and
+ * stamps no file. One read runs at a time (`sessionQuery`); triggers during a
+ * read fold into one more. The work tree is not followed: an edit made in
+ * another program shows at the next trigger.
  *
  * @module
  */
@@ -1401,6 +1404,8 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
     const interrupt = (fiber: Option.Option<Fiber.Fiber<unknown>>) =>
       Option.map(fiber, (running) => fork(Fiber.interrupt(running)))
     const locations = new Map<string, Location>()
+    // The reads run only while the reader looks at what they show.
+    const watched = () => shell.pane.isOpen(GIT_PANE) || shell.pane.isOpen(STATUS_PANE)
 
     // The git files followed now, and the fiber that stamps them. A new
     // checkout takes its first stamp inside the read that located it, before
@@ -1414,8 +1419,8 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
     const followFrom = (files: GitFiles) =>
       Effect.gen(function* () {
         const from = yield* gitStateStamp(files)
-        // The extension may have stopped while the stamp was read.
-        if (stopped) return
+        // The extension may have stopped, or both panes closed, while the stamp was read.
+        if (stopped || !watched()) return
         unfollow()
         followed = Option.some({
           files,
@@ -1443,29 +1448,49 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
         }),
     }
 
+    // A session move while both panes are closed reads nothing: the new
+    // session's checkout is unknown until a pane opens.
     const local = yield* sessionQuery({
       initial: Option.none<Checkout>(),
       follow: true,
-      fetch: () =>
-        workspace.sessionCwd.pipe(
+      fetch: () => {
+        if (!watched()) return Effect.succeedNone
+        return workspace.sessionCwd.pipe(
           Effect.flatMap((cwd) => readCheckout(cwd, locations, follower)),
           Effect.provideContext(services),
-        ),
+        )
+      },
     })
+    const refresh = () => {
+      if (watched()) local.refresh()
+    }
+    // A pane opens: read now, and follow the git files. Both close: stop.
+    lifecycle.addCleanup(
+      createRoot((dispose) => {
+        createEffect(
+          on(watched, (open) => {
+            if (open) return local.refresh()
+            unfollow()
+          }),
+        )
+        return dispose
+      }),
+    )
 
     // Any tool can write files; a burst of calls reads once, after it settles.
     let settling = Option.none<Fiber.Fiber<void>>()
     const afterTool = () => {
+      if (!watched()) return
       interrupt(settling)
       settling = Option.some(
-        fork(Effect.sleep(TOOL_SETTLE).pipe(Effect.andThen(Effect.sync(local.refresh)))),
+        fork(Effect.sleep(TOOL_SETTLE).pipe(Effect.andThen(Effect.sync(refresh)))),
       )
     }
     lifecycle.addCleanup(
       transport.onSessionEvent((envelope) => {
         const tag = envelope.event._tag
         if (tag === "ToolCallSucceeded" || tag === "ToolCallFailed") afterTool()
-        else if (tag === "TurnCompleted" || tag === "MessageReceived") local.refresh()
+        else if (tag === "TurnCompleted" || tag === "MessageReceived") refresh()
       }),
     )
     lifecycle.addCleanup(() => {
@@ -1613,9 +1638,9 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
           Effect.provideContext(services),
         ),
       )
+    // Opening the pane reads the checkout (the watch above) and asks `gh` again.
     const openPane = () => {
       shell.pane.open(GIT_PANE)
-      local.refresh()
       pullRequest.refresh()
     }
 

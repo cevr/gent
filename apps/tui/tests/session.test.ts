@@ -855,6 +855,8 @@ describe("buildContextLabels", () => {
       estimatedTokens: 250_000,
       availableInputTokens: 252_000,
       contextLimitTokens: 400_000,
+      reservedOutputTokens: 32_000,
+      inputLimitTokens: 272_000,
       omittedMessages: 3,
       compactions: 2,
       renters: [],
@@ -871,6 +873,7 @@ describe("buildContextLabels", () => {
       estimatedTokens: 84_000,
       availableInputTokens: 168_000,
       contextLimitTokens: 200_000,
+      reservedOutputTokens: 32_000,
       omittedMessages: 3,
       compactions: 2,
       renters: [],
@@ -878,11 +881,29 @@ describe("buildContextLabels", () => {
     expect(labels[0]!.text).toBe("ctx 84k/168k")
   })
 
+  test("a role window below the hard cap is the denominator", () => {
+    // A 1M window with a 200k role window: the messages may take 963k under
+    // the window and 163k under the role's, so the gauge reads against 163k.
+    const labels = contextLabels(0, 1_000_000, {
+      estimatedTokens: 81_500,
+      availableInputTokens: 963_000,
+      contextLimitTokens: 1_000_000,
+      reservedOutputTokens: 32_000,
+      roleWindow: { tokens: 200_000, availableInputTokens: 163_000 },
+      omittedMessages: 0,
+      compactions: 0,
+      renters: [],
+    })
+    expect(labels[0]!.text).toBe("ctx 82k/163k")
+    expect(labels[0]!.short?.text).toBe("ctx 50%")
+  })
+
   test("the costliest held item and the dropped messages stay off the row", () => {
     const labels = contextLabels(0, absent, {
       estimatedTokens: 171_000,
       availableInputTokens: 190_000,
       contextLimitTokens: 200_000,
+      reservedOutputTokens: 8_000,
       omittedMessages: 4,
       compactions: 1,
       renters: [
@@ -898,8 +919,8 @@ describe("buildContextLabels", () => {
     expect(labels[0]!.text).toBe("ctx 136k/272k")
   })
 
-  test("skips context when tokens are 0", () => {
-    expect(contextLabels(0, 200_000, absent).length).toBe(0)
+  test("a fresh session reads 0 over the catalog's ceiling", () => {
+    expect(contextLabels(0, 200_000, absent).map((label) => label.text)).toEqual(["ctx 0/168k"])
   })
 
   test("skips context when contextLength undefined", () => {
@@ -908,10 +929,36 @@ describe("buildContextLabels", () => {
 })
 
 describe("buildContextDetail", () => {
-  test("names the held tokens, the window and what the cap leaves out of it", () => {
+  test("with no projection the catalog's cap leaves out only the output reserve", () => {
     expect(contextDetail(42_000, 200_000, absent)).toEqual([
       "ctx 42k held of 168k · 25%",
-      "window 200k · 32k kept for system, tools and output",
+      "hands off at 168k (hard cap) · window 200k",
+      "kept for output 32k",
+    ])
+    expect(contextDetail(136_000, 400_000, absent, { inputLimit: 272_000 })).toEqual([
+      "ctx 136k held of 272k · 50%",
+      "hands off at 272k (hard cap) · window 400k",
+      "kept for output 32k · input capped at 272k",
+    ])
+  })
+
+  test("a role window names both caps and the cold-cache floor follows the hard cap", () => {
+    expect(
+      contextDetail(0, absent, {
+        estimatedTokens: 81_500,
+        availableInputTokens: 963_000,
+        contextLimitTokens: 1_000_000,
+        reservedOutputTokens: 32_000,
+        roleWindow: { tokens: 200_000, availableInputTokens: 163_000 },
+        omittedMessages: 0,
+        compactions: 0,
+        renters: [],
+      }),
+    ).toEqual([
+      "ctx 82k held of 163k · 50%",
+      "hands off at 163k (role window 200k) · hard cap 963k · window 1.0M",
+      "kept for system and tools 5.0k, output 32k",
+      "a cold cache hands off past 150k",
     ])
   })
 
@@ -921,6 +968,7 @@ describe("buildContextDetail", () => {
         estimatedTokens: 84_000,
         availableInputTokens: 168_000,
         contextLimitTokens: 200_000,
+        reservedOutputTokens: 32_000,
         omittedMessages: 3,
         compactions: 2,
         renters: [
@@ -930,7 +978,9 @@ describe("buildContextDetail", () => {
       }),
     ).toEqual([
       "ctx 84k held of 168k · 50%",
-      "window 200k · 32k kept for system, tools and output",
+      "hands off at 168k (hard cap) · window 200k",
+      "kept for output 32k",
+      "a cold cache hands off past 84k",
       "left out 3 messages",
       "costliest read 12k",
     ])
@@ -941,6 +991,7 @@ describe("buildContextDetail", () => {
       estimatedTokens: 84_000,
       availableInputTokens: 168_000,
       contextLimitTokens: 200_000,
+      reservedOutputTokens: 32_000,
       omittedMessages: 0,
       compactions: 0,
       renters: [{ id: "marker", kind: "handoff", tokens: 4_000, rent: 8_000, calls: 3 }],
@@ -958,8 +1009,7 @@ describe("buildContextDetail", () => {
     expect(held?.color).toBe(theme.error)
   })
 
-  test("nothing before a count or a window is known", () => {
-    expect(contextDetail(0, 200_000, absent)).toEqual([])
+  test("nothing before the model's window is known", () => {
     expect(contextDetail(50_000, absent, absent)).toEqual([])
   })
 })

@@ -5,13 +5,13 @@
 ## Sub-features
 
 - `resets-at-rest`: no band and no `resets` text under the status row.
-- `resets-in-status`: in `/status`, after one `up`, the full row under the lanes row; an account with only lapsed grants, or out of the scope (`work`: the run's scope is `default` alone), is not named.
-- `resets-narrow`: the pane cuts the row with `…`: at 44 columns `↺ resets anthropic default 3 · next lap…`, at 28 `↺ resets anthropic defa…`.
+- `resets-in-status`: in `/status`, at the end of the list, the full row under the lanes row; an account with only lapsed grants, or out of the scope (`work`: the run's scope is `default` alone), is not named.
+- `resets-narrow`: the pane picks the row's shorter forms for its width: at 44 columns `↺ resets anthropic default 3` (and `≡ lanes anthropic 1/1 free · 5h 120k/%`), at 28 `↺ resets default 3` (and `≡ lanes 1/1 free`).
 - `ctl-resets`: `gent ctl lanes` holds `resets` on every account that holds any, `work` too; `--line` prints `resets anthropic default 3 · next lapses <HH:MM>`.
 
 ## How to get to it (user POV)
 
-- `/status` (or `Status` in the `ctrl+p` palette), then `up` to the lanes rows at the end of the list.
+- `/status` (or `Status` in the `ctrl+p` palette), then `down` to the lanes rows at the end of the list.
 - `gent ctl lanes` and `gent ctl lanes --line` from a shell, with no session.
 
 ## Driving it with verify:drive
@@ -48,7 +48,7 @@ resets: [
 Script `drives/lanes-resets.json` (the run with that ledger, 120x40):
 
 1. **At rest.** `expectNot resets`, `cap 79-resets-at-rest`. No band.
-2. **In /status.** `send /status`, `keys enter`, `waitFor Status`, `keys up`, `waitFor ↺ resets anthropic default 3 · next lapses`, `cap 79a-resets-in-status`. The pane's last line reads `↺ resets anthropic default 3 · next lapses <HH:MM>`, under `≡ lanes anthropic 1/1 free`; `work` and `home` are not named.
+2. **In /status.** `send /status`, `keys enter`, `waitFor more ↓`, `settle`, twelve `down`, `waitFor ↺ resets anthropic default 3 · next lapses`, `cap 79a-resets-in-status`. The pane's last line reads `↺ resets anthropic default 3 · next lapses <HH:MM>`, under `≡ lanes anthropic 1/1 free`; `work` and `home` are not named.
 3. **Second view.** `sh gent ctl lanes --line` and `sh gent ctl lanes`. The line file holds the row without its mark; the JSON lists `resets` on `default` and `work` only.
 4. **Resize.** `resize 44 20`, `cap 79b-resets-narrow`; `resize 28 20`, `cap 79c-resets-narrower`; `resize 120 40`, `cap 79d-resets-wide-again`. Each capture fits its width.
 

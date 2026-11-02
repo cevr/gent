@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
+import { TestClock } from "effect/testing"
 import {
   Clock,
   Effect,
@@ -42,9 +43,13 @@ import gitExtension, {
   pagerCommand,
   workTreeCommand,
 } from "../../src/extensions/git.client"
-import type { StatusLabelItem } from "../../src/extensions/client-facets"
+import { STATUS_PANE, type StatusLabelItem } from "../../src/extensions/client-facets"
 import { App } from "../../src/app"
-import { provideClientServices } from "../extension-test-harness-boundary"
+import {
+  makePaneSlot,
+  provideClientServices,
+  testClientContextDeps,
+} from "../extension-test-harness-boundary"
 import {
   createMockClient,
   createMockRuntime,
@@ -282,17 +287,55 @@ describe("git checkout read", () => {
 
 // ── refresh ─────────────────────────────────────────────────────────────────
 
-/** The extension's labels for `cwd`, with the event feed a test drives. */
-const mountLabels = (cwd: string, tools: TestTools = {}) =>
+/**
+ * The extension's labels for `cwd`, with the event feed a test drives and
+ * the pane slot. The `/status` pane is open, as the labels show only there,
+ * unless `closed`: then nothing reads until a test opens a pane. `clock`
+ * replaces the extension's clock (the poll and the settle timer), and
+ * `sessionCwd` the read of the session's directory each checkout read asks.
+ */
+const mountLabels = (
+  cwd: string,
+  tools: TestTools = {},
+  opts: {
+    readonly closed?: boolean
+    readonly clock?: TestClock.TestClock
+    readonly sessionCwd?: Effect.Effect<string>
+    /** Runs as the extension asks the shell to run an effect (each read starts so). */
+    readonly onCast?: () => void
+  } = {},
+) =>
   Effect.gen(function* () {
     const subscribers = new Set<(envelope: EventEnvelope) => void>()
     const cleanups: Array<() => void> = []
     yield* Effect.addFinalizer(() => Effect.sync(() => cleanups.forEach((cleanup) => cleanup())))
-    const contributions = yield* provideClientServices(gitExtension.setup, {
-      workspace: { cwd, home: cwd },
+    const pane = makePaneSlot()
+    if (opts.closed !== true) pane.open(STATUS_PANE)
+    // The harness's own shell runs each effect; a test may count them first.
+    const { shell } = testClientContextDeps()
+    const onCast = Option.fromUndefinedOr(opts.onCast)
+    const setup = Option.match(Option.fromUndefinedOr(opts.clock), {
+      onNone: () => gitExtension.setup,
+      onSome: (clock) => gitExtension.setup.pipe(Effect.provideService(Clock.Clock, clock)),
+    })
+    const contributions = yield* provideClientServices(setup, {
+      workspace: {
+        cwd,
+        home: cwd,
+        sessionCwd: Option.getOrElse(Option.fromUndefinedOr(opts.sessionCwd), () =>
+          Effect.succeed(cwd),
+        ),
+      },
       sessionEventSubscribers: subscribers,
       currentSession: () => ({ sessionId, branchId }),
       lifecycle: { addCleanup: (cleanup) => cleanups.push(cleanup) },
+      shell: {
+        pane,
+        cast: (effect) => {
+          if (Option.isSome(onCast)) onCast.value()
+          shell.cast(effect)
+        },
+      },
       tools,
     })
     const produce = contributions.statusLabels?.[0]?.produce ?? (() => [])
@@ -302,9 +345,9 @@ const mountLabels = (cwd: string, tools: TestTools = {}) =>
       const envelope = EventEnvelope.make({ id: EventId.make(ids), createdAt: ids, event })
       for (const subscriber of subscribers) subscriber(envelope)
     }
-    const texts = () => labelTexts(produce())
-    const labels = () => produce()
-    return { texts, labels, emit }
+    const texts = () => labelTexts(produce({ columns: 120 }))
+    const labels = () => produce({ columns: 120 })
+    return { texts, labels, emit, pane }
   })
 
 /**
@@ -421,6 +464,76 @@ const PR_JSON =
   '"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}'
 
 describe("git refresh", () => {
+  it.live("with both panes closed nothing reads git or polls its files; a pane open reads", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* makeRepo("gent-git-closed-")
+      yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
+      // Each read is asked of the shell, and each checkout read asks the
+      // session's directory first: count both while no pane shows them. The
+      // setup's own ask for the session in view reads nothing.
+      const clock = yield* TestClock.make()
+      let shown = () => false
+      let asked = 0
+      let hidden = 0
+      const { texts, emit, pane } = yield* mountLabels(
+        repo,
+        {},
+        {
+          closed: true,
+          clock,
+          sessionCwd: Effect.sync(() => {
+            if (!shown()) hidden += 1
+            return repo
+          }),
+          onCast: () => {
+            if (!shown()) asked += 1
+          },
+        },
+      )
+      shown = () => pane.isOpen(STATUS_PANE)
+      expect(hidden).toBe(0)
+      asked = 0
+      // A turn's end, a message and a tool burst past its settle time read nothing.
+      emit(
+        AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
+          sessionId,
+          branchId,
+          durationMs: 10,
+        }),
+      )
+      emit(
+        AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("call-closed"),
+          toolName: "write",
+        }),
+      )
+      yield* clock.adjust("2 seconds")
+      // Opening the pane reads the checkout; a read let out before it would
+      // have run first, one at a time.
+      pane.open(STATUS_PANE)
+      yield* waitUntil(
+        () => texts().join("|") === "branch trunk|changes 1 file +0 -1",
+        "the checkout as the pane opens",
+      )
+      expect([asked, hidden]).toEqual([0, 0])
+      // Closed again, the git files are not polled: a commit, four poll
+      // periods on, starts no read (a git run gives a stamp read time to
+      // land) until the pane opens again.
+      pane.close(STATUS_PANE)
+      yield* git(repo, "commit", "-q", "-am", "edit")
+      yield* clock.adjust("2 seconds")
+      yield* git(repo, "status", "--short")
+      expect([asked, hidden]).toEqual([0, 0])
+      pane.open(STATUS_PANE)
+      yield* waitUntil(() => texts().join("|") === "branch trunk", "the commit as the pane opens")
+      expect([asked, hidden]).toEqual([0, 0])
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
   it.live("a tool call reads the checkout again once the burst settles", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

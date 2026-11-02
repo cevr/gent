@@ -291,6 +291,7 @@ const busyContext = {
   estimatedTokens: 90_000,
   availableInputTokens: 10_000,
   contextLimitTokens: 100_000,
+  reservedOutputTokens: 25_000,
   omittedMessages: 0,
   compactions: 1,
   renters: [],

@@ -1,13 +1,13 @@
 # Lanes band
 
-The lanes say how many runs the accounts can carry now (`≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%`: free over capacity, the binding window's fuel per percent, its band and the spend outside gent). The band under the status row shows only what needs the owner: a lanes row with no free lane (none free, the Sabbath, a lost login), a peer that holds runs or whose link is down, and each active machine run of this session's thread (`▸ soak check r1 3s`: machine, state, round, age; `◷ … · wait 13:47` while its round waits for its account; `?` while it asks). Otherwise the band hides; `/status` lists every lanes row.
+The lanes say how many runs the accounts can carry now (`≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%`: free over capacity, the binding window's fuel per percent, its band and the spend outside gent). The band under the status row shows only what needs the owner in this session: a refused or waiting lane of the session's provider (not one its own runs fill), a lost login there, the Sabbath, the peer while it acts on this server ([lanes-peer.md](lanes-peer.md)), and each active machine run of this session's thread (`▸ soak check r1 3s`: machine, state, round, age; `◷ … · wait 13:47` while its round waits for its account; `?` while it asks). Otherwise the band hides; `/status` lists every lanes row.
 
 ## Sub-features
 
 - `band-hidden`: at rest no band shows, with a reading or without one.
-- `status-measured`: a run whose ledger holds a reading and a fitted rate shows `≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%` in `/status`, after one `up`.
+- `status-measured`: a run whose ledger holds a reading and a fitted rate shows `≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%` last in `/status`.
 - `status-unknown`: with no reading, `/status` shows `≡ lanes unknown`.
-- `band-run`: `debug machine` starts the `soak` machine; `▸ soak check r1 <age>` shows alone under the status row (no `≡` row: the lane is free or unknown) until its 45 s command ends, then goes.
+- `band-run`: `debug machine` starts the `soak` machine; `▸ soak check r1 <age>` shows alone under the status row (no `≡` row: its own run fills the lane) until its 45 s command ends, then goes.
 - `band-narrow`: the run row fits at 60 and 44 columns.
 - `ctl-lanes`: `gent ctl lanes` prints `Lanes` with one provider record per line; `--line` prints the lanes rows' text.
 - `band-sabbath`: in the owner's Sabbath the band's first row is `≡ sabbath · no run starts until <end>`, alone with no reading; narrower, `≡ sabbath until <end>`, then `≡ sabbath`. The end reads `HH:MM` when it falls on today's local date, else with its date, so the width each form needs moves with it: with a dated end the row is `sabbath until` at 44 columns, with a clock only it is still the full row. The owner's own turn still answers. `gent ctl lanes` holds `sabbathEnd`, and `--line` prints the row.
@@ -40,7 +40,7 @@ Script `drives/lanes.json` (the run with the ledger, 120x40):
 
 1. **At rest.** `expectNot ≡`, `cap 71-lanes-at-rest`. The status row is the last row; no band.
 2. **Second view.** `sh gent ctl lanes --line` and `sh gent ctl lanes`. The line file holds `lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%`; the JSON holds `capacity: 1`, `fuelPerPct: 120000`.
-3. **In /status.** `send /status`, `keys enter`, `waitFor Status`, `keys up`, `waitFor` the full row, `cap 71b-lanes-in-status`, `keys esc`. The lanes rows are the pane's last lines.
+3. **In /status.** `send /status`, `keys enter`, `settle`, twelve `down`, `waitFor` the full row, `cap 71b-lanes-in-status`, `keys esc`. The lanes rows are last.
 4. **A run.** `send debug machine`, `keys enter`, `waitFor soak check r1`, `expectNot ≡`, `cap 72-band-with-run`. `▸ soak check r1 0s` alone under the status row.
 5. **Its record.** `sh gent ctl request --extension @gent/machines --id run-list`. One run, `machine: "soak"`, `status: "running"`.
 6. **Resize.** `resize 60 20`, `cap 73-band-narrow`; `resize 44 20`, `cap 73b-band-narrower` (the status row reads `ctx 0%`); `resize 120 40`, `cap 74-band-wide-again`.

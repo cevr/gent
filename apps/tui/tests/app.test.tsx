@@ -111,6 +111,7 @@ import {
   terminalText,
   snapshotNaming,
   testPlatformLayer,
+  testPlatformServices,
 } from "./render-harness-boundary"
 import { LinkOpener, LinkOpenerError } from "../src/os"
 import { createSignal, onMount, Show, type Signal } from "solid-js"
@@ -2580,7 +2581,13 @@ describe("App status and activity rows", () => {
                 lanes: () =>
                   Effect.succeed({
                     providers: [],
-                    peer: { heard: { host: "workbox", at: 0 }, runs: 0, silent: false, down: [] },
+                    peer: {
+                      heard: { host: "workbox", at: 0 },
+                      runs: 0,
+                      silent: false,
+                      counted: true,
+                      down: [],
+                    },
                   }),
               },
               auth: {
@@ -2617,6 +2624,7 @@ describe("App status and activity rows", () => {
                       context: {
                         contextLimitTokens: 200_000,
                         availableInputTokens: 160_000,
+                        reservedOutputTokens: 32_000,
                         estimatedTokens: 12_000,
                         omittedMessages: 0,
                         compactions: 0,
@@ -2650,26 +2658,35 @@ describe("App status and activity rows", () => {
           for (const gone of ["personal", "$0.10", "cache", "/work", "idle", "ready"])
             expect([gone, row.includes(gone)]).toEqual([gone, false])
           yield* typeCommand("/status")(setup)
-          // The lanes row lands with the lanes answer; scroll only after it, or
-          // the selection clamps on a shorter list.
+          // Nine lines in six rows: five and the cue. The lanes and the peer
+          // land with the lanes answer, so the cue counts four only then;
+          // scroll only after it, or the scroll clamps on a shorter list.
           const pane = yield* waitForFrame(
             setup,
-            (next) =>
-              next.includes("account anthropic · personal") && next.includes("≡ lanes unknown"),
+            (next) => next.includes("account anthropic · personal") && next.includes("4 more ↓"),
             "the status pane with the lanes answer",
           )
           expect(pane).toContain("ctx 12k held of 160k · 8%")
-          expect(pane).toContain("window 200k · 40k kept for system, tools and output")
-          expect(pane).toContain("cost $0.10")
-          expect(pane).toContain("cwd work")
-          // The pane shows six lines at a time: the peer sits past the lanes.
+          expect(pane).toContain("hands off at 160k (hard cap) · window 200k")
+          expect(pane).toContain("kept for system and tools 8.0k, output 32k")
+          expect(pane).toContain("a cold cache hands off past 80k")
+          expect(pane).toContain("↑↓ scroll")
+          // Up at the top stays at the top: the pane does not wrap.
+          setup.mockInput.pressArrow("up")
+          // Down past the end stops at the last line, and the cue goes.
           for (const _line of [1, 2, 3, 4, 5, 6]) setup.mockInput.pressArrow("down")
-          yield* waitForFrame(
+          const end = yield* waitForFrame(
             setup,
-            (next) => next.includes("⇄ peer workbox 0 runs"),
-            "the peer in the pane",
+            (next) => next.includes("⇄ peer workbox 0 runs") && !next.includes("more ↓"),
+            "the end of the pane",
           )
-          setup.mockInput.pressEscape()
+          for (const shown of ["cost $0.10", "cwd work", "≡ lanes unknown"])
+            expect([shown, end.includes(shown)]).toEqual([shown, true])
+          expect(end).not.toContain("account anthropic")
+          setup.mockInput.pressArrow("up")
+          yield* waitForFrame(setup, (next) => next.includes("2 more ↓"), "one line back up")
+          // Enter closes the pane, as Esc does: nothing in it is a choice.
+          setup.mockInput.pressEnter()
           const closed = yield* waitForFrame(
             setup,
             (next) => !next.includes("esc close"),
@@ -2681,6 +2698,39 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("10 seconds")),
     )
   }
+  // The cwd line reads `repo/sub` from the root walk: until the walk ends it
+  // shows as pending, not as a bare directory the walk may yet rename.
+  it.scopedLive("the /status cwd line shows as pending until the root walk ends", () =>
+    Effect.gen(function* () {
+      const platform = yield* testPlatformServices()
+      const fs = Context.get(platform, FileSystem.FileSystem)
+      const release = yield* Deferred.make<void>()
+      const held: FileSystem.FileSystem = {
+        ...fs,
+        exists: (path) => {
+          if (!path.endsWith(".git")) return fs.exists(path)
+          return Deferred.await(release).pipe(Effect.andThen(fs.exists(path)))
+        },
+      }
+      const { setup } = yield* mountApp({
+        services: Context.add(platform, FileSystem.FileSystem, held),
+      })
+      yield* typeCommand("/status")(setup)
+      const pending = yield* waitForFrame(
+        setup,
+        (next) => next.includes("cwd …"),
+        "the cwd line pending",
+      )
+      expect(pending).not.toMatch(/cwd [^…]/)
+      yield* Deferred.succeed(release, void 0)
+      const known = yield* waitForFrame(
+        setup,
+        (next) => !next.includes("cwd …") && /cwd \S/.test(next),
+        "the cwd line after the walk",
+      )
+      expect(known).toContain("esc close")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // A virtual model routes each turn: the row names it, the model its newest
   // route chose and that route's effort, and the gauge reads the chosen
   // model's window. A narrow row keeps the pair.
@@ -7895,10 +7945,12 @@ describe("TUI renderer surfaces", () => {
               const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + skewMs
               return {
                 providers: [],
+                // Silent 5 min, inside the hold: its two last runs still count here.
                 peer: {
                   heard: { host: "workbox", at: serverNow - 5 * 60_000 },
                   runs: 2,
-                  silent: false,
+                  silent: true,
+                  counted: true,
                   down: [],
                 },
                 serverNow,
@@ -7916,7 +7968,7 @@ describe("TUI renderer surfaces", () => {
             "the peer row",
           )
           const row = frame.split("\n").find((line) => line.includes("⇄ peer workbox")) ?? ""
-          expect(row.trim()).toBe("⇄ peer workbox 2 runs · 5m")
+          expect(row.trim()).toBe("⇄ peer workbox unread 5m · 2 runs held")
         }).pipe(Effect.timeout("10 seconds")),
     )
   }

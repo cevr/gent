@@ -3,10 +3,12 @@
  * The machines extension's client side: the lanes band under the status
  * line, and one `gent ctl` view.
  *
- * The band shows what needs the owner or runs now: the lanes rows that
- * block or wait (no free lane, a lost login, the Sabbath), the peer's row
- * while it holds runs, falls silent or has a link down, and each active run of this
- * session's thread, from `MachinesRpc.Runs`. It hides while none does. Every
+ * The band shows what needs the owner or runs now: the lanes rows of the
+ * session's provider that are refused or wait (a refusal, a usage-limit
+ * wait, a lost login, the Sabbath), the peer's row while the peer changes
+ * what this server does (silent with runs in the hold, a link down while it
+ * was heard inside the hold), and each active run of this session's thread,
+ * from `MachinesRpc.Runs`. It hides while none does. Every
  * lanes row (`accounts.lanes`, the rows `gent ctl lanes --line` prints) is
  * in the `/status` pane. It reads again when a turn completes, when the
  * connection comes back, and every 30 s.
@@ -75,6 +77,7 @@ const RESETS_GLYPH = "↺"
 const PEER_GLYPH = "⇄"
 const LANE_GLYPHS: Record<LaneRow["state"], string> = {
   free: LANES_GLYPH,
+  full: LANES_GLYPH,
   none: LANES_GLYPH,
   unknown: LANES_GLYPH,
   banked: RESETS_GLYPH,
@@ -140,42 +143,63 @@ const laneBandRow = (row: LaneRow): BandRow => ({
 })
 
 /**
- * The lanes rows that need the owner: a provider with no free lane (a
- * refusal, a usage-limit wait, every lane held), a lost login, the Sabbath
- * holding every run; and the peer's row while the peer holds runs on this
- * server's pool, falls silent or has a link down. Free lanes, unknown ones,
- * banked resets and an idle linked peer are `/status` detail
+ * Whether the peer changes what this server does now: it fell silent while
+ * its last runs still count in the hold (the server keeps to half the
+ * pace), or a link went down while the peer was heard inside the hold.
+ * A live peer's runs, an idle linked peer and a peer silent past the hold
+ * are `/status` detail.
+ */
+const peerActs = (peer: NonNullable<LaneReport["peer"]>): boolean =>
+  (peer.silent && peer.runs > 0) || (peer.counted && peer.down.length > 0)
+
+/**
+ * The lanes rows that need the owner in this session: a refusal or a
+ * usage-limit wait on the session's provider, a lost login there, the
+ * Sabbath holding every run, and the peer's row while the peer acts on this
+ * server ({@link peerActs}). `provider` is the session's model's provider;
+ * none while the session names no model the catalog knows, and then every
+ * provider's rows count. Every lane held by the owner's own runs (`full`),
+ * free lanes, unknown ones and banked resets are `/status` detail
  * ({@link laneDetail}).
  */
 const lanesNeedingOwner = (
   report: LaneReport,
   now: number,
   width: number,
+  provider: Option.Option<string>,
   zone: DateTime.TimeZone,
 ): ReadonlyArray<LaneRow> => {
-  const peerRuns = Option.exists(Option.fromUndefinedOr(report.peer), (peer) => peer.runs > 0)
+  const peer = Option.exists(Option.fromUndefinedOr(report.peer), peerActs)
+  const ours = (row: LaneRow) =>
+    Option.isNone(provider) ||
+    Option.match(row.provider, {
+      onNone: () => true,
+      onSome: (name) => Option.contains(provider, name),
+    })
   return laneRows(report, now, width, zone).filter((row) => {
-    if (row.state === "linked") return peerRuns
-    return row.state === "none" || row.state === "unlinked"
+    if (row.state === "linked" || row.state === "unlinked") return peer
+    return row.state === "none" && ours(row)
   })
 }
 
 /**
  * The band: the lanes rows that need the owner, then one row per active
  * run, oldest first, up to four and a count of the rest. Empty while no
- * lane blocks or waits, the peer holds no run and hears on both links, and no
- * run is active, so the band hides. `width` is the text's columns.
+ * lane of the session's provider is refused or waits, the peer does not act
+ * on this server, and no run is active, so the band hides. `width` is the
+ * text's columns; `provider` is the session's provider ({@link lanesNeedingOwner}).
  */
 export const bandRows = (
   data: BandData,
   now: number,
   width: number,
+  provider: Option.Option<string> = Option.none(),
   zone: DateTime.TimeZone = DateTime.zoneMakeLocal(),
 ): ReadonlyArray<BandRow> => {
   const active = data.runs.filter(isActive).toSorted((a, b) => a.createdAt - b.createdAt)
   const lanes = Option.match(data.lanes, {
     onNone: (): ReadonlyArray<LaneRow> => [],
-    onSome: (report) => lanesNeedingOwner(report, now, width, zone),
+    onSome: (report) => lanesNeedingOwner(report, now, width, provider, zone),
   }).map(laneBandRow)
   const shown = active.slice(0, BAND_MAX_RUNS).map((run) => runRow(run, now, width, zone))
   const rest = active.length - BAND_MAX_RUNS
@@ -183,11 +207,9 @@ export const bandRows = (
   return [...lanes, ...shown, { glyph: " ", tone: "running", text: `+${rest} more runs` }]
 }
 
-/** The pane's width for a lanes row: the longest form, which the pane cuts to its own width. */
-const PANE_LANE_COLUMNS = 160
-
 const PANE_TONES: Record<LaneRow["state"], StatusLabelItem["color"]> = {
   free: "success",
+  full: "textMuted",
   none: "warning",
   unknown: "textMuted",
   banked: "textMuted",
@@ -198,28 +220,40 @@ const PANE_TONES: Record<LaneRow["state"], StatusLabelItem["color"]> = {
 /**
  * Every lanes row as `/status` lines, in their glyph's tone: the lanes of
  * each provider, its lost logins and banked resets, the Sabbath, the peer.
- * None until the lanes answer.
+ * `columns` is the pane's row width: each row takes the longest form that
+ * fits it after its glyph. None until the lanes answer.
  */
 export const laneDetail = (
   lanes: Option.Option<LaneReport>,
   now: number,
+  columns: number,
   zone: DateTime.TimeZone = DateTime.zoneMakeLocal(),
 ): ReadonlyArray<StatusLabelItem> =>
   Option.match(lanes, {
     onNone: () => [],
     onSome: (report) =>
-      laneRows(report, now, PANE_LANE_COLUMNS, zone).map((row) => ({
+      laneRows(report, now, Math.max(8, columns - 2), zone).map((row) => ({
         text: `${LANE_GLYPHS[row.state]} ${row.text}`,
         color: PANE_TONES[row.state],
       })),
   })
 
-export function LanesBand(props: { readonly data: () => BandData; readonly now: () => number }) {
+export function LanesBand(props: {
+  readonly data: () => BandData
+  readonly now: () => number
+  /** The session's model's provider; none shows every provider's rows. */
+  readonly provider?: () => Option.Option<string>
+}) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   // The frame pads a column each side, and the glyph takes two.
   const textColumns = () => Math.max(8, dimensions().width - 4)
-  const rows = () => bandRows(props.data(), props.now(), textColumns())
+  const provider = () =>
+    Option.match(Option.fromUndefinedOr(props.provider), {
+      onNone: () => Option.none<string>(),
+      onSome: (read) => read(),
+    })
+  const rows = () => bandRows(props.data(), props.now(), textColumns(), provider())
   const toneColor = (tone: BandTone) => {
     if (tone === "free") return theme.success
     if (tone === "none") return theme.warning
@@ -413,11 +447,23 @@ export default defineClientExtension(statusRef.extensionId, {
       ),
     )
 
+    // The provider of the model the session runs its next step on, from the
+    // catalog: none until both are known.
+    const sessionProvider = () =>
+      Option.flatMap(transport.selectedModel(), (id) =>
+        Option.flatMap(transport.modelCatalog(), (catalog) =>
+          Option.map(
+            Option.fromUndefinedOr(catalog.find((model) => model.id === id)),
+            (model): string => model.provider,
+          ),
+        ),
+      )
+
     return clientContributions(
       statusLabelContribution({
         priority: 50,
         anchor: "pane",
-        produce: () => laneDetail(band.value().lanes, transport.serverNow()),
+        produce: (fit) => laneDetail(band.value().lanes, transport.serverNow(), fit.columns),
       }),
       widgetContribution({
         id: "machines.band",
@@ -431,7 +477,7 @@ export default defineClientExtension(statusRef.extensionId, {
             tick()
             return transport.serverNow()
           }
-          return <LanesBand data={band.value} now={now} />
+          return <LanesBand data={band.value} now={now} provider={sessionProvider} />
         },
       }),
     )

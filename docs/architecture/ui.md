@@ -25,6 +25,7 @@ The references are the `ui` rows of [`PRIOR_ART.md`](../../PRIOR_ART.md): Claude
 6. Asks and prompts: approval, question, handoff; docked pane, never modal (owner rule).
 7. Errors and notices: provider error, retry, overflow/compaction notice; wording and placement.
 8. Status: the row at rest (model, effort and context gauge only), what joins it when it needs the reader, the rows under it for live work, and the on-demand detail (`/status`: account, cost, cwd, cache, lanes).
+   The row and the band hold only what needs an action in this session: a failing PR check (`pr #N ✗`) and a cache about to lapse (`cache <1m`) are not, so they stay in `/status`.
 9. Selection and copy (OSC 52), links, mouse.
 10. A clear transcript: a user message, an agent reply, a child agent, a queued message and a tool call each look different at a glance; finished work is one summary line with its detail on demand.
 11. Consistency inside gent: the same key or word means the same thing on every surface; each pane shows its way out.

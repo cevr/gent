@@ -60,6 +60,16 @@ export const ContextRenter = Schema.Struct({
 export type ContextRenter = typeof ContextRenter.Type
 
 /**
+ * A role's window below the model's, as a step ran under it: the window,
+ * and what the messages may take under it (`roleWindowMessageTokens`).
+ */
+export const RoleWindowTokens = Schema.Struct({
+  tokens: Schema.Natural,
+  availableInputTokens: Schema.Natural,
+})
+export type RoleWindowTokens = typeof RoleWindowTokens.Type
+
+/**
  * Why a stopped step may run again only at its retry time: `limit`, its
  * account's usage limit or quota windows; `sabbath`, the owner's Sabbath.
  */
@@ -347,6 +357,13 @@ export const AgentEvent = Schema.TaggedUnion({
     reservedOutputTokens: Schema.Natural,
     /** The model's input cap the step ran under; absent when its catalog names none. */
     inputLimitTokens: Schema.optional(Schema.Natural),
+    /**
+     * The role's window the step ran under (`ModelContextWindowPolicy`), below
+     * the model's: `tokens`, the window, and `availableInputTokens`, what the
+     * messages may take under it, the count a handoff at it compares with
+     * `estimatedTokens`. Absent when the role has no window of its own.
+     */
+    roleWindow: Schema.optional(RoleWindowTokens),
     omittedMessages: Schema.Natural,
     /**
      * The first message the projection sent past the ones it omitted. Absent
