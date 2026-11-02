@@ -77,6 +77,7 @@ import {
   type ReasoningEffort,
   request,
   resolveDataDir,
+  runProcess,
   SessionId,
   sessionThread,
   tool,
@@ -214,6 +215,9 @@ type ThreadState = typeof ThreadState.Type
 /** A server-global named permit; an omitted limit means one. */
 const Permit = Schema.Struct({ name: Slug, limit: Schema.optionalKey(PositiveInt) })
 
+/** An environment variable's name, as a shell reads it. */
+const EnvName = Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/))
+
 /**
  * A command moves by its end: exit 0 takes `pass`. Without `error`, any other
  * end takes `fail`. With it, only exit 1 takes `fail`, and any other end (an
@@ -236,6 +240,13 @@ const RunState = Schema.Struct({
    * Default false: every pass and fail judges.
    */
   screen: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Reuses a pass (`PassReceipt`): a visit whose head commit, command,
+   * environment and inputs all match a kept pass moves by `pass` with no
+   * command run. `env` names the environment variables the command reads
+   * beyond those every receipt keys on. Default: every visit runs.
+   */
+  reuse: Schema.optionalKey(Schema.Struct({ env: Schema.optionalKey(Schema.Array(EnvName)) })),
   ...VisitCap,
 })
 type RunState = typeof RunState.Type
@@ -506,11 +517,13 @@ const MachineStep = Schema.TaggedUnion({
     handedOffTokens: Schema.optionalKey(PositiveInt),
     windowTokens: Schema.optionalKey(PositiveInt),
   },
+  /** `reused`: a pass receipt gave the end, and no command ran (`RunState.reuse`). */
   CommandEnded: {
     state: StateName,
     exitCode: Schema.optionalKey(Schema.Int),
     timedOut: Schema.Boolean,
     outputTail: Schema.String,
+    reused: Schema.optionalKey(Schema.Boolean),
   },
   Interrupted: { state: StateName },
   /**
@@ -1239,12 +1252,58 @@ const createMachineTables = Effect.gen(function* () {
   )
 })
 
-const ensureMachineTables = ensureExtensionTables({
-  owner: "@gent/machines",
-  version: 2,
-  tables: ["machine_steps", "machine_runs"],
-  create: createMachineTables,
-}).pipe(Effect.mapError(storageError("Machine table setup failed")))
+/**
+ * The pass receipts (`PassReceipt`), at a version of their own: they name no
+ * run, so a change to them leaves the runs alone.
+ */
+const createReceiptTables = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`CREATE TABLE machine_receipts (
+    head TEXT NOT NULL,
+    command TEXT NOT NULL,
+    env TEXT NOT NULL,
+    input TEXT NOT NULL,
+    exit_code INTEGER NOT NULL,
+    output TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (head, command, env, input)
+  )`)
+  yield* sql.unsafe(`CREATE INDEX machine_receipts_at ON machine_receipts (at)`)
+})
+
+const ensureMachineTables = Effect.andThen(
+  ensureExtensionTables({
+    owner: "@gent/machines",
+    version: 2,
+    tables: ["machine_steps", "machine_runs"],
+    create: createMachineTables,
+  }),
+  ensureExtensionTables({
+    owner: "@gent/machines/receipts",
+    version: 1,
+    tables: ["machine_receipts"],
+    create: createReceiptTables,
+  }),
+).pipe(Effect.mapError(storageError("Machine table setup failed")))
+
+/** The newest pass receipts a server keeps; a new one past this many drops the oldest. */
+const MAX_RECEIPTS = 500
+
+/**
+ * What a pass receipt is kept under: the commit, the command as rendered,
+ * the environment and the input tree, each a digest. A pass at one key is a
+ * pass at any run with the same key.
+ */
+interface ReceiptKey {
+  readonly head: string
+  readonly command: string
+  readonly env: string
+  readonly input: string
+}
+
+const decodeReceiptRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ output: Schema.String })),
+)
 
 /** At most this many machine commands run at once in one server, over every machine. */
 const MAX_ACTIVE_MACHINE_COMMANDS = 4
@@ -1339,6 +1398,13 @@ interface MachineStoreService {
   /** The runs a branch hosts that have work left. */
   readonly activeOn: (host: PlaceRecord) => Effect.Effect<ReadonlyArray<Run>, MachineStorageError>
   readonly removeHostSession: (sessionId: SessionId) => Effect.Effect<void, MachineStorageError>
+  /** The output of the pass kept under `key`, if one is. */
+  readonly receipt: (key: ReceiptKey) => Effect.Effect<Option.Option<string>, MachineStorageError>
+  /** Keeps a pass under `key`, its output's tail with it; past `MAX_RECEIPTS` the oldest goes. */
+  readonly keepReceipt: (
+    key: ReceiptKey,
+    output: string,
+  ) => Effect.Effect<void, MachineStorageError>
   readonly permits: CommandPermits
 }
 
@@ -1640,6 +1706,30 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
             }).pipe(sql.withTransaction)
           },
           Effect.mapError(storageError("Failed to remove a session's machine runs")),
+        ),
+        receipt: Effect.fn("MachineStore.receipt")(
+          function* (key) {
+            const rows = yield* sql`SELECT output FROM machine_receipts
+              WHERE head = ${key.head} AND command = ${key.command}
+                AND env = ${key.env} AND input = ${key.input} AND exit_code = 0`
+            const decoded = yield* decodeReceiptRows(rows)
+            return Option.map(Option.fromUndefinedOr(decoded[0]), (row) => row.output)
+          },
+          Effect.mapError(storageError("Failed to read a pass receipt")),
+        ),
+        keepReceipt: Effect.fn("MachineStore.keepReceipt")(
+          function* (key, output) {
+            const at = yield* Clock.currentTimeMillis
+            yield* Effect.gen(function* () {
+              yield* sql`INSERT INTO machine_receipts (head, command, env, input, exit_code, output, at)
+                VALUES (${key.head}, ${key.command}, ${key.env}, ${key.input}, 0, ${output}, ${at})
+                ON CONFLICT (head, command, env, input)
+                DO UPDATE SET exit_code = 0, output = excluded.output, at = excluded.at`
+              yield* sql`DELETE FROM machine_receipts WHERE rowid NOT IN (
+                SELECT rowid FROM machine_receipts ORDER BY at DESC, rowid DESC LIMIT ${MAX_RECEIPTS})`
+            }).pipe(sql.withTransaction)
+          },
+          Effect.mapError(storageError("Failed to keep a pass receipt")),
         ),
         permits,
       })
@@ -3859,7 +3949,128 @@ interface CommandEnd {
   readonly exitCode: Option.Option<number>
   readonly timedOut: boolean
   readonly output: string
+  /** A pass receipt gave the end: no command ran. */
+  readonly reused: boolean
 }
+
+// ── pass receipts ───────────────────────────────────────────────────────────
+
+/** One git read of a receipt key; a slower one gives no key, and the command runs. */
+const RECEIPT_GIT_TIMEOUT = Duration.seconds(30)
+
+/** A git read's trimmed stdout; a nonzero exit fails it. */
+const receiptGit = (cwd: string, args: ReadonlyArray<string>, env: Record<string, string> = {}) =>
+  runProcess("git", args, {
+    cwd,
+    env: { GIT_TERMINAL_PROMPT: "0", ...env },
+    extendEnv: true,
+    timeout: RECEIPT_GIT_TIMEOUT,
+  }).pipe(
+    Effect.flatMap((result) => {
+      if (result.exitCode === 0) return Effect.succeed(result.stdout.trim())
+      return Effect.fail(
+        new MachineFault({ message: `git ${args.join(" ")} exited ${result.exitCode}` }),
+      )
+    }),
+  )
+
+/**
+ * The tree the checkout holds now, every file git does not ignore included
+ * (tracked, changed or new): `git add -A` into a copy of the index, then
+ * `git write-tree`. The checkout's own index is not touched.
+ */
+const inputTree = Effect.fn("Machines.inputTree")(function* (cwd: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const index = path.resolve(cwd, yield* receiptGit(cwd, ["rev-parse", "--git-path", "index"]))
+  const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-receipt-index-" })
+  const scratch = path.join(dir, "index")
+  // The copy keeps the index's file stats, so the add hashes only what changed.
+  if (yield* fs.exists(index)) yield* fs.copyFile(index, scratch)
+  yield* receiptGit(cwd, ["add", "-A"], { GIT_INDEX_FILE: scratch })
+  return yield* receiptGit(cwd, ["write-tree"], { GIT_INDEX_FILE: scratch })
+}, Effect.scoped)
+
+/**
+ * The environment a command inherits, as `env -0` prints it: what the server
+ * holds now, read the way the command will read it.
+ */
+const commandEnvironment = Effect.fn("Machines.commandEnvironment")(function* (cwd: string) {
+  const result = yield* runProcess("env", ["-0"], { cwd, timeout: RECEIPT_GIT_TIMEOUT })
+  if (result.exitCode !== 0) {
+    return yield* new MachineFault({ message: `env -0 exited ${result.exitCode}` })
+  }
+  const variables = new Map<string, string>()
+  for (const entry of result.stdout.split("\0")) {
+    const at = entry.indexOf("=")
+    if (at > 0) variables.set(entry.slice(0, at), entry.slice(at + 1))
+  }
+  return variables
+})
+
+/**
+ * The environment a pass held for: the platform, the gent build, the
+ * directory, `PATH`, and each variable the state names in `reuse.env`.
+ */
+const envDigest = Effect.fn("Machines.envDigest")(function* (
+  cwd: string,
+  names: ReadonlyArray<string>,
+) {
+  const platform = yield* GentPlatform
+  const os = yield* platform.osInfo
+  const build = yield* platform.build
+  let buildId = "source"
+  if (build._tag === "Compiled") buildId = build.id
+  const variables = yield* commandEnvironment(cwd)
+  const named: Record<string, string> = {}
+  for (const name of [...new Set(["PATH", ...names])].sort()) {
+    const value = Option.fromUndefinedOr(variables.get(name))
+    if (Option.isSome(value)) named[name] = value.value
+  }
+  return yield* sha256Hex(
+    encodeJsonText({
+      platform: os.platform,
+      arch: os.arch,
+      release: os.release,
+      build: buildId,
+      cwd,
+      named,
+    }),
+  )
+})
+
+/**
+ * The key a pass of `state` is kept under, for a state with `reuse`: the
+ * commit `HEAD` names, the command as rendered (a file by its content,
+ * `{{visit}}` as 0), the environment and the input tree. None when the state
+ * has no `reuse` or git cannot say (no repository, no commit): the command
+ * runs, and keeps nothing.
+ */
+const receiptKeyOf = Effect.fn("Machines.receiptKeyOf")(function* (
+  run: Run,
+  state: RunState,
+  shipped: Readonly<Record<string, string>>,
+  bun: string,
+) {
+  const reuse = Option.fromUndefinedOr(state.reuse)
+  if (Option.isNone(reuse)) return Option.none<ReceiptKey>()
+  return yield* Effect.gen(function* () {
+    const files: Record<string, string> = {}
+    for (const [name, content] of Object.entries(shipped)) {
+      files[name] = `file:${yield* sha256Hex(content)}`
+    }
+    const rendered = render(state.run, { ...templateScope(run, 0), files, bun: Option.some(bun) })
+    return {
+      head: yield* receiptGit(run.cwd, ["rev-parse", "HEAD"]),
+      command: yield* sha256Hex(rendered),
+      env: yield* envDigest(run.cwd, reuse.value.env ?? []),
+      input: yield* inputTree(run.cwd),
+    } satisfies ReceiptKey
+  }).pipe(Effect.option)
+})
+
+const sameReceiptKey = (a: ReceiptKey, b: ReceiptKey) =>
+  a.head === b.head && a.command === b.command && a.env === b.env && a.input === b.input
 
 /** The characters of a command's output an `error` move's note keeps: its last ones. */
 const ERROR_NOTE_OUTPUT_CHARS = 1_000
@@ -3914,7 +4125,12 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
   const permits = (yield* ExtensionContext).Permits
   // The command outlives this call, in the branch scope: it keeps the services it runs against.
   const services = yield* Effect.context<
-    MachineStore | FileSystem.FileSystem | Path.Path | Crypto.Crypto | ChildProcessSpawner
+    | MachineStore
+    | FileSystem.FileSystem
+    | Path.Path
+    | Crypto.Crypto
+    | ChildProcessSpawner
+    | GentPlatform
   >()
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -3949,6 +4165,9 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
         exitCode: Option.getOrNull(result.exitCode),
         timedOut: result.timedOut,
         output: outputTail,
+        ...omitUndefined({
+          reused: Option.getOrUndefined(Option.liftPredicate(true, () => result.reused)),
+        }),
       }
       return {
         after: {
@@ -3961,7 +4180,10 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
             state: action.state,
             timedOut: result.timedOut,
             outputTail,
-            ...omitUndefined({ exitCode: Option.getOrUndefined(result.exitCode) }),
+            ...omitUndefined({
+              exitCode: Option.getOrUndefined(result.exitCode),
+              reused: Option.getOrUndefined(Option.liftPredicate(true, () => result.reused)),
+            }),
           }),
           MachineStep.cases.Saved.make({ state: action.state, value }),
           MachineStep.cases.Moved.make({
@@ -3994,17 +4216,28 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
     Effect.timeoutOption(timeout),
     Effect.map(
       Option.match({
-        onNone: () => ({ exitCode: Option.none<number>(), timedOut: true, output: "" }),
-        onSome: (output) => ({
+        onNone: (): CommandEnd => ({
+          exitCode: Option.none(),
+          timedOut: true,
+          output: "",
+          reused: false,
+        }),
+        onSome: (output): CommandEnd => ({
           exitCode: Option.some(output.exitCode),
           timedOut: false,
           output: [output.stdout, output.stderr].filter((text) => text.length > 0).join("\n"),
+          reused: false,
         }),
       }),
     ),
     // A spawn that fails ran nothing: the command fails with the error as its output.
     Effect.catch((error) =>
-      Effect.succeed({ exitCode: Option.none<number>(), timedOut: false, output: String(error) }),
+      Effect.succeed<CommandEnd>({
+        exitCode: Option.none(),
+        timedOut: false,
+        output: String(error),
+        reused: false,
+      }),
     ),
   )
   const permitted = Option.match(Option.fromUndefinedOr(state.permit), {
@@ -4014,7 +4247,35 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
         .with(named.name, named.limit ?? 1, commandResult)
         .pipe(Effect.mapError((error) => new MachineFault({ message: error.message }))),
   })
-  const work = permitted.pipe(
+  const keyed = receiptKeyOf(run, state, shipped, bun)
+  // A kept pass at the same key ends the command at once; a new pass is kept
+  // when the key still holds after it, so a change made while it ran keeps none.
+  const receipted = Effect.gen(function* () {
+    const store = yield* MachineStore
+    const key = yield* keyed
+    const kept = yield* Effect.transposeOption(Option.map(key, store.receipt)).pipe(
+      Effect.map(Option.flatten),
+      Effect.catchTag("MachineStorageError", () => Effect.succeedNone),
+    )
+    if (Option.isSome(kept)) {
+      return { exitCode: Option.some(0), timedOut: false, output: kept.value, reused: true }
+    }
+    const result = yield* permitted
+    if (Option.isNone(key) || result.timedOut || !Option.contains(result.exitCode, 0)) return result
+    const after = yield* keyed
+    if (!Option.exists(after, (now) => sameReceiptKey(now, key.value))) return result
+    yield* store
+      .keepReceipt(key.value, result.output.slice(-OUTPUT_TAIL_CHARS))
+      .pipe(
+        Effect.catchTag("MachineStorageError", (error) =>
+          Effect.logWarning("machines.receipt.keep.failed").pipe(
+            Effect.annotateLogs({ run: run.run, error: error.message }),
+          ),
+        ),
+      )
+    return result
+  })
+  const work = receipted.pipe(
     Effect.flatMap(ended),
     // Permit acquisition failed before spawning: fail the run as a typed
     // machine fault, rather than taking an exit-code edge or logging a defect.

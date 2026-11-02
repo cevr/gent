@@ -205,6 +205,28 @@
     and clears them, since a wrong test is the implementor's own failure.
     Runs recorded before `screen` counted every repeat-check pass and fail
     as a judging check, so older quality history mixes the two rules.
+  - A `run` state with `reuse` (`{ env? }`) keeps its passes as receipts in
+    `machine_receipts` (at their own schema version, `@gent/machines/receipts`,
+    so a change to them leaves the runs alone; the newest 500 stay). The key
+    is four parts: the commit `git rev-parse HEAD` names; the SHA-256 of the
+    command as rendered, a shipped file by its content's digest and
+    `{{visit}}` as 0; the SHA-256 of the platform, release, gent build, cwd,
+    `PATH` and each variable `reuse.env` names, as `env -0` prints them (what
+    the command inherits); and the tree `git add -A` then `git write-tree`
+    give in a copy of the index, so a change, a new file and a deletion that
+    git does not ignore are inputs, and the checkout's index is untouched.
+    Before the command (and its named permit), a kept pass at the key ends
+    the visit as exit 0 with the kept output: `CommandEnded.reused` and
+    `reused: true` in the `Saved` value, no process, no log. A pass is kept
+    only when the key reads the same after it, so a command that changed the
+    checkout (a log inside it, a formatter) keeps none. A red, a timeout and
+    a start failure are never kept: a flake would trap the run. No
+    repository or no commit gives no key, and the command runs. Files
+    written inside the checkout count, so keep logs outside it or ignored;
+    `machine.define` writes `.gent/machines/`, which a project that does not
+    ignore it sees as a new input. The orchestrate machines' merge gate has
+    `reuse: {}`; the implementor's own gate is a bash call, not a machine
+    command, and keeps nothing.
   - The orchestrate machines' `repeats` state (`fix-repeats` in the light
     one) runs the shipped `repeat-tests.ts` (`packages/extensions/src`,
     embedded by a Bun text import) as `{{bun}} "{{files.repeat-tests.ts}}"

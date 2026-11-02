@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Clock, Duration, Effect, FileSystem, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
   defineExtension,
@@ -31,6 +31,7 @@ import {
   RevertOutcome,
   TurnPatch,
 } from "../src/checkpoints.js"
+import { scopedEnv } from "./helpers/process-env"
 import { e2ePreset } from "./helpers/test-preset"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -227,27 +228,6 @@ const storeRefs = (store: string) =>
 /** The file `gent-gc` of a store: when git last collected its garbage. */
 const collectedAt = (store: string) =>
   sh(store, "if [ -e gent-gc ]; then cat gent-gc; else echo none; fi")
-
-/**
- * Set `name` in the process environment to `next` (unset on none); the value
- * it held. The environment is the boundary under test: gent's git commands
- * inherit it, as they inherit the user's.
- */
-const swapEnv = (name: string, next: Option.Option<string>) => {
-  // oxlint-disable-next-line effect/noGlobals -- the process environment is what git inherits, and the only way a global git config reaches it.
-  const env = process.env
-  const previous = Option.fromUndefinedOr(env[name])
-  if (Option.isSome(next)) env[name] = next.value
-  else delete env[name]
-  return previous
-}
-
-/** `name` set in the process environment for the scope. */
-const scopedEnv = (name: string, value: string) =>
-  Effect.acquireRelease(
-    Effect.sync(() => swapEnv(name, Option.some(value))),
-    (previous) => Effect.sync(() => swapEnv(name, previous)),
-  )
 
 /** What the user's repository holds: its refs, its objects and its index. */
 const repositoryState = (repo: string) =>

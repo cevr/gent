@@ -122,6 +122,11 @@ const answer = (
 const unexpected = (command: string, args: ReadonlyArray<string>) =>
   Effect.die(`unexpected command ${command} ${args.join(" ")}`)
 
+/** The git verbs the fake answers; over a real spawner, any other git runs for real. */
+const FAKE_GIT_VERBS = new Set(["remote get-url", "rev-parse --verify", "merge-base --is-ancestor"])
+const fakeOwnsGit = (args: ReadonlyArray<string>) =>
+  args[0] === "push" || FAKE_GIT_VERBS.has(`${args[0] ?? ""} ${args[1] ?? ""}`)
+
 // ── the fake ────────────────────────────────────────────────────────────────
 
 export const fakeGitHub = (initial: Partial<Remote> = {}) =>
@@ -269,14 +274,17 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
       addRun,
       addStatus,
       layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      /** The fake for `gh` and `git`; any other command spawns on the spawner it is given. */
+      /**
+       * The fake for `gh` and the git verbs it answers; any other command
+       * spawns on the spawner it is given.
+       */
       layerOverReal: Layer.effect(
         ChildProcessSpawner.ChildProcessSpawner,
         Effect.map(ChildProcessSpawner.ChildProcessSpawner, (real) =>
           ChildProcessSpawner.make((command) => {
             const owned =
               command._tag === "StandardCommand" &&
-              (command.command === "gh" || command.command === "git")
+              (command.command === "gh" || (command.command === "git" && fakeOwnsGit(command.args)))
             if (owned) return spawner.spawn(command)
             return real.spawn(command)
           }),

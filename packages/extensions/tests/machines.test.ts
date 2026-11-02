@@ -101,6 +101,7 @@ import {
 } from "./helpers/routed-session"
 import { e2ePreset } from "./helpers/test-preset"
 import { CANDIDATE, fakeGitHub, REPO } from "./helpers/fake-github"
+import { scopedEnv } from "./helpers/process-env"
 
 // ── the routed models ───────────────────────────────────────────────────────
 
@@ -402,6 +403,7 @@ const StepView = Schema.Struct({
   handedOffTokens: Schema.optionalKey(Schema.Finite),
   windowTokens: Schema.optionalKey(Schema.Finite),
   askId: Schema.optionalKey(Schema.String),
+  reused: Schema.optionalKey(Schema.Boolean),
   round: Schema.optionalKey(Schema.String),
   model: Schema.optionalKey(Schema.String),
   maker: Schema.optionalKey(Schema.String),
@@ -7323,5 +7325,170 @@ describe("the repeat-test check of the orchestrate machine", () => {
         )
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
+  )
+})
+
+// ── pass receipts ───────────────────────────────────────────────────────────
+
+/**
+ * A gate that counts its runs in `{{input.count}}`, outside the checkout,
+ * and prints `say`; a rerun answer comes back to it. `extra` adds lines to
+ * its command.
+ */
+const receiptGate = (name: string, say: string, extra: ReadonlyArray<string> = []) => ({
+  name,
+  threads: {},
+  start: "gate",
+  states: {
+    gate: {
+      kind: "run",
+      run: [`echo "run {{visit}}" >> "{{input.count}}"`, ...extra, `echo "${say}"`].join("\n"),
+      reuse: { env: ["GENT_RECEIPT_PROBE"] },
+      on: { pass: "again", fail: "again" },
+    },
+    again: { kind: "ask", ask: "Again?", on: { rerun: "gate", end: "done" } },
+    done: { kind: "final" },
+  },
+})
+
+/** The lines of the count file: how many times a gate's command ran. */
+const runsCounted = (file: string) =>
+  Effect.map(
+    readUnitFile(file),
+    (text) => text.split("\n").filter((line) => line.length > 0).length,
+  )
+
+/** The gate's command ends of a run, each reused or not. */
+const gateEnds = (home: Effect.Success<typeof restartableHome>, run: string) =>
+  Effect.map(home.sql(stepsOf(run)), (steps) =>
+    steps.filter((step) => step._tag === "CommandEnded").map((step) => step.reused === true),
+  )
+
+describe("a run state's pass receipt", () => {
+  it.live(
+    "a pass is reused at the same head, command, environment and input tree, and any change runs the command",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const count = `${home.home}/count`
+        yield* unitGit(home.cwd, ["init", "-q", "-b", "main"])
+        // machine.define writes the definitions under .gent/machines in the cwd.
+        yield* commitFiles(home.cwd, { ".gitignore": ".gent/\n", "a.txt": "one\n" }, "base")
+        const models = yield* makeModels(trackWorker)
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRun(
+          client,
+          owner,
+          receiptGate("receipts", "gate passed"),
+          "receipts",
+          {
+            count,
+          },
+        )
+        yield* askDetails(client, owner, 1)
+        expect(yield* runsCounted(count)).toBe(1)
+        // Nothing changed: the kept pass ends the command, which does not run.
+        yield* answerAsk(client, owner, 1, "rerun")
+        yield* askDetails(client, owner, 2)
+        expect(yield* runsCounted(count)).toBe(1)
+        const saved = (yield* home.sql(stepsOf(run))).filter(
+          (step) => step._tag === "Saved" && step.state === "gate",
+        )
+        expect(saved[1]?.value).toEqual({
+          exitCode: 0,
+          timedOut: false,
+          output: "gate passed\n",
+          reused: true,
+        })
+        // A new commit with the same tree: a new head.
+        yield* unitGit(home.cwd, ["commit", "-q", "--allow-empty", "-m", "empty"])
+        yield* answerAsk(client, owner, 2, "rerun")
+        yield* askDetails(client, owner, 3)
+        expect(yield* runsCounted(count)).toBe(2)
+        // A new file git does not ignore: a new input tree at the same head.
+        yield* writeFiles(home.cwd, { "b.txt": "new\n" })
+        yield* answerAsk(client, owner, 3, "rerun")
+        yield* askDetails(client, owner, 4)
+        expect(yield* runsCounted(count)).toBe(3)
+        // A named variable set: a new environment.
+        yield* scopedEnv("GENT_RECEIPT_PROBE", "on")
+        yield* answerAsk(client, owner, 4, "rerun")
+        yield* askDetails(client, owner, 5)
+        expect(yield* runsCounted(count)).toBe(4)
+        yield* answerAsk(client, owner, 5, "end")
+        expect(yield* gateEnds(home, run)).toEqual([false, true, false, false, false])
+        // Another command at the same key runs; the same command in a new run reuses.
+        const changed = yield* startRun(
+          client,
+          owner,
+          receiptGate("receipts-changed", "gate passed again"),
+          "receipts-changed",
+          { count },
+        )
+        yield* askDetails(client, owner, 6)
+        expect(yield* runsCounted(count)).toBe(5)
+        yield* answerAsk(client, owner, 6, "end")
+        const again = yield* startRun(
+          client,
+          owner,
+          receiptGate("receipts", "gate passed"),
+          "receipts",
+          { count },
+          "receipts-again",
+        )
+        yield* askDetails(client, owner, 7)
+        expect(yield* runsCounted(count)).toBe(5)
+        expect(yield* gateEnds(home, changed)).toEqual([false])
+        expect(yield* gateEnds(home, again)).toEqual([true])
+      }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
+    65_000,
+  )
+
+  it.live(
+    "a pass whose command changed the checkout keeps no receipt, nor does a red or a cwd outside git",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const count = `${home.home}/count`
+        const models = yield* makeModels(trackWorker)
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        const owner = ownerOf(yield* client.session.create({}))
+        // No repository: no key, so each visit runs.
+        const loose = yield* startRun(client, owner, receiptGate("loose", "ok"), "loose", { count })
+        yield* answerAsk(client, owner, 1, "rerun")
+        yield* askDetails(client, owner, 2)
+        expect(yield* runsCounted(count)).toBe(2)
+        yield* answerAsk(client, owner, 2, "end")
+        expect(yield* gateEnds(home, loose)).toEqual([false, false])
+        yield* unitGit(home.cwd, ["init", "-q", "-b", "main"])
+        yield* commitFiles(home.cwd, { ".gitignore": ".gent/\n", "a.txt": "one\n" }, "base")
+        // The command writes a file in the checkout as it passes: the tree it
+        // started at no longer holds at its end, so it keeps no receipt, even
+        // once the tree is back.
+        const writer = yield* startRun(
+          client,
+          owner,
+          receiptGate("writer", "ok", ["echo made > made.txt"]),
+          "writer",
+          { count },
+        )
+        yield* askDetails(client, owner, 3)
+        yield* removePath(`${home.cwd}/made.txt`)
+        yield* answerAsk(client, owner, 3, "rerun")
+        yield* askDetails(client, owner, 4)
+        expect(yield* runsCounted(count)).toBe(4)
+        expect(yield* gateEnds(home, writer)).toEqual([false, false])
+        yield* answerAsk(client, owner, 4, "end")
+        // A red is never kept: a flake would trap the run on it.
+        const red = yield* startRun(client, owner, receiptGate("red", "ok", ["exit 1"]), "red", {
+          count,
+        })
+        yield* answerAsk(client, owner, 5, "rerun")
+        yield* askDetails(client, owner, 6)
+        expect(yield* runsCounted(count)).toBe(6)
+        expect(yield* gateEnds(home, red)).toEqual([false, false])
+      }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
+    65_000,
   )
 })

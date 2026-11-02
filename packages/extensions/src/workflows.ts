@@ -301,6 +301,9 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       permit: { name: "gate" },
       // The gate holds the server's one permit, so a slow one stalls every unit.
       timeoutSeconds: 1200,
+      // A pass at the same head, gate and files is not run again; its log is
+      // the earlier visit's.
+      reuse: {},
       on: { pass: "merge", fail: "resume" },
     },
     merge: { kind: "integrate", ref: "main", on: { green: "merged", red: "resume" } },
