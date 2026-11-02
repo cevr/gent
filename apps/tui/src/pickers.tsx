@@ -8,8 +8,11 @@ import {
   plainRow,
   SelectList,
   type SelectListRow,
+  selectable,
   usePickerGeometry,
 } from "./ui"
+import { useTheme } from "./theme"
+import type { RGBA } from "@opentui/core"
 import { formatError, shortId, truncate } from "./utils"
 import { textWidth } from "./bun-adapter"
 import { useClient, useRuntime } from "./client"
@@ -584,6 +587,77 @@ export function SettingsPicker(props: SettingsPickerProps) {
           filter={{ onQueryChange: setQuery }}
           sticky={sticky}
           onSelect={(row) => props.onSelect(row.id)}
+          onDismiss={props.onClose}
+        />
+      </PickerFrame>
+    </Show>
+  )
+}
+
+// ── status pane ─────────────────────────────────────────────────────────────
+
+/** One `/status` line: its text names what it is (`cache 59m`), drawn in its color. */
+interface StatusPaneLine {
+  readonly text: string
+  readonly color: RGBA
+}
+
+function StatusPaneRow(props: {
+  readonly id: string
+  readonly selected: boolean
+  readonly line: StatusPaneLine
+  readonly width: number
+}) {
+  const { theme } = useTheme()
+  const background = () => {
+    if (props.selected) return theme.primary
+    return "transparent"
+  }
+  const foreground = () => {
+    if (props.selected) return theme.selectedListItemText
+    return props.line.color
+  }
+  return (
+    <box id={props.id} backgroundColor={background()} paddingLeft={1}>
+      <text wrapMode="none" style={{ fg: foreground() }}>
+        {truncate(props.line.text, props.width)}
+      </text>
+    </box>
+  )
+}
+
+/**
+ * The `/status` pane: what the status row leaves out, read on demand. A
+ * docked pane like `/model`, one line each: the account, the context's
+ * window and cap, the cost, the cwd, then the extensions' pane labels (the
+ * cache clock, the branch, the lanes, the peer). Nothing in it is a choice:
+ * the cursor only scrolls a list longer than the pane, and Enter does
+ * nothing. The lines are live, so a cache clock counts down while it is open.
+ */
+export function StatusPane(props: {
+  readonly open: boolean
+  readonly lines: () => ReadonlyArray<StatusPaneLine>
+  readonly onClose: () => void
+}) {
+  const { rowWidth } = usePickerGeometry()
+  // A line is keyed by its place: the text of a clock changes as it counts.
+  const rows = (): ReadonlyArray<SelectListRow<number>> =>
+    props
+      .lines()
+      .map((line, index) =>
+        selectable(index, (selected, id) => (
+          <StatusPaneRow id={id} selected={selected()} line={line} width={rowWidth() - 1} />
+        )),
+      )
+  return (
+    <Show when={props.open}>
+      <PickerFrame error={Option.none()} title="Status" keys={[KeyHints.move, KeyHints.close]}>
+        <SelectList
+          id="status-pane"
+          open={props.open}
+          rows={rows}
+          rowKey={String}
+          onSelect={() => {}}
           onDismiss={props.onClose}
         />
       </PickerFrame>

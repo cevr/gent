@@ -22,6 +22,7 @@ import {
   fedStream,
   gridText,
   historyText,
+  isStatusRow,
   keys,
   ptyWaitFor,
   rawForFailure,
@@ -31,6 +32,7 @@ import {
   settleAndCaptureFollowedBy,
   settlePty,
   signalAndExit,
+  STATUS_ROW_TEXT,
   type TestContext,
 } from "../src/pty-fixture"
 import { exitWithin } from "../src/server-process-fixture"
@@ -68,7 +70,7 @@ class TranscriptReadinessError extends Schema.TaggedError<
  */
 const submitMessages = (ctx: TestContext, count: number) =>
   Effect.gen(function* () {
-    yield* ptyWaitFor(ctx, "ready", { timeout: GENT_START_BOUND_MS })
+    yield* ptyWaitFor(ctx, STATUS_ROW_TEXT, { timeout: GENT_START_BOUND_MS })
     for (let index = 1; index <= count; index++) {
       ctx.pty.write(messageText(index))
       yield* settlePty(ctx, TYPED)
@@ -212,7 +214,7 @@ describe("E2E: Scrollback ownership", () => {
           ctx,
           (visible) =>
             visible.some((row) => row.includes(DEBUG_SESSION_END)) &&
-            visible.some((row) => row.startsWith("ready")),
+            visible.some((row) => isStatusRow(row)),
           { timeout: 25_000, label: "the debug session at idle" },
         )
         const before = transcriptBlock(yield* settleAndCapture(ctx, SETTLE))
@@ -227,7 +229,7 @@ describe("E2E: Scrollback ownership", () => {
         expect(prompt).toBeGreaterThanOrEqual(start + before.length)
         // The region is gone: nothing follows the prompt, and no status row stays.
         expect(rows.slice(prompt + 1).filter((row) => row !== "")).toEqual([])
-        expect(rows.filter((row) => row.startsWith("ready"))).toEqual([])
+        expect(rows.filter((row) => isStatusRow(row))).toEqual([])
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
@@ -292,7 +294,7 @@ describe("E2E: Scrollback ownership", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn(["--debug"], { cols: 80, rows: 24 })
-        yield* ptyWaitFor(ctx, "ready", { timeout: 25_000 })
+        yield* ptyWaitFor(ctx, STATUS_ROW_TEXT, { timeout: 25_000 })
         yield* settlePty(ctx, TYPED)
         ctx.pty.write("/new")
         yield* settlePty(ctx, TYPED)
@@ -327,7 +329,7 @@ describe("E2E: Scrollback ownership", () => {
           ctx,
           (visible) =>
             visible.some((row) => row.includes(DEBUG_SESSION_END)) &&
-            visible.some((row) => row.startsWith("ready")),
+            visible.some((row) => isStatusRow(row)),
           { timeout: 25_000, label: "the debug session at idle" },
         )
         yield* settlePty(ctx, SETTLE)
@@ -395,7 +397,7 @@ describe("E2E: Scrollback ownership", () => {
             ctx,
             (visible) =>
               visible.some((row) => row.includes(DEBUG_SESSION_END)) &&
-              visible.some((row) => row.startsWith("ready")),
+              visible.some((row) => isStatusRow(row)),
             { timeout: 25_000, label: "the debug session at idle" },
           )
           const before = transcriptRows(yield* settleAndCapture(ctx, SETTLE))
@@ -418,7 +420,7 @@ describe("E2E: Scrollback ownership", () => {
             ctx,
             (visible) =>
               !visible.some((row) => row.startsWith("Model · ")) &&
-              visible.some((row) => row.startsWith("ready")),
+              visible.some((row) => isStatusRow(row)),
             { timeout: 10_000, label: "the model picker closed" },
           )
           yield* settlePty(ctx, SETTLE)
@@ -456,7 +458,7 @@ describe("E2E: Scrollback ownership", () => {
           ctx,
           (visible) =>
             visible.some((row) => row.includes(DEBUG_SESSION_END)) &&
-            visible.some((row) => row.startsWith("ready")),
+            visible.some((row) => isStatusRow(row)),
           { timeout: 25_000, label: "the debug session at idle" },
         )
         const before = transcriptBlock(yield* settleAndCapture(ctx, SETTLE))

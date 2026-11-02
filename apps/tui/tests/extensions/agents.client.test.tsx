@@ -2741,7 +2741,7 @@ describe("the status row names the child the reader watches", () => {
       const labels = yield* childLabels("explore")
       expect(labels.map((label) => label.text)).toEqual(["↳ child explore", "← sessions"])
       expect(labels[0]?.color).toBe("info")
-      // On a narrow row the way back gives way after the debug mark, before the cwd.
+      // On a narrow row the way back gives way after the gauge's share, before the model.
       expect(labels[1]?.short?.text).toBe("")
       expect(labels[1]?.key).toBe("←")
     }).pipe(Effect.timeout("8 seconds")),
@@ -2751,7 +2751,7 @@ describe("the status row names the child the reader watches", () => {
     Effect.gen(function* () {
       const labels = yield* childLabels("Check the greeting files (debug tools) and report back")
       expect(labels[0]?.text).toBe("↳ child Check the…")
-      // The label gives way whole and first: before the debug mark, the way back and the cwd.
+      // The label gives way whole and first: before the debug mark, the way back and the model.
       expect(labels[0]?.short?.text).toBe("")
       expect(labels[0]?.short?.rank).toBeLessThan(STATUS_YIELD.debug)
       expect(labels[0]?.short?.rank).toBeLessThan(labels[1]?.short?.rank ?? -Infinity)
@@ -2780,9 +2780,8 @@ describe("the status row names the child the reader watches", () => {
 
   /**
    * The status row the app draws over a child's session: the host labels,
-   * the extension's labels (`extra`), and the right group. A plain row has
-   * the phase, the cwd and the model; a crowded one, as the live check drew
-   * it, adds a provider, the effort and the git labels.
+   * the extension's labels (`extra`), and the right group, the gauge. A plain
+   * row has the model; a crowded one adds a provider and the effort.
    */
   const statusRowAt = (width: number, host: HostRow, extra: ReadonlyArray<StatusLabelItem>) =>
     Effect.gen(function* () {
@@ -2798,25 +2797,19 @@ describe("the status row names the child the reader watches", () => {
             ...item,
             color: resolveThemeColor(theme, item.color),
           }))
-          const right = [muted("cache 5m"), muted("ctx 0%"), muted("$0.002")]
+          const right = [muted("ctx 2k/160k", { text: "ctx 1%", rank: STATUS_YIELD.context })]
           const plain = [
-            muted("idle", { text: "", rank: STATUS_YIELD.phase }),
-            muted("repo", { text: "", rank: STATUS_YIELD.cwd }),
             muted("Claude Sonnet 5.5", { text: "Sonnet 5.5", rank: STATUS_YIELD.model }),
             ...ownLabels,
             ...right,
           ]
           const crowded = [
-            muted("idle", { text: "", rank: STATUS_YIELD.phase }),
-            muted("repo", { text: "", rank: STATUS_YIELD.cwd }),
             muted("Claude Sonnet 5.5 (anthropic)", {
               text: "Sonnet 5.5",
               rank: STATUS_YIELD.model,
             }),
             muted("high"),
             ...ownLabels,
-            muted("main", { text: "", rank: STATUS_YIELD.model + 0.5 }),
-            muted("3 files +5 -0", { text: "+5 -0", rank: STATUS_YIELD.cwd + 0.5 }),
             ...right,
           ]
           let labels = plain
@@ -2825,8 +2818,8 @@ describe("the status row names the child the reader watches", () => {
         },
         { width, height: 4 },
       )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("$0.002"), "status row")
-      return frame.split("\n").find((line) => line.includes("$0.002")) ?? ""
+      const frame = yield* waitForFrame(setup, (next) => next.includes("ctx "), "status row")
+      return frame.split("\n").find((line) => line.includes("ctx ")) ?? ""
     })
 
   it.scopedLive("the way back draws its key bright, as every hint does", () =>
@@ -2855,11 +2848,11 @@ describe("the status row names the child the reader watches", () => {
     }).pipe(Effect.timeout("8 seconds")),
   )
 
-  // The child label never costs the reader the way back or the cwd: at each
-  // width they show as on the same row without it.
+  // The child label never costs the reader the way back or the model's full
+  // name: at each width they show as on the same row without it.
   for (const width of [100, 60, 40]) {
     for (const host of ["plain", "crowded"] as const) {
-      it.scopedLive(`the child label keeps the way back and the cwd: ${host} row, ${width}`, () =>
+      it.scopedLive(`the child label keeps the way back and the model: ${host} row, ${width}`, () =>
         Effect.gen(function* () {
           const labels = yield* childLabels(
             "Check the greeting files (debug tools) and report back",
@@ -2868,12 +2861,10 @@ describe("the status row names the child the reader watches", () => {
           const hintOnly = yield* statusRowAt(width, host, labels.slice(1))
           const bare = yield* statusRowAt(width, host, [])
           expect(withChild.includes("← sessions")).toBe(hintOnly.includes("← sessions"))
-          expect(withChild.includes("repo")).toBe(bare.includes("repo"))
+          expect(withChild.includes("Claude")).toBe(bare.includes("Claude"))
           // At 100 columns a plain row has room for all three, the name cut at a word.
           if (width === 100 && host === "plain") {
-            expect(withChild).toContain(
-              "repo · Claude Sonnet 5.5 · ↳ child Check the… · ← sessions",
-            )
+            expect(withChild).toContain("Claude Sonnet 5.5 · ↳ child Check the… · ← sessions")
           }
         }).pipe(Effect.timeout("8 seconds")),
       )

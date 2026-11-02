@@ -50,12 +50,12 @@ import {
  * lifetime an expiry cannot be told from a changed prefix.
  *
  * Nothing is stored and the model never sees it. A notice row shows a miss
- * large enough to matter; the status row shows the share of the branch's
- * input the cache served and the misses' total (`cache hit 97% · waste
- * $0.07`), and, in its right group, the time the cached prefix has left
- * (`cache 42m`, then
- * `cache cold`, with `next turn compacts` when the loop would hand the
- * window off first).
+ * large enough to matter. The `/status` pane shows the time the cached
+ * prefix has left (`cache 42m`, then `cache cold`), and the share of the
+ * branch's input the cache served and the misses' total (`cache hit 97% ·
+ * waste $0.07`). The status row says nothing of the cache until it lapsed on
+ * a window the loop would hand off first: then its right group reads `cache
+ * cold · next turn compacts`, before the gauge.
  */
 
 const CACHE_EXTENSION_ID = "@gent/cache"
@@ -931,6 +931,44 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
           return target.misses().map((miss) => priceOnce(target.born, miss, catalog))
         })
 
+      /**
+       * The cache clock's label at the tick, and whether the next turn
+       * compacts the lapsed window first. None before the first refresh.
+       */
+      const clockLabel = (): Option.Option<{
+        readonly item: StatusLabelItem
+        readonly compacts: boolean
+      }> => {
+        const state = branch(branchKey(transport.currentSession())).clock()
+        const entry = Option.flatMap(
+          Option.all([state.refresh, catalogModels()]),
+          ([last, catalog]) => Option.fromUndefinedOr(catalog.get(last.catalogModel)),
+        )
+        const lifetime = Option.flatMap(Option.all([state.refresh, entry]), ([last, model]) =>
+          promptCacheTtlMsFor(model, last.child),
+        )
+        const pricing = Option.flatMap(entry, (model) => Option.fromUndefinedOr(model.pricing))
+        // The refresh is a server time: its age reads the tick on the server's clock.
+        const clock = cacheClock(
+          state.refresh,
+          lifetime,
+          transport.selectedModel(),
+          onServerClock(now(), transport.serverClockOffset()),
+        )
+        return Option.map(clock, (value) => {
+          const compactsNext = Option.exists(lifetime, (ttlMs) =>
+            handsOffCold(state.window, pricing, ttlMs),
+          )
+          return {
+            item: cacheClockLabel(value, {
+              estimated: Option.exists(state.refresh, (last) => last.estimated),
+              compactsNext,
+            }),
+            compacts: value._tag === "Expired" && compactsNext,
+          }
+        })
+      }
+
       return clientContributions(
         noticeRowContribution({
           id: "cache.misses",
@@ -941,7 +979,8 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
         }),
         // The served share needs no catalog; the waste is priced once it is there.
         statusLabelContribution({
-          priority: 60,
+          priority: 31,
+          anchor: "pane",
           produce: (): ReadonlyArray<{ readonly text: string; readonly color: "textMuted" }> => {
             const key = branchKey(transport.currentSession())
             const total = Option.getOrElse(
@@ -965,40 +1004,22 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
             return [{ text: `cache ${parts.join(" · ")}`, color: "textMuted" }]
           },
         }),
-        // The time the cached prefix has left: a glance number, so it sits in
-        // the right group, before the context gauge, and keeps its place on a
-        // narrow row.
+        // The time the cached prefix has left is `/status` detail. Only a
+        // lapsed cache the next turn compacts reaches the row, in the right
+        // group before the gauge: the reader may act on it before sending.
         statusLabelContribution({
           priority: 55,
           anchor: "right",
-          produce: (): ReadonlyArray<StatusLabelItem> => {
-            const state = branch(branchKey(transport.currentSession())).clock()
-            const entry = Option.flatMap(
-              Option.all([state.refresh, catalogModels()]),
-              ([last, catalog]) => Option.fromUndefinedOr(catalog.get(last.catalogModel)),
-            )
-            const lifetime = Option.flatMap(Option.all([state.refresh, entry]), ([last, model]) =>
-              promptCacheTtlMsFor(model, last.child),
-            )
-            const pricing = Option.flatMap(entry, (model) => Option.fromUndefinedOr(model.pricing))
-            // The refresh is a server time: its age reads the tick on the server's clock.
-            const clock = cacheClock(
-              state.refresh,
-              lifetime,
-              transport.selectedModel(),
-              onServerClock(now(), transport.serverClockOffset()),
-            )
-            return Option.toArray(
-              Option.map(clock, (value) =>
-                cacheClockLabel(value, {
-                  estimated: Option.exists(state.refresh, (last) => last.estimated),
-                  compactsNext: Option.exists(lifetime, (ttlMs) =>
-                    handsOffCold(state.window, pricing, ttlMs),
-                  ),
-                }),
-              ),
-            )
-          },
+          produce: (): ReadonlyArray<StatusLabelItem> =>
+            Option.toArray(Option.filter(clockLabel(), (label) => label.compacts)).map(
+              (label) => label.item,
+            ),
+        }),
+        statusLabelContribution({
+          priority: 30,
+          anchor: "pane",
+          produce: (): ReadonlyArray<StatusLabelItem> =>
+            Option.toArray(clockLabel()).map((label) => label.item),
         }),
       )
     })

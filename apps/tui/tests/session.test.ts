@@ -17,6 +17,7 @@ import {
   applyRuntime,
   beginAuthCheck,
   buildBudgetLabels,
+  buildContextDetail,
   buildContextLabels,
   buildModelLabels,
   canNavigateAtCursor,
@@ -51,7 +52,11 @@ import {
   slashAutocompleteItems,
   useSessionFeed,
 } from "../src/session"
-import type { AutocompleteContribution, NoticeRow } from "../src/extensions/client-facets"
+import {
+  type AutocompleteContribution,
+  type NoticeRow,
+  STATUS_YIELD,
+} from "../src/extensions/client-facets"
 import {
   BranchId,
   SessionId,
@@ -727,6 +732,20 @@ const contextLabels = (
     theme,
   })
 
+/** The `/status` pane's context lines, as {@link contextLabels} reads the gauge. */
+const contextDetail = (
+  latestInputTokens: number,
+  // eslint-disable-next-line effect/noNullish -- mirrors the optional client snapshot field.
+  contextLength: number | undefined,
+  context?: ModelContextMetrics,
+  limits: { readonly inputLimit?: number; readonly outputLimit?: number } = {},
+) =>
+  buildContextDetail({
+    metrics: { latestInputTokens, context: Option.fromNullishOr(context) },
+    model: Option.some({ contextLength, ...limits }),
+    theme,
+  }).map((label) => label.text)
+
 describe("buildModelLabels", () => {
   test("empty when no data", () => {
     const labels = buildModelLabels({
@@ -794,24 +813,27 @@ describe("buildModelLabels", () => {
 })
 
 describe("buildContextLabels", () => {
-  test("shows context utilization against the input one request may carry", () => {
+  test("reads the tokens held over the input one request may carry", () => {
     // A 200k window keeps 32k for the reply: 168k of input.
     const labels = contextLabels(42_000, 200_000, absent)
     expect(labels.length).toBe(1)
-    expect(labels[0]!.text).toBe("42k (25%)")
+    expect(labels[0]!.text).toBe("ctx 42k/168k")
     expect(labels[0]!.color).toBe(theme.textMuted)
+    // A narrow row reads the share.
+    expect(labels[0]!.short).toEqual({ text: "ctx 25%", rank: STATUS_YIELD.context })
   })
 
   test("with no projection a full input ceiling reads full before the handoff", () => {
     const labels = contextLabels(168_000, 200_000, absent)
-    expect(labels[0]!.text).toBe("168k (100%)")
+    expect(labels[0]!.text).toBe("ctx 168k/168k")
+    expect(labels[0]!.short?.text).toBe("ctx 100%")
     expect(labels[0]!.color).toBe(theme.error)
   })
 
   test("with no projection the reserve follows the model's own output cap", () => {
     // An 8k output cap leaves 192k of the 200k window for input.
     const labels = contextLabels(96_000, 200_000, absent, { outputLimit: 8_000 })
-    expect(labels[0]!.text).toBe("96k (50%)")
+    expect(labels[0]!.text).toBe("ctx 96k/192k")
   })
 
   test("context at 70% uses warning color", () => {
@@ -839,7 +861,8 @@ describe("buildContextLabels", () => {
       handoffMessageId: MessageId.make("context-handoff:b:m"),
     })
     expect(labels.length).toBe(1)
-    expect(labels[0]!.text).toBe("ctx 99%")
+    expect(labels[0]!.text).toBe("ctx 250k/252k")
+    expect(labels[0]!.short?.text).toBe("ctx 99%")
     expect(labels[0]!.color).toBe(theme.error)
   })
 
@@ -852,65 +875,27 @@ describe("buildContextLabels", () => {
       compactions: 2,
       renters: [],
     })
-    expect(labels[0]!.text).toBe("ctx 50%")
+    expect(labels[0]!.text).toBe("ctx 84k/168k")
   })
 
-  test("a projection with nothing dropped shows only the percent", () => {
+  test("the costliest held item and the dropped messages stay off the row", () => {
     const labels = contextLabels(0, absent, {
       estimatedTokens: 171_000,
       availableInputTokens: 190_000,
       contextLimitTokens: 200_000,
-      omittedMessages: 0,
-      compactions: 0,
-      renters: [],
-    })
-    expect(labels[0]!.text).toBe("ctx 90%")
-    expect(labels[0]!.color).toBe(theme.error)
-  })
-
-  test("the costliest held item follows the gauge and gives way first on a narrow row", () => {
-    const labels = contextLabels(0, absent, {
-      estimatedTokens: 84_000,
-      availableInputTokens: 168_000,
-      contextLimitTokens: 200_000,
-      omittedMessages: 0,
-      compactions: 0,
+      omittedMessages: 4,
+      compactions: 1,
       renters: [
         { id: "call-1", kind: "tool", tool: "read", tokens: 12_000, rent: 30_000, calls: 6 },
-        { id: "m-1", kind: "reply", tokens: 20_000, rent: 9_000, calls: 2 },
       ],
     })
-    expect(labels[0]!.text).toBe("ctx 50% · read 12k")
-    expect(labels[0]!.short).toEqual({ text: "ctx 50%", rank: 0.5 })
-  })
-
-  test("a costliest item that is no tool names its kind", () => {
-    const labels = contextLabels(0, absent, {
-      estimatedTokens: 84_000,
-      availableInputTokens: 168_000,
-      contextLimitTokens: 200_000,
-      omittedMessages: 0,
-      compactions: 0,
-      renters: [{ id: "marker", kind: "handoff", tokens: 4_000, rent: 8_000, calls: 3 }],
-    })
-    expect(labels[0]!.text).toBe("ctx 50% · handoff 4.0k")
+    expect(labels.map((label) => label.text)).toEqual(["ctx 171k/190k"])
+    expect(labels[0]!.color).toBe(theme.error)
   })
 
   test("with no projection the provider's count reads against the input cap", () => {
     const labels = contextLabels(136_000, 400_000, absent, { inputLimit: 272_000 })
-    expect(labels[0]!.text).toBe("136k (50%)")
-  })
-
-  test("a summary-free projection does not label the old compaction count", () => {
-    const labels = contextLabels(0, absent, {
-      estimatedTokens: 1000,
-      availableInputTokens: 190000,
-      contextLimitTokens: 200000,
-      omittedMessages: 0,
-      compactions: 2,
-      renters: [],
-    })
-    expect(labels[0]?.text).toBe("ctx 1%")
+    expect(labels[0]!.text).toBe("ctx 136k/272k")
   })
 
   test("skips context when tokens are 0", () => {
@@ -922,6 +907,63 @@ describe("buildContextLabels", () => {
   })
 })
 
+describe("buildContextDetail", () => {
+  test("names the held tokens, the window and what the cap leaves out of it", () => {
+    expect(contextDetail(42_000, 200_000, absent)).toEqual([
+      "ctx 42k held of 168k · 25%",
+      "window 200k · 32k kept for system, tools and output",
+    ])
+  })
+
+  test("a projection adds the dropped messages and the costliest held item", () => {
+    expect(
+      contextDetail(0, absent, {
+        estimatedTokens: 84_000,
+        availableInputTokens: 168_000,
+        contextLimitTokens: 200_000,
+        omittedMessages: 3,
+        compactions: 2,
+        renters: [
+          { id: "call-1", kind: "tool", tool: "read", tokens: 12_000, rent: 30_000, calls: 6 },
+          { id: "m-1", kind: "reply", tokens: 20_000, rent: 9_000, calls: 2 },
+        ],
+      }),
+    ).toEqual([
+      "ctx 84k held of 168k · 50%",
+      "window 200k · 32k kept for system, tools and output",
+      "left out 3 messages",
+      "costliest read 12k",
+    ])
+  })
+
+  test("a costliest item that is no tool names its kind", () => {
+    const lines = contextDetail(0, absent, {
+      estimatedTokens: 84_000,
+      availableInputTokens: 168_000,
+      contextLimitTokens: 200_000,
+      omittedMessages: 0,
+      compactions: 0,
+      renters: [{ id: "marker", kind: "handoff", tokens: 4_000, rent: 8_000, calls: 3 }],
+    })
+    expect(lines).toContain("costliest handoff 4.0k")
+    expect(lines.some((line) => line.startsWith("left out"))).toBe(false)
+  })
+
+  test("the held line takes the gauge's pressure color", () => {
+    const [held] = buildContextDetail({
+      metrics: { latestInputTokens: 70_000, context: Option.none() },
+      model: Option.some({ contextLength: 100_000 }),
+      theme,
+    })
+    expect(held?.color).toBe(theme.error)
+  })
+
+  test("nothing before a count or a window is known", () => {
+    expect(contextDetail(0, 200_000, absent)).toEqual([])
+    expect(contextDetail(50_000, absent, absent)).toEqual([])
+  })
+})
+
 describe("buildBudgetLabels", () => {
   const budget = (used: number, limit: number) =>
     buildBudgetLabels({ attempts: Option.some({ used, limit }), theme })
@@ -930,20 +972,16 @@ describe("buildBudgetLabels", () => {
     expect(buildBudgetLabels({ attempts: Option.none(), theme })).toEqual([])
   })
 
-  test("far from the limit the count reads used of limit, muted", () => {
-    const [label] = budget(2, 32)
-    expect(label?.text).toBe("calls 2/32")
-    expect(label?.color).toBe(theme.textMuted)
-    expect(label?.short).toBeUndefined()
+  test("far from the limit the row says nothing", () => {
+    expect(budget(2, 32)).toEqual([])
+    expect(budget(26, 32)).toEqual([])
   })
 
-  test("near the limit the shape changes to the calls left", () => {
+  test("near the limit the row names the calls left", () => {
     const [near] = budget(27, 32)
     expect(near?.text).toBe("⧗ 5 of 32 calls left")
     expect(near?.color).toBe(theme.warning)
     expect(near?.short?.text).toBe("⧗ 5 left")
-    // One more call far: the count, not the notice shape.
-    expect(budget(26, 32)[0]?.text).toBe("calls 26/32")
   })
 
   test("with no call left the count reads none left in the error color", () => {

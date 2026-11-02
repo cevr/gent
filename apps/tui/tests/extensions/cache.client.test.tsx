@@ -1040,20 +1040,32 @@ const setupWithCatalog = (
       for (const envelope of envelopes) for (const cb of subscribers) cb(envelope)
     }
     const [notices] = contributions.noticeRows ?? []
-    const [label, timer] = contributions.statusLabels ?? []
+    const labels = contributions.statusLabels ?? []
+    // The `/status` pane holds the hit share and the clock; the row's right
+    // group holds only a lapsed cache the next turn compacts.
+    const find = (anchor: "pane" | "right", priority: number) =>
+      Option.fromUndefinedOr(
+        labels.find((entry) => entry.anchor === anchor && entry.priority === priority),
+      )
+    const label = find("pane", 31)
+    const timer = find("pane", 30)
+    const compacts = find("right", 55)
+    const textOf = (entry: Option.Option<(typeof labels)[number]>) => {
+      const items = Option.match(entry, { onNone: () => [], onSome: (found) => found.produce() })
+      if (items.length === 0) return "none"
+      return items.map((item) => `${item.text} [${String(item.color)}]`).join(" ")
+    }
     return {
       deliver,
       setCatalog,
       setSelected,
       rows: () => Option.flatten(Option.fromUndefinedOr(notices?.rows(session))),
-      label: () => label?.produce() ?? [],
-      /** The timer's text, or `none` when it draws nothing. */
-      timer: () => {
-        const items = timer?.produce() ?? []
-        if (items.length === 0) return "none"
-        return items.map((item) => `${item.text} [${String(item.color)}]`).join(" ")
-      },
-      timerAnchor: timer?.anchor,
+      label: () => Option.match(label, { onNone: () => [], onSome: (found) => found.produce() }),
+      /** The pane's clock line, or `none` when it draws nothing. */
+      timer: () => textOf(timer),
+      timerAnchor: Option.map(timer, (found) => found.anchor),
+      /** The row's lapsed-cache label, or `none` while the next turn does not compact. */
+      compacts: () => textOf(compacts),
     }
   })
 
@@ -1337,10 +1349,15 @@ describe("cache client extension", () => {
         extension: cacheExtension,
       })
       yield* waitForTerminal(setup.rendered, (text) => text.includes(`◌ ${IDLE_ROW}`), "miss row")
+      // The share and the waste are `/status` detail, never the row. The
+      // pane shows six lines at a time; the cache lines sit past the cwd.
+      yield* openStatus(setup.rendered)
+      yield* waitForFrame(setup.rendered, (frame) => frame.includes("cache cold"), "the pane")
+      for (const _line of [1, 2, 3, 4, 5, 6]) setup.rendered.mockInput.pressArrow("down")
       yield* waitForFrame(
         setup.rendered,
         (frame) => frame.includes("cache hit 31% · waste $0.07"),
-        "status total",
+        "the pane's cache total",
       )
     }).pipe(Effect.timeout("8 seconds")),
   )
@@ -1808,7 +1825,7 @@ describe("cache timer label", () => {
     Effect.gen(function* () {
       const clock = yield* TestClock.make()
       const extension = yield* setupWithCatalog(Option.some(models), { clock })
-      expect(extension.timerAnchor).toBe("right")
+      expect(extension.timerAnchor).toEqual(Option.some("pane"))
       expect(extension.timer()).toBe("none")
       // The first request went out at 1s and wrote the 5-minute cache.
       yield* clock.adjust("1 second")
@@ -1938,10 +1955,15 @@ describe("cache timer label", () => {
             () => extension.timer() === expected,
             `a lapsed ${estimatedTokens} window`,
           )
+          return extension.compacts()
         })
-      // Under the 150k floor the loop resends the window, so the label only says cold.
-      yield* lapsedLabel(120_000, "cache cold [textMuted]")
-      yield* lapsedLabel(200_000, "cache cold · next turn compacts [warning]")
+      // Under the 150k floor the loop resends the window, so the label only
+      // says cold, in the pane, and the row says nothing.
+      expect(yield* lapsedLabel(120_000, "cache cold [textMuted]")).toBe("none")
+      // Past it the row warns before the reader sends.
+      expect(yield* lapsedLabel(200_000, "cache cold · next turn compacts [warning]")).toBe(
+        "cache cold · next turn compacts [warning]",
+      )
     }).pipe(Effect.timeout("4 seconds")),
   )
 
@@ -1968,40 +1990,50 @@ const statusLine = (frame: string): string =>
     .filter((line) => line.includes("ctx "))
     .at(-1) ?? ""
 
-describe("cache timer on the status row", () => {
-  it.scopedLive("a resumed session whose last request is old reads cold, never a count", () =>
-    Effect.gen(function* () {
-      const setup = yield* renderResumed({
-        catalog: Effect.succeed(models),
-        extension: cacheExtension,
-      })
-      const frame = yield* waitForFrame(
-        setup.rendered,
-        (text) => statusLine(text).includes("cache cold"),
-        "cold timer",
-        4000,
-      )
-      expect(statusLine(frame)).not.toMatch(/cache \d/)
-    }).pipe(Effect.timeout("8 seconds")),
-  )
+type RenderSetup = Effect.Success<ReturnType<typeof renderResumed>>["rendered"]
 
-  for (const width of [60, 120]) {
-    it.scopedLive(`the timer sits before the gauge and keeps its place at ${width} columns`, () =>
-      Effect.gen(function* () {
-        const setup = yield* renderResumed({
-          catalog: Effect.succeed(models),
-          extension: cacheExtension,
-          width,
-        })
-        const frame = yield* waitForFrame(
-          setup.rendered,
-          (text) => statusLine(text).includes("cache cold · ctx 31% · $0.15"),
-          "timer, gauge and cost",
-          4000,
-        )
-        // The right group ends the row: the left group gave way, not the timer.
-        expect(statusLine(frame).trimEnd().endsWith("cache cold · ctx 31% · $0.15")).toBe(true)
-      }).pipe(Effect.timeout("8 seconds")),
+/** Opens the `/status` pane, as the reader does. */
+const openStatus = (setup: RenderSetup) =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => setup.mockInput.typeText("/status"))
+    setup.mockInput.pressEnter()
+  })
+
+describe("cache clock in the /status pane", () => {
+  for (const width of [120, 60]) {
+    it.scopedLive(
+      `a resumed session's old cache reads cold in the pane, never a count, and not on the row at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const setup = yield* renderResumed({
+            catalog: Effect.succeed(models),
+            extension: cacheExtension,
+            width,
+          })
+          yield* waitForFrame(
+            setup.rendered,
+            (text) => statusLine(text).trimEnd().endsWith("ctx 62k/200k"),
+            "the gauge ends the row",
+            4000,
+          )
+          yield* openStatus(setup.rendered)
+          const pane = yield* waitForFrame(
+            setup.rendered,
+            (text) => text.includes("cache cold"),
+            "the pane's clock",
+            4000,
+          )
+          expect(pane).not.toMatch(/cache \d/)
+          // The row stays above the pane. With the clock read, a lapsed cache
+          // the next turn does not compact is still not the row's.
+          const row =
+            pane
+              .split("\n")
+              .find((line) => line.includes("ctx 62k/200k"))
+              ?.trimEnd() ?? ""
+          expect(row.endsWith("ctx 62k/200k")).toBe(true)
+          expect(row).not.toContain("cache")
+        }).pipe(Effect.timeout("8 seconds")),
     )
   }
 })

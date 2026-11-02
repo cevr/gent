@@ -75,6 +75,7 @@ import {
   runningCallLabel,
   lostRequest,
   onServerClock,
+  plural,
   randomId,
   SEND_RETRY,
   serverNowAt,
@@ -185,58 +186,38 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
   return theme.textMuted
 }
 
-/**
- * `ctx 42%`: the messages' share of the input the projection lets them take.
- * Both numbers leave out the system prompt, the tools and the output
- * reserve, and the estimate is anchored on the last step's measured input,
- * so the gauge reads 100% where the window hands off, also on a model whose
- * input cap is below its window. What the projection dropped is in the
- * thread pane.
- *
- * The costliest item still held follows (`ctx 42% · read 12k`): its tool,
- * or its kind, and the tokens it holds. It is the first part to go on a
- * narrow row.
- */
-const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): StatusRowLabel => {
-  const pct = Math.min(
-    100,
-    Math.round((context.estimatedTokens / context.availableInputTokens) * 100),
-  )
-  const gauge = `ctx ${pct}%`
-  const label = { text: gauge, color: pressureColor(pct, theme) }
-  return Option.match(Option.fromUndefinedOr(context.renters[0]), {
-    onNone: () => label,
-    onSome: (renter) => ({
-      ...label,
-      text: `${gauge} · ${renter.tool ?? renter.kind} ${formatTokens(renter.tokens)}`,
-      short: { text: gauge, rank: STATUS_YIELD.renter },
-    }),
-  })
+/** What the context gauge reads: the tokens held, the cap they count against, and their share. */
+interface ContextReading {
+  readonly held: number
+  readonly cap: number
+  readonly pct: number
+  /** The model's whole window, and the projection that measured `held`, when there is one. */
+  readonly projection: Option.Option<ModelContextMetrics>
 }
 
 /**
- * The context gauge alone, for the labels anchored to the right edge.
+ * The context the next request carries, against the input it may take.
  *
- * It is split from {@link buildModelLabels} because the two halves sit at
- * opposite ends of the row: effort belongs beside the model name, while the
- * gauge belongs with the running total a reader checks at a glance.
+ * With a projection, the messages' tokens against the input the projection
+ * lets them take: both leave out the system prompt, the tools and the output
+ * reserve, and the estimate is anchored on the last step's measured input,
+ * so the gauge reads 100% where the window hands off, also on a model whose
+ * input cap is below its window. Before one (a session from before
+ * projections), the provider's count against the input one request may
+ * carry, the ceiling the turn's budget uses. None while neither is known.
  */
-export function buildContextLabels(input: {
+const contextReading = (input: {
   readonly metrics: SessionMetrics
-  /** The session's model, for its catalog limits. */
   readonly model: Option.Option<Pick<Model, "contextLength" | "inputLimit" | "outputLimit">>
-  readonly theme: ThemeColors
-}): StatusRowLabel[] {
-  const projection = input.metrics.context
-  if (Option.isSome(projection) && projection.value.availableInputTokens > 0) {
-    // The projection names the input the messages may take.
-    return [projectionLabel(projection.value, input.theme)]
+}): Option.Option<ContextReading> => {
+  const share = (held: number, cap: number) => Math.min(100, Math.round((held / cap) * 100))
+  const projected = Option.filter(input.metrics.context, (value) => value.availableInputTokens > 0)
+  if (Option.isSome(projected)) {
+    const { estimatedTokens: held, availableInputTokens: cap } = projected.value
+    return Option.some({ held, cap, pct: share(held, cap), projection: projected })
   }
-  // No projection yet (a session from before projections): the provider's
-  // count against the input one request may carry, the ceiling the turn's
-  // budget uses, so the gauge reads full where the turn hands off.
-  const tokens = input.metrics.latestInputTokens
-  const limit = Option.flatMap(input.model, (model) =>
+  const held = input.metrics.latestInputTokens
+  const cap = Option.flatMap(input.model, (model) =>
     Option.map(Option.fromUndefinedOr(model.contextLength), (window) =>
       modelInputCeilingTokens({
         contextLimitTokens: window,
@@ -245,19 +226,103 @@ export function buildContextLabels(input: {
       }),
     ),
   )
-  if (tokens > 0 && Option.isSome(limit) && limit.value > 0) {
-    const pct = Math.min(100, Math.round((tokens / limit.value) * 100))
-    return [{ text: `${formatTokens(tokens)} (${pct}%)`, color: pressureColor(pct, input.theme) }]
-  }
-  return []
+  return cap.pipe(
+    Option.filter((value) => held > 0 && value > 0),
+    Option.map((value) => ({
+      held,
+      cap: value,
+      pct: share(held, value),
+      projection: Option.none(),
+    })),
+  )
+}
+
+/**
+ * The context gauge, for the labels anchored to the right edge:
+ * `ctx 12k/160k`, the tokens held over the cap they count against, in the
+ * warning color from 70% and the error color from 90%. A narrow row reads
+ * the share, `ctx 8%` (`STATUS_YIELD.context`). The window, the reserve the
+ * cap leaves out and the costliest item held are in the `/status` pane
+ * ({@link buildContextDetail}).
+ *
+ * It is split from {@link buildModelLabels} because the two halves sit at
+ * opposite ends of the row: effort belongs beside the model name, while the
+ * gauge is the number a reader checks at a glance.
+ */
+export function buildContextLabels(input: {
+  readonly metrics: SessionMetrics
+  /** The session's model, for its catalog limits. */
+  readonly model: Option.Option<Pick<Model, "contextLength" | "inputLimit" | "outputLimit">>
+  readonly theme: ThemeColors
+}): StatusRowLabel[] {
+  return Option.match(contextReading(input), {
+    onNone: () => [],
+    onSome: (reading) => [
+      {
+        text: `ctx ${formatTokens(reading.held)}/${formatTokens(reading.cap)}`,
+        color: pressureColor(reading.pct, input.theme),
+        short: { text: `ctx ${reading.pct}%`, rank: STATUS_YIELD.context },
+      },
+    ],
+  })
+}
+
+/**
+ * The context gauge's lines in the `/status` pane: the tokens held against
+ * the cap and their share, in the gauge's color; the model's window and
+ * what the cap leaves out of it (the system prompt, the tools and the output
+ * reserve); the messages the projection left out; and the costliest item
+ * still held, by its tool or its kind.
+ */
+export function buildContextDetail(input: {
+  readonly metrics: SessionMetrics
+  readonly model: Option.Option<Pick<Model, "contextLength" | "inputLimit" | "outputLimit">>
+  readonly theme: ThemeColors
+}): StatusRowLabel[] {
+  return Option.match(contextReading(input), {
+    onNone: () => [],
+    onSome: (reading) => {
+      const muted = (text: string): StatusRowLabel => ({ text, color: input.theme.textMuted })
+      const window = Option.match(reading.projection, {
+        onNone: () =>
+          Option.flatMap(input.model, (model) => Option.fromUndefinedOr(model.contextLength)),
+        onSome: (projection) => Option.some(projection.contextLimitTokens),
+      })
+      const lines: StatusRowLabel[] = [
+        {
+          text: `ctx ${formatTokens(reading.held)} held of ${formatTokens(reading.cap)} · ${reading.pct}%`,
+          color: pressureColor(reading.pct, input.theme),
+        },
+      ]
+      Option.map(
+        Option.filter(window, (tokens) => tokens > 0),
+        (tokens) => {
+          const reserve = Math.max(0, tokens - reading.cap)
+          let text = `window ${formatTokens(tokens)}`
+          if (reserve > 0) text += ` · ${formatTokens(reserve)} kept for system, tools and output`
+          lines.push(muted(text))
+        },
+      )
+      Option.map(reading.projection, (projection) => {
+        if (projection.omittedMessages > 0)
+          lines.push(muted(`left out ${plural(projection.omittedMessages, "message")}`))
+        Option.map(Option.fromUndefinedOr(projection.renters[0]), (renter) =>
+          lines.push(
+            muted(`costliest ${renter.tool ?? renter.kind} ${formatTokens(renter.tokens)}`),
+          ),
+        )
+      })
+      return lines
+    },
+  })
 }
 
 /**
  * The running turn's model-call budget, for the right-anchored group before
- * the context gauge: `calls 2/8` while it is far from the limit, and from
- * `MODEL_ATTEMPTS_NOTICE_LEFT` calls left the calls left, `⧗ 3 of 8 calls
- * left`, the glyph the turn's notice row draws. Near and far differ by shape
- * (R0); the warning and error colors only add. Read from the newest step's
+ * the context gauge, only near its limit: from `MODEL_ATTEMPTS_NOTICE_LEFT`
+ * calls left, `⧗ 3 of 8 calls left`, the glyph the turn's notice row draws,
+ * in the warning color, the error color at none. Far from the limit it says
+ * nothing: the reader has nothing to act on. Read from the newest step's
  * receipt, so a request in flight counts once its step ends. Nothing for a
  * turn with no budget, or between turns: the turn line keeps the count.
  */
@@ -265,23 +330,27 @@ export function buildBudgetLabels(input: {
   readonly attempts: Option.Option<ModelAttempts>
   readonly theme: Pick<ThemeColors, "textMuted" | "warning" | "error">
 }): StatusRowLabel[] {
-  return Option.match(input.attempts, {
-    onNone: () => [],
-    onSome: (attempts) => {
-      const left = modelAttemptsLeft(attempts)
-      if (left > MODEL_ATTEMPTS_NOTICE_LEFT)
-        return [{ text: `calls ${attempts.used}/${attempts.limit}`, color: input.theme.textMuted }]
-      let color = input.theme.warning
-      if (left === 0) color = input.theme.error
-      return [
-        {
-          text: `⧗ ${left} of ${attempts.limit} calls left`,
-          color,
-          short: { text: `⧗ ${left} left`, rank: STATUS_YIELD.budget },
-        },
-      ]
+  return Option.match(
+    Option.filter(
+      input.attempts,
+      (attempts) => modelAttemptsLeft(attempts) <= MODEL_ATTEMPTS_NOTICE_LEFT,
+    ),
+    {
+      onNone: () => [],
+      onSome: (attempts) => {
+        const left = modelAttemptsLeft(attempts)
+        let color = input.theme.warning
+        if (left === 0) color = input.theme.error
+        return [
+          {
+            text: `⧗ ${left} of ${attempts.limit} calls left`,
+            color,
+            short: { text: `⧗ ${left} left`, rank: STATUS_YIELD.budget },
+          },
+        ]
+      },
     },
-  })
+  )
 }
 
 /**
@@ -964,6 +1033,8 @@ export const SessionOverlayState = Schema.Union([
   Schema.TaggedStruct("auth", { enforceAuth: Schema.Boolean }),
   Schema.TaggedStruct("model", {}),
   Schema.TaggedStruct("reasoning", {}),
+  /** The `/status` pane: what the status row leaves out, on demand. */
+  Schema.TaggedStruct("status", {}),
   /**
    * The branch picker. The boot flow is the only thing that opens it, so
    * escape does nothing: a reader who never chose a branch has nowhere to
@@ -1024,6 +1095,7 @@ export const SessionUiEvent = Schema.TaggedUnion({
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenSettingsPicker: { picker: Schema.Literals(["model", "reasoning"]) },
   OpenBranches: { branches: Schema.Array(Branch) },
+  OpenStatus: {},
   OpenPane: { id: Schema.String },
   /** Closes the named pane only, so a late close never shuts the pane that replaced it. */
   ClosePane: { id: Schema.String },
@@ -1051,6 +1123,7 @@ const SLOT_OPENERS: ReadonlySet<SessionUiEvent["_tag"]> = new Set([
   "OpenAuth",
   "OpenSettingsPicker",
   "OpenBranches",
+  "OpenStatus",
   "OpenPane",
   "PromptSearch",
 ])
@@ -1135,6 +1208,10 @@ function transitionSlot(state: SessionUiState, event: SessionUiEvent): SessionUi
           ...state,
           overlay: SessionOverlayState.cases.branches.make({ branches: event.branches }),
         },
+        effects: [],
+      }),
+      OpenStatus: (): SessionUiTransitionResult => ({
+        state: { ...state, overlay: SessionOverlayState.cases.status.make({}) },
         effects: [],
       }),
       OpenPane: (event): SessionUiTransitionResult => ({
@@ -1634,6 +1711,8 @@ interface SessionCommandRegistryProps {
   readonly openModelPicker: () => void
   readonly openReasoningPicker: () => void
   readonly openAuth: () => void
+  /** Opens the `/status` pane. */
+  readonly openStatus: () => void
   /** Opens the palette: every command and its key. */
   readonly openPalette: () => void
 }
@@ -1816,6 +1895,16 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     category: "Session",
     slash: "auth",
     onSelect: props.openAuth,
+  },
+  {
+    // What the status row leaves out: the account, the cache clock, the
+    // cost, the lanes, the peers and the context's window.
+    id: "session.status",
+    title: "Status",
+    description: "Account, cache, cost, lanes, peers and the context window",
+    category: "Session",
+    slash: "status",
+    onSelect: props.openStatus,
   },
 ]
 
@@ -3638,15 +3727,15 @@ export function createSessionController(props: {
     ),
   )
 
-  // The status row reads the label while idle, the live line while a turn
-  // runs: an open ask, then the running op, then a retry's wait, then whether
-  // answer text streams, then the reasoning's heading.
+  // The activity row's live line while a turn runs: an open ask, then the
+  // running op, then a retry's wait, then whether answer text streams, then
+  // the reasoning's heading. An idle session draws no activity row, and the
+  // status row names no phase.
   const phaseLabel = createMemo(() => {
     const nextActivity = activity()
     switch (nextActivity.phase) {
       case "idle":
-        if (Option.exists(client.turnsStarted(), (turns) => turns > 0)) return "idle"
-        return "ready"
+        return ""
       case "tool":
         if (runningShells().length === 0 && waitingForAnswer()) return "Waiting for your answer"
         return nextActivity.toolInfo
@@ -3692,6 +3781,7 @@ export function createSessionController(props: {
     openReasoningPicker: () =>
       dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "reasoning" })),
     openAuth: () => dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false })),
+    openStatus: () => dispatchSessionUi(SessionUiEvent.cases.OpenStatus.make({})),
     openPalette: command.openPalette,
   })
 

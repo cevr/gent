@@ -885,23 +885,21 @@ export type StatusLabelColor = Schema.Schema.Type<typeof StatusLabelColor>
 
 /**
  * When each host label takes its short form on a narrow row: the debug mark
- * first, then the context gauge's costliest item (`ctx 42% · read 12k` reads
- * `ctx 42%`), the cwd, before the model, the idle phase word, and the
- * `auto → high` effort last (its short form saves two columns). A plain
- * effort and the cost have none; in the right group the near-limit
- * model-call count (`⧗ 3 left`) gives way last. The
- * values are an order, not widths: an extension label ranks between two host
- * labels with a fraction (`STATUS_YIELD.cwd + 0.5` gives way after the cwd,
- * before the model).
+ * first, then the context gauge (`ctx 12k/160k` reads `ctx 8%`), before the
+ * model, and the `auto → high` effort last (its short form saves two
+ * columns). A plain effort has none; in the right group the near-limit
+ * model-call count (`⧗ 3 left`) gives way last. The values are an order, not
+ * widths: an extension label ranks between two host labels with a fraction
+ * (`STATUS_YIELD.context - 0.5` gives way after the debug mark, before the
+ * gauge). A label ranked below the model gives way for the whole row, wherever
+ * it sits.
  */
 export const STATUS_YIELD = {
   debug: 0,
-  renter: 0.5,
-  cwd: 1,
+  context: 1,
   model: 2,
-  phase: 3,
-  effort: 4,
-  budget: 5,
+  effort: 3,
+  budget: 4,
 } as const
 
 /** A status label's short form, and when it gives way. */
@@ -924,21 +922,32 @@ export interface StatusLabelItem {
   readonly key?: string
 }
 
-/** Where a status label sits: the left group, or the right group before the gauge and cost. */
-export type StatusLabelAnchor = "left" | "right"
+/**
+ * Where a status label sits: the row's left group, the row's right group
+ * before the gauge, or the `/status` pane only.
+ */
+export type StatusLabelAnchor = "left" | "right" | "pane"
 
 /**
- * Text on the composer's status row. The row is one line: the host's labels,
- * then every left extension label by priority, then the right group: the
- * right-anchored extension labels by priority, the context gauge and the
- * cost. The right group is laid out first and keeps its place on a narrow
- * row; the left group truncates. A glance number (a countdown) anchors right.
+ * Text on the composer's status row, or in the `/status` pane. The row is
+ * one line and says little by default: the model and its effort on the left,
+ * the context gauge on the right. An extension puts a label on the row only
+ * while the reader must act on it or work runs (a goal, a child in view, a
+ * cache the next turn compacts); the rest is `pane` detail, read on demand.
+ * On the row, the left labels follow the host's by priority; the
+ * right-anchored ones sit before the gauge, are laid out first and keep their
+ * place on a narrow row, and the left group truncates. In the pane each label
+ * is one line, by priority, after the host's lines: name what the line is
+ * (`cache 59m`, `branch main`).
  */
 const StatusLabelContribution = Schema.Struct({
   /** Lower = earlier; default 100. */
   priority: Schema.optional(Schema.Finite),
-  /** `right`: in the right group, before the gauge; absent, in the left group. */
-  anchor: Schema.optional(Schema.Literal("right")),
+  /**
+   * `right`: in the row's right group, before the gauge; `pane`: in the
+   * `/status` pane only; absent, in the row's left group.
+   */
+  anchor: Schema.optional(Schema.Literals(["right", "pane"])),
   produce: contributed<() => ReadonlyArray<StatusLabelItem>>(),
 })
 type StatusLabelContribution = typeof StatusLabelContribution.Type

@@ -653,8 +653,6 @@ interface ClientAgentValue {
   // Derived accessors
   /** Whether a turn runs; an error on screen does not change it. */
   isStreaming: () => boolean
-  /** How many turns the branch in view has started; None until its first snapshot lands. */
-  turnsStarted: () => Option.Option<number>
   isError: () => boolean
   /** The error on screen; None outside the error state. */
   error: () => Option.Option<string>
@@ -1655,7 +1653,6 @@ export function ClientProvider(props: ClientProviderProps) {
     defaultReasoningLevel: () => agentStore.defaultReasoningLevel,
     // Derived accessors
     isStreaming: () => agentStore.running,
-    turnsStarted: () => agentStore.turnsStarted,
     isError: () => Option.isSome(agentStore.error),
     error: () => agentStore.error,
     sessionMetrics,

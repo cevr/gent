@@ -32,7 +32,6 @@ import {
   SelectList,
   type SelectListRow,
   sessionQuery,
-  STATUS_YIELD,
   statusLabelContribution,
   type StatusLabelItem,
   textWidth,
@@ -259,17 +258,6 @@ export const parseNumstat = (output: string): ReadonlyMap<string, Option.Option<
 
 // ── labels ──────────────────────────────────────────────────────────────────
 
-/**
- * When each label gives way on a narrow row, between the host's labels: the
- * change count (to its `+/-` form) after the cwd and before the model, the
- * branch after the model shortens and before the idle phase word.
- */
-const RANK = {
-  pullRequest: STATUS_YIELD.cwd - 0.5,
-  changes: STATUS_YIELD.cwd + 0.5,
-  branch: STATUS_YIELD.model + 0.5,
-}
-
 /** `main ↑2 ↓1`; `detached @1a2b3c4`; an unborn branch by its name; none with no commit and no branch. */
 export const branchText = (head: GitHead): Option.Option<string> =>
   Option.match(head.branch, {
@@ -300,8 +288,9 @@ const changeTotals = (files: ReadonlyArray<ChangedFile>): LineCounts =>
 const lineDelta = (lines: LineCounts): string => `+${lines.added} -${lines.deleted}`
 
 /**
- * The status row's labels for one checkout: the branch, the branch's pull
- * request when there is one, then the change count.
+ * The `/status` pane's lines for one checkout: the branch, the branch's pull
+ * request when there is one, then the change count. The status row shows
+ * none of them: the `/git` pane is the place to work with them.
  */
 export const checkoutLabels = (
   checkout: Checkout,
@@ -309,15 +298,14 @@ export const checkoutLabels = (
 ): ReadonlyArray<StatusLabelItem> => {
   const labels: Array<StatusLabelItem> = []
   Option.map(branchText(checkout.head), (text) =>
-    labels.push({ text, color: "textMuted", short: { text: "", rank: RANK.branch } }),
+    labels.push({ text: `branch ${text}`, color: "textMuted" }),
   )
   Option.map(pullRequest, (pr) => labels.push(pullRequestLabel(pr)))
   if (checkout.files.length > 0) {
     const delta = lineDelta(changeTotals(checkout.files))
     labels.push({
-      text: `${plural(checkout.files.length, "file")} ${delta}`,
+      text: `changes ${plural(checkout.files.length, "file")} ${delta}`,
       color: "textMuted",
-      short: { text: delta, rank: RANK.changes },
     })
   }
   return labels
@@ -609,27 +597,25 @@ export const checksVerdict = (
 }
 
 /**
- * `#123 ✓` (checks pass), `#123 ✗` (a check failed), `#123 …` (checks
- * running), `#123` (no checks); a draft, a merged and a closed request say
- * so. It gives way first on a narrow row.
+ * `pr #123 ✓` (checks pass), `pr #123 ✗` (a check failed), `pr #123 …`
+ * (checks running), `pr #123` (no checks); a draft, a merged and a closed
+ * request say so.
  */
 const pullRequestLabel = (pr: PullRequest): StatusLabelItem => {
-  const short = { text: "", rank: RANK.pullRequest }
   const muted = (word: string): StatusLabelItem => ({
-    text: `#${pr.number}${word}`,
+    text: `pr #${pr.number}${word}`,
     color: "textMuted",
-    short,
   })
   if (pr.state === "MERGED") return muted(" merged")
   if (pr.state === "CLOSED") return muted(" closed")
   if (pr.isDraft) return muted(" draft")
   switch (checksVerdict(pr.statusCheckRollup ?? [])) {
     case "fail":
-      return { text: `#${pr.number} ✗`, color: "error", short }
+      return { text: `pr #${pr.number} ✗`, color: "error" }
     case "pending":
-      return { text: `#${pr.number} …`, color: "warning", short }
+      return { text: `pr #${pr.number} …`, color: "warning" }
     case "pass":
-      return { text: `#${pr.number} ✓`, color: "success", short }
+      return { text: `pr #${pr.number} ✓`, color: "success" }
     case "none":
       return muted("")
   }
@@ -1635,7 +1621,8 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
 
     return clientContributions(
       statusLabelContribution({
-        priority: 20,
+        priority: 40,
+        anchor: "pane",
         produce: () =>
           Option.match(local.value(), {
             onNone: () => [],

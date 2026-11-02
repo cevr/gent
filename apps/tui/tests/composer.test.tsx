@@ -330,22 +330,21 @@ describe("paste placeholders", () => {
 /**
  * The status row's right-hand labels hold their place.
  *
- * The effort, the context gauge and the running total are the labels a reader
- * checks at a glance. The right group is laid out first and keeps its columns;
- * the left group truncates, so a long cwd cannot push them off the row.
+ * The context gauge, and a running turn's model-call budget near its limit,
+ * are the labels a reader checks at a glance. The right group is laid out
+ * first and keeps its columns; the left group truncates, so a long label that
+ * needs the owner cannot push them off the row.
  */
 
 const muted = RGBA.fromHex("#888888")
 const label = (text: string): StatusRowLabel => ({ text, color: muted })
 
-/** Everything the real row carries, longest-plausible cwd included. */
+/** Everything the row carries at its busiest: a long extension label, the model, its effort, the gauge. */
 const labels: StatusRowLabel[] = [
-  label("idle"),
-  label("some-very-long-project-name (feature/a-long-branch)"),
+  label("goal: ship the quiet status row (feature/a-long-branch)"),
   label("Claude Sonnet 5"),
   label("medium"),
-  label("ctx 42%"),
-  label("$12.34"),
+  label("ctx 12k/160k"),
 ]
 
 const frameText = (width: number, rightLabels: number) =>
@@ -362,12 +361,11 @@ const frameText = (width: number, rightLabels: number) =>
   })
 
 describe("the status row anchors its right-hand labels", () => {
-  it.scopedLive("keeps the running total when the row cannot fit everything", () =>
+  it.scopedLive("keeps the gauge when the row cannot fit everything", () =>
     Effect.gen(function* () {
-      const text = yield* frameText(60, 2)
-      // The two anchored labels survive a width that cannot hold the row.
-      expect(text).toContain("$12.34")
-      expect(text).toContain("ctx 42%")
+      const text = yield* frameText(60, 1)
+      // The anchored gauge survives a width that cannot hold the row.
+      expect(text).toContain("ctx 12k/160k")
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -376,92 +374,73 @@ describe("the status row anchors its right-hand labels", () => {
       // Without a reservation the row spends one left-to-right budget: the
       // last labels are pushed off the end by everything before them.
       const text = yield* frameText(60, 0)
-      expect(text).not.toContain("$12.34")
+      expect(text).not.toContain("ctx 12k/160k")
     }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.scopedLive("shows every label when the row is wide enough", () =>
     Effect.gen(function* () {
-      const text = yield* frameText(140, 2)
-      expect(text).toContain("idle")
+      const text = yield* frameText(140, 1)
+      expect(text).toContain("goal: ship")
       expect(text).toContain("Claude Sonnet 5")
-      expect(text).toContain("ctx 42%")
-      expect(text).toContain("$12.34")
+      expect(text).toContain("medium")
+      expect(text).toContain("ctx 12k/160k")
     }).pipe(Effect.timeout("10 seconds")),
   )
 
   // A rank between two host ranks gives way between them: the label ranked
-  // 1.5 takes its short form after the cwd (1) and before the model (2).
+  // 1.5 takes its short form after the gauge's share (1) and before the model (2).
   it.scopedLive(
     "a label with a fractional rank gives way between the host labels it sits between",
     () =>
       Effect.gen(function* () {
-        const ranked: StatusRowLabel[] = [
-          label("ready"),
-          { ...label("repo"), short: { text: "", rank: STATUS_YIELD.cwd } },
-          { ...label("Claude Sonnet 5"), short: { text: "Sonnet 5", rank: STATUS_YIELD.model } },
-          {
-            ...label("4 files +120 -31"),
-            short: { text: "+120 -31", rank: STATUS_YIELD.cwd + 0.5 },
-          },
-        ]
-        const setup = yield* renderScoped(() => <StatusRow labels={ranked} />, {
-          width: 36,
-          height: 4,
-        })
-        yield* Effect.promise(() => setup.flush())
-        const row =
-          setup
-            .captureCharFrame()
-            .split("\n")
-            .find((line) => line.includes("ready")) ?? ""
-        expect(row.trimEnd()).toBe("ready · Claude Sonnet 5 · +120 -31")
-      }).pipe(Effect.timeout("10 seconds")),
-  )
-
-  // The costliest item is a detail of the anchored gauge: it gives way for the
-  // whole row, before the left group's cwd and model shorten.
-  it.scopedLive("the gauge's costliest item gives way before the model in the left group", () =>
-    Effect.gen(function* () {
-      const row = (width: number) =>
-        Effect.gen(function* () {
-          const ranked: StatusRowLabel[] = [
-            label("idle"),
-            { ...label("repo"), short: { text: "", rank: STATUS_YIELD.cwd } },
-            { ...label("Claude Sonnet 5"), short: { text: "Sonnet 5", rank: STATUS_YIELD.model } },
-            {
-              ...label("ctx 42% · read 12k"),
-              short: { text: "ctx 42%", rank: STATUS_YIELD.renter },
-            },
-            label("$12.34"),
-          ]
-          const setup = yield* renderScoped(() => <StatusRow labels={ranked} rightLabels={2} />, {
-            width,
-            height: 4,
+        const row = (width: number) =>
+          Effect.gen(function* () {
+            const ranked: StatusRowLabel[] = [
+              {
+                ...label("Claude Sonnet 5"),
+                short: { text: "Sonnet 5", rank: STATUS_YIELD.model },
+              },
+              {
+                ...label("4 files +120 -31"),
+                short: { text: "+120 -31", rank: STATUS_YIELD.context + 0.5 },
+              },
+              {
+                ...label("ctx 12k/160k"),
+                short: { text: "ctx 8%", rank: STATUS_YIELD.context },
+              },
+            ]
+            const setup = yield* renderScoped(() => <StatusRow labels={ranked} rightLabels={1} />, {
+              width,
+              height: 4,
+            })
+            yield* Effect.promise(() => setup.flush())
+            return (
+              setup
+                .captureCharFrame()
+                .split("\n")
+                .find((line) => line.includes("Sonnet 5")) ?? ""
+            ).trimEnd()
           })
-          yield* Effect.promise(() => setup.flush())
-          return (
-            setup
-              .captureCharFrame()
-              .split("\n")
-              .find((line) => line.includes("idle")) ?? ""
-          ).trimEnd()
-        })
-      expect(yield* row(80)).toMatch(
-        /^idle · repo · Claude Sonnet 5 +ctx 42% · read 12k · \$12\.34$/,
-      )
-      expect(yield* row(50)).toMatch(/^idle · repo · Claude Sonnet 5 +ctx 42% · \$12\.34$/)
-    }).pipe(Effect.timeout("10 seconds")),
+        // 50 columns hold the row in full.
+        expect(yield* row(50)).toMatch(/^Claude Sonnet 5 · 4 files \+120 -31 +ctx 12k\/160k$/)
+        // 46 columns: the gauge reads its share first.
+        expect(yield* row(46)).toMatch(/^Claude Sonnet 5 · 4 files \+120 -31 +ctx 8%$/)
+        // 40 columns: the fractional label gives way next, the model stays whole.
+        expect(yield* row(40)).toMatch(/^Claude Sonnet 5 · \+120 -31 +ctx 8%$/)
+        // 30 columns: the model drops its family word last.
+        expect(yield* row(30)).toMatch(/^Sonnet 5 · \+120 -31 +ctx 8%$/)
+      }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
 /**
  * A running turn's model-call budget sits in the right group, before the
- * context gauge: `calls 2/8`, and near the limit `⧗ 3 of 8 calls left`, a
- * different shape (R0), shortened to `⧗ 3 left` only where the right group
- * cannot hold it.
+ * context gauge, only near its limit: `⧗ 3 of 8 calls left`, shortened to
+ * `⧗ 3 left` only where the right group cannot hold it. Far from the limit it
+ * says nothing; the `/status` pane keeps the count.
  */
-describe("the status row carries a running turn's model-call budget", () => {
+describe("the status row carries a running turn's model-call budget near its limit", () => {
   const theme = {
     textMuted: muted,
     warning: RGBA.fromHex("#ffaa00"),
@@ -471,8 +450,7 @@ describe("the status row carries a running turn's model-call budget", () => {
     Effect.gen(function* () {
       const right = [
         ...buildBudgetLabels({ attempts: Option.some({ used, limit: 8 }), theme }),
-        label("ctx 42%"),
-        label("$12.34"),
+        label("ctx 12k/160k"),
       ]
       const all = [...labels.slice(0, 3), ...right]
       const setup = yield* renderScoped(
@@ -484,31 +462,32 @@ describe("the status row carries a running turn's model-call budget", () => {
         setup
           .captureCharFrame()
           .split("\n")
-          .find((line) => line.includes("$12.34")) ?? ""
+          .find((line) => line.includes("ctx 12k/160k")) ?? ""
       ).trimEnd()
     })
 
-  it.scopedLive("at 100 columns the near count stands beside the gauge and the total", () =>
+  it.scopedLive("at 100 columns the near count stands beside the gauge", () =>
     Effect.gen(function* () {
       const row = yield* rowAt(100, 5)
-      expect(row.startsWith("idle · some-very-long-project-name")).toBe(true)
-      expect(row.endsWith("   ⧗ 3 of 8 calls left · ctx 42% · $12.34")).toBe(true)
+      expect(row.startsWith("goal: ship the quiet status row")).toBe(true)
+      expect(row.endsWith("   ⧗ 3 of 8 calls left · ctx 12k/160k")).toBe(true)
       expect(row.length).toBe(100)
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.scopedLive("at 60 columns a count far from the limit keeps its place", () =>
+  it.scopedLive("at 60 columns a count far from the limit says nothing", () =>
     Effect.gen(function* () {
       const row = yield* rowAt(60, 2)
-      expect(row.startsWith("idle · ")).toBe(true)
-      expect(row.endsWith("   calls 2/8 · ctx 42% · $12.34")).toBe(true)
+      expect(row.startsWith("goal: ")).toBe(true)
+      expect(row).not.toContain("calls")
+      expect(row.endsWith(" ctx 12k/160k")).toBe(true)
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.scopedLive("at 40 columns the left group gives way, and narrower the count shortens", () =>
+  it.scopedLive("at 34 columns the left group gives way, and narrower the count shortens", () =>
     Effect.gen(function* () {
-      expect((yield* rowAt(40, 5)).trim()).toBe("⧗ 3 of 8 calls left · ctx 42% · $12.34")
-      expect((yield* rowAt(30, 5)).trim()).toBe("⧗ 3 left · ctx 42% · $12.34")
+      expect((yield* rowAt(34, 5)).trim()).toBe("⧗ 3 of 8 calls left · ctx 12k/160k")
+      expect((yield* rowAt(24, 5)).trim()).toBe("⧗ 3 left · ctx 12k/160k")
     }).pipe(Effect.timeout("10 seconds")),
   )
 })

@@ -92,7 +92,7 @@ import {
   resolveHeadlessMissingSignIns,
   resolveInteractiveBootstrap,
   activityLine,
-  statusCredentialLabel,
+  statusAccountLabel,
   NO_MODEL_LABEL,
 } from "../src/app"
 import { modelDisplayName } from "../src/utils"
@@ -102,6 +102,8 @@ import {
   createMockRuntime,
   createMutableRuntime,
   holdingReplies,
+  MOCK_SESSION_MODEL,
+  MOCK_SESSION_MODEL_NAME,
   mountClient,
   renderFrame,
   renderScoped,
@@ -791,7 +793,7 @@ const mountSessionPair = (
       client: overrides,
       initialSession: sessionNamed(pairA.sessionId, pairA.branchId, "Session A"),
     })
-    yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session A")
+    yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session A")
     // The row draws once the session's catalog has settled: a switch to a
     // session whose catalog a test holds loading waits for the switch alone.
     const switchTo = (pair: typeof pairA, name: string, row: "drawn" | "held" = "drawn") =>
@@ -801,7 +803,7 @@ const mountSessionPair = (
           setup,
           (frame) =>
             clientCtx.sessionIdentity().sessionId === pair.sessionId &&
-            (row === "held" || frame.includes("ready ·")),
+            (row === "held" || frame.includes(MOCK_SESSION_MODEL_NAME)),
           name,
         )
       })
@@ -839,7 +841,7 @@ const mountIdleSession = (
       ...terminal,
       initialSession: sessionNamed("session-a", "branch-a", "Session A"),
     })
-    yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+    yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session view")
     const { shutdowns, destroy } = yield* countShutdowns(setup)
     return {
       setup,
@@ -1055,7 +1057,11 @@ const mountNoticeSources = (ids: ReadonlyArray<string>) =>
       builtins: [...builtinClientModules, extension],
       initialSession: sessionNamed("session-silent", "branch-silent", "Silent"),
     })
-    yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && ext.loaded(), "loaded")
+    yield* waitForFrame(
+      setup,
+      (frame) => frame.includes(MOCK_SESSION_MODEL_NAME) && ext.loaded(),
+      "loaded",
+    )
     const sources = (): ReadonlyArray<string> => ext.noticeRows().map((source) => source.id)
     const failed = () => ext.failures().some((failure) => failure.id === "@test/silent-notices")
     yield* waitForFrame(setup, () => ids.every((id) => sources().includes(id)), "the sources")
@@ -1142,7 +1148,7 @@ describe("App sign-in pane", () => {
         },
         initialSession: sessionNamed("session-scripted", "branch-scripted", "Scripted"),
       })
-      yield* waitForFrame(setup, (next) => next.includes("ready ·"), "session view")
+      yield* waitForFrame(setup, (next) => next.includes(MOCK_SESSION_MODEL_NAME), "session view")
       // The agent resolves: the point where a keyed model checks its sign-ins.
       applySnapshotAgent(client, AgentName.make("main"))
       yield* Effect.promise(() => setup.renderOnce())
@@ -1647,7 +1653,11 @@ describe("App session view and fatal screen", () => {
           if (autocomplete) {
             // A `%` typed before the extensions load opens nothing, and `ready`
             // is the session's word, not the load's: wait for the load itself.
-            yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "the session ready")
+            yield* waitForFrame(
+              setup,
+              (frame) => frame.includes(MOCK_SESSION_MODEL_NAME),
+              "the session ready",
+            )
             Deferred.doneUnsafe(readySeen, Exit.void)
             yield* untilExtensionsLoaded(setup, ext.loaded)
             yield* Effect.promise(() => setup.mockInput.typeText("%"))
@@ -1670,7 +1680,7 @@ describe("App session view and fatal screen", () => {
             setup,
             (current) =>
               current.includes("@test/breaks: render failed") &&
-              (!idle || current.includes("ready ·")),
+              (!idle || current.includes(MOCK_SESSION_MODEL_NAME)),
             "the failure named",
           )
           expect(frame).not.toContain("Fatal error")
@@ -1761,12 +1771,12 @@ describe("App session view and fatal screen", () => {
         },
         initialSession: sessionNamed("session-kept", "branch-kept", "Kept"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session view")
       yield* typeCommand("/new")(setup)
       // While the create is in flight, the session stays mounted.
       yield* waitForFrame(setup, (frame) => !frame.includes("/new"), "command sent")
       expect(clientContext.session().sessionId).toEqual(SessionId.make("session-kept"))
-      expect(renderFrame(setup)).toContain("ready ·")
+      expect(renderFrame(setup)).toContain(MOCK_SESSION_MODEL_NAME)
       yield* Deferred.succeed(release, void 0)
       const frame = yield* waitForFrame(
         setup,
@@ -1814,7 +1824,11 @@ describe("App draft, shell and exit keys", () => {
         builtins: [...builtinClientModules, throwing, extension],
         initialSession: sessionNamed("session-stop", "branch-stop", "Stop"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && ext.loaded(), "loaded")
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes(MOCK_SESSION_MODEL_NAME) && ext.loaded(),
+        "loaded",
+      )
       const { shutdowns } = yield* countShutdowns(setup)
       // A draft is nearer: the press arms its clear and stops nothing.
       yield* Effect.promise(() => setup.mockInput.typeText("keep me"))
@@ -2111,7 +2125,11 @@ describe("App draft, shell and exit keys", () => {
       yield* view.settle
       expect(view.shutdowns()).toBe(0)
       view.setup.mockInput.pressEscape()
-      yield* waitForFrame(view.setup, (frame) => frame.includes("ready ·"), "collapsed")
+      yield* waitForFrame(
+        view.setup,
+        (frame) => frame.includes(MOCK_SESSION_MODEL_NAME),
+        "collapsed",
+      )
       view.setup.mockInput.pressKey("d", { ctrl: true })
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
     }).pipe(Effect.timeout("10 seconds")),
@@ -2201,7 +2219,7 @@ describe("App status and activity rows", () => {
       expect(written.filter((text) => text.includes("to resume"))).toHaveLength(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive("a session cost under a cent reads as the turn row spells it, not as free", () =>
+  it.scopedLive("the /status pane spells a session cost under a cent as the turn row does", () =>
     Effect.gen(function* () {
       const { setup } = yield* mountApp({
         client: {
@@ -2222,8 +2240,13 @@ describe("App status and activity rows", () => {
         },
         initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
-      const frame = yield* waitForFrame(setup, (next) => next.includes("$0.0"), "the cost label")
-      expect(frame).toContain("$0.002")
+      yield* typeCommand("/status")(setup)
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("cost $0.0"),
+        "the cost line",
+      )
+      expect(frame).toContain("cost $0.002")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("an error shown during a running turn leaves the turn running", () =>
@@ -2305,10 +2328,10 @@ describe("App status and activity rows", () => {
       )
     }).pipe(Effect.timeout("4 seconds")),
   )
-  // A resumed session's row draws whole. Until its snapshot has replayed,
-  // its catalog has answered and its root walk has ended, it shows no phase
-  // word and no cwd, so it never reads `ready` with no model, then redraws.
-  for (const held of ["catalog", "snapshot", "root walk"] as const) {
+  // A resumed session's row draws whole. Until its snapshot has replayed and
+  // its catalog has answered, it shows no gauge, so it never reads a gauge
+  // with no model beside it, then redraws.
+  for (const held of ["catalog", "snapshot"] as const) {
     it.scopedLive(
       `the status row of a resumed session waits for its ${held}, then draws whole`,
       () =>
@@ -2320,6 +2343,7 @@ describe("App status and activity rows", () => {
             name: "Claude Sonnet 5",
             provider: ProviderId.make("anthropic"),
             providerName: "Anthropic",
+            contextLength: 200_000,
           })
           const asked = yield* Deferred.make<void>()
           const release = yield* Deferred.make<void>()
@@ -2341,25 +2365,9 @@ describe("App status and activity rows", () => {
             resolvedModelId: sonnet.id,
             agent: AgentName.make("main"),
             runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
-            metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+            metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 12_000 },
           })
-          // The root walk stats each `.git` up from the cwd.
-          const built = yield* Layer.build(testPlatformLayer())
-          const fs = Context.get(built, FileSystem.FileSystem)
-          const walked: FileSystem.FileSystem = {
-            ...fs,
-            exists: (path) => {
-              if (!path.endsWith(".git")) return fs.exists(path)
-              return readOf("root walk", fs.exists(path))
-            },
-          }
-          const scope = yield* Scope.Scope
-          const services = Context.makeUnsafe<unknown>(
-            Context.add(Context.add(built, FileSystem.FileSystem, walked), Scope.Scope, scope)
-              .mapUnsafe,
-          )
           const { setup } = yield* mountApp({
-            services,
             client: {
               model: { list: () => readOf("catalog", catalog) },
               driver: {
@@ -2380,34 +2388,41 @@ describe("App status and activity rows", () => {
             yield* Effect.yieldNow
             yield* Effect.promise(() => setup.renderOnce())
           }
-          expect(setup.captureCharFrame()).not.toContain("ready ·")
+          expect(setup.captureCharFrame()).not.toContain("ctx ")
           const partial: Array<string> = []
           yield* Deferred.complete(release, Effect.void)
           const whole = yield* waitForFrame(
             setup,
             (frame) => {
-              if (frame.includes("ready ·") && !frame.includes("Claude Sonnet 5"))
-                partial.push(frame)
+              if (frame.includes("ctx ") && !frame.includes("Claude Sonnet 5")) partial.push(frame)
               return frame.includes("Claude Sonnet 5")
             },
             "the whole row",
           )
           expect(partial).toEqual([])
-          expect(whole).toContain("ready ·")
+          expect(whole).toContain("ctx 12k/")
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
   // A failed catalog read has answered too: the row draws, not held for good.
+  const rowProbe = defineClientExtension("@test/row-probe", {
+    setup: Effect.succeed(
+      statusLabelContribution({
+        produce: () => [{ text: "probe label", color: "textMuted" as const }],
+      }),
+    ),
+  })
   it.scopedLive("the status row of a session whose catalog read failed draws", () =>
     Effect.gen(function* () {
       const { setup } = yield* mountApp({
         client: {
           model: { list: () => Effect.fail(new ProviderAuthError({ message: "catalog refused" })) },
         },
+        builtins: [rowProbe],
         width: 120,
         initialSession: sessionNamed("session-failed-catalog", "branch-failed-catalog", "Failed"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready · workspace-"), "the row")
+      yield* waitForFrame(setup, (frame) => frame.includes("probe label"), "the row")
     }).pipe(Effect.timeout("4 seconds")),
   )
   // Gent ships no default model: a session nobody named one for says so, and
@@ -2496,10 +2511,11 @@ describe("App status and activity rows", () => {
     expect(modelDisplayName(mirror, models)).toBe("Claude Haiku 4.5 (Mirror (mirror-a))")
     expect(modelDisplayName(bare, models)).toBe("Claude Haiku 4.5 (bare)")
   })
-  // A sign-in of several credentials: the row names the one the model's
-  // newest request went out with, or `unknown` for a request recorded before
-  // receipts. One credential, or a newest request on another model, names none.
-  test("the status row names the credential of a sign-in that holds several", () => {
+  // The `/status` pane names the account: the provider and the credential
+  // the model's newest request went out with, `unknown` for a request recorded
+  // before receipts on a sign-in of several. One credential, or a newest
+  // request on another model, names the provider alone.
+  test("the /status pane names the account the newest request went out on", () => {
     const model = new Model({
       id: ModelId.make("anthropic/claude-opus-5"),
       name: "Claude Opus 5",
@@ -2518,34 +2534,38 @@ describe("App status and activity rows", () => {
       },
     ]
     const last = (on: string, used: typeof receipt) => Option.some({ model: on, receipt: used })
-    expect(statusCredentialLabel(model, last(model.id, receipt), several)).toEqual(
-      Option.some("personal"),
+    expect(statusAccountLabel(model, last(model.id, receipt), several)).toBe(
+      "account anthropic · personal",
     )
-    expect(statusCredentialLabel(model, last(model.id, Option.none()), several)).toEqual(
-      Option.some("unknown"),
+    expect(statusAccountLabel(model, last(model.id, Option.none()), several)).toBe(
+      "account anthropic · unknown",
     )
-    expect(statusCredentialLabel(model, last("anthropic/other", receipt), several)).toEqual(
-      Option.none(),
+    expect(statusAccountLabel(model, last("anthropic/other", receipt), several)).toBe(
+      "account anthropic",
     )
-    expect(statusCredentialLabel(model, Option.none(), several)).toEqual(Option.none())
+    expect(statusAccountLabel(model, Option.none(), several)).toBe("account anthropic")
     const single = [{ provider: ProviderId.make("anthropic"), hasKey: true, required: false }]
-    expect(statusCredentialLabel(model, last(model.id, receipt), single)).toEqual(Option.none())
+    expect(statusAccountLabel(model, last(model.id, Option.none()), single)).toBe(
+      "account anthropic",
+    )
   })
-  for (const [width, shown] of [
-    [120, "via personal"],
-    [60, "personal"],
-  ] as const) {
+  // The row keeps the model, its effort and the gauge; the account, the
+  // context's window and cap, the cost and the cwd are in the `/status` pane,
+  // at a normal and a narrow width.
+  for (const width of [120, 60]) {
     it.scopedLive(
-      `the status row names the credential the last request used at ${width} columns`,
+      `the status row keeps the model, effort and gauge, and /status shows the rest at ${width} columns`,
       () =>
         Effect.gen(function* () {
-          const sessionId = SessionId.make(`session-credential-${width}`)
-          const branchId = BranchId.make(`branch-credential-${width}`)
+          const sessionId = SessionId.make(`session-status-${width}`)
+          const branchId = BranchId.make(`branch-status-${width}`)
           const sonnet = new Model({
             id: ModelId.make("anthropic/claude-sonnet-5"),
             name: "Claude Sonnet 5",
             provider: ProviderId.make("anthropic"),
-            contextLength: 1_000_000,
+            contextLength: 200_000,
+            reasoning: true,
+            efforts: ["low", "medium", "high"],
           })
           const stored = (slot: string) => ({
             slot: CredentialSlot.make(slot),
@@ -2555,6 +2575,14 @@ describe("App status and activity rows", () => {
           const { setup } = yield* mountApp({
             client: {
               model: { list: () => Effect.succeed([sonnet]) },
+              // A linked peer that holds no run: `/status` names it, the band does not.
+              accounts: {
+                lanes: () =>
+                  Effect.succeed({
+                    providers: [],
+                    peer: { heard: { host: "workbox", at: 0 }, runs: 0, silent: false, down: [] },
+                  }),
+              },
               auth: {
                 listProviders: () =>
                   Effect.succeed([
@@ -2575,7 +2603,7 @@ describe("App status and activity rows", () => {
                     branchId,
                     messages: [],
                     lastEventId: nullValue,
-                    reasoningLevel: absent,
+                    reasoningLevel: "high",
                     resolvedModelId: sonnet.id,
                     agent: AgentName.make("main"),
                     runtime: SessionRuntimeStateSchema.cases.Idle.make({
@@ -2584,7 +2612,16 @@ describe("App status and activity rows", () => {
                     metrics: {
                       turns: 1,
                       durationMs: 0,
-                      costUsd: 0,
+                      costUsd: 0.1,
+                      lastInputTokens: 0,
+                      context: {
+                        contextLimitTokens: 200_000,
+                        availableInputTokens: 160_000,
+                        estimatedTokens: 12_000,
+                        omittedMessages: 0,
+                        compactions: 0,
+                        renters: [],
+                      },
                       lastCredential: {
                         model: sonnet.id,
                         receipt: {
@@ -2596,16 +2633,52 @@ describe("App status and activity rows", () => {
                   }),
               },
             },
+            cwd: "/work",
             width,
-            initialSession: sessionNamed(sessionId, branchId, "Credential"),
+            initialSession: sessionNamed(sessionId, branchId, "Status"),
           })
+          const statusRow = (frame: string) =>
+            frame.split("\n").find((line) => line.includes("Sonnet 5")) ?? ""
           const frame = yield* waitForFrame(
             setup,
-            (next) => next.includes(shown),
-            "the credential in the status row",
+            (next) => statusRow(next).includes("ctx "),
+            "the model and the gauge in the status row",
           )
-          expect(frame).toContain("Sonnet 5")
-        }).pipe(Effect.timeout("4 seconds")),
+          const row = statusRow(frame)
+          expect(row).toContain("high")
+          expect(row).toContain("ctx 12k/160k")
+          for (const gone of ["personal", "$0.10", "cache", "/work", "idle", "ready"])
+            expect([gone, row.includes(gone)]).toEqual([gone, false])
+          yield* typeCommand("/status")(setup)
+          // The lanes row lands with the lanes answer; scroll only after it, or
+          // the selection clamps on a shorter list.
+          const pane = yield* waitForFrame(
+            setup,
+            (next) =>
+              next.includes("account anthropic · personal") && next.includes("≡ lanes unknown"),
+            "the status pane with the lanes answer",
+          )
+          expect(pane).toContain("ctx 12k held of 160k · 8%")
+          expect(pane).toContain("window 200k · 40k kept for system, tools and output")
+          expect(pane).toContain("cost $0.10")
+          expect(pane).toContain("cwd work")
+          // The pane shows six lines at a time: the peer sits past the lanes.
+          for (const _line of [1, 2, 3, 4, 5, 6]) setup.mockInput.pressArrow("down")
+          yield* waitForFrame(
+            setup,
+            (next) => next.includes("⇄ peer workbox 0 runs"),
+            "the peer in the pane",
+          )
+          setup.mockInput.pressEscape()
+          const closed = yield* waitForFrame(
+            setup,
+            (next) => !next.includes("esc close"),
+            "the status pane closed",
+          )
+          // An idle linked peer and lanes unknown need nothing: no band row.
+          expect(closed).not.toContain("⇄")
+          expect(closed).not.toContain("≡")
+        }).pipe(Effect.timeout("10 seconds")),
     )
   }
   // A virtual model routes each turn: the row names it, the model its newest
@@ -2672,7 +2745,7 @@ describe("App status and activity rows", () => {
             "the routed model in the status row",
           )
           expect(frame).toContain("high")
-          expect(frame).toContain("(50%)")
+          expect(frame).toContain("ctx 50k/100k")
           // The picker lists the virtual model by its label, beside its id.
           yield* typeCommand("/model")(setup)
           const picker = yield* waitForFrame(
@@ -2686,13 +2759,13 @@ describe("App status and activity rows", () => {
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
-  // The row as a live session draws it: the phase, the cwd, a routed model
-  // whose name another provider shares, its effort, the debug mark, and the
-  // cache label beside the gauge and the cost. A row too narrow for every
-  // label in full takes their short forms by its budget: the debug mark, then
-  // the cwd, then the model (no provider label, no family word), then the
-  // phase word; a label that fits again in full after a later one shortened
-  // gets its full form back.
+  // The row as a live session draws it: a routed model whose name another
+  // provider shares, its effort, the debug mark, and an extension's
+  // right-anchored label beside the gauge. A row too narrow for every label in
+  // full takes their short forms by its budget: the debug mark, then the
+  // gauge's share, then the model (no provider label, no family word); a label
+  // that fits again in full after a later one shortened gets its full form
+  // back (the debug mark at 60 columns).
   const cacheLabel = defineClientExtension("@test/cache-label", {
     setup: Effect.succeed(
       statusLabelContribution({
@@ -2702,12 +2775,13 @@ describe("App status and activity rows", () => {
     ),
   })
   for (const [width, left, hidden] of [
-    [120, "idle · work · Auto → Claude Sonnet 5 (anthropic) · high · debug", []],
-    [80, "idle · work · Auto → Sonnet 5 · high · debug", ["Claude", "(anthropic)"]],
-    [60, "Auto → Sonnet 5 · high", ["Claude", "(anthropic)", "debug", "idle", "work"]],
+    [120, "Auto → Claude Sonnet 5 (anthropic) · high · debug", []],
+    [80, "Auto → Claude Sonnet 5 (anthropic) · high · debug", []],
+    [60, "Auto → Sonnet 5 · high · debug", ["Claude", "(anthropic)", "ctx 500"]],
+    [44, "Auto → Sonnet 5 · high", ["Claude", "(anthropic)", "debug", "ctx 500"]],
   ] as const) {
     it.scopedLive(
-      `the status row at ${width} columns takes the short forms its budget needs, the cwd before the model`,
+      `the status row at ${width} columns takes the short forms its budget needs, the debug mark first`,
       () =>
         Effect.gen(function* () {
           const sessionId = SessionId.make(`session-routed-shared-${width}`)
@@ -2790,7 +2864,7 @@ describe("App status and activity rows", () => {
           {
             text: "changes: 4 files +120 -31",
             color: "textMuted" as const,
-            short: { text: "+120 -31", rank: STATUS_YIELD.cwd + 0.5 },
+            short: { text: "+120 -31", rank: STATUS_YIELD.context + 0.5 },
           },
         ],
       }),
@@ -2871,11 +2945,19 @@ describe("App status and activity rows", () => {
             Effect.forkScoped,
           )
         const completed = Effect.map(Ref.get(published), (all) => all.includes("TurnCompleted"))
-        // The row names the session's directory, the harness's temporary one.
+        // The status row ends the frame; its left group names the effort alone
+        // (the client lists no model of a provider it has no sign-in for).
         const statusRow = (frame: string) =>
-          frame.split("\n").find((line) => line.includes("gent-test-cwd-")) ?? ""
+          (
+            frame
+              .split("\n")
+              .filter((line) => line.trim().length > 0)
+              .at(-1) ?? ""
+          )
+            .trim()
+            .split(/\s{2,}/)[0] ?? ""
         yield* typeCommand("/effort low")(setup)
-        yield* waitForFrame(setup, (frame) => statusRow(frame).includes("· low"), "low set")
+        yield* waitForFrame(setup, (frame) => statusRow(frame) === "low", "low set")
         yield* Effect.promise(() => setup.mockInput.typeText("think"))
         setup.mockInput.pressEnter()
         yield* controls.waitForStreamStart.pipe(Effect.timeout("3 seconds"))
@@ -2892,16 +2974,14 @@ describe("App status and activity rows", () => {
           "the reply's text during the turn",
         )
         expect(yield* completed).toBe(false)
-        expect(statusRow(during)).toContain("· low")
-        expect(statusRow(during)).not.toContain("high")
+        expect(statusRow(during)).toBe("low")
         yield* controls.emitAll
         yield* waitFor(completed, (done) => done, 3_000, "the turn completed")
-        const after = yield* waitForFrame(
+        yield* waitForFrame(
           setup,
-          (frame) => statusRow(frame).includes("· high"),
+          (frame) => statusRow(frame) === "high",
           "the new level after the turn",
         )
-        expect(statusRow(after)).not.toContain("low")
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
@@ -3028,8 +3108,8 @@ describe("App status and activity rows", () => {
   // `/effort auto`: the row names auto and the level its newest effort route
   // picked, clamped as the request was sent; a narrow row keeps both.
   for (const [width, left] of [
-    [120, "idle · work · Claude Opus 5 · auto → high · debug"],
-    [60, "Opus 5 · auto → high"],
+    [120, "Claude Opus 5 · auto → high · debug"],
+    [60, "Claude Opus 5 · auto → high"],
   ] as const) {
     it.scopedLive(
       `the status row on /effort auto names auto and its routed level at ${width} columns`,
@@ -3096,6 +3176,8 @@ describe("App status and activity rows", () => {
             Option.fromUndefinedOr(frame.split("\n").find((line) => line.includes("cache cold"))),
           )
           expect(row.trimStart().slice(0, left.length)).toBe(left)
+          // The narrow row gives the debug mark up first.
+          expect(row.includes("debug")).toBe(width === 120)
           // The effort picker marks `auto` as the session's.
           yield* typeCommand("/effort")(setup)
           const picker = yield* waitForFrame(setup, (next) => next.includes("Effort ·"), "picker")
@@ -3211,15 +3293,13 @@ describe("App status and activity rows", () => {
             width,
             initialSession: sessionNamed(harness.sessionId, harness.branchId, "Effort auto"),
           })
-          // The row that names the harness cwd (the client lists no model of a
-          // provider it has no sign-in for).
+          // The status row ends the frame: no band or pane is open. It names no
+          // model (the client lists no model of a provider it has no sign-in for).
           const statusRow = (frame: string) =>
-            Option.getOrElse(
-              Option.fromUndefinedOr(
-                frame.split("\n").find((line) => line.includes("gent-test-cwd")),
-              ),
-              () => "",
-            )
+            frame
+              .split("\n")
+              .filter((line) => line.trim().length > 0)
+              .at(-1) ?? ""
           yield* typeCommand("/effort auto")(setup)
           yield* waitForFrame(
             setup,
@@ -3413,11 +3493,8 @@ describe("App drafts, queue restore and forks across session switches", () => {
           model: {
             list: (input: { readonly sessionId: SessionId }) =>
               Effect.suspend(() => {
-                const sonnet = Model.make({
-                  id: ModelId.make("anthropic/sonnet"),
-                  name: "Sonnet",
-                  provider: ProviderId.make("anthropic"),
-                })
+                // The session's own model: the row draws its name once the catalog settles.
+                const sonnet = MOCK_SESSION_MODEL
                 if (input.sessionId !== pairA.sessionId) return Effect.succeed([sonnet])
                 readsOfA += 1
                 if (readsOfA === 1) return Effect.succeed([sonnet])
@@ -3806,11 +3883,7 @@ describe("App drafts, queue restore and forks across session switches", () => {
         },
       }
       const sessionB = (view: TestSetup) =>
-        waitForFrame(
-          view,
-          (frame) => frame.includes("ready ·") && frame.includes("Claude Sonnet 5"),
-          "session B",
-        )
+        waitForFrame(view, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session B")
       const mountOnA = (replies?: Parameters<typeof createMockClient>[1]) =>
         mountApp({
           client: perSession,
@@ -4206,7 +4279,7 @@ describe("App cancel and quit keys during a turn", () => {
         builtins: builtinClientModules,
         initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session view")
       yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("btw · fork"), "btw pane")
@@ -4233,7 +4306,7 @@ describe("App slash commands", () => {
         builtins: [...builtinClientModules, held],
         initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session view")
       expect(ext.loaded()).toBe(false)
       yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
       yield* waitForFrame(setup, (frame) => frame.includes("/btw"), "the typed command")
@@ -4353,7 +4426,11 @@ describe("App slash commands", () => {
           }),
           initialSession: sessionNamed("session-a", "branch-a", "Session A"),
         })
-        yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes(MOCK_SESSION_MODEL_NAME),
+          "session view",
+        )
         yield* Effect.promise(() => setup.mockInput.typeText("older prompt"))
         yield* waitForFrame(setup, (frame) => frame.includes("┃ older prompt"), "typed prompt")
         setup.mockInput.pressEnter()
@@ -4406,7 +4483,11 @@ describe("App slash commands", () => {
           builtins: builtinClientModules,
           initialSession: sessionNamed("session-a", "branch-a", "Session A"),
         })
-        yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes(MOCK_SESSION_MODEL_NAME),
+          "session view",
+        )
         yield* waitForFrame(setup, () => ext.loaded(), "client extensions loaded")
         yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
         yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
@@ -4448,7 +4529,7 @@ describe("App slash commands", () => {
         builtins: builtinClientModules,
         initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session view")
       yield* waitForFrame(setup, () => ext.commandsSettled(), "the commands settled")
       yield* typeCommand("/late now")(setup)
       yield* waitForFrame(setup, () => requests.length + sent.length > 0, "the command answered")
@@ -4506,7 +4587,7 @@ describe("App slash commands", () => {
         width: 60,
         initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session view")
       yield* typeCommand("/audit now")(setup)
       const failed = yield* waitForFrame(
         setup,
@@ -4520,7 +4601,7 @@ describe("App slash commands", () => {
       yield* typeCommand("/note")(setup)
       const frame = yield* waitForFrame(
         setup,
-        (next) => !next.includes("audit refused") && next.includes("ready ·"),
+        (next) => !next.includes("audit refused") && next.includes(MOCK_SESSION_MODEL_NAME),
         "the failure gone",
       )
       expect(frame).not.toContain("/audit failed")
@@ -4546,7 +4627,7 @@ describe("App slash commands", () => {
         builtins: builtinClientModules,
         initialSession: sessionNamed("session-a", "branch-a", "Session A"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session view")
       yield* Effect.promise(() => setup.mockInput.typeText("/aud"))
       yield* waitForFrame(setup, (frame) => frame.includes("/audit"), "the popup row")
       expect(renderFrame(setup)).toContain("Detect, audit")
@@ -4601,7 +4682,11 @@ describe("App slash commands", () => {
             builtins: builtinClientModules,
             initialSession: sessionNamed("session-a", "branch-a", "Session A"),
           })
-          yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+          yield* waitForFrame(
+            setup,
+            (frame) => frame.includes(MOCK_SESSION_MODEL_NAME),
+            "session view",
+          )
           yield* waitForFrame(setup, () => ext.loaded(), "client extensions loaded")
           yield* Effect.promise(() => setup.mockInput.typeText("/probe now"))
           yield* waitForFrame(setup, (frame) => frame.includes("/probe now"), "the typed command")
@@ -4665,7 +4750,11 @@ describe("App slash commands", () => {
           builtins: builtinClientModules,
           initialSession: sessionNamed("session-a", "branch-a", "Session A"),
         })
-        yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes(MOCK_SESSION_MODEL_NAME),
+          "session view",
+        )
         yield* waitForFrame(
           setup,
           () => ext.loaded() && ext.commandsSettled(),
@@ -6757,7 +6846,7 @@ describe("TUI renderer surfaces", () => {
       const view = yield* mountIdleSession()
       const statusRowAbove = (frame: string, title: string) => {
         const lines = frame.split("\n")
-        const status = lines.findIndex((line) => line.startsWith("ready ·"))
+        const status = lines.findIndex((line) => line.startsWith(MOCK_SESSION_MODEL_NAME))
         const pane = lines.findIndex((line) => line.startsWith(title))
         return status >= 0 && pane > status
       }
@@ -6788,12 +6877,20 @@ describe("TUI renderer surfaces", () => {
       expect(statusRowAbove(effort, "Effort ·")).toBe(true)
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive("a resumed session with turns behind it reads idle, not ready", () =>
+  // An idle session says nothing of its phase: the empty row is the idle
+  // state, and the activity row names a running turn's phase.
+  it.scopedLive("a resumed session's idle row names its model and no phase word", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-test")
       const branchId = BranchId.make("branch-test")
+      const sonnet = new Model({
+        id: ModelId.make("anthropic/claude-sonnet-5"),
+        name: "Claude Sonnet 5",
+        provider: ProviderId.make("anthropic"),
+      })
       const { setup } = yield* mountApp({
         client: {
+          model: { list: () => Effect.succeed([sonnet]) },
           session: {
             getSnapshot: () =>
               Effect.succeed({
@@ -6802,7 +6899,7 @@ describe("TUI renderer surfaces", () => {
                 messages: [],
                 lastEventId: nullValue,
                 reasoningLevel: absent,
-                resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+                resolvedModelId: sonnet.id,
                 agent: AgentName.make("primary"),
                 runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
                 metrics: { turns: 3, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
@@ -6811,8 +6908,14 @@ describe("TUI renderer surfaces", () => {
         },
         initialSession: sessionNamed(sessionId, branchId, "Resumed"),
       })
-      yield* waitForFrame(setup, (drawn) => drawn.includes("idle ·"), "the resumed status")
-      expect(renderFrame(setup)).not.toContain("ready ·")
+      const frame = yield* waitForFrame(
+        setup,
+        (drawn) => drawn.includes("Claude Sonnet 5"),
+        "the resumed status",
+      )
+      const row = frame.split("\n").find((line) => line.includes("Claude Sonnet 5")) ?? ""
+      expect(row).not.toContain("idle")
+      expect(row).not.toContain("ready")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
@@ -8670,7 +8773,7 @@ describe("client extension status", () => {
         client,
         initialSession: sessionNamed(sessionId, branchId, "Pulses"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session view")
       // The mount read, one read for the replayed five, and one for the live pulse.
       yield* waitUntil(() => healthReads >= 3, "the live pulse reads health")
       yield* waitForFrame(setup, () => true)
@@ -8903,7 +9006,7 @@ export default defineClientExtension("@test/there", {
         width: 140,
         initialSession: sessionNamed("session-driver", "branch-driver", "Driver"),
       })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* waitForFrame(setup, (frame) => frame.includes(MOCK_SESSION_MODEL_NAME), "session view")
       yield* typeCommand("/driver")(setup)
       yield* waitForFrame(
         setup,

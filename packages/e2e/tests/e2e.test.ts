@@ -8,6 +8,7 @@ import { Effect, FileSystem, Option } from "effect"
 import { GENT_START_BOUND_MS, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
   DEFAULT_PTY_SIZE,
+  isStatusRow,
   keys,
   ptyWaitFor,
   screenWaitFor,
@@ -15,6 +16,7 @@ import {
   seedSkillAndSpawn,
   settlePty,
   spawnNoAuth,
+  STATUS_ROW_TEXT,
 } from "../src/pty-fixture"
 import { exitWithin } from "../src/server-process-fixture"
 
@@ -154,10 +156,10 @@ describe("E2E: Session", () => {
     () =>
       Effect.gen(function* () {
         // `--mock-empty` keeps the turn offline: memory state, no seeded
-        // session, a model that answers nothing. The home footer reads
-        // "ready"; only the session route renders the `✻` live line.
+        // session, a model that answers nothing. The home footer names the
+        // model; only the session route renders the `✻` live line.
         const ctx = yield* seedAndSpawn(["--mock-empty"])
-        yield* ptyWaitFor(ctx, "ready", { timeout: GENT_START_BOUND_MS })
+        yield* ptyWaitFor(ctx, STATUS_ROW_TEXT, { timeout: GENT_START_BOUND_MS })
         ctx.pty.write("hi")
         // Enter must reach the composer after the text it submits is drawn.
         yield* settlePty(ctx, REPAINT)
@@ -233,7 +235,7 @@ describe("E2E: Terminal handover", () => {
           (visible) =>
             visible.some((line) => line.includes("┃ edited by the probe")) &&
             visible.some((line) => line.includes("ctrl+p commands")) &&
-            visible.some((line) => line.includes("ready")),
+            visible.some((line) => isStatusRow(line)),
           { timeout: 10_000, label: "the screen back with the edit in the composer" },
         )
       }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
@@ -278,7 +280,7 @@ describe("E2E: Terminal handover", () => {
           ctx,
           (visible) =>
             visible.some((line) => line.includes("┃ edited after ctrl+c")) &&
-            visible.some((line) => line.includes("ready")),
+            visible.some((line) => isStatusRow(line)),
           { timeout: 10_000, label: "the screen back with the edit in the composer" },
         )
         // Gent is alive: the composer still takes keys.
@@ -318,7 +320,7 @@ describe("E2E: Terminal handover", () => {
           ctx,
           (visible) =>
             visible.some((line) => line.includes("ctrl+p commands")) &&
-            visible.some((line) => line.includes("ready")),
+            visible.some((line) => isStatusRow(line)),
           { timeout: 10_000, label: "the screen back after hunk" },
         )
       }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),

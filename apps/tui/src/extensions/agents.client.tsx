@@ -131,11 +131,10 @@ const TRAY_HINTS = [keyHint(TRAY_KEY, "sessions")]
 const TRAY_MAX_ROWS = 3
 /**
  * Columns of a child's name on the status row; a thread's name is often its
- * whole task. At 100 columns the left group has 71 beside the right group
- * (`cache 5m · ctx 0% · $0.002`). The phase, the cwd, `Claude Sonnet 5.5` and
- * the way back take 44 of them, and ` · ↳ child ` 11 more: 16 are left for
- * the name. At 60 and 40 columns the way back alone does not fit, so the
- * label never shows there.
+ * whole task. The row holds the model, its effort and the context gauge
+ * (`ctx 12k/160k`); a long model name, ` · ↳ child ` and the way back leave
+ * 16 columns for the name at 100. On a narrow row the name gives way first
+ * (`STATUS_YIELD.debug - 1`), then the way back.
  */
 const WATCHED_NAME = 16
 
@@ -2321,8 +2320,8 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
       // A child session in view says so on the status row, and how to get
       // back to the tree: the reader can tell a child from its parent at a
       // glance. On a narrow row the child label gives way first, whole, then
-      // the way back, both before the cwd: the label never costs the reader
-      // the way back or the cwd.
+      // the gauge reads its share, then the way back goes, before the model
+      // name shortens: the label never costs the reader the way back.
       statusLabelContribution({
         priority: 0,
         produce: () =>
@@ -2338,7 +2337,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
                 text: TRAY_HINT,
                 color: "textMuted",
                 key: TRAY_KEY,
-                short: { text: "", rank: STATUS_YIELD.cwd - 0.5 },
+                short: { text: "", rank: STATUS_YIELD.context + 0.5 },
               },
             ],
           }),

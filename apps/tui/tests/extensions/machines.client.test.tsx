@@ -16,13 +16,14 @@ import { type MachineRunView, MachinesRpc, ReviewRound } from "@gent/extensions/
 import machinesExtension, {
   type BandData,
   bandRows,
+  laneDetail,
   LanesBand,
 } from "../../src/extensions/machines.client"
 import { laneRows } from "../../src/utils"
 import { textWidth } from "../../src/bun-adapter"
 import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
 import { createMockClient, renderFrame, renderScoped } from "../render-harness-boundary"
-import { waitForFrame } from "../helpers-boundary"
+import { waitForFrame, waitUntil } from "../helpers-boundary"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -355,9 +356,9 @@ describe("the lanes band rows", () => {
       expect(textWidth(at(width) ?? "")).toBeLessThanOrEqual(width)
       expect(at(width)).toContain("login!")
     }
-    // The band draws it as a lanes row; a provider with only a lost login shows too.
+    // The band draws the lost login, which needs the owner, and leaves the
+    // free lanes to `/status`; a provider with only a lost login shows too.
     expect(texts({ lanes: Option.some(lost(measured)), runs: [] }, 120)).toEqual([
-      "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
       "≡ login! anthropic work refused · sign in with /auth",
     ])
     // No reading, no scope: the server lists the provider for its lost login alone.
@@ -365,7 +366,6 @@ describe("the lanes band rows", () => {
       providers: unrated.providers.map((lanes) => ({ ...lanes, scope: [], accounts: [], load: 0 })),
     })
     expect(texts({ lanes: Option.some(alone), runs: [] }, 120)).toEqual([
-      "≡ lanes anthropic unknown",
       "≡ login! anthropic work refused · sign in with /auth",
     ])
   })
@@ -392,14 +392,11 @@ describe("the lanes band rows", () => {
     // An account with none, or only lapsed grants, shows nothing; nor does
     // one out of the scope, whatever it holds.
     expect(laneRows(measured, NOW, 120, utc).map((row) => row.state)).toEqual(["free"])
-    // The band draws the row with its own mark after the provider's lanes and lost logins.
-    expect(texts({ lanes: Option.some(banked), runs: [] }, 120)).toEqual([
-      "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
-      "↺ resets anthropic default 2, work 1 · next lapses 15:00",
-    ])
+    // Banked resets need no action: the band leaves them to `/status`.
+    expect(texts({ lanes: Option.some(banked), runs: [] }, 120)).toEqual([])
   })
 
-  test("each active run follows the lanes: machine, state, round and age; a waiting round names its clock", () => {
+  test("each active run draws its row: machine, state, round and age; a waiting round names its clock", () => {
     const data: BandData = {
       lanes: Option.some(measured),
       runs: [
@@ -429,15 +426,14 @@ describe("the lanes band rows", () => {
         run({ run: "run-0000000000000004", status: "final" }),
       ],
     }
+    // Free lanes are `/status` detail: the runs alone draw.
     expect(texts(data, 120)).toEqual([
-      "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
       "◷ review review r1 2h · wait 12:47",
       "▸ track implement r2 4m",
       "? track decide r0 10s",
     ])
-    // Narrow: each row fits, the free count stays, a wait too long for the row drops its clock.
+    // Narrow: each row fits, a wait too long for the row drops its clock.
     expect(texts(data, 22)).toEqual([
-      "≡ lanes 3/5 free",
       "◷ review review r1 2h",
       "▸ track implement r2 4m",
       "? track decide r0 10s",
@@ -466,7 +462,6 @@ describe("the lanes band rows", () => {
     expect(texts({ lanes: Option.none(), runs: [merging({})] }, 120).at(-1)).toBe(
       "▸ track merge r1 1h",
     )
-    // Each `.at(-1)` reads the run row; the "lanes unknown" row comes before it.
     // Narrow: the row drops the PR before the head.
     expect(texts({ lanes: Option.none(), runs: [merging({ pr: 12 })] }, 20).at(-1)).toBe(
       "◷ track merge r1 1h",
@@ -490,14 +485,14 @@ describe("the lanes band rows", () => {
     for (const width of [25, 24, 19, 18, 17, 16, 11, 10, 4]) {
       expect(textWidth(at(width) ?? "")).toBeLessThanOrEqual(width)
     }
-    // The band draws it with its own mark; a peer alone shows the band, after lanes unknown.
+    // The band draws a peer that holds runs with its own mark, alone: the
+    // free lanes and lanes unknown are `/status` detail.
     expect(texts({ lanes: Option.some(withPeer(linked)), runs: [] }, 120)).toEqual([
-      "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
       "⇄ peer workbox 2 runs · 12s",
     ])
     expect(
       texts({ lanes: Option.some(withPeer(linked, { providers: [] })), runs: [] }, 120),
-    ).toEqual(["≡ lanes unknown", "⇄ peer workbox 2 runs · 12s"])
+    ).toEqual(["⇄ peer workbox 2 runs · 12s"])
   })
 
   test("a silent peer reads unread and its age; a link down marks peer! and names the link", () => {
@@ -582,7 +577,7 @@ describe("the lanes band rows", () => {
     }
   })
 
-  test("the band hides with no reading and no active run; a run alone shows lanes unknown", () => {
+  test("the band hides with no reading and no active run; a run alone shows its row", () => {
     expect(bandRows({ lanes: Option.none(), runs: [] }, NOW, 120, utc)).toEqual([])
     expect(bandRows({ lanes: Option.some({ providers: [] }), runs: [] }, NOW, 120, utc)).toEqual([])
     expect(
@@ -594,86 +589,140 @@ describe("the lanes band rows", () => {
       ),
     ).toEqual([])
     expect(texts({ lanes: Option.none(), runs: [run({})] }, 120)).toEqual([
-      "≡ lanes unknown",
       "▸ track implement r2 4m",
     ])
+  })
+
+  test("the band hides while every lane is free and the linked peer holds no run", () => {
+    const idle = { ...linked, runs: 0 }
+    for (const report of [measured, banked, unrated, withPeer(idle)])
+      expect(texts({ lanes: Option.some(report), runs: [] }, 120)).toEqual([])
+  })
+
+  test("a lane refusal, a usage-limit wait or a full pool draws its lanes row", () => {
+    expect(texts({ lanes: Option.some(spent), runs: [] }, 120)).toEqual([
+      "≡ lanes anthropic 0 free · retry 13:47",
+    ])
+    const busy: LaneReport = {
+      providers: measured.providers.map((lanes) => ({ ...lanes, load: 5 })),
+    }
+    expect(texts({ lanes: Option.some(busy), runs: [] }, 120)).toEqual([
+      "≡ lanes anthropic 0/5 free · 5 running",
+    ])
+  })
+
+  test("a silent peer or a link down draws the peer row, with no run held", () => {
+    const quiet = { ...linked, runs: 0 }
+    expect(
+      texts({ lanes: Option.some(withPeer({ ...quiet, down: ["own"] })), runs: [] }, 120),
+    ).toEqual(["⇄ peer! workbox 0 runs · 12s · own link down"])
+    expect(
+      texts({ lanes: Option.some(withPeer({ ...quiet, silent: true })), runs: [] }, 120).length,
+    ).toBe(1)
+  })
+})
+
+describe("the lanes in the /status pane", () => {
+  const lines = (report: LaneReport) =>
+    laneDetail(Option.some(report), NOW, utc).map((item) => `${item.text} [${item.color}]`)
+
+  test("every lanes row, in its glyph's tone: free lanes, banked resets and an idle peer", () => {
+    expect(lines(withPeer({ ...linked, runs: 0 }, banked))).toEqual([
+      "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12% [success]",
+      "↺ resets anthropic default 2, work 1 · next lapses 15:00 [textMuted]",
+      "⇄ peer workbox 0 runs · 12s [info]",
+    ])
+    expect(lines(spent)).toEqual(["≡ lanes anthropic 0 free · retry 13:47 [warning]"])
+    expect(lines({ providers: [] })).toEqual(["≡ lanes unknown [textMuted]"])
+  })
+
+  test("names nothing before the lanes answer", () => {
+    expect(laneDetail(Option.none(), NOW, utc)).toEqual([])
   })
 })
 
 // ── rendered band ───────────────────────────────────────────────────────────
 
 describe("the lanes band", () => {
-  for (const [width, rows] of [
-    [120, ["≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%", "▸ track implement r2 4m"]],
-    [40, ["≡ lanes anthropic 3/5 free · 5h 120k/%", "▸ track implement r2 4m"]],
-  ] as const) {
-    it.scopedLive(`draws the lanes row and each active run at ${width} columns`, () =>
+  /** The band's drawn lines, trimmed, blank ones left out. */
+  const drawn = (data: BandData, width: number) =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(() => <LanesBand data={() => data} now={() => NOW} />, {
+        width,
+        height: 6,
+      })
+      return renderFrame(setup)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+    })
+
+  for (const width of [120, 40]) {
+    it.scopedLive(`draws an active run alone while every lane is free at ${width} columns`, () =>
       Effect.gen(function* () {
         const data: BandData = { lanes: Option.some(measured), runs: [run({})] }
         const setup = yield* renderScoped(() => <LanesBand data={() => data} now={() => NOW} />, {
           width,
           height: 6,
         })
-        yield* waitForFrame(setup, () => renderFrame(setup).includes("≡"), "band")
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("▸"), "band")
         const lines = renderFrame(setup)
           .split("\n")
           .map((line) => line.trim())
           .filter((line) => line.length > 0)
-        expect(lines).toEqual([...rows])
+        expect(lines).toEqual(["▸ track implement r2 4m"])
       }),
     )
   }
 
-  for (const [width, rows] of [
-    [
-      120,
-      [
-        "≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
-        "↺ resets anthropic default 2, work 1 · next lapses 15:00",
-      ],
-    ],
-    [40, ["≡ lanes anthropic 3/5 free · 5h 120k/%", "↺ resets anthropic default 2, work 1"]],
-    [28, ["≡ lanes anthropic 3/5 free", "↺ resets default 2, work 1"]],
+  for (const [width, row] of [
+    [120, "≡ lanes anthropic 0 free · retry 13:47"],
+    [28, "≡ 0 free · retry 13:47"],
   ] as const) {
-    it.scopedLive(`draws each account's banked resets under its lanes at ${width} columns`, () =>
+    it.scopedLive(`draws a lane refusal at ${width} columns`, () =>
       Effect.gen(function* () {
-        const data: BandData = { lanes: Option.some(banked), runs: [] }
+        const data: BandData = { lanes: Option.some(spent), runs: [] }
         const setup = yield* renderScoped(() => <LanesBand data={() => data} now={() => NOW} />, {
           width,
           height: 6,
         })
-        yield* waitForFrame(setup, () => renderFrame(setup).includes("↺"), "resets row")
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("≡"), "refusal row")
         const lines = renderFrame(setup)
           .split("\n")
           .map((line) => line.trim())
           .filter((line) => line.length > 0)
-        expect(lines).toEqual([...rows])
+        expect(lines).toEqual([row])
       }),
     )
   }
 
-  for (const [width, rows] of [
-    [120, ["≡ lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%", "⇄ peer workbox 2 runs · 12s"]],
-    [26, ["≡ lanes 3/5 free", "⇄ peer 2 runs · 12s"]],
+  for (const [width, row] of [
+    [120, "⇄ peer workbox 2 runs · 12s"],
+    [26, "⇄ peer 2 runs · 12s"],
   ] as const) {
-    it.scopedLive(`draws the peer row last at ${width} columns`, () =>
-      Effect.gen(function* () {
-        const data: BandData = { lanes: Option.some(withPeer(linked)), runs: [] }
-        const setup = yield* renderScoped(() => <LanesBand data={() => data} now={() => NOW} />, {
-          width,
-          height: 6,
-        })
-        yield* waitForFrame(setup, () => renderFrame(setup).includes("⇄"), "peer row")
-        const lines = renderFrame(setup)
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
-        expect(lines).toEqual([...rows])
-      }),
+    it.scopedLive(
+      `draws a peer that holds runs, and nothing for an idle linked peer, at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          expect(
+            yield* drawn({ lanes: Option.some(withPeer({ ...linked, runs: 0 })), runs: [] }, width),
+          ).toEqual([])
+          const data: BandData = { lanes: Option.some(withPeer(linked)), runs: [] }
+          const setup = yield* renderScoped(() => <LanesBand data={() => data} now={() => NOW} />, {
+            width,
+            height: 6,
+          })
+          yield* waitForFrame(setup, () => renderFrame(setup).includes("⇄"), "peer row")
+          const lines = renderFrame(setup)
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+          expect(lines).toEqual([row])
+        }),
     )
   }
 
-  it.scopedLive("hides when nothing is measured and no run is active", () =>
+  it.scopedLive("hides when no lane blocks and no run is active", () =>
     Effect.gen(function* () {
       const [data, setData] = createSignal<BandData>({ lanes: Option.some(spent), runs: [] })
       const setup = yield* renderScoped(() => <LanesBand data={data} now={() => NOW} />, {
@@ -681,7 +730,7 @@ describe("the lanes band", () => {
         height: 6,
       })
       yield* waitForFrame(setup, () => renderFrame(setup).includes("0 free"), "spent band")
-      setData({ lanes: Option.some({ providers: [] }), runs: [] })
+      setData({ lanes: Option.some(measured), runs: [] })
       yield* waitForFrame(setup, () => renderFrame(setup).trim() === "", "band hidden")
     }),
   )
@@ -691,7 +740,8 @@ describe("the lanes band", () => {
 
 describe("the lanes band reads", () => {
   // A completed turn and a reconnect read the lanes and the runs again;
-  // another event reads nothing.
+  // another event reads nothing. Free lanes are `/status` lines: the band
+  // stays hidden while they change.
   it.scopedLive("displays fresh lanes on load, TurnCompleted, reconnect and the 30 s poll", () =>
     Effect.gen(function* () {
       const session = { sessionId: SessionId.make("s"), branchId: BranchId.make("s-branch") }
@@ -726,11 +776,18 @@ describe("the lanes band reads", () => {
           contributions.widgets?.find((widget) => widget.id === "machines.band"),
         ),
       )
+      const pane = Option.getOrThrow(
+        Option.fromUndefinedOr(
+          contributions.statusLabels?.find((label) => label.anchor === "pane"),
+        ),
+      )
+      const paneText = () => pane.produce().map((item) => item.text)
       const setup = yield* renderScoped(() => <band.component />, { width: 120, height: 6 })
       const shows = (text: string) =>
-        waitForFrame(setup, () => renderFrame(setup).includes(text), text)
+        waitUntil(() => paneText().some((line) => line.includes(text)), text)
       expect(yield* Queue.take(reads)).toBe("run-list")
       yield* shows("≡ lanes anthropic 3/5 free")
+      expect(renderFrame(setup).trim()).toBe("")
       deliver(
         AgentEvent.cases.StreamSynchronized.make({ ...session, lastEventId: EventId.make(1) }),
       )
@@ -757,7 +814,7 @@ describe("the lanes band reads", () => {
       yield* Ref.set(report, unrated)
       yield* clock.adjust("29 seconds")
       expect(yield* Queue.size(reads)).toBe(0)
-      expect(renderFrame(setup)).toContain("≡ lanes anthropic 1/5 free")
+      expect(paneText().join("\n")).toContain("≡ lanes anthropic 1/5 free")
       yield* clock.adjust("1 second")
       expect(yield* Queue.take(reads)).toBe("run-list")
       yield* shows("≡ lanes anthropic unknown")

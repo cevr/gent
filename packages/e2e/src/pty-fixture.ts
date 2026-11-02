@@ -243,6 +243,17 @@ const spawnWithDir = (
 
 export const DEFAULT_PTY_SIZE: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }
 
+/**
+ * The text the status row of a TUI on the test model always holds: the
+ * model's name. The row draws once the session's snapshot and the catalog are
+ * in, so the TUI is ready for keys.
+ */
+export const STATUS_ROW_TEXT = "Sonnet 5"
+
+/** The status row: the test model's name leads it, `Claude Sonnet 5` or, narrow, `Sonnet 5`. */
+export const isStatusRow = (row: string): boolean =>
+  row.startsWith("Claude Sonnet 5") || row.startsWith(STATUS_ROW_TEXT)
+
 export const seedAndSpawn = (
   extraArgs: string[] = [],
   size: PtySize = DEFAULT_PTY_SIZE,

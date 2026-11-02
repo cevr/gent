@@ -1566,18 +1566,14 @@ describe("loadTuiExtensions", () => {
         )
         expect(resolved.widgets.map((widget) => widget.id)).toContain("checkpoints.revert")
         expect(executeSlashCommand("revert", "", commands)).toBe(true)
-        // The builtin status labels: the watched child (0), the git branch and changes (20), the goal
-        // (40), the cache timer (55, in the right group) and the cache waste
-        // total (60).
+        // The builtin status labels: on the row, the watched child (0), the
+        // goal (40) and a lapsed cache the next turn compacts (55, in the
+        // right group); in the `/status` pane, the cache clock (30) and its
+        // hit share and waste (31), the git branch and changes (40) and the
+        // lanes (50).
         expect(
-          resolved.statusLabels.map((label) => [label.priority, label.anchor] as const),
-        ).toEqual([
-          [0, "left"],
-          [20, "left"],
-          [40, "left"],
-          [55, "right"],
-          [60, "left"],
-        ])
+          resolved.statusLabels.map((label) => `${label.priority} ${label.anchor}`).toSorted(),
+        ).toEqual(["0 left", "30 pane", "31 pane", "40 left", "40 pane", "50 pane", "55 right"])
       }).pipe(Effect.provide(BunServices.layer))
     },
   )

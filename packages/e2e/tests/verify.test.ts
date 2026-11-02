@@ -187,7 +187,7 @@ describe("verify helpers", () => {
           {
             command: ["gent"],
             steps: [
-              ["waitFor", "ready · work", 30_000],
+              ["waitFor", "Sonnet 5", 30_000],
               ["send", "hello drive"],
               ["keys", "enter"],
               ["waitFor", "gent debug response", 15_000],
@@ -226,7 +226,7 @@ describe("verify helpers", () => {
           {
             command: ["gent"],
             sweep: [[60, 20]],
-            steps: [["waitFor", "ready · work", 30_000], ["fits"]],
+            steps: [["waitFor", "Sonnet 5", 30_000], ["fits"]],
           },
           `${evidence}/sweep`,
         )
@@ -250,7 +250,7 @@ describe("verify helpers", () => {
           {
             command: ["gent"],
             steps: [
-              ["waitFor", "ready · work", 30_000],
+              ["waitFor", "Sonnet 5", 30_000],
               ["waitFor", "never drawn", 300],
               ["sh", "exit 4"],
             ],

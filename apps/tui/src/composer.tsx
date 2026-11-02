@@ -308,7 +308,7 @@ interface StatusRowProps {
    * How many of `labels`, counted from the end, are laid out from the right
    * edge inward instead of after the left group.
    *
-   * The reader glances at the right-hand labels (context, cost)
+   * The reader glances at the right-hand labels (the context gauge)
    * without reading the row, so their position is fixed and the left group
    * is what gives way when the row runs out of columns.
    */
@@ -407,8 +407,9 @@ function StatusLabelText(props: { readonly label: StatusRowLabel }) {
 }
 
 /**
- * The status row: the phase word, the cwd, the model and the extension
- * labels, with the context gauge and the cost anchored right. A group too
+ * The status row: the model and its effort, a cue, an error or a notice, and
+ * the extension labels that need the reader, with the context gauge anchored
+ * right. What it leaves out is in the `/status` pane. A group too
  * narrow for its labels in full takes their short forms (`fitForms`). It sits right
  * under the input (the composer places it, `Composer`'s `statusRow`), and
  * every docked pane, the autocomplete popup and the palette included, docks
@@ -426,13 +427,14 @@ export function StatusRow(props: StatusRowProps) {
     const rightLabels = all.slice(all.length - reserved)
     const width = dimensions().width
 
-    // A right label ranked before the cwd is a detail: it gives way for the
-    // whole row, so the right group's costliest item yields before the model.
-    // The left group decides its own forms against what the right leaves it.
-    // Then the right group is laid out first and keeps its columns; the left
-    // group spends what is left. A right group that cannot fit the row on its
-    // own still truncates rather than pushing the left group to nothing.
-    const details = fitForms([...leftLabels, ...rightLabels], width, STATUS_YIELD.cwd)
+    // A label ranked before the model gives way for the whole row, wherever
+    // it sits: the gauge reads its share (`ctx 8%`) before the model name
+    // shortens. The left group decides its own forms against what the right
+    // leaves it. Then the right group is laid out first and keeps its
+    // columns; the left group spends what is left. A right group that cannot
+    // fit the row on its own still truncates rather than pushing the left
+    // group to nothing.
+    const details = fitForms([...leftLabels, ...rightLabels], width, STATUS_YIELD.model)
     const right = layout(fitForms(details.slice(leftLabels.length), width), width)
     let rightGap = 0
     if (right.shown.length > 0) rightGap = SEPARATOR_WIDTH

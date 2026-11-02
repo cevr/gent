@@ -72,11 +72,13 @@ import {
   PromptSearchPalette,
   reasoningRows,
   SettingsPicker,
+  StatusPane,
 } from "./pickers"
 import { projectRoot } from "./workspace"
 import {
   type StatusRowLabel,
   buildBudgetLabels,
+  buildContextDetail,
   buildContextLabels,
   buildModelLabels,
   createSessionController,
@@ -643,40 +645,30 @@ function ActivityRow(props: { label: string; elapsed: number }) {
 export const NO_MODEL_LABEL = "no model · /model"
 
 /**
- * The credential label the status row names beside the model: the one the
- * newest request on `model` went out with, `unknown` for a request recorded
- * before receipts. Only a sign-in that holds more than one credential names
- * it (its row lists `credentials`); a newest request on another model, or
- * none yet, names nothing.
+ * The `/status` pane's account line: the provider and the credential the
+ * newest request on `model` went out with (`account anthropic · personal`).
+ * A request recorded before receipts reads `unknown` on a sign-in that holds
+ * more than one credential (its row lists `credentials`), and the provider
+ * alone on a sign-in of one. Before a request on `model`, the provider alone.
  */
-export const statusCredentialLabel = (
+export const statusAccountLabel = (
   model: Model,
   last: Option.Option<{
     readonly model: string
     readonly receipt: Option.Option<{ readonly provider: string; readonly slot: string }>
   }>,
   providers: ReadonlyArray<AuthProviderInfo>,
-): Option.Option<string> =>
-  Option.flatMap(
-    Option.filter(last, (request) => request.model === model.id),
-    (request) => {
-      const owners = [
-        model.provider,
-        ...Option.toArray(Option.map(request.receipt, (receipt) => receipt.provider)),
-      ]
-      const several = providers.some(
-        (provider) =>
-          owners.includes(provider.provider) && Predicate.isNotUndefined(provider.credentials),
-      )
-      if (!several) return Option.none()
-      return Option.some(
-        Option.match(request.receipt, {
-          onNone: () => "unknown",
-          onSome: (receipt) => receipt.slot,
-        }),
-      )
-    },
+): string => {
+  const request = Option.filter(last, (value) => value.model === model.id)
+  const receipt = Option.flatMap(request, (value) => value.receipt)
+  if (Option.isSome(receipt)) return `account ${receipt.value.provider} · ${receipt.value.slot}`
+  const several = providers.some(
+    (provider) =>
+      provider.provider === model.provider && Predicate.isNotUndefined(provider.credentials),
   )
+  if (Option.isSome(request) && several) return `account ${model.provider} · unknown`
+  return `account ${model.provider}`
+}
 
 /**
  * The activity row while a turn runs: what it does, how long it has run, and
@@ -750,31 +742,10 @@ export function Session(props: SessionProps) {
       key: item.key,
     }))
 
+  /** A lost connection: the row says so while it lasts. A past restart is `/status` detail. */
   const connectionLabels = (): StatusRowLabel[] => {
-    const items: StatusRowLabel[] = []
-
-    // Core chrome: connection/restart status
-    const restart = Option.filter(client.connectedGeneration(), (generation) => generation > 0)
-    if (client.isReconnecting()) {
-      items.push({ text: "reconnecting", color: theme.warning })
-    } else if (Option.isSome(restart)) {
-      items.push({ text: `restart ${restart.value}`, color: theme.textMuted })
-    }
-
-    return items
-  }
-
-  /**
-   * The running total, rendered last of everything.
-   *
-   * Cost is the one number a reader glances at
-   * without reading the rest of the row, so it belongs at the far end where
-   * its position is fixed and nothing before it can shift it.
-   */
-  const costLabels = (): StatusRowLabel[] => {
-    const c = client.cost()
-    if (c <= 0) return []
-    return [{ text: formatCost(c), color: theme.textMuted }]
+    if (client.isReconnecting()) return [{ text: "reconnecting", color: theme.warning }]
+    return []
   }
 
   const modelLabels = (): StatusRowLabel[] => {
@@ -798,16 +769,6 @@ export function Session(props: SessionProps) {
         color: theme.textMuted,
         short: { text: Option.getOrElse(short, () => full.value), rank: STATUS_YIELD.model },
       })
-    // The credential the model's newest request went out with, on a sign-in of several.
-    const credential = Option.flatMap(client.turnModel(), (turn) =>
-      statusCredentialLabel(turn, client.lastCredential(), controller.authProviders()),
-    )
-    if (Option.isSome(credential))
-      items.push({
-        text: `via ${credential.value}`,
-        color: theme.textMuted,
-        short: { text: credential.value, rank: STATUS_YIELD.model },
-      })
     // Gent ships no default model: once the snapshot names the agent, a
     // session nobody named a model for says so, and where to name one.
     if (Option.isSome(client.agent()) && Option.isNone(client.model()))
@@ -828,10 +789,11 @@ export function Session(props: SessionProps) {
 
   /**
    * The labels anchored to the right edge: the right-anchored extension
-   * labels (the cache timer), a running turn's model-call budget, the context
-   * gauge and the running total. Each is a number a reader checks at a glance
-   * without reading the row, so they hold their place and the left group
-   * truncates instead. An empty label takes no place in the count.
+   * labels (a lapsed cache the next turn compacts), a running turn's
+   * model-call budget near its limit, and the context gauge. The gauge is the
+   * number a reader checks at a glance without reading the row, so the group
+   * holds its place and the left group truncates instead. An empty label
+   * takes no place in the count.
    */
   const rightAnchoredLabels = (): StatusRowLabel[] =>
     [
@@ -843,11 +805,44 @@ export function Session(props: SessionProps) {
         model: client.turnModel(),
         theme,
       }),
-      ...costLabels(),
     ].filter((label) => label.text.length > 0)
 
-  const phaseLabels = (): StatusRowLabel[] => {
-    const a = controller.activity()
+  /**
+   * The `/status` pane's lines: what the row leaves out. The account the
+   * newest request went out on, the context's window, cap, held tokens and
+   * costliest item, the turn's model calls, the session's cost, the cwd and
+   * a past server restart; then every extension's pane labels by priority
+   * (the cache clock and its hit rate, the branch, the lanes, the peer).
+   */
+  const statusPaneLines = (): StatusRowLabel[] => {
+    const muted = (text: string): StatusRowLabel => ({ text, color: theme.textMuted })
+    const account = Option.map(client.turnModel(), (turn) =>
+      muted(statusAccountLabel(turn, client.lastCredential(), controller.authProviders())),
+    )
+    const calls = Option.map(client.turnModelAttempts(), (attempts) =>
+      muted(`calls ${attempts.used}/${attempts.limit} this turn`),
+    )
+    const restart = Option.map(
+      Option.filter(client.connectedGeneration(), (generation) => generation > 0),
+      (generation) => muted(`server restart ${generation}`),
+    )
+    const sessionCwd = client.pathPlace().cwd
+    return [
+      ...Option.toArray(account),
+      ...buildContextDetail({
+        metrics: client.sessionMetrics(),
+        model: client.turnModel(),
+        theme,
+      }),
+      ...Option.toArray(calls),
+      muted(`cost ${formatCost(client.cost())}`),
+      muted(`cwd ${formatCwd(sessionCwd, rootOf(sessionCwd))}`),
+      ...Option.toArray(restart),
+      ...extensionLabels("pane"),
+    ].filter((label) => label.text.length > 0)
+  }
+
+  const cueLabels = (): StatusRowLabel[] => {
     const items: StatusRowLabel[] = []
     if (controller.uiState().transcriptExpanded) {
       const close = KeyHints.close
@@ -858,9 +853,11 @@ export function Session(props: SessionProps) {
     }
     // One footer line, one owner. An armed key's cue (`ctrl+c again to exit`)
     // comes first: it answers the key just pressed and lasts a second. A
-    // local error (a slash command that could not apply, a failed RPC)
-    // replaces the phase word until the next turn clears it; an extension
-    // notice shows when no error stands, and a notice never replaces an error.
+    // local error (a slash command that could not apply, a failed RPC) stands
+    // until the next turn clears it; an extension notice shows when no error
+    // stands, and a notice never replaces an error. None gives way on a
+    // narrow row. An idle session says nothing: the empty row is the idle
+    // state, and the activity row names a running turn's phase.
     const armedCue = controller.armedCue()
     const localError = client.error()
     const notice = client.notice()
@@ -870,51 +867,25 @@ export function Session(props: SessionProps) {
       items.push({ text: localError.value, color: theme.error })
     } else if (Option.isSome(notice)) {
       items.push({ text: notice.value, color: theme.warning })
-    } else if (a.phase === "idle" && rowReady()) {
-      // The phase word says least of the row: a narrow row leaves it out
-      // last. A cue, an error and a notice never give way.
-      items.push({
-        text: controller.phaseLabel(),
-        color: theme.textMuted,
-        short: { text: "", rank: STATUS_YIELD.phase },
-      })
     }
-    if (!rowReady()) return items
-
-    // Where the session is rooted, beside the phase word rather than behind a
-    // debug flag. A reader running several sessions at once cannot tell them
-    // apart from the model and cost alone, and the cwd is the thing that
-    // distinguishes them.
-    // The branch and the changes are the `@gent/git` extension's labels. A
-    // narrow row leaves the cwd out before it shortens the model.
-    const sessionCwd = client.pathPlace().cwd
-    items.push({
-      text: formatCwd(sessionCwd, rootOf(sessionCwd)),
-      color: theme.textMuted,
-      short: { text: "", rank: STATUS_YIELD.cwd },
-    })
-
     return items
   }
 
   // The row draws from reads that answer after the first frame: the
-  // branch's snapshot and replay (the phase word, the cost, the extension
-  // labels), the catalog (the model's name) and the root walk (the cwd
-  // label). Until each has answered it holds only what the reader must see
-  // now: a cue, an error, a notice and the connection's state. So it never
-  // shows a resumed session as `ready` with no model, then redraws it.
-  const rowReady = () =>
-    controller.historyReplayed() &&
-    Option.isSome(client.modelCatalog()) &&
-    Option.isSome(root().pipe(Option.filter((known) => known.cwd === client.pathPlace().cwd)))
+  // branch's snapshot and replay (the gauge, the extension labels) and the
+  // catalog (the model's name and its effort). Until both have answered it
+  // holds only what the reader must see now: a cue, an error, a notice and
+  // the connection's state. So it never shows a resumed session with no
+  // model, then redraws it.
+  const rowReady = () => controller.historyReplayed() && Option.isSome(client.modelCatalog())
   const statusRightLabels = () => {
     if (!rowReady()) return 0
     return rightAnchoredLabels().length
   }
   const statusLabels = (): StatusRowLabel[] => {
-    if (!rowReady()) return [...phaseLabels(), ...connectionLabels()]
+    if (!rowReady()) return [...cueLabels(), ...connectionLabels()]
     return [
-      ...phaseLabels(),
+      ...cueLabels(),
       ...connectionLabels(),
       ...modelLabels(),
       ...extensionLabels("left"),
@@ -1025,6 +996,11 @@ export function Session(props: SessionProps) {
               ),
             )}
             onSelect={(id) => controller.onReasoningSelect(parseReasoningRow(id))}
+            onClose={controller.closeOverlay}
+          />
+          <StatusPane
+            open={controller.uiState().overlay._tag === "status"}
+            lines={statusPaneLines}
             onClose={controller.closeOverlay}
           />
           {(() => {

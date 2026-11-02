@@ -3,11 +3,13 @@
  * The machines extension's client side: the lanes band under the status
  * line, and one `gent ctl` view.
  *
- * The band's first row is the server's free lanes (`accounts.lanes`), the
- * row `gent ctl lanes --line` prints; each active run of this session's
- * thread follows, from `MachinesRpc.Runs`. It hides while gent read no
- * quota window and no run is active. It reads again when a turn completes,
- * when the connection comes back, and every 30 s.
+ * The band shows what needs the owner or runs now: the lanes rows that
+ * block or wait (no free lane, a lost login, the Sabbath), the peer's row
+ * while it holds runs, falls silent or has a link down, and each active run of this
+ * session's thread, from `MachinesRpc.Runs`. It hides while none does. Every
+ * lanes row (`accounts.lanes`, the rows `gent ctl lanes --line` prints) is
+ * in the `/status` pane. It reads again when a turn completes, when the
+ * connection comes back, and every 30 s.
  *
  * `gent ctl status --run <run>` reads one machine run (its state, status,
  * pending action and last steps) as a session of the owner's thread,
@@ -33,6 +35,8 @@ import {
   type LaneRow,
   laneRows,
   sessionQuery,
+  statusLabelContribution,
+  type StatusLabelItem,
   textWidth,
   TrayFrame,
   truncate,
@@ -129,11 +133,38 @@ const runRow = (
   })
 }
 
+const laneBandRow = (row: LaneRow): BandRow => ({
+  glyph: LANE_GLYPHS[row.state],
+  tone: row.state,
+  text: row.text,
+})
+
 /**
- * The band: the lanes rows, then one row per active run, oldest first, up
- * to four and a count of the rest. Empty while gent read no quota window,
- * the owner's Sabbath does not hold the lanes, the server reports no peer
- * and no run is active, so the band hides. `width` is the text's columns.
+ * The lanes rows that need the owner: a provider with no free lane (a
+ * refusal, a usage-limit wait, every lane held), a lost login, the Sabbath
+ * holding every run; and the peer's row while the peer holds runs on this
+ * server's pool, falls silent or has a link down. Free lanes, unknown ones,
+ * banked resets and an idle linked peer are `/status` detail
+ * ({@link laneDetail}).
+ */
+const lanesNeedingOwner = (
+  report: LaneReport,
+  now: number,
+  width: number,
+  zone: DateTime.TimeZone,
+): ReadonlyArray<LaneRow> => {
+  const peerRuns = Option.exists(Option.fromUndefinedOr(report.peer), (peer) => peer.runs > 0)
+  return laneRows(report, now, width, zone).filter((row) => {
+    if (row.state === "linked") return peerRuns
+    return row.state === "none" || row.state === "unlinked"
+  })
+}
+
+/**
+ * The band: the lanes rows that need the owner, then one row per active
+ * run, oldest first, up to four and a count of the rest. Empty while no
+ * lane blocks or waits, the peer holds no run and hears on both links, and no
+ * run is active, so the band hides. `width` is the text's columns.
  */
 export const bandRows = (
   data: BandData,
@@ -142,25 +173,46 @@ export const bandRows = (
   zone: DateTime.TimeZone = DateTime.zoneMakeLocal(),
 ): ReadonlyArray<BandRow> => {
   const active = data.runs.filter(isActive).toSorted((a, b) => a.createdAt - b.createdAt)
-  const measured = Option.exists(
-    data.lanes,
-    (report) =>
-      report.providers.length > 0 ||
-      Predicate.isNotUndefined(report.peer) ||
-      (Predicate.isNotUndefined(report.sabbathEnd) && report.sabbathEnd > now),
-  )
-  if (!measured && active.length === 0) return []
-  const report = Option.getOrElse(data.lanes, (): LaneReport => ({ providers: [] }))
-  const lanes = laneRows(report, now, width, zone).map((row): BandRow => ({
-    glyph: LANE_GLYPHS[row.state],
-    tone: row.state,
-    text: row.text,
-  }))
+  const lanes = Option.match(data.lanes, {
+    onNone: (): ReadonlyArray<LaneRow> => [],
+    onSome: (report) => lanesNeedingOwner(report, now, width, zone),
+  }).map(laneBandRow)
   const shown = active.slice(0, BAND_MAX_RUNS).map((run) => runRow(run, now, width, zone))
   const rest = active.length - BAND_MAX_RUNS
   if (rest <= 0) return [...lanes, ...shown]
   return [...lanes, ...shown, { glyph: " ", tone: "running", text: `+${rest} more runs` }]
 }
+
+/** The pane's width for a lanes row: the longest form, which the pane cuts to its own width. */
+const PANE_LANE_COLUMNS = 160
+
+const PANE_TONES: Record<LaneRow["state"], StatusLabelItem["color"]> = {
+  free: "success",
+  none: "warning",
+  unknown: "textMuted",
+  banked: "textMuted",
+  linked: "info",
+  unlinked: "warning",
+}
+
+/**
+ * Every lanes row as `/status` lines, in their glyph's tone: the lanes of
+ * each provider, its lost logins and banked resets, the Sabbath, the peer.
+ * None until the lanes answer.
+ */
+export const laneDetail = (
+  lanes: Option.Option<LaneReport>,
+  now: number,
+  zone: DateTime.TimeZone = DateTime.zoneMakeLocal(),
+): ReadonlyArray<StatusLabelItem> =>
+  Option.match(lanes, {
+    onNone: () => [],
+    onSome: (report) =>
+      laneRows(report, now, PANE_LANE_COLUMNS, zone).map((row) => ({
+        text: `${LANE_GLYPHS[row.state]} ${row.text}`,
+        color: PANE_TONES[row.state],
+      })),
+  })
 
 export function LanesBand(props: { readonly data: () => BandData; readonly now: () => number }) {
   const { theme } = useTheme()
@@ -362,6 +414,11 @@ export default defineClientExtension(statusRef.extensionId, {
     )
 
     return clientContributions(
+      statusLabelContribution({
+        priority: 50,
+        anchor: "pane",
+        produce: () => laneDetail(band.value().lanes, transport.serverNow()),
+      }),
       widgetContribution({
         id: "machines.band",
         slot: "below-input",

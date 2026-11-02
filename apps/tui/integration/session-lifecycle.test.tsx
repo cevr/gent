@@ -102,7 +102,9 @@ describe("session lifecycle", () => {
           })
           const composer = yield* waitForFrame(
             setup,
-            (frame) => frame.includes("ready") || frame.includes("idle") || frame.includes("❯"),
+            // The composer's rail: the status row names no phase, and it
+            // stays empty in this layer (no model on the row).
+            (frame) => frame.includes("┃"),
             "composer visible before send",
             3000,
           )

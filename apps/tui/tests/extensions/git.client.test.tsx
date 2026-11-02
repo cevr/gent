@@ -48,6 +48,7 @@ import { provideClientServices } from "../extension-test-harness-boundary"
 import {
   createMockClient,
   createMockRuntime,
+  MOCK_SESSION_MODEL_NAME,
   renderScoped,
   type TestTools,
   testPlatformLayer,
@@ -193,7 +194,7 @@ describe("git labels", () => {
 
   test("a clean checkout shows the branch alone and a dirty one adds the change count", () => {
     const clean: Checkout = { root: "/r", gitDir: "/r/.git", base: "HEAD", head, files: [] }
-    expect(labelTexts(checkoutLabels(clean))).toEqual(["main"])
+    expect(labelTexts(checkoutLabels(clean))).toEqual(["branch main"])
     const dirty: Checkout = {
       ...clean,
       files: [
@@ -213,8 +214,9 @@ describe("git labels", () => {
       ],
     }
     const labels = checkoutLabels(dirty)
-    expect(labelTexts(labels)).toEqual(["main", "3 files +12 -4"])
-    expect(labels[1]?.short?.text).toBe("+12 -4")
+    expect(labelTexts(labels)).toEqual(["branch main", "changes 3 files +12 -4"])
+    // `/status` lines have room: no label carries a short form.
+    expect(labels.map((label) => Predicate.isUndefined(label.short))).toEqual([true, true])
   })
 })
 
@@ -268,7 +270,10 @@ describe("git checkout read", () => {
         const checkout = yield* readCheckout(repo, new Map())
         if (Option.isNone(checkout)) return yield* Effect.die("no checkout")
         expect(checkout.value.base).toBe(SHA1_EMPTY_TREE)
-        expect(labelTexts(checkoutLabels(checkout.value))).toEqual(["fresh", "1 file +4 -0"])
+        expect(labelTexts(checkoutLabels(checkout.value))).toEqual([
+          "branch fresh",
+          "changes 1 file +4 -0",
+        ])
         const outside = yield* makeTempDirectoryScoped("gent-git-outside-")
         expect(Option.isNone(yield* readCheckout(outside, new Map()))).toBe(true)
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
@@ -421,7 +426,7 @@ describe("git refresh", () => {
       const fs = yield* FileSystem.FileSystem
       const repo = yield* makeRepo("gent-git-tool-")
       const { texts, emit } = yield* mountLabels(repo)
-      yield* waitUntil(() => texts().join("|") === "trunk", "the clean checkout")
+      yield* waitUntil(() => texts().join("|") === "branch trunk", "the clean checkout")
       yield* fs.writeFileString(`${repo}/written.txt`, "hello\n")
       emit(
         AgentEvent.cases.ToolCallSucceeded.make({
@@ -431,7 +436,11 @@ describe("git refresh", () => {
           toolName: "write",
         }),
       )
-      yield* waitUntil(() => texts().join("|") === "trunk|1 file +1 -0", "the written file", 2_500)
+      yield* waitUntil(
+        () => texts().join("|") === "branch trunk|changes 1 file +1 -0",
+        "the written file",
+        2_500,
+      )
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
@@ -440,7 +449,7 @@ describe("git refresh", () => {
       const fs = yield* FileSystem.FileSystem
       const repo = yield* makeRepo("gent-git-turn-")
       const { texts, emit } = yield* mountLabels(repo)
-      yield* waitUntil(() => texts().join("|") === "trunk", "the clean checkout")
+      yield* waitUntil(() => texts().join("|") === "branch trunk", "the clean checkout")
       yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
       emit(
         AgentEvent.cases.TurnCompleted.make({
@@ -451,7 +460,11 @@ describe("git refresh", () => {
         }),
       )
       // Inside the tool settle time: the turn's end does not wait for it.
-      yield* waitUntil(() => texts().join("|") === "trunk|1 file +0 -1", "the edited file", 700)
+      yield* waitUntil(
+        () => texts().join("|") === "branch trunk|changes 1 file +0 -1",
+        "the edited file",
+        700,
+      )
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
@@ -461,11 +474,14 @@ describe("git refresh", () => {
       const repo = yield* makeRepo("gent-git-watch-")
       yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
       const { texts } = yield* mountLabels(repo)
-      yield* waitUntil(() => texts().join("|") === "trunk|1 file +0 -1", "the edited file")
+      yield* waitUntil(
+        () => texts().join("|") === "branch trunk|changes 1 file +0 -1",
+        "the edited file",
+      )
       yield* git(repo, "commit", "-q", "-am", "edit")
       yield* git(repo, "checkout", "-q", "-b", "next")
       yield* waitUntil(
-        () => texts().join("|") === "next",
+        () => texts().join("|") === "branch next",
         "the commit and the checkout",
         GIT_STATE_WAIT,
       )
@@ -485,7 +501,7 @@ describe("git refresh", () => {
       yield* waitForLog(held.log, (log) => log === "held\n")
       yield* git(repo, "checkout", "-q", "-b", "next")
       yield* fs.writeFileString(`${held.dir}/released`, "")
-      yield* waitUntil(() => texts().join("|") === "next", "the checkout", GIT_STATE_WAIT)
+      yield* waitUntil(() => texts().join("|") === "branch next", "the checkout", GIT_STATE_WAIT)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 
@@ -502,7 +518,7 @@ describe("git refresh", () => {
       yield* commitIn(upstream, "first.txt")
       yield* git(clone, "fetch", "-q", "--no-write-fetch-head")
       yield* fs.writeFileString(`${held.dir}/released`, "")
-      yield* waitUntil(() => texts().join("|") === "trunk ↓1", "the fetch", GIT_STATE_WAIT)
+      yield* waitUntil(() => texts().join("|") === "branch trunk ↓1", "the fetch", GIT_STATE_WAIT)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 
@@ -526,7 +542,7 @@ describe("git refresh", () => {
       yield* fs.writeFileString(`${named.dir}/branch`, "trunk")
       const { texts } = yield* mountLabels(repo, { git: named.program })
       yield* waitForLog(named.log, (log) => statusRuns(log) >= 2)
-      yield* waitUntil(() => texts().join("|") === "trunk", "the first branch")
+      yield* waitUntil(() => texts().join("|") === "branch trunk", "the first branch")
       const before = yield* fs.stat(fetchHead)
       yield* fs.writeFileString(`${named.dir}/branch`, "fetched")
       yield* fs.writeFileString(fetchHead, line("b"))
@@ -541,7 +557,7 @@ describe("git refresh", () => {
         before.size,
         Option.map(before.mtime, (time) => time.getTime()),
       ])
-      yield* waitUntil(() => texts().join("|") === "fetched", "the rewrite", GIT_STATE_WAIT)
+      yield* waitUntil(() => texts().join("|") === "branch fetched", "the rewrite", GIT_STATE_WAIT)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 
@@ -553,12 +569,12 @@ describe("git refresh", () => {
       const counting = yield* countingGit
       const { texts } = yield* mountLabels(clone, { git: counting.program })
       yield* waitForLog(counting.log, (log) => statusRuns(log) >= 2)
-      yield* waitUntil(() => texts().join("|") === "trunk", "the clean clone")
+      yield* waitUntil(() => texts().join("|") === "branch trunk", "the clean clone")
       yield* commitIn(upstream, "first.txt")
       yield* git(clone, "fetch", "-q", "--no-write-fetch-head")
-      yield* waitUntil(() => texts().join("|") === "trunk ↓1", "the fetch", GIT_STATE_WAIT)
+      yield* waitUntil(() => texts().join("|") === "branch trunk ↓1", "the fetch", GIT_STATE_WAIT)
       yield* git(clone, "update-ref", "refs/remotes/origin/trunk", "HEAD")
-      yield* waitUntil(() => texts().join("|") === "trunk", "the update-ref", GIT_STATE_WAIT)
+      yield* waitUntil(() => texts().join("|") === "branch trunk", "the update-ref", GIT_STATE_WAIT)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 
@@ -571,10 +587,10 @@ describe("git refresh", () => {
       const counting = yield* countingGit
       const { texts } = yield* mountLabels(`${root}/worktree`, { git: counting.program })
       yield* waitForLog(counting.log, (log) => statusRuns(log) >= 2)
-      yield* waitUntil(() => texts().join("|") === "side", "the worktree")
+      yield* waitUntil(() => texts().join("|") === "branch side", "the worktree")
       yield* commitIn(upstream, "first.txt")
       yield* git(clone, "fetch", "-q")
-      yield* waitUntil(() => texts().join("|") === "side ↓1", "the fetch", GIT_STATE_WAIT)
+      yield* waitUntil(() => texts().join("|") === "branch side ↓1", "the fetch", GIT_STATE_WAIT)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 
@@ -584,13 +600,21 @@ describe("git refresh", () => {
     Effect.gen(function* () {
       const { upstream, clone } = yield* makeClone("gent-git-fetch-")
       const { texts } = yield* mountLabels(clone)
-      yield* waitUntil(() => texts().join("|") === "trunk", "the clean clone")
+      yield* waitUntil(() => texts().join("|") === "branch trunk", "the clean clone")
       yield* commitIn(upstream, "first.txt")
       yield* git(clone, "fetch", "-q")
-      yield* waitUntil(() => texts().join("|") === "trunk ↓1", "the first fetch", GIT_STATE_WAIT)
+      yield* waitUntil(
+        () => texts().join("|") === "branch trunk ↓1",
+        "the first fetch",
+        GIT_STATE_WAIT,
+      )
       yield* commitIn(upstream, "second.txt")
       yield* git(clone, "fetch", "-q")
-      yield* waitUntil(() => texts().join("|") === "trunk ↓2", "the next fetch", GIT_STATE_WAIT)
+      yield* waitUntil(
+        () => texts().join("|") === "branch trunk ↓2",
+        "the next fetch",
+        GIT_STATE_WAIT,
+      )
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 })
@@ -613,8 +637,6 @@ const renderRow = (cwd: string, width: number) =>
       updatedAt: dateFromMillis(0),
     }),
   })
-
-const statusLine = (frame: string) => frame.split("\n").find((line) => line.includes("ready")) ?? ""
 
 describe("git pull request", () => {
   test("checks fail on any failure, then wait on any running check, then pass", () => {
@@ -660,18 +682,18 @@ describe("git pull request", () => {
       const labels = checkoutLabels(checkout, Option.some({ ...pr, ...fields }))
       return [labels[1]?.text, labels[1]?.color]
     }
-    expect(labelOf({})).toEqual(["#7 ✓", "success"])
+    expect(labelOf({})).toEqual(["pr #7 ✓", "success"])
     expect(
       labelOf({ statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }] }),
-    ).toEqual(["#7 ✗", "error"])
+    ).toEqual(["pr #7 ✗", "error"])
     expect(labelOf({ statusCheckRollup: [{ status: "QUEUED", conclusion: "" }] })).toEqual([
-      "#7 …",
+      "pr #7 …",
       "warning",
     ])
-    expect(labelOf({ statusCheckRollup: [] })).toEqual(["#7", "textMuted"])
-    expect(labelOf({ isDraft: true })).toEqual(["#7 draft", "textMuted"])
-    expect(labelOf({ state: "MERGED" })).toEqual(["#7 merged", "textMuted"])
-    expect(labelOf({ state: "CLOSED" })).toEqual(["#7 closed", "textMuted"])
+    expect(labelOf({ statusCheckRollup: [] })).toEqual(["pr #7", "textMuted"])
+    expect(labelOf({ isDraft: true })).toEqual(["pr #7 draft", "textMuted"])
+    expect(labelOf({ state: "MERGED" })).toEqual(["pr #7 merged", "textMuted"])
+    expect(labelOf({ state: "CLOSED" })).toEqual(["pr #7 closed", "textMuted"])
   })
 
   it.live("gh answers a request, no request, a sign-in failure, or is not there", () =>
@@ -710,11 +732,15 @@ describe("git pull request", () => {
       // says how many times gh ran.
       const gh = yield* fakeGh({ stdout: PR_JSON.replace('"number":7', '"number":CALLS') })
       const { texts, emit } = yield* mountLabels(repo, { gh: gh.program })
-      yield* waitUntil(() => texts().join("|") === "trunk|#1 ✓", "the pull request")
+      yield* waitUntil(() => texts().join("|") === "branch trunk|pr #1 ✓", "the pull request")
       // A commit moves the branch ahead of its upstream: the request is asked again.
       yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
       yield* git(repo, "commit", "-q", "-am", "ahead")
-      yield* waitUntil(() => texts().join("|") === "trunk ↑1|#2 ✓", "the commit", GIT_STATE_WAIT)
+      yield* waitUntil(
+        () => texts().join("|") === "branch trunk ↑1|pr #2 ✓",
+        "the commit",
+        GIT_STATE_WAIT,
+      )
       // An edit changes no branch fact: the labels move, gh is not asked.
       yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\n")
       emit(
@@ -725,11 +751,14 @@ describe("git pull request", () => {
           durationMs: 10,
         }),
       )
-      yield* waitUntil(() => texts().join("|") === "trunk ↑1|#2 ✓|1 file +1 -0", "the edit")
+      yield* waitUntil(
+        () => texts().join("|") === "branch trunk ↑1|pr #2 ✓|changes 1 file +1 -0",
+        "the edit",
+      )
       // The next commit is the third ask; an ask for the edit would make it the fourth.
       yield* git(repo, "commit", "-q", "-am", "ahead again")
       yield* waitUntil(
-        () => texts().join("|") === "trunk ↑2|#3 ✓",
+        () => texts().join("|") === "branch trunk ↑2|pr #3 ✓",
         "the next commit",
         GIT_STATE_WAIT,
       )
@@ -743,10 +772,13 @@ describe("git pull request", () => {
       const repo = yield* makeRepo("gent-git-nogh-")
       yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
       const { texts } = yield* mountLabels(repo)
-      yield* waitUntil(() => texts().join("|") === "trunk|1 file +0 -1", "the checkout")
+      yield* waitUntil(
+        () => texts().join("|") === "branch trunk|changes 1 file +0 -1",
+        "the checkout",
+      )
       yield* git(repo, "checkout", "-q", "-b", "next")
       yield* waitUntil(
-        () => texts().join("|") === "next|1 file +0 -1",
+        () => texts().join("|") === "branch next|changes 1 file +0 -1",
         "the branch move",
         GIT_STATE_WAIT,
       )
@@ -754,72 +786,104 @@ describe("git pull request", () => {
   )
 })
 
-describe("git status row", () => {
-  it.live(
-    "a wide row shows the branch with its arrows and the changes; a narrow one their short forms",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const repo = yield* makeRepo("gent-git-row-")
-        yield* git(repo, "branch", "base")
-        yield* fs.writeFileString(`${repo}/ahead.txt`, "a\n")
-        yield* git(repo, "add", "ahead.txt")
-        yield* git(repo, "commit", "-q", "-m", "ahead")
-        yield* git(repo, "checkout", "-q", "base")
-        yield* fs.writeFileString(`${repo}/behind.txt`, "b\n")
-        yield* git(repo, "add", "behind.txt")
-        yield* git(repo, "commit", "-q", "-m", "behind")
-        yield* git(repo, "checkout", "-q", "trunk")
-        yield* git(repo, "branch", "-q", "--set-upstream-to=base")
-        yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\nthree\n")
-        yield* fs.writeFileString(`${repo}/new.txt`, "x\ny\n")
+/** The `/status` pane's line that starts with `prefix`, trimmed; empty while none does. */
+const paneLine = (frame: string, prefix: string) =>
+  frame
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.startsWith(prefix)) ?? ""
 
-        const dir = repo.split("/").pop() ?? ""
-        const full = `ready · ${dir} · trunk ↑1 ↓1 · 2 files +3 -0`
-        const setup = yield* renderRow(repo, 120)
-        const rowAt = (width: number, row: string) =>
-          Effect.gen(function* () {
-            setup.resize(width, 20)
-            yield* waitForFrame(setup, (frame) => statusLine(frame).trim() === row, row)
-          })
-        yield* waitForFrame(setup, (frame) => statusLine(frame).trim() === full, full)
-        // At 60 columns the whole row still fits.
-        yield* rowAt(60, full)
-        // The cwd goes first, then the change count takes its `+/-` form,
-        // then the branch goes; the phase word stays last.
-        yield* rowAt(40, "ready · trunk ↑1 ↓1 · 2 files +3 -0")
-        yield* rowAt(30, "ready · trunk ↑1 ↓1 · +3 -0")
-        yield* rowAt(20, "ready · +3 -0")
-        yield* rowAt(120, full)
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
-  )
+/** The status row: the line that names the mock session's model. */
+const statusLine = (frame: string) =>
+  frame.split("\n").find((line) => line.includes(MOCK_SESSION_MODEL_NAME)) ?? ""
 
-  it.live("the status row names an unborn branch, and a detached head by its commit", () =>
+/** Opens the `/status` pane, as the reader does. */
+const openStatus = (setup: RenderSetup) =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => setup.mockInput.typeText("/status"))
+    setup.mockInput.pressEnter()
+  })
+
+/**
+ * Waits for the checkout's read to land: `/status` shows `text`, then the
+ * pane closes and the row is back.
+ */
+const awaitStatusLine = (setup: RenderSetup, text: string, what: string) =>
+  Effect.gen(function* () {
+    yield* openStatus(setup)
+    yield* waitForFrame(setup, (frame) => frame.includes(text), what, GIT_STATE_WAIT)
+    setup.mockInput.pressEscape()
+    yield* waitForFrame(setup, (frame) => !frame.includes(text), "the status pane closed")
+  })
+
+describe("git in the /status pane", () => {
+  for (const width of [120, 60]) {
+    it.live(
+      `the pane names the branch with its arrows and the changes, and the row neither, at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const repo = yield* makeRepo("gent-git-row-")
+          yield* git(repo, "branch", "base")
+          yield* fs.writeFileString(`${repo}/ahead.txt`, "a\n")
+          yield* git(repo, "add", "ahead.txt")
+          yield* git(repo, "commit", "-q", "-m", "ahead")
+          yield* git(repo, "checkout", "-q", "base")
+          yield* fs.writeFileString(`${repo}/behind.txt`, "b\n")
+          yield* git(repo, "add", "behind.txt")
+          yield* git(repo, "commit", "-q", "-m", "behind")
+          yield* git(repo, "checkout", "-q", "trunk")
+          yield* git(repo, "branch", "-q", "--set-upstream-to=base")
+          yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\nthree\n")
+          yield* fs.writeFileString(`${repo}/new.txt`, "x\ny\n")
+
+          const setup = yield* renderRow(repo, width)
+          const row = yield* waitForFrame(
+            setup,
+            (frame) => statusLine(frame).length > 0,
+            "the status row",
+          )
+          yield* openStatus(setup)
+          const pane = yield* waitForFrame(
+            setup,
+            (frame) =>
+              paneLine(frame, "branch ") === "branch trunk ↑1 ↓1" &&
+              paneLine(frame, "changes ") === "changes 2 files +3 -0",
+            "the git lines",
+            GIT_STATE_WAIT,
+          )
+          expect(paneLine(pane, "cwd ")).toContain(repo.split("/").pop() ?? "")
+          for (const gone of ["trunk", "+3 -0"])
+            expect([gone, statusLine(row).includes(gone)]).toEqual([gone, false])
+        }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    )
+  }
+
+  it.live("the pane names an unborn branch, and a detached head by its commit", () =>
     Effect.gen(function* () {
       const repo = yield* makeTempDirectoryScoped("gent-git-head-")
-      const dir = repo.split("/").pop() ?? ""
-      const rowOf = Effect.gen(function* () {
+      const branchOf = Effect.gen(function* () {
         const setup = yield* renderRow(repo, 60)
+        yield* openStatus(setup)
         const frame = yield* waitForFrame(
           setup,
-          // The row with its head label: an empty first frame is not it.
-          (next) => statusLine(next).trim().startsWith(`ready · ${dir} · `),
+          (next) => paneLine(next, "branch ").length > 0,
           "the branch",
         )
-        return statusLine(frame).trim()
+        return paneLine(frame, "branch ")
       }).pipe(Effect.scoped)
       yield* git(repo, "init", "-q", "-b", "trunk")
-      expect(yield* rowOf).toBe(`ready · ${dir} · trunk`)
+      expect(yield* branchOf).toBe("branch trunk")
       yield* git(repo, "commit", "-q", "--allow-empty", "-m", "first")
       yield* git(repo, "checkout", "-q", "--detach")
-      expect(yield* rowOf).toMatch(new RegExp(`^ready · ${dir} · detached @[0-9a-f]{7}$`))
+      expect(yield* branchOf).toMatch(/^branch detached @[0-9a-f]{7}$/)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   // The labels watch the checkout's own git directory, which git names: a
   // session in a subdirectory, or in a worktree whose `.git` is a file,
   // follows a checkout as soon as git writes HEAD.
-  it.live("the status row follows a checkout from a subdirectory and from a worktree", () =>
+  it.live("the pane follows a checkout from a subdirectory and from a worktree", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const root = yield* makeTempDirectoryScoped("gent-git-follow-")
@@ -828,24 +892,25 @@ describe("git status row", () => {
       yield* git(repo, "init", "-q", "-b", "trunk")
       yield* git(repo, "commit", "-q", "--allow-empty", "-m", "first")
       yield* git(repo, "worktree", "add", "-q", "-b", "side", `${root}/worktree`)
-      const follows = (cwd: string, label: string, before: string, after: string) =>
+      const follows = (cwd: string, before: string, after: string) =>
         Effect.gen(function* () {
           const setup = yield* renderRow(cwd, 120)
+          yield* openStatus(setup)
           yield* waitForFrame(
             setup,
-            (frame) => statusLine(frame).trim() === `ready · ${label} · ${before}`,
+            (frame) => paneLine(frame, "branch ") === `branch ${before}`,
             before,
           )
           yield* git(cwd, "checkout", "-q", "-b", after)
           yield* waitForFrame(
             setup,
-            (frame) => statusLine(frame).trim() === `ready · ${label} · ${after}`,
+            (frame) => paneLine(frame, "branch ") === `branch ${after}`,
             after,
             GIT_STATE_WAIT,
           )
         }).pipe(Effect.scoped)
-      yield* follows(`${repo}/sub`, "repo/sub", "trunk", "feature")
-      yield* follows(`${root}/worktree`, "worktree", "side", "side-next")
+      yield* follows(`${repo}/sub`, "trunk", "feature")
+      yield* follows(`${root}/worktree`, "side", "side-next")
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
   )
 })
@@ -1079,7 +1144,7 @@ describe("git pane", () => {
         yield* fs.writeFileString(`${repo}/${deep}`, "a\nb\nc\n")
         const gh = yield* fakePullRequestGh(LONG_PR_JSON, PATCH)
         const setup = yield* renderApp(repo, 120, { gh: gh.program })
-        yield* waitForFrame(setup, (frame) => frame.includes("#7 ✓"), "the pull request label")
+        yield* awaitStatusLine(setup, "pr #7 ✓", "the pull request label")
         yield* slash(setup, "/git")
         const wide = yield* waitForFrame(
           setup,
@@ -1154,7 +1219,7 @@ describe("git pane", () => {
         const hunk = yield* fakeHunk
         const gh = yield* fakePullRequestGh(PR_JSON, PATCH)
         const setup = yield* renderApp(`${repo}/sub`, 100, { gh: gh.program, hunk: hunk.program })
-        yield* waitForFrame(setup, (frame) => frame.includes("#7 ✓"), "the pull request label")
+        yield* awaitStatusLine(setup, "pr #7 ✓", "the pull request label")
         yield* slash(setup, "/git")
         yield* waitForFrame(setup, (frame) => frame.includes("#7 Show the branch"), "the pane")
         setup.mockInput.pressEnter()
@@ -1205,7 +1270,7 @@ describe("git pane", () => {
         const objects = yield* gitOutput(repo, "count-objects", "-v")
         const index = yield* fs.readFile(`${repo}/.git/index`)
         const setup = yield* renderApp(repo, 100, {})
-        yield* waitForFrame(setup, (frame) => frame.includes("2 files +2 -0"), "the checkout")
+        yield* awaitStatusLine(setup, "changes 2 files +2 -0", "the checkout")
         yield* slash(setup, "/diff")
         yield* waitForFrame(
           setup,
@@ -1248,7 +1313,7 @@ describe("git pane", () => {
         yield* git(repo, "config", "core.pager", pager.program)
         const gh = yield* fakePullRequestGh(PR_JSON, PATCH)
         const setup = yield* renderApp(repo, 100, { gh: gh.program })
-        yield* waitForFrame(setup, (frame) => frame.includes("#7 ✓"), "the pull request label")
+        yield* awaitStatusLine(setup, "pr #7 ✓", "the pull request label")
         yield* slash(setup, "/diff pr")
         yield* waitForFrame(
           setup,
@@ -1361,7 +1426,7 @@ describe("git pane", () => {
           "kill -TERM $$",
         ])
         const setup = yield* renderApp(repo, 100, { hunk: hunk.program })
-        yield* waitForFrame(setup, (frame) => frame.includes("1 file +1 -0"), "the checkout")
+        yield* awaitStatusLine(setup, "changes 1 file +1 -0", "the checkout")
         yield* slash(setup, "/diff")
         yield* waitForLog(hunk.log, (log) => log.includes("diff --watch HEAD"))
         yield* waitUntil(

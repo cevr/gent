@@ -476,7 +476,7 @@ describe("gamut read output", () => {
 
 describe("a settled run", () => {
   const finished = { started: true, open: [], stored: true }
-  const idlePane = "idle · work (main)\n"
+  const idlePane = "GPT-5.6 Sol · medium\n"
 
   /** Fold a script of pane reads; the index of the read that settles the wait, or -1. */
   const settlesAt = (
@@ -493,41 +493,40 @@ describe("a settled run", () => {
     Array.from({ length: count }, () => [paneText, record] as const)
 
   test("an idle status line with every turn ended settles on the second read", () => {
-    const pane = "  Done.\n\nidle · work (main) · GPT-5.6 Sol · medium   ctx 1%\n"
+    const pane = "  Done.\n\nGPT-5.6 Sol · medium   ctx 4k/400k\n"
     expect(settlesAt(repeated(pane, finished, 3), true)).toBe(1)
   })
-  // The footer's first slot holds a held error or an extension notice in
-  // place of the phase word (apps/tui/src/app.tsx, phaseLabels).
+  // The status row leads with a held error or an extension notice, before
+  // the model (apps/tui/src/app.tsx, cueLabels).
   test("a held error in the footer still settles once every turn has ended", () => {
-    const pane = "  Done.\n\nprovider rejected the key · work (main) · GPT-5.6 Sol\n"
+    const pane = "  Done.\n\nprovider rejected the key · GPT-5.6 Sol\n"
     expect(settlesAt(repeated(pane, finished, 2), true)).toBe(1)
   })
   test("an extension notice in the footer still settles once every turn has ended", () => {
-    const pane = "wake alarm set for 10:00 · work (main) · GPT-5.6 Sol\n"
+    const pane = "wake alarm set for 10:00 · GPT-5.6 Sol\n"
     expect(settlesAt(repeated(pane, finished, 2), true)).toBe(1)
   })
   // The turn line ends each finished turn as the last transcript row, so it
   // is inside the pane tail every wait reads.
   test("a finished turn's turn line settles on the second read", () => {
     const pane =
-      "┃ fix the ledger\n\n  Done.\n\n  ✻ Worked for 42s · ↑12k ↓1.1k · $0.08\n\nidle · work (main) · GPT-6.1 Sol\n"
+      "┃ fix the ledger\n\n  Done.\n\n  ✻ Worked for 42s · ↑12k ↓1.1k · $0.08\n\nGPT-6.1 Sol\n"
     expect(settlesAt(repeated(pane, finished, 3), true)).toBe(1)
   })
   test("an idle root with a working background child is not settled", () => {
     // The tray's running row: the pulse (`◇◈◆◈`) at its head, no state word.
     for (const pulse of ["◇", "◈"]) {
-      const pane = `idle · work (main) · GPT-5.6 Sol\n ${pulse} delegate: Task 2. Read-only audit · Reading src  ← sessions\n`
+      const pane = `GPT-5.6 Sol\n ${pulse} delegate: Task 2. Read-only audit · Reading src  ← sessions\n`
       expect(settlesAt(repeated(pane, finished, 10), true)).toBe(-1)
     }
   })
   test("an idle root whose tray shows only a done thread settles", () => {
-    const pane = "  Done.\n\nidle · work (main) · GPT-5.6 Sol\n ◆ release notes  ← sessions\n"
+    const pane = "  Done.\n\nGPT-5.6 Sol\n ◆ release notes  ← sessions\n"
     expect(settlesAt(repeated(pane, finished, 3), true)).toBe(1)
   })
   test("a generating turn is not settled, whatever words the transcript echoes", () => {
     const generating = { started: true, open: ["main"], stored: true }
-    const pane =
-      "┃ Reply with the word idle · ready\n  ✻ Generating (3s)\nidle · work (main) · GPT-5.6 Sol\n"
+    const pane = "┃ Reply with the word idle · ready\n  ✻ Generating (3s)\nGPT-5.6 Sol\n"
     expect(settlesAt(repeated(pane, generating, 10), true)).toBe(-1)
   })
   test("an open turn in the record is not settled, whatever the pane shows", () => {
@@ -536,7 +535,7 @@ describe("a settled run", () => {
   })
   test("a prompt whose turn never started is not settled, however long the pane is idle", () => {
     const quiet = { started: false, open: [], stored: false }
-    expect(settlesAt(repeated("ready · work (main)\n", quiet, 20), true)).toBe(-1)
+    expect(settlesAt(repeated("GPT-5.6 Sol · medium\n", quiet, 20), true)).toBe(-1)
   })
   // `/plan` and `/review` queue a turn; the queued prompt can reach the event
   // log after the pane has already read idle twice.

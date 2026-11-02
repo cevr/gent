@@ -51,7 +51,9 @@ import {
   EventEnvelope,
   BranchId,
   dateFromMillis,
+  Model,
   ModelId,
+  ProviderId,
   SessionId,
   Session as DomainSession,
   SessionSnapshot,
@@ -61,7 +63,7 @@ import {
   ExtensionHealthSnapshot,
   RequestReply,
 } from "@gent/core/protocol"
-import { emptyQueueSnapshot, EventId, testAgent } from "@gent/core/test-utils"
+import { emptyQueueSnapshot, EventId, TEST_MODEL_ID, testAgent } from "@gent/core/test-utils"
 
 const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
@@ -154,6 +156,18 @@ type NamespaceOverrides = Partial<Record<string, Partial<MockNamespace>>>
  * A `session` mock whose snapshot is of the session asked for and names
  * `agent`: the agent a session runs reaches the UI only through its snapshot.
  */
+/**
+ * The model the mock session runs, in the mock catalog: a session's model is
+ * one its catalog lists, so the status row names it once the session has
+ * drawn. A test waits for {@link MOCK_SESSION_MODEL_NAME} to know it has.
+ */
+export const MOCK_SESSION_MODEL_NAME = "Claude Sonnet 5"
+export const MOCK_SESSION_MODEL = new Model({
+  id: TEST_MODEL_ID,
+  name: MOCK_SESSION_MODEL_NAME,
+  provider: ProviderId.make("anthropic"),
+})
+
 export const snapshotNaming = (agent: AgentName) => ({
   getSnapshot: (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
     Effect.succeed({
@@ -164,7 +178,7 @@ export const snapshotNaming = (agent: AgentName) => ({
       lastEventId: null,
       // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
       reasoningLevel: undefined,
-      resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+      resolvedModelId: TEST_MODEL_ID,
       agent,
       runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
       metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
@@ -266,7 +280,7 @@ export const createMockClient = (
       respondHandoff: () => noRpcError({}),
     },
     model: {
-      list: () => noRpcError([]),
+      list: () => noRpcError([MOCK_SESSION_MODEL]),
     },
     driver: {
       list: () => noRpcError({ drivers: [], overrides: {}, agents: [testAgent] }),
