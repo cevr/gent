@@ -2,7 +2,7 @@
  * Workflow commands RPC acceptance test. Each slash command queues a recipe
  * prompt that runs as a model turn through the per-request scope.
  */
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Order, Path, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
@@ -400,4 +400,32 @@ describe("WorkflowsExtension via RPC", () => {
       ),
     10_000,
   )
+})
+
+describe("the merge gate and merge of the shipped orchestrate machines", () => {
+  for (const machine of [ORCHESTRATE_MACHINE, ORCHESTRATE_LIGHT_MACHINE]) {
+    test(`${machine.name}: the engine writes the gate's log and keys its reuse; the merge restacks to the gate`, () => {
+      const gate = machine.states["gate"]
+      expect(gate).toMatchObject({
+        kind: "run",
+        reuse: true,
+        log: "{{input.dir}}/merge-gate-{{visit}}.log",
+        on: { pass: "merge", fail: "resume" },
+      })
+      // The command writes no log of its own: a pipe to tee would hide a timeout's output.
+      expect(gate?.kind === "run" && gate.run.includes("tee")).toBe(false)
+      expect(machine.states["merge"]).toEqual({
+        kind: "integrate",
+        ref: "main",
+        via: "{{input.via}}",
+        on: {
+          green: "merged",
+          red: "resume",
+          restack: "gate",
+          conflict: "resume",
+          declined: "decide",
+        },
+      })
+    })
+  }
 })

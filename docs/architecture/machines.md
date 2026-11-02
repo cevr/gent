@@ -195,23 +195,34 @@
     the implementor rebases and resolves.
   - An integrate state's `via` (a template; empty or `push` pushes) set to
     `pr` merges through a pull request a person approves, for a repository
-    whose ref takes no push. The visit force-pushes its pinned head to the
-    run's own branch `gent/<run>` (never a person's branch), finds the open
-    PR from it on the ref or opens one titled by the head's subject, and
-    records the PR in `PendingAction.Integrate.pr` with one `Waiting` step,
-    reason `pr`. A crash between the open and the record finds the same PR.
+    whose ref takes no push. The visit pushes its pinned head to the run's
+    own branch `gent/<run>` (never a person's branch) with
+    `--force-with-lease` on the commit the run last pushed there
+    (`RunMemo.prBranchHead`, from the recorded PR actions; none: the branch
+    must not exist), finds the open PR from it on the ref or opens one
+    titled by the head's subject, and records the PR in
+    `PendingAction.Integrate.pr` with one `Waiting` step, reason `pr`. A
+    lease that fails reads the branch (`git ls-remote`): at the head, a push
+    that landed before a crash, and the visit goes on; gone, the push makes
+    it again; at another commit, a person pushed there, and the run moves by
+    `declined` (reason `moved`) and pushes nothing over it. A crash between
+    the open and the record finds the same PR.
     Then it reads the PR (`gh pr view`) every 2 minutes under the run's own
     record, with no step, no permit and no model turn: a review takes
     minutes to days, so 2 minutes adds little, and 30 reads an hour stay
-    far under GitHub's 5,000 requests an hour. A merged PR (by a person or
-    by the run) moves by `green` (`GateOutcome.merged`); changes requested,
-    a closed PR or a head the run did not push move by `declined` to
+    far under GitHub's 5,000 requests an hour. A PR merged (by a person, a
+    queue or the run) at the head the run pushed moves by `green`
+    (`GateOutcome.merged`); merged at another head, changes requested, a
+    closed PR or a head the run did not push move by `declined` to
     `on.declined` (default `on.red`), the move's note quoting the reviews;
     a failed check moves by `red` (`GateOutcome.checks`). Approved, green
     and mergeable, the run merges by the repository's method (squash, then
     rebase, then merge) with `--match-head-commit`, so a head pushed after
-    the read never lands. A conflicting PR restacks with `on.restack`
-    (then the next visit force-pushes the new head to the same PR) and takes
+    the read never lands, and reads the PR at once. Still open, a merge
+    queue holds it: the action records the method (`queued`) and the run
+    reads the PR again, asking for no second merge, until it reads merged
+    (`green` with that method). A conflicting PR restacks with `on.restack`
+    (then the next visit pushes the new head to the same PR) and takes
     `on.conflict` (default `on.red`) without it; a PR only behind its ref
     restacks with `on.restack` and waits for a person without it. The run's
     status stays `running` while it waits: the open PR on the pending action
@@ -248,28 +259,43 @@
     and clears them, since a wrong test is the implementor's own failure.
     Runs recorded before `screen` counted every repeat-check pass and fail
     as a judging check, so older quality history mixes the two rules.
-  - A `run` state with `reuse` (`{ env? }`) keeps its passes as receipts in
+  - A `run` state's `log` (a template, rendered for the visit and resolved
+    from the run's cwd) names a file the engine writes the command's whole
+    output to, a timeout's too; the command needs no pipe to `tee`, which
+    hid its exit and lost the output a timeout killed.
+  - A `run` state with `reuse: true` keeps its passes as receipts in
     `machine_receipts` (at their own schema version, `@gent/machines/receipts`,
     so a change to them leaves the runs alone; the newest 500 stay). The key
-    is four parts: the commit `git rev-parse HEAD` names; the SHA-256 of the
-    command as rendered, a shipped file by its content's digest and
-    `{{visit}}` as 0; the SHA-256 of the platform, release, gent build, cwd,
-    `PATH` and each variable `reuse.env` names, as `env -0` prints them (what
-    the command inherits); and the tree `git add -A` then `git write-tree`
-    give in a copy of the index, so a change, a new file and a deletion that
-    git does not ignore are inputs, and the checkout's index is untouched.
-    Before the command (and its named permit), a kept pass at the key ends
-    the visit as exit 0 with the kept output: `CommandEnded.reused` and
-    `reused: true` in the `Saved` value, no process, no log. A pass is kept
-    only when the key reads the same after it, so a command that changed the
-    checkout (a log inside it, a formatter) keeps none. A red, a timeout and
-    a start failure are never kept: a flake would trap the run. No
-    repository or no commit gives no key, and the command runs. Files
-    written inside the checkout count, so keep logs outside it or ignored;
-    `machine.define` writes `.gent/machines/`, which a project that does not
-    ignore it sees as a new input. The orchestrate machines' merge gate has
-    `reuse: {}`; the implementor's own gate is a bash call, not a machine
-    command, and keeps nothing.
+    is five parts: the commit `git rev-parse HEAD` names; the SHA-256 of the
+    command as the visit renders it (with its `{{visit}}`), a shipped file
+    by its content's digest; the SHA-256 of the platform, release, gent
+    build, cwd and every variable the command inherits but the engine's own
+    per-command ones (`ENGINE_COMMAND_ENV`), so a `CHECK_MODE` the
+    definition never names is in the key; the tree `git add -A` then
+    `git write-tree` give in a copy of the index, so a change, a new file and
+    a deletion that git does not ignore are inputs, and the checkout's index
+    is untouched; and the digest of every file git ignores (`node_modules`,
+    build output, a local `.env`) by path, size, modification time and
+    inode, with no file read (gent's own `.gent/` is not an input); a
+    worktree with 383,000 ignored files (most in `node_modules`) took 3 to
+    5 seconds a read, measured, and a visit reads the key twice. Tools
+    outside the worktree are outside the key: a global binary, a cache in
+    the home directory, a service the command calls. Before the command
+    (and its named permit), a kept pass at the key ends the visit as exit 0
+    with the kept output: `CommandEnded.reused` and `reused: true` in the
+    `Saved` value, no process, and the visit's `log` names the run, visit
+    and time of the pass it reused, then holds the end of its output (the
+    8,000 characters a receipt keeps). A pass is kept only when the head,
+    command, environment and tree read the same after it, so a command
+    that changed the checkout (a log inside it, a formatter) keeps none; it
+    is kept under the ignored files as the visit left them, so an output it
+    wrote, ignored, still matches the next visit. A red, a timeout and a
+    start failure are never kept: a flake
+    would trap the run. No repository or no commit gives no key, and the
+    command runs. The orchestrate machines' merge gate has `reuse: true`
+    and its log at `{{input.dir}}/merge-gate-{{visit}}.log`; the
+    implementor's own gate is a bash call, not a machine command, and keeps
+    nothing.
   - The orchestrate machines' `repeats` state (`fix-repeats` in the light
     one) runs the shipped `repeat-tests.ts` (`packages/extensions/src`,
     embedded by a Bun text import) as `{{bun}} "{{files.repeat-tests.ts}}"

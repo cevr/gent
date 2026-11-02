@@ -1418,29 +1418,48 @@ interface CommandOutput {
 }
 
 /**
- * Run a command to its end: a foreground call, or a monitor check. Each
- * stream comes back whole up to `2 * commandOutputEndChars` characters, else
- * as its ends around a marker that counts the middle. Given a `spill` file,
- * output past that also goes to the file, whole, and a run that ends
- * without a result removes it. The scope owns the process and the file.
- * Given a recording, the command runs through its launch's receipt, and the
- * run hands `recorded` the process it started, before the command ends, so
- * a caller can store what a later server must stop (`stopLostCommand`) when
- * this one is lost.
+ * A file a command's output goes to beside memory, stdout and stderr in
+ * arrival order. `spill`: only once the output passed what memory keeps
+ * whole, and removed when the run ends without a result. `log`: all of it
+ * from the start, kept however the command ended.
+ */
+export interface CommandOutputFile {
+  readonly file: string
+  readonly mode: "spill" | "log"
+}
+
+/**
+ * Run a command to its end: a foreground call, a monitor check, or a machine
+ * command. Each stream comes back whole up to `2 * commandOutputEndChars`
+ * characters, else as its ends around a marker that counts the middle. Given
+ * an output file, its output also goes there (`CommandOutputFile`). The scope
+ * owns the process and the file. Given a recording, the command runs through
+ * its launch's receipt, and the run hands `recorded` the process it started,
+ * before the command ends, so a caller can store what a later server must
+ * stop (`stopLostCommand`) when this one is lost.
  */
 export const runBashCommand = <E = never>(
   command: string,
   cwd: Option.Option<string>,
-  spill: Option.Option<string>,
+  outputFile: Option.Option<CommandOutputFile>,
   recording: Option.Option<CommandRecording<E>> = Option.none(),
 ) =>
   Effect.gen(function* () {
     let stdout = noOutput
     let stderr = noOutput
-    const file = yield* Option.match(spill, {
+    const file = yield* Option.match(outputFile, {
       onNone: () => Effect.succeed(Option.none<OutputFile>()),
-      onSome: (path) => Effect.asSome(makeOutputFile(path, 2 * commandOutputEndChars)),
+      onSome: (target) =>
+        Effect.gen(function* () {
+          if (target.mode === "spill") {
+            return Option.some(yield* makeOutputFile(target.file, 2 * commandOutputEndChars))
+          }
+          const log = yield* makeOutputFile(target.file, 0)
+          yield* log.open
+          return Option.some(log)
+        }),
     })
+    const spills = Option.exists(outputFile, (target) => target.mode === "spill")
     const toFile = (text: string) =>
       Option.match(file, { onNone: () => Effect.void, onSome: (output) => output.write(text) })
     const exitCode = yield* spawnBashCommand(
@@ -1460,10 +1479,16 @@ export const runBashCommand = <E = never>(
       },
       recording,
     ).pipe(
-      // Only a result names the file: a run that ends without one (a
-      // timeout, an interrupt, a spawn failure) removes it.
+      // Only a result names a spill file: a run that ends without one (a
+      // timeout, an interrupt, a spawn failure) removes it. A log stays.
       Effect.onError(() =>
-        Option.match(file, { onNone: () => Effect.void, onSome: (output) => output.discard }),
+        Option.match(
+          Option.filter(file, () => spills),
+          {
+            onNone: () => Effect.void,
+            onSome: (output) => output.discard,
+          },
+        ),
       ),
     )
     const output: CommandOutput = {
@@ -2085,17 +2110,16 @@ export const BashTool = tool({
     // joining it on success and ordinary cancellation still waits for cleanup.
     // The permit and its scope never belong to the tool/request fiber.
     const dataDir = yield* resolveDataDir(ctx.home)
-    let spill = Option.none<string>()
+    let spill = Option.none<CommandOutputFile>()
     if (!Predicate.isUndefined(ctx.toolCallId)) {
-      spill = Option.some(
-        yield* jobOutputFile(path, dataDir, {
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          toolCallId: ctx.toolCallId,
-        }).pipe(
-          Effect.catchTag("PlatformError", (e) => new BashError({ command, message: e.message })),
-        ),
+      const file = yield* jobOutputFile(path, dataDir, {
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+        toolCallId: ctx.toolCallId,
+      }).pipe(
+        Effect.catchTag("PlatformError", (e) => new BashError({ command, message: e.message })),
       )
+      spill = Option.some({ file, mode: "spill" })
     }
     const admitted = yield* Deferred.make<void, BashError | PlatformError.PlatformError>()
     const process = Deferred.succeed(admitted, void 0).pipe(

@@ -5,7 +5,9 @@
  * by `head_sha`. A list answers in pages of `pageSize`: page 1 alone, or,
  * with `--paginate --slurp`, one array of every page. Pull requests:
  * `gh pr list`, `create`, `view` and `merge`, and `gh api repos/<repo>`
- * for the merge methods the repository allows.
+ * for the merge methods the repository allows. A push with
+ * `--force-with-lease` lands only while the branch is where the lease says;
+ * `git ls-remote` reads a branch.
  */
 import {
   Deferred,
@@ -106,6 +108,8 @@ export interface Remote {
   mergeMethods: { squash: boolean; rebase: boolean; merge: boolean }
   /** `gh pr` answers this error while set. */
   prFails: Option.Option<string>
+  /** A merge queue: `gh pr merge` exits 0 and the PR stays open until a test merges it. */
+  mergeQueue: boolean
 }
 
 // ── the wire ────────────────────────────────────────────────────────────────
@@ -160,6 +164,19 @@ const refspecOf = (refspec: string) => {
   return { sha, branch: target.replace(/^refs\/heads\//, "") }
 }
 
+/** A push's refspec: its last argument. */
+const pushRefspecOf = (args: ReadonlyArray<string>) => args.at(-1) ?? ""
+
+/** A push's `--force-with-lease=<ref>:<expected>`; none for a push with no lease. */
+const leaseOf = (args: ReadonlyArray<string>) =>
+  Option.map(
+    Option.fromUndefinedOr(args.find((arg) => arg.startsWith("--force-with-lease="))),
+    (flag) => {
+      const [ref = "", expected = ""] = flag.slice("--force-with-lease=".length).split(":")
+      return { branch: ref.replace(/^refs\/heads\//, ""), expected }
+    },
+  )
+
 /** The value after `flag` in a command's arguments. */
 const flagOf = (args: ReadonlyArray<string>, flag: string) => {
   const at = args.indexOf(flag)
@@ -173,7 +190,9 @@ export const SUBJECT = "feat: the unit's change"
 /** The git verbs the fake answers; over a real spawner, any other git runs for real. */
 const FAKE_GIT_VERBS = new Set(["remote get-url", "rev-parse --verify", "merge-base --is-ancestor"])
 const fakeOwnsGit = (args: ReadonlyArray<string>) =>
-  args[0] === "push" || FAKE_GIT_VERBS.has(`${args[0] ?? ""} ${args[1] ?? ""}`)
+  args[0] === "push" ||
+  args[0] === "ls-remote" ||
+  FAKE_GIT_VERBS.has(`${args[0] ?? ""} ${args[1] ?? ""}`)
 
 // ── the fake ────────────────────────────────────────────────────────────────
 
@@ -199,6 +218,7 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
       merges: [],
       mergeMethods: { squash: true, rebase: true, merge: true },
       prFails: Option.none(),
+      mergeQueue: false,
       ...initial,
     }
     let nextId = 1
@@ -346,7 +366,7 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
               const sha = flagOf(args, "--match-head-commit")
               if (sha !== pr.headRefOid) return answer(1, "", "Head branch was modified")
               remote.merges.push({ pr: pr.number, method, sha })
-              pr.state = "MERGED"
+              if (!remote.mergeQueue) pr.state = "MERGED"
               return answer(0)
             },
           })
@@ -393,9 +413,21 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
           onNone: () => Effect.void,
           onSome: Deferred.await,
         })
-        land(args[2] ?? "")
+        const stale = Option.exists(
+          leaseOf(args),
+          (lease) => (remote.branches.get(lease.branch) ?? "") !== lease.expected,
+        )
+        if (stale) return yield* answer(1, "", " ! [rejected] (stale info)\n")
+        land(pushRefspecOf(args))
         return yield* answer(0)
       })
+    /** `git ls-remote <remote> refs/heads/<branch>`: the branch's sha, or nothing. */
+    const lsRemote = (args: ReadonlyArray<string>) => {
+      const ref = args.at(-1) ?? ""
+      const sha = remote.branches.get(ref.replace(/^refs\/heads\//, ""))
+      if (Predicate.isUndefined(sha)) return answer(0)
+      return answer(0, `${sha}\t${ref}\n`)
+    }
     const git = (args: ReadonlyArray<string>) => {
       const verb = `${args[0] ?? ""} ${args[1] ?? ""}`
       switch (verb) {
@@ -418,6 +450,7 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
         }
       }
       if (args[0] === "push") return push(args)
+      if (args[0] === "ls-remote") return lsRemote(args)
       return unexpected("git", args)
     }
     const spawner = ChildProcessSpawner.make((command) => {
@@ -433,7 +466,7 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
         exitCode: Effect.tap(handle.exitCode, (code) =>
           Effect.sync(() => {
             if (code !== 0) return
-            land(args[2] ?? "")
+            land(pushRefspecOf(args))
           }),
         ),
       })

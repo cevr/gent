@@ -36,6 +36,7 @@ import {
   Clock,
   Context,
   Crypto,
+  DateTime,
   Duration,
   Effect,
   Exit,
@@ -87,6 +88,7 @@ import {
   ensureExtensionTables,
 } from "@gent/core/extensions/api"
 import {
+  type CommandOutputFile,
   type CommandProcess,
   commandLaunch,
   removeCommandReceipt,
@@ -215,9 +217,6 @@ type ThreadState = typeof ThreadState.Type
 /** A server-global named permit; an omitted limit means one. */
 const Permit = Schema.Struct({ name: Slug, limit: Schema.optionalKey(PositiveInt) })
 
-/** An environment variable's name, as a shell reads it. */
-const EnvName = Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/))
-
 /**
  * A command moves by its end: exit 0 takes `pass`. Without `error`, any other
  * end takes `fail`. With it, only exit 1 takes `fail`, and any other end (an
@@ -241,12 +240,17 @@ const RunState = Schema.Struct({
    */
   screen: Schema.optionalKey(Schema.Boolean),
   /**
-   * Reuses a pass (`PassReceipt`): a visit whose head commit, command,
-   * environment and inputs all match a kept pass moves by `pass` with no
-   * command run. `env` names the environment variables the command reads
-   * beyond those every receipt keys on. Default: every visit runs.
+   * Reuses a pass (`ReceiptKey`): a visit whose head commit, command as
+   * rendered for it, environment and inputs all match a kept pass moves by
+   * `pass` with no command run. Default false: every visit runs.
    */
-  reuse: Schema.optionalKey(Schema.Struct({ env: Schema.optionalKey(Schema.Array(EnvName)) })),
+  reuse: Schema.optionalKey(Schema.Boolean),
+  /**
+   * The file the command's whole output goes to, from its start, however it
+   * ends: a template rendered per visit, resolved against the run's cwd. A
+   * reused visit writes it too, naming the pass it reused and that output.
+   */
+  log: Schema.optionalKey(Template),
   ...VisitCap,
 })
 type RunState = typeof RunState.Type
@@ -455,6 +459,9 @@ const PendingAction = Schema.TaggedUnion({
    * `via: "pr"`: the visit opens a pull request (`IntegrateState.via`);
    * `pr` is its number once opened, and `repo` and `sha` the repository and
    * the pushed head. The run then waits for a person, polling the PR.
+   * `queued`: the merge method of a `gh pr merge` that exited 0 while the PR
+   * stayed open (a merge queue holds it); the run asks for no second merge
+   * and waits for the PR to read merged.
    */
   Integrate: {
     state: StateName,
@@ -463,6 +470,7 @@ const PendingAction = Schema.TaggedUnion({
     head: Schema.optionalKey(Schema.String),
     via: Schema.optionalKey(Schema.Literal("pr")),
     pr: Schema.optionalKey(PositiveInt),
+    queued: Schema.optionalKey(Schema.String),
     repairOf: Schema.optionalKey(PositiveInt),
     repo: Schema.optionalKey(Schema.String),
     generation: Schema.optionalKey(PositiveInt),
@@ -676,7 +684,7 @@ const templatesOf = (state: MachineState): ReadonlyArray<string> => {
     case "thread":
       return [state.say]
     case "run":
-      return [state.run]
+      return [state.run, ...Option.toArray(Option.fromUndefinedOr(state.log))]
     case "integrate":
       return Option.toArray(Option.fromUndefinedOr(state.via))
     case "ask":
@@ -1141,6 +1149,12 @@ interface RunMemo {
    * removes it.
    */
   readonly owed: ReadonlySet<string>
+  /**
+   * The commit the run's PR branch (`gent/<run>`) holds as the run last
+   * pushed it: the sha of its last recorded open PR. None before its first.
+   * The next push to the branch leases on it (`openPr`).
+   */
+  readonly prBranchHead: Option.Option<string>
 }
 
 type Run = RunRecord & RunMemo
@@ -1300,8 +1314,9 @@ const createMachineTables = Effect.gen(function* () {
 })
 
 /**
- * The pass receipts (`PassReceipt`), at a version of their own: they name no
- * run, so a change to them leaves the runs alone.
+ * The pass receipts (`ReceiptKey`), at a version of their own: a run reads
+ * none of them back, so a change to them leaves the runs alone. `run` and
+ * `visit` name the pass a reuse reads, for its log.
  */
 const createReceiptTables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -1310,10 +1325,13 @@ const createReceiptTables = Effect.gen(function* () {
     command TEXT NOT NULL,
     env TEXT NOT NULL,
     input TEXT NOT NULL,
+    ignored TEXT NOT NULL,
+    run TEXT NOT NULL,
+    visit INTEGER NOT NULL,
     exit_code INTEGER NOT NULL,
     output TEXT NOT NULL,
     at INTEGER NOT NULL,
-    PRIMARY KEY (head, command, env, input)
+    PRIMARY KEY (head, command, env, input, ignored)
   )`)
   yield* sql.unsafe(`CREATE INDEX machine_receipts_at ON machine_receipts (at)`)
 })
@@ -1327,7 +1345,7 @@ const ensureMachineTables = Effect.andThen(
   }),
   ensureExtensionTables({
     owner: "@gent/machines/receipts",
-    version: 1,
+    version: 2,
     tables: ["machine_receipts"],
     create: createReceiptTables,
   }),
@@ -1337,20 +1355,31 @@ const ensureMachineTables = Effect.andThen(
 const MAX_RECEIPTS = 500
 
 /**
- * What a pass receipt is kept under: the commit, the command as rendered,
- * the environment and the input tree, each a digest. A pass at one key is a
- * pass at any run with the same key.
+ * What a pass receipt is kept under, each a digest: the commit `HEAD` names,
+ * the command as rendered for the visit, the environment the command
+ * inherits (`envDigest`), the tree of every file git does not ignore
+ * (`inputTree`), and the files it ignores by their stats (`ignoredDigest`).
+ * A pass at one key is a pass at any run with the same key. A tool outside
+ * the worktree is outside the key.
  */
 interface ReceiptKey {
   readonly head: string
   readonly command: string
   readonly env: string
   readonly input: string
+  readonly ignored: string
 }
 
-const decodeReceiptRows = Schema.decodeUnknownEffect(
-  Schema.Array(Schema.Struct({ output: Schema.String })),
-)
+/** A kept pass: its output's tail, and the run, visit and time it came from. */
+const PassReceipt = Schema.Struct({
+  output: Schema.String,
+  run: Schema.String,
+  visit: Schema.Int,
+  at: Schema.Finite,
+})
+type PassReceipt = typeof PassReceipt.Type
+
+const decodeReceiptRows = Schema.decodeUnknownEffect(Schema.Array(PassReceipt))
 
 /** At most this many machine commands run at once in one server, over every machine. */
 const MAX_ACTIVE_MACHINE_COMMANDS = 4
@@ -1445,12 +1474,14 @@ interface MachineStoreService {
   /** The runs a branch hosts that have work left. */
   readonly activeOn: (host: PlaceRecord) => Effect.Effect<ReadonlyArray<Run>, MachineStorageError>
   readonly removeHostSession: (sessionId: SessionId) => Effect.Effect<void, MachineStorageError>
-  /** The output of the pass kept under `key`, if one is. */
-  readonly receipt: (key: ReceiptKey) => Effect.Effect<Option.Option<string>, MachineStorageError>
-  /** Keeps a pass under `key`, its output's tail with it; past `MAX_RECEIPTS` the oldest goes. */
+  /** The pass kept under `key`, if one is. */
+  readonly receipt: (
+    key: ReceiptKey,
+  ) => Effect.Effect<Option.Option<PassReceipt>, MachineStorageError>
+  /** Keeps a pass under `key`; past `MAX_RECEIPTS` the oldest pass goes. */
   readonly keepReceipt: (
     key: ReceiptKey,
-    output: string,
+    pass: PassReceipt,
   ) => Effect.Effect<void, MachineStorageError>
   readonly permits: CommandPermits
 }
@@ -1512,9 +1543,10 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
       const memoOf = Effect.fn("MachineStore.memoOf")(function* (record: RunRecord) {
         const rows = yield* sql`SELECT seq, at, step_json FROM machine_steps
           WHERE run = ${record.run} AND seq <= ${record.seq}
-            AND json_extract(step_json, '$._tag') IN (${sql.literal(
+            AND (json_extract(step_json, '$._tag') IN (${sql.literal(
               MEMO_TAGS.map((tag) => `'${tag}'`).join(", "),
-            )})
+            )}) OR (json_extract(step_json, '$._tag') = 'Recorded'
+              AND json_extract(step_json, '$.action.pr') IS NOT NULL))
           ORDER BY seq ASC`
         const decoded = yield* decodeStepRows(rows).pipe(
           Effect.mapError(storageError("A machine step row does not decode")),
@@ -1616,6 +1648,7 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
                   context: before.context,
                   lastMove: before.lastMove,
                   owed: before.owed,
+                  prBranchHead: before.prBranchHead,
                 },
                 steps,
               )
@@ -1756,22 +1789,24 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
         ),
         receipt: Effect.fn("MachineStore.receipt")(
           function* (key) {
-            const rows = yield* sql`SELECT output FROM machine_receipts
-              WHERE head = ${key.head} AND command = ${key.command}
-                AND env = ${key.env} AND input = ${key.input} AND exit_code = 0`
+            const rows = yield* sql`SELECT output, run, visit, at FROM machine_receipts
+              WHERE head = ${key.head} AND command = ${key.command} AND env = ${key.env}
+                AND input = ${key.input} AND ignored = ${key.ignored} AND exit_code = 0`
             const decoded = yield* decodeReceiptRows(rows)
-            return Option.map(Option.fromUndefinedOr(decoded[0]), (row) => row.output)
+            return Option.fromUndefinedOr(decoded[0])
           },
           Effect.mapError(storageError("Failed to read a pass receipt")),
         ),
         keepReceipt: Effect.fn("MachineStore.keepReceipt")(
-          function* (key, output) {
-            const at = yield* Clock.currentTimeMillis
+          function* (key, pass) {
             yield* Effect.gen(function* () {
-              yield* sql`INSERT INTO machine_receipts (head, command, env, input, exit_code, output, at)
-                VALUES (${key.head}, ${key.command}, ${key.env}, ${key.input}, 0, ${output}, ${at})
-                ON CONFLICT (head, command, env, input)
-                DO UPDATE SET exit_code = 0, output = excluded.output, at = excluded.at`
+              yield* sql`INSERT INTO machine_receipts
+                  (head, command, env, input, ignored, run, visit, exit_code, output, at)
+                VALUES (${key.head}, ${key.command}, ${key.env}, ${key.input}, ${key.ignored},
+                  ${pass.run}, ${pass.visit}, 0, ${pass.output}, ${pass.at})
+                ON CONFLICT (head, command, env, input, ignored)
+                DO UPDATE SET exit_code = 0, run = excluded.run, visit = excluded.visit,
+                  output = excluded.output, at = excluded.at`
               yield* sql`DELETE FROM machine_receipts WHERE rowid NOT IN (
                 SELECT rowid FROM machine_receipts ORDER BY at DESC, rowid DESC LIMIT ${MAX_RECEIPTS})`
             }).pipe(sql.withTransaction)
@@ -2014,6 +2049,7 @@ const EMPTY_MEMO: RunMemo = {
   context: { last: {}, all: {} },
   lastMove: Option.none(),
   owed: new Set(),
+  prBranchHead: Option.none(),
 }
 
 /** The owed ask states after `step`: a dispatch with `requires` adds, a met answer removes. */
@@ -2055,6 +2091,11 @@ const foldStep = (memo: RunMemo, step: MachineStep): RunMemo => {
       return { ...memo, context: saved(memo.context, step.state, step.value) }
     case "Moved":
       return { ...memo, lastMove: Option.some(step), owed: owedAfter(memo.owed, step) }
+    case "Recorded": {
+      const action = step.action
+      if (action._tag !== "Integrate" || Predicate.isUndefined(action.pr)) return memo
+      return { ...memo, prBranchHead: Option.fromUndefinedOr(action.sha) }
+    }
     default:
       return memo
   }
@@ -2064,7 +2105,7 @@ const foldStep = (memo: RunMemo, step: MachineStep): RunMemo => {
 const foldSteps = (memo: RunMemo, steps: ReadonlyArray<MachineStep>): RunMemo =>
   steps.reduce(foldStep, memo)
 
-/** The steps `foldStep` reads: a read of the memo loads only these. */
+/** The steps `foldStep` reads: a read of the memo loads only these, and a PR's `Recorded`. */
 const MEMO_TAGS = ["Dispatched", "Finished", "Granted", "Saved", "Moved"] as const
 
 /**
@@ -2875,7 +2916,8 @@ const GateOutcome = Schema.Union([
   }),
   Schema.Struct({
     outcome: Schema.tag("declined"),
-    pr: PositiveInt,
+    /** Absent when the run's branch was a person's before the run had its PR. */
+    pr: Schema.optionalKey(PositiveInt),
     reason: Schema.Literals(["changes", "closed", "moved"]),
     note: Schema.String,
   }),
@@ -3092,16 +3134,72 @@ const saidBy = (command: string, result: { readonly exitCode: number; readonly s
 const PrNumbers = Schema.fromJsonString(Schema.Array(Schema.Struct({ number: PositiveInt })))
 const decodePrNumbers = Schema.decodeUnknownOption(PrNumbers)
 
-/** `Opened`: the PR the run's branch merges from. `Unreachable`: git or gh failed, tried again later. */
+/**
+ * `Opened`: the PR the run's branch merges from. `Unreachable`: git or gh
+ * failed, tried again later. `Foreign`: the branch holds a commit the run
+ * did not push, which the run keeps.
+ */
 const PrOpen = Schema.TaggedUnion({
   Opened: { repo: Schema.String, pr: PositiveInt, sha: Schema.String },
   Unreachable: { message: Schema.String },
+  Foreign: { note: Schema.String },
+})
+type PrOpen = typeof PrOpen.Type
+
+/** The commit a remote's branch names now: none when it has no such branch. */
+const remoteBranchHead = (cwd: string, remote: string, ref: string) =>
+  Effect.map(receiptGit(cwd, ["ls-remote", remote, ref]), (listed) =>
+    Option.fromUndefinedOr(
+      listed
+        .split("\n")
+        .map((line) => line.split("\t"))
+        .find(([, name]) => name === ref)?.[0],
+    ),
+  )
+
+/**
+ * Pushes `head` to the run's branch, leased on the commit the run last
+ * pushed there (`RunMemo.prBranchHead`; none: the branch must not exist), so
+ * a person's push to the branch is never overwritten. A lease that fails
+ * reads the branch: at `head`, an earlier try of this push landed before a
+ * crash; gone, a person deleted it, and the push makes it again; at another
+ * commit, the branch is a person's now (`Foreign`).
+ */
+const pushPrBranch = Effect.fn("Machines.pushPrBranch")(function* (
+  run: Run,
+  remote: string,
+  head: string,
+) {
+  const ref = `refs/heads/${prBranch(run.run)}`
+  const push = (expected: string) =>
+    restackGit(run.cwd, ["push", `--force-with-lease=${ref}:${expected}`, remote, `${head}:${ref}`])
+  const pushed = yield* push(Option.getOrElse(run.prBranchHead, () => ""))
+  if (pushed.exitCode === 0) return Option.none<PrOpen>()
+  const unreachable = Option.some(
+    PrOpen.cases.Unreachable.make({ message: saidBy(`git push ${remote}`, pushed) }),
+  )
+  const read = yield* Effect.option(remoteBranchHead(run.cwd, remote, ref))
+  if (Option.isNone(read)) return unreachable
+  const now = read.value
+  if (Option.contains(now, head)) return Option.none<PrOpen>()
+  if (Option.isNone(now)) {
+    const remade = yield* push("")
+    if (remade.exitCode === 0) return Option.none<PrOpen>()
+    return unreachable
+  }
+  // The branch is where the lease said: the push failed for another reason.
+  if (Option.contains(run.prBranchHead, now.value)) return unreachable
+  return Option.some(
+    PrOpen.cases.Foreign.make({
+      note: `${prBranch(run.run)} on ${remote} is at ${now.value}, a commit the run did not push: the run did not push ${head} over it.`,
+    }),
+  )
 })
 
 /**
- * Pushes the visit's head to the run's branch (a forced push: the branch is
- * the run's alone) and finds its open PR on the ref, or opens one titled by
- * the head's subject. A retry after a crash finds the PR it opened.
+ * Pushes the visit's head to the run's branch (`pushPrBranch`) and finds its
+ * open PR on the ref, or opens one titled by the head's subject. A retry
+ * after a crash finds the PR it opened.
  */
 const openPr = Effect.fn("Machines.openPr")(
   function* (run: Run, action: IntegrateAction, state: IntegrateState) {
@@ -3113,10 +3211,8 @@ const openPr = Effect.fn("Machines.openPr")(
       onSome: Effect.succeed,
     })
     const branch = prBranch(run.run)
-    const pushed = yield* restackGit(run.cwd, ["push", remote, `+${head}:refs/heads/${branch}`])
-    if (pushed.exitCode !== 0) {
-      return PrOpen.cases.Unreachable.make({ message: saidBy(`git push ${remote}`, pushed) })
-    }
+    const refused = yield* pushPrBranch(run, remote, head)
+    if (Option.isSome(refused)) return refused.value
     const listed = yield* ghPr([
       "pr",
       "list",
@@ -3239,8 +3335,9 @@ const quoteReviews = (reviews: ReadonlyArray<PrReview>) =>
     })
 
 /**
- * What a read PR asks for. `Merged`: a person merged it. `Declined`: changes
- * requested, closed, or a head the run did not push. `Failing`: a check
+ * What a read PR asks for. `Merged`: merged at the head the run pushed.
+ * `Declined`: changes requested, closed, or a head the run did not push,
+ * merged or not. `Failing`: a check
  * failed. `Restack`: it conflicts with the ref, or (approved, its checks
  * green) the ref moved past it. `Ready`: approved, green, mergeable.
  * `Waiting`: none of these yet.
@@ -3268,6 +3365,14 @@ const prReviewed = (view: PrView, pr: number, sha: string): Option.Option<PrDeci
   if (Predicate.isNotUndefined(view.url)) name = `${name} (${view.url})`
   const quoted = (said: string) =>
     [said, ...quoteReviews(view.reviews ?? [])].join("\n").slice(0, PR_NOTE_MAX)
+  if (view.state === "MERGED" && view.headRefOid !== sha) {
+    return Option.some(
+      PrDecision.cases.Declined.make({
+        reason: "moved",
+        note: `${name} was merged at ${view.headRefOid}, not the ${sha} the run pushed: a push the run did not make was merged.`,
+      }),
+    )
+  }
   if (view.state === "MERGED") return Option.some(PrDecision.cases.Merged.make({}))
   if (view.state === "CLOSED") {
     return Option.some(
@@ -3389,7 +3494,8 @@ const waitForPerson = (visit: PrVisit, reason: string) =>
 /**
  * Pushes the run's branch and opens its PR, then waits `PR_POLL_WAIT` (one
  * `Waiting` step, reason `pr`). Git or gh out of reach tries again after
- * `GATE_RETRY_WAIT`.
+ * `GATE_RETRY_WAIT`. A branch a person pushed to takes `declined` (default
+ * `red`), reason `moved`.
  */
 const openPrVisit = Effect.fn("Machines.openPrVisit")(function* (
   run: Run,
@@ -3399,6 +3505,16 @@ const openPrVisit = Effect.fn("Machines.openPrVisit")(function* (
 ) {
   const opened = yield* openPr(run, action, state)
   if (opened._tag === "Unreachable") return yield* retryIntegrate(run, action, opened.message)
+  if (opened._tag === "Foreign") {
+    return yield* leaveIntegrate(
+      run,
+      action,
+      state.on.declined ?? state.on.red,
+      "declined",
+      GateOutcome.cases.declined.make({ reason: "moved", note: opened.note }),
+      Option.some(opened.note),
+    )
+  }
   const { notBefore: _notBefore, ...ready } = action
   const recorded = PendingAction.cases.Integrate.make({
     ...ready,
@@ -3443,41 +3559,93 @@ const restackPr = Effect.fn("Machines.restackPr")(function* (visit: PrVisit, con
   )
 })
 
-/** Merges a ready PR and takes `green`; a merge that did not land is read again later. */
-const mergePrVisit = Effect.fn("Machines.mergePrVisit")(function* (visit: PrVisit) {
-  const method = yield* mergePr(visit.repo, visit.pr, visit.sha)
-  if (Option.isNone(method)) return yield* waitForPerson(visit, "the merge did not land")
-  yield* leaveIntegrate(
+/** A PR merged at the run's head takes `green`, with the method of a merge the run asked for. */
+const prMerged = (visit: PrVisit) =>
+  leaveIntegrate(
     visit.run,
     visit.action,
     visit.state.on.green,
     "green",
-    GateOutcome.cases.merged.make({ pr: visit.pr, sha: visit.sha, method: method.value }),
+    GateOutcome.cases.merged.make({
+      pr: visit.pr,
+      sha: visit.sha,
+      ...omitUndefined({ method: visit.action.queued }),
+    }),
+  )
+
+/** A declined PR takes `declined` (default `red`), its note the move's. */
+const prDeclined = (visit: PrVisit, declined: Extract<PrDecision, { _tag: "Declined" }>) =>
+  leaveIntegrate(
+    visit.run,
+    visit.action,
+    visit.state.on.declined ?? visit.state.on.red,
+    "declined",
+    GateOutcome.cases.declined.make({
+      pr: visit.pr,
+      reason: declined.reason,
+      note: declined.note,
+    }),
+    Option.some(declined.note),
+  )
+
+/** The PR as `gh pr view` reads it now; a read that failed gives its reason. */
+const readPr = Effect.fn("Machines.readPr")(function* (repo: string, pr: number) {
+  const viewed = yield* ghPr(["pr", "view", String(pr), "--repo", repo, "--json", PR_VIEW_FIELDS])
+  if (viewed.exitCode !== 0) return Result.fail(saidBy("gh pr view", viewed))
+  return Option.match(decodePrView(viewed.stdout), {
+    onNone: () => Result.fail("gh pr view answered no PR"),
+    onSome: (view) => Result.succeed(view),
+  })
+})
+
+/**
+ * Asks GitHub to merge a ready PR, then reads it at once: merged at the run's
+ * head takes `green`. A merge that exited 0 with the PR still open was taken
+ * by a merge queue: the visit records the method as `queued` and waits for
+ * the PR to read merged, asking for no second merge. A merge that did not
+ * land is read again later.
+ */
+const mergePrVisit = Effect.fn("Machines.mergePrVisit")(function* (visit: PrVisit) {
+  const method = yield* mergePr(visit.repo, visit.pr, visit.sha)
+  if (Option.isNone(method)) return yield* waitForPerson(visit, "the merge did not land")
+  const queued = PendingAction.cases.Integrate.make({
+    ...visit.action,
+    queued: method.value,
+    notBefore: visit.nextPoll,
+  })
+  const wait = commitMove(visit.run, { ...visit.run, pending: Option.some(queued) }, [
+    MachineStep.cases.Recorded.make({ action: queued }),
+    MachineStep.cases.Waiting.make({
+      state: visit.action.state,
+      until: visit.nextPoll,
+      reason: "pr",
+    }),
+  ])
+  const read = yield* readPr(visit.repo, visit.pr)
+  if (Result.isFailure(read)) return yield* wait
+  return yield* Match.value(prDecision(read.success, visit.pr, visit.sha)).pipe(
+    Match.tagsExhaustive({
+      Merged: () => prMerged({ ...visit, action: queued }),
+      Declined: (declined) => prDeclined(visit, declined),
+      Failing: () => wait,
+      Restack: () => wait,
+      Ready: () => wait,
+      Waiting: () => wait,
+    }),
   )
 })
 
-/** The move a read PR's decision asks for. */
+/**
+ * The move a read PR's decision asks for. A queued merge (`queued`) takes
+ * `green` by its method once the PR reads merged, and waits while it reads
+ * ready: the queue holds it.
+ */
 const decidePr = (visit: PrVisit, decision: PrDecision) => {
   const { run, action, state, pr, sha } = visit
   return Match.value(decision).pipe(
     Match.tagsExhaustive({
-      Merged: () =>
-        leaveIntegrate(
-          run,
-          action,
-          state.on.green,
-          "green",
-          GateOutcome.cases.merged.make({ pr, sha }),
-        ),
-      Declined: (declined) =>
-        leaveIntegrate(
-          run,
-          action,
-          state.on.declined ?? state.on.red,
-          "declined",
-          GateOutcome.cases.declined.make({ pr, reason: declined.reason, note: declined.note }),
-          Option.some(declined.note),
-        ),
+      Merged: () => prMerged(visit),
+      Declined: (declined) => prDeclined(visit, declined),
       Failing: (failing) =>
         leaveIntegrate(
           run,
@@ -3487,7 +3655,12 @@ const decidePr = (visit: PrVisit, decision: PrDecision) => {
           GateOutcome.cases.checks.make({ pr, sha, failing: failing.failing }),
         ),
       Restack: (restacking) => restackPr(visit, restacking.conflicting),
-      Ready: () => mergePrVisit(visit),
+      Ready: () => {
+        if (Predicate.isNotUndefined(action.queued)) {
+          return waitForPerson(visit, "the merge queue holds the PR")
+        }
+        return mergePrVisit(visit)
+      },
       Waiting: () => waitForPerson(visit, "no decision yet"),
     }),
   )
@@ -3511,11 +3684,9 @@ const advancePr = Effect.fn("Machines.advancePr")(function* (
     return yield* openPrVisit(run, action, state, nextPoll)
   }
   const visit: PrVisit = { run, action, state, repo, pr, sha, nextPoll, signals }
-  const viewed = yield* ghPr(["pr", "view", String(pr), "--repo", repo, "--json", PR_VIEW_FIELDS])
-  if (viewed.exitCode !== 0) return yield* waitForPerson(visit, saidBy("gh pr view", viewed))
-  const view = decodePrView(viewed.stdout)
-  if (Option.isNone(view)) return yield* waitForPerson(visit, "gh pr view answered no PR")
-  return yield* decidePr(visit, prDecision(view.value, pr, sha))
+  const read = yield* readPr(repo, pr)
+  if (Result.isFailure(read)) return yield* waitForPerson(visit, read.failure)
+  return yield* decidePr(visit, prDecision(read.success, pr, sha))
 })
 
 /** Removes the run's core record once its end is settled. */
@@ -4742,8 +4913,12 @@ interface CommandEnd {
 /** One git read of a receipt key; a slower one gives no key, and the command runs. */
 const RECEIPT_GIT_TIMEOUT = Duration.seconds(30)
 
-/** A git read's trimmed stdout; a nonzero exit fails it. */
-const receiptGit = (cwd: string, args: ReadonlyArray<string>, env: Record<string, string> = {}) =>
+/** A git read's stdout as git printed it; a nonzero exit fails it. */
+const receiptGitRaw = (
+  cwd: string,
+  args: ReadonlyArray<string>,
+  env: Record<string, string> = {},
+) =>
   runProcess("git", args, {
     cwd,
     env: { GIT_TERMINAL_PROMPT: "0", ...env },
@@ -4751,12 +4926,16 @@ const receiptGit = (cwd: string, args: ReadonlyArray<string>, env: Record<string
     timeout: RECEIPT_GIT_TIMEOUT,
   }).pipe(
     Effect.flatMap((result) => {
-      if (result.exitCode === 0) return Effect.succeed(result.stdout.trim())
+      if (result.exitCode === 0) return Effect.succeed(result.stdout)
       return Effect.fail(
         new MachineFault({ message: `git ${args.join(" ")} exited ${result.exitCode}` }),
       )
     }),
   )
+
+/** A git read's trimmed stdout; a nonzero exit fails it. */
+const receiptGit = (cwd: string, args: ReadonlyArray<string>, env: Record<string, string> = {}) =>
+  Effect.map(receiptGitRaw(cwd, args, env), (stdout) => stdout.trim())
 
 /**
  * The tree the checkout holds now, every file git does not ignore included
@@ -4793,24 +4972,27 @@ const commandEnvironment = Effect.fn("Machines.commandEnvironment")(function* (c
 })
 
 /**
- * The environment a pass held for: the platform, the gent build, the
- * directory, `PATH`, and each variable the state names in `reuse.env`.
+ * The variables the engine sets on each command it spawns, apart from the
+ * environment the server holds: a receipt key leaves them out, since each
+ * spawn's differ. Every other variable is in the key.
  */
-const envDigest = Effect.fn("Machines.envDigest")(function* (
-  cwd: string,
-  names: ReadonlyArray<string>,
-) {
+const ENGINE_COMMAND_ENV: ReadonlySet<string> = new Set(["GENT_COMMAND_TOKEN"])
+
+/**
+ * The environment a pass held for: the platform, the gent build, the
+ * directory, and every variable the command inherits, sorted, apart from
+ * the engine's own (`ENGINE_COMMAND_ENV`).
+ */
+const envDigest = Effect.fn("Machines.envDigest")(function* (cwd: string) {
   const platform = yield* GentPlatform
   const os = yield* platform.osInfo
   const build = yield* platform.build
   let buildId = "source"
   if (build._tag === "Compiled") buildId = build.id
   const variables = yield* commandEnvironment(cwd)
-  const named: Record<string, string> = {}
-  for (const name of [...new Set(["PATH", ...names])].sort()) {
-    const value = Option.fromUndefinedOr(variables.get(name))
-    if (Option.isSome(value)) named[name] = value.value
-  }
+  const inherited = [...variables]
+    .filter(([name]) => !ENGINE_COMMAND_ENV.has(name))
+    .sort(([a], [b]) => Order.String(a, b))
   return yield* sha256Hex(
     encodeJsonText({
       platform: os.platform,
@@ -4818,43 +5000,103 @@ const envDigest = Effect.fn("Machines.envDigest")(function* (
       release: os.release,
       build: buildId,
       cwd,
-      named,
+      env: inherited,
     }),
   )
 })
 
+const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
+
+/** At most this many ignored files are read at once for `ignoredDigest`. */
+const IGNORED_STAT_CONCURRENCY = 128
+
 /**
- * The key a pass of `state` is kept under, for a state with `reuse`: the
- * commit `HEAD` names, the command as rendered (a file by its content,
- * `{{visit}}` as 0), the environment and the input tree. None when the state
- * has no `reuse` or git cannot say (no repository, no commit): the command
- * runs, and keeps nothing.
+ * The files git ignores in the checkout (`node_modules`, build output,
+ * caches, a local `.env`), each by its path, size, modification time and
+ * inode, in one digest: a changed ignored file changes it, and nothing is
+ * read but the stats. A file gone between the list and its stat is named
+ * gone. gent's own `.gent/` is not an input: a definition written there
+ * changes no key.
+ */
+const ignoredDigest = Effect.fn("Machines.ignoredDigest")(function* (cwd: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const listed = yield* receiptGitRaw(cwd, [
+    "ls-files",
+    "-z",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--",
+    ".",
+    ":(exclude).gent",
+  ])
+  const files = listed.split("\0").filter((file) => file.length > 0)
+  const lines = yield* Effect.forEach(
+    files,
+    (file) =>
+      fs.stat(path.join(cwd, file)).pipe(
+        Effect.map((info) => {
+          const mtime = Option.match(info.mtime, {
+            onNone: () => "",
+            onSome: (at) => String(at.getTime()),
+          })
+          const inode = Option.match(info.ino, { onNone: () => "", onSome: String })
+          return `${file}\0${info.size}\0${mtime}\0${inode}`
+        }),
+        Effect.orElseSucceed(() => `${file}\0gone`),
+      ),
+    { concurrency: IGNORED_STAT_CONCURRENCY },
+  )
+  return yield* sha256Hex(lines.sort(Order.String).join("\n"))
+})
+
+/**
+ * The key a pass of `state` at `visit` is kept under, for a state with
+ * `reuse` (`ReceiptKey`): the command is rendered as the visit runs it, a
+ * shipped file by its content. None when the state has no `reuse` or git
+ * cannot say (no repository, no commit): the command runs, and keeps
+ * nothing.
  */
 const receiptKeyOf = Effect.fn("Machines.receiptKeyOf")(function* (
   run: Run,
   state: RunState,
+  visit: number,
   shipped: Readonly<Record<string, string>>,
   bun: string,
 ) {
-  const reuse = Option.fromUndefinedOr(state.reuse)
-  if (Option.isNone(reuse)) return Option.none<ReceiptKey>()
+  if (state.reuse !== true) return Option.none<ReceiptKey>()
   return yield* Effect.gen(function* () {
     const files: Record<string, string> = {}
     for (const [name, content] of Object.entries(shipped)) {
       files[name] = `file:${yield* sha256Hex(content)}`
     }
-    const rendered = render(state.run, { ...templateScope(run, 0), files, bun: Option.some(bun) })
+    const rendered = render(state.run, {
+      ...templateScope(run, visit),
+      files,
+      bun: Option.some(bun),
+    })
     return {
       head: yield* receiptGit(run.cwd, ["rev-parse", "HEAD"]),
       command: yield* sha256Hex(rendered),
-      env: yield* envDigest(run.cwd, reuse.value.env ?? []),
+      env: yield* envDigest(run.cwd),
       input: yield* inputTree(run.cwd),
+      ignored: yield* ignoredDigest(run.cwd),
     } satisfies ReceiptKey
   }).pipe(Effect.option)
 })
 
-const sameReceiptKey = (a: ReceiptKey, b: ReceiptKey) =>
-  a.head === b.head && a.command === b.command && a.env === b.env && a.input === b.input
+/**
+ * Whether a pass still holds for what the visit left: the same commit,
+ * command, environment and tree. The ignored files may differ: a command
+ * writes its own build output and caches there, and the pass is kept under
+ * the files as it left them.
+ */
+const passHolds = (before: ReceiptKey, after: ReceiptKey) =>
+  before.head === after.head &&
+  before.command === after.command &&
+  before.env === after.env &&
+  before.input === after.input
 
 /** The characters of a command's output an `error` move's note keeps: its last ones. */
 const ERROR_NOTE_OUTPUT_CHARS = 1_000
@@ -4985,6 +5227,14 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
         ],
       }
     })
+  // The visit's log: rendered as the command is, so a template names the same visit.
+  const logFile = (files: Readonly<Record<string, string>>) =>
+    Option.map(Option.fromUndefinedOr(state.log), (log) =>
+      path.resolve(
+        run.cwd,
+        render(log, { ...templateScope(run, action.visit), files, bun: Option.some(bun) }),
+      ),
+    )
   const commandResult = Effect.gen(function* () {
     const files = yield* writtenFiles
     const scope = { ...templateScope(run, action.visit), files, bun: Option.some(bun) }
@@ -4992,7 +5242,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
     return yield* runBashCommand(
       command,
       Option.some(run.cwd),
-      Option.none(),
+      Option.map(logFile(files), (file): CommandOutputFile => ({ file, mode: "log" })),
       Option.some({ launch: action.launch, recorded: record }),
     )
   }).pipe(
@@ -5031,9 +5281,43 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
         .with(named.name, named.limit ?? 1, commandResult)
         .pipe(Effect.mapError((error) => new MachineFault({ message: error.message }))),
   })
-  const keyed = receiptKeyOf(run, state, shipped, bun)
-  // A kept pass at the same key ends the command at once; a new pass is kept
-  // when the key still holds after it, so a change made while it ran keeps none.
+  const keyed = receiptKeyOf(run, state, action.visit, shipped, bun)
+  // A pass is kept under the key as the visit left the checkout, when the
+  // pass still holds for it (`passHolds`): a change made while it ran keeps none.
+  const keepAfter = (before: ReceiptKey, pass: PassReceipt) =>
+    Effect.gen(function* () {
+      const after = yield* keyed
+      if (Option.isNone(after) || !passHolds(before, after.value)) return
+      yield* (yield* MachineStore).keepReceipt(after.value, pass)
+    }).pipe(
+      Effect.catchTag("MachineStorageError", (error) =>
+        Effect.logWarning("machines.receipt.keep.failed").pipe(
+          Effect.annotateLogs({ run: run.run, error: error.message }),
+        ),
+      ),
+    )
+  // A reused visit's log names the pass it reused, and holds that pass's output.
+  const reuseLog = (pass: PassReceipt) =>
+    Option.match(logFile({}), {
+      onNone: () => Effect.succeed(false),
+      onSome: (file) =>
+        Effect.gen(function* () {
+          yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+          yield* fs.writeFileString(
+            file,
+            `gent ran no command on this visit: it reused the pass of run ${pass.run}, visit ${pass.visit}, at ${isoOf(pass.at)}, at the same head, command, environment and inputs. The end of that pass's output (at most ${OUTPUT_TAIL_CHARS} characters; that visit's log holds all of it):\n${pass.output}`,
+          )
+          return true
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("machines.receipt.log.failed").pipe(
+              Effect.annotateLogs({ run: run.run, file, cause: Cause.pretty(cause) }),
+              Effect.as(false),
+            ),
+          ),
+        ),
+    })
+  // A kept pass at the same key ends the command at once.
   const receipted = Effect.gen(function* () {
     const store = yield* MachineStore
     const key = yield* keyed
@@ -5041,22 +5325,26 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
       Effect.map(Option.flatten),
       Effect.catchTag("MachineStorageError", () => Effect.succeedNone),
     )
-    if (Option.isSome(kept)) {
-      return { exitCode: Option.some(0), timedOut: false, output: kept.value, reused: true }
+    if (Option.isSome(key) && Option.isSome(kept)) {
+      // The log the reuse wrote is in the checkout now: the next visit reads the key with it.
+      if (yield* reuseLog(kept.value)) yield* keepAfter(key.value, kept.value)
+      const end: CommandEnd = {
+        exitCode: Option.some(0),
+        timedOut: false,
+        output: kept.value.output,
+        reused: true,
+      }
+      return end
     }
     const result = yield* permitted
     if (Option.isNone(key) || result.timedOut || !Option.contains(result.exitCode, 0)) return result
-    const after = yield* keyed
-    if (!Option.exists(after, (now) => sameReceiptKey(now, key.value))) return result
-    yield* store
-      .keepReceipt(key.value, result.output.slice(-OUTPUT_TAIL_CHARS))
-      .pipe(
-        Effect.catchTag("MachineStorageError", (error) =>
-          Effect.logWarning("machines.receipt.keep.failed").pipe(
-            Effect.annotateLogs({ run: run.run, error: error.message }),
-          ),
-        ),
-      )
+    const at = yield* Clock.currentTimeMillis
+    yield* keepAfter(key.value, {
+      output: result.output.slice(-OUTPUT_TAIL_CHARS),
+      run: run.run,
+      visit: action.visit,
+      at,
+    })
     return result
   })
   const work = receipted.pipe(

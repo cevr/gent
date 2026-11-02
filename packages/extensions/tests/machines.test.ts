@@ -100,7 +100,7 @@ import {
   toolCalls,
 } from "./helpers/routed-session"
 import { e2ePreset } from "./helpers/test-preset"
-import { CANDIDATE, fakeGitHub, OUTSIDE, type Pr, REPO, SUBJECT } from "./helpers/fake-github"
+import { CANDIDATE, fakeGitHub, FIX, OUTSIDE, type Pr, REPO, SUBJECT } from "./helpers/fake-github"
 import { scopedEnv } from "./helpers/process-env"
 
 // ── the routed models ───────────────────────────────────────────────────────
@@ -6706,8 +6706,11 @@ describe("the shipped orchestrate machine", () => {
           "resume→blocked",
           "blocked→dropped",
         ])
-        // The empty gate never parsed, so nothing ran into the gate's log.
-        expect(yield* fileExists(`${dir}/merge-gate-1.log`)).toBe(false)
+        // The empty gate never parsed: the engine's log of the gate holds only bash's refusal.
+        const log = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.readFileString(`${dir}/merge-gate-1.log`),
+        ).pipe(Effect.provide(BunServices.layer))
+        expect(log).toContain("syntax error")
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )
@@ -7333,17 +7336,23 @@ describe("the repeat-test check of the orchestrate machine", () => {
 /**
  * A gate that counts its runs in `{{input.count}}`, outside the checkout,
  * and prints `say`; a rerun answer comes back to it. `extra` adds lines to
- * its command.
+ * its command; `fields` adds fields to the state, as its `log`.
  */
-const receiptGate = (name: string, say: string, extra: ReadonlyArray<string> = []) => ({
+const receiptGate = (
+  name: string,
+  say: string,
+  extra: ReadonlyArray<string> = [],
+  fields: Readonly<Record<string, string>> = {},
+) => ({
   name,
   threads: {},
   start: "gate",
   states: {
     gate: {
       kind: "run",
-      run: [`echo "run {{visit}}" >> "{{input.count}}"`, ...extra, `echo "${say}"`].join("\n"),
-      reuse: { env: ["GENT_RECEIPT_PROBE"] },
+      run: [`echo run >> "{{input.count}}"`, ...extra, `echo "${say}"`].join("\n"),
+      ...fields,
+      reuse: true,
       on: { pass: "again", fail: "again" },
     },
     again: { kind: "ask", ask: "Again?", on: { rerun: "gate", end: "done" } },
@@ -7411,8 +7420,8 @@ describe("a run state's pass receipt", () => {
         yield* answerAsk(client, owner, 3, "rerun")
         yield* askDetails(client, owner, 4)
         expect(yield* runsCounted(count)).toBe(3)
-        // A named variable set: a new environment.
-        yield* scopedEnv("GENT_RECEIPT_PROBE", "on")
+        // A variable the definition names nowhere: a new environment.
+        yield* scopedEnv("CHECK_MODE", "strict")
         yield* answerAsk(client, owner, 4, "rerun")
         yield* askDetails(client, owner, 5)
         expect(yield* runsCounted(count)).toBe(4)
@@ -7490,6 +7499,107 @@ describe("a run state's pass receipt", () => {
         expect(yield* gateEnds(home, red)).toEqual([false, false])
       }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
     65_000,
+  )
+
+  it.live(
+    "the key holds the command as its visit renders it: a pass ends no other visit",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const count = `${home.home}/count`
+        yield* unitGit(home.cwd, ["init", "-q", "-b", "main"])
+        yield* commitFiles(home.cwd, { ".gitignore": ".gent/\n", "a.txt": "one\n" }, "base")
+        const models = yield* makeModels(trackWorker)
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        const owner = ownerOf(yield* client.session.create({}))
+        // Visit 1 passes; visit 2 renders another command, which fails.
+        const run = yield* startRun(
+          client,
+          owner,
+          receiptGate("by-visit", "ok", ["test {{visit}} -eq 1 || exit 1"]),
+          "by-visit",
+          { count },
+        )
+        yield* askDetails(client, owner, 1)
+        yield* answerAsk(client, owner, 1, "rerun")
+        yield* askDetails(client, owner, 2)
+        expect(yield* runsCounted(count)).toBe(2)
+        expect(yield* gateEnds(home, run)).toEqual([false, false])
+        expect(yield* home.sql(savedValue(run, "gate"))).toMatchObject({ exitCode: 1 })
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "the engine writes each visit's log: a reused visit's names the pass it reused and holds its output",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const count = `${home.home}/count`
+        yield* unitGit(home.cwd, ["init", "-q", "-b", "main"])
+        yield* commitFiles(home.cwd, { ".gitignore": ".gent/\n", "a.txt": "one\n" }, "base")
+        const models = yield* makeModels(trackWorker)
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRun(
+          client,
+          owner,
+          receiptGate("logged", "gate passed", [], { log: "{{input.logs}}/gate-{{visit}}.log" }),
+          "logged",
+          { count, logs: home.home },
+        )
+        yield* askDetails(client, owner, 1)
+        yield* answerAsk(client, owner, 1, "rerun")
+        yield* askDetails(client, owner, 2)
+        expect(yield* gateEnds(home, run)).toEqual([false, true])
+        expect(yield* readUnitFile(`${home.home}/gate-1.log`)).toBe("gate passed\n")
+        const reused = yield* readUnitFile(`${home.home}/gate-2.log`)
+        expect(reused).toContain(
+          `gent ran no command on this visit: it reused the pass of run ${run}, visit 1,`,
+        )
+        expect(reused).toContain("that visit's log holds all of it):\ngate passed\n")
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "the key holds the ignored files: a changed one reruns, and an output the pass wrote still reuses",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const count = `${home.home}/count`
+        yield* unitGit(home.cwd, ["init", "-q", "-b", "main"])
+        yield* commitFiles(
+          home.cwd,
+          { ".gitignore": ".gent/\n*.cache\n*.out\n", "a.txt": "one\n" },
+          "base",
+        )
+        yield* writeFiles(home.cwd, { "input.cache": "one\n" })
+        const models = yield* makeModels(trackWorker)
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        const owner = ownerOf(yield* client.session.create({}))
+        // The gate reads an ignored file and writes another.
+        const run = yield* startRun(
+          client,
+          owner,
+          receiptGate("ignored", "ok", ["cat input.cache > result.out"]),
+          "ignored",
+          { count },
+        )
+        yield* askDetails(client, owner, 1)
+        // The output it wrote is part of the key it kept: visit 2 reuses.
+        yield* answerAsk(client, owner, 1, "rerun")
+        yield* askDetails(client, owner, 2)
+        expect(yield* runsCounted(count)).toBe(1)
+        // The ignored input changed: visit 3 runs.
+        yield* writeFiles(home.cwd, { "input.cache": "two two\n" })
+        yield* answerAsk(client, owner, 2, "rerun")
+        yield* askDetails(client, owner, 3)
+        expect(yield* runsCounted(count)).toBe(2)
+        expect(yield* gateEnds(home, run)).toEqual([false, true, false])
+        expect(yield* readUnitFile(`${home.cwd}/result.out`)).toBe("two two\n")
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
   )
 })
 
@@ -7823,6 +7933,30 @@ const readPrAfterRestart = (
     )
   })
 
+/**
+ * The pending integrate holds no PR, as after a restack: the next visit
+ * pushes the run's branch again, leased on the head it recorded last.
+ */
+const pushAgain = (run: string) =>
+  Effect.flatMap(
+    SqlClient.SqlClient,
+    (sql) => sql`UPDATE machine_runs
+      SET pending_json = json_remove(pending_json, '$.pr', '$.repo', '$.sha') WHERE run = ${run}`,
+  )
+
+/**
+ * The record as it stands when the server died after the push landed and
+ * gh opened the PR: neither the PR nor the branch's head was recorded.
+ */
+const crashBeforeRecord = (run: string) =>
+  Effect.gen(function* () {
+    yield* pushAgain(run)
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`DELETE FROM machine_steps WHERE run = ${run}
+      AND json_extract(step_json, '$._tag') = 'Recorded'
+      AND json_extract(step_json, '$.action.pr') IS NOT NULL`
+  })
+
 const APPROVED: Partial<Pr> = {
   reviewDecision: "APPROVED",
   reviews: [{ author: { login: "cevr" }, state: "APPROVED", body: "" }],
@@ -7923,6 +8057,14 @@ describe("an integrate state through a pull request", () => {
       merges: [],
     },
     {
+      why: "merged at a head the run did not push takes declined",
+      pr: { state: "MERGED", headRefOid: OUTSIDE },
+      to: "declined",
+      saved: { outcome: "declined", pr: 1, reason: "moved" },
+      note: `was merged at ${OUTSIDE}, not the ${CANDIDATE} the run pushed`,
+      merges: [],
+    },
+    {
       why: "a failed check takes red, naming it",
       pr: { checks: [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }] },
       to: "broken",
@@ -7992,29 +8134,131 @@ describe("an integrate state through a pull request", () => {
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
 
-  it.live("a crash before the open PR was recorded finds that PR again, opening no second", () =>
-    Effect.gen(function* () {
-      const home = yield* restartableHome
-      const github = yield* fakeGitHub()
-      const { run } = yield* openPrRun(home, github)
-      // As the record stands when the server died after gh opened the PR.
-      yield* home.sql(
-        Effect.flatMap(
-          SqlClient.SqlClient,
-          (sql) => sql`UPDATE machine_runs
-            SET pending_json = json_remove(pending_json, '$.pr', '$.repo', '$.sha') WHERE run = ${run}`,
-        ),
-      )
-      yield* home.sql(retryDueNow(run))
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          yield* createRpcClient(yield* prServer(home, github))
-          yield* waitFor(home.sql(runRow(run)), recordsPr(1), 15_000, "the run found its PR")
-        }),
-      )
-      expect(github.remote.prs.map((pr) => pr.number)).toEqual([1])
-      expect(github.remote.pushes).toEqual([])
-    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  it.live(
+    "a crash after the push landed and gh opened the PR finds that PR again, opening no second",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const github = yield* fakeGitHub()
+        const { run } = yield* openPrRun(home, github)
+        yield* home.sql(crashBeforeRecord(run))
+        yield* home.sql(retryDueNow(run))
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* createRpcClient(yield* prServer(home, github))
+            yield* waitFor(home.sql(runRow(run)), recordsPr(1), 15_000, "the run found its PR")
+          }),
+        )
+        expect(github.remote.prs.map((pr) => pr.number)).toEqual([1])
+        expect(github.remote.branches.get(`gent/${run}`)).toBe(CANDIDATE)
+        expect(github.remote.pushes).toEqual([])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a branch a person deleted is pushed again, with a new PR",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const github = yield* fakeGitHub()
+        const { run } = yield* openPrRun(home, github)
+        // The lease names the head the run recorded, which the branch no longer has.
+        yield* home.sql(pushAgain(run))
+        github.remote.branches.delete(`gent/${run}`)
+        // GitHub closes the PR of a deleted branch.
+        Object.assign(github.remote.prs[0] ?? {}, { state: "CLOSED" })
+        yield* home.sql(retryDueNow(run))
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* createRpcClient(yield* prServer(home, github))
+            yield* waitFor(home.sql(runRow(run)), recordsPr(2), 15_000, "the run opened a new PR")
+          }),
+        )
+        expect(github.remote.branches.get(`gent/${run}`)).toBe(CANDIDATE)
+        expect(github.remote.prs.map((pr) => [pr.number, pr.state])).toEqual([
+          [1, "CLOSED"],
+          [2, "OPEN"],
+        ])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a commit a person pushed to the run's branch is never pushed over: declined",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const github = yield* fakeGitHub()
+        const { run } = yield* openPrRun(home, github)
+        yield* home.sql(crashBeforeRecord(run))
+        github.remote.branches.set(`gent/${run}`, FIX)
+        yield* readPrAfterRestart(home, github, run)
+        expect(github.remote.branches.get(`gent/${run}`)).toBe(FIX)
+        expect(Option.map(yield* home.sql(runRow(run)), (row) => row.state)).toEqual(
+          Option.some("declined"),
+        )
+        expect(yield* home.sql(savedValue(run, "merge"))).toMatchObject({
+          outcome: "declined",
+          reason: "moved",
+        })
+        const moved = (yield* home.sql(stepsOf(run))).filter((step) => step._tag === "Moved")
+        expect(moved[0]?.note ?? "").toContain(
+          `gent/${run} on origin is at ${FIX}, a commit the run did not push: the run did not push ${CANDIDATE} over it.`,
+        )
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a merge a queue takes waits until the PR reads merged, asking for no second merge",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const github = yield* fakeGitHub({ mergeQueue: true })
+        const { run } = yield* openPrRun(home, github)
+        Object.assign(github.remote.prs[0] ?? {}, APPROVED)
+        const queued = (row: Option.Option<typeof RunRowView.Type>) =>
+          Option.exists(row, (found) => (found.pending_json ?? "").includes('"queued":"squash"'))
+        yield* home.sql(retryDueNow(run))
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* createRpcClient(yield* prServer(home, github))
+            yield* waitFor(home.sql(runRow(run)), queued, 15_000, "the run recorded the queue")
+          }),
+        )
+        expect(github.remote.merges).toEqual([{ pr: 1, method: "squash", sha: CANDIDATE }])
+        // The queue still holds the PR at the next read: the run waits.
+        yield* home.sql(retryDueNow(run))
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* createRpcClient(yield* prServer(home, github))
+            yield* waitFor(
+              home.sql(runRecords(run)),
+              (records) => records.some((at) => Option.exists(at, (time) => time > 0)),
+              15_000,
+              "the run waits for the next read",
+            )
+          }),
+        )
+        expect(github.remote.merges).toHaveLength(1)
+        expect(Option.getOrThrow(yield* home.sql(runRow(run)))).toMatchObject({
+          state: "merge",
+          status: "running",
+        })
+        // The queue merged it.
+        Object.assign(github.remote.prs[0] ?? {}, { state: "MERGED" })
+        yield* readPrAfterRestart(home, github, run)
+        expect(yield* home.sql(savedValue(run, "merge"))).toEqual({
+          outcome: "merged",
+          pr: 1,
+          sha: CANDIDATE,
+          method: "squash",
+        })
+        expect(github.remote.merges).toHaveLength(1)
+        expect(github.remote.pushes).toEqual([])
+      }).pipe(Effect.scoped, Effect.timeout("50 seconds")),
+    55_000,
   )
 
   it.live("a via that is not push or pr is refused at define and at start", () =>

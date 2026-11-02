@@ -291,19 +291,19 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
         ":",
         "{{input.mergeGate}}",
         "}",
-        "{",
         "unit_gate",
         "status=$?",
         '[ "$status" -eq 0 ] || exit "$status"',
         "merge_legs",
-        '} 2>&1 | tee "{{input.dir}}/merge-gate-{{visit}}.log"',
       ].join("\n"),
+      // The engine writes the whole output here, a timeout's too.
+      log: "{{input.dir}}/merge-gate-{{visit}}.log",
       permit: { name: "gate" },
       // The gate holds the server's one permit, so a slow one stalls every unit.
       timeoutSeconds: 1200,
-      // A pass at the same head, gate and files is not run again; its log is
-      // the earlier visit's.
-      reuse: {},
+      // A pass at the same head, gate, environment and files is not run again;
+      // the visit's log names the pass it reused and holds its output.
+      reuse: true,
       on: { pass: "merge", fail: "resume" },
     },
     // A push main moved past rebases onto it and runs the gate again, with no
