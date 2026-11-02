@@ -6,7 +6,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
-import { ReviewRound } from "@gent/extensions/client"
+import { ReviewRound, RoleScore } from "@gent/extensions/client"
 import {
   defineExtension,
   ExtensionHost,
@@ -1089,6 +1089,7 @@ describe("gent ctl against a running server", () => {
             `${out}/messages.jsonl`,
             `${out}/sessions.jsonl`,
             `${out}/rounds.jsonl`,
+            `${out}/roles.jsonl`,
             `${out}/digest.md`,
           ])
           // Nothing outside --out: the home holds what it held, and the directory.
@@ -1096,7 +1097,13 @@ describe("gent ctl against a running server", () => {
             [...before, "review"].toSorted(),
           )
           expect((yield* fs.readDirectory(out)).toSorted()).toEqual(
-            ["digest.md", "messages.jsonl", "rounds.jsonl", "sessions.jsonl"].toSorted(),
+            [
+              "digest.md",
+              "messages.jsonl",
+              "roles.jsonl",
+              "rounds.jsonl",
+              "sessions.jsonl",
+            ].toSorted(),
           )
           const lines = (name: string) =>
             Effect.map(fs.readFileString(`${out}/${name}`), (text) => text.trimEnd().split("\n"))
@@ -1125,6 +1132,9 @@ describe("gent ctl against a running server", () => {
           // The machines extension's file: no machine ran, so no round, and its empty table.
           expect(yield* fs.readFileString(`${out}/rounds.jsonl`)).toBe("")
           expect(digest).toContain("## Machine rounds per role and model")
+          // No run moved: no role line, and the roles table's header alone.
+          expect(yield* fs.readFileString(`${out}/roles.jsonl`)).toBe("")
+          expect(digest).toContain("## Machine roles per model")
 
           // An ISO date reads the same window; a run again overwrites the files.
           const dated = yield* Effect.flatMap(
@@ -1174,6 +1184,8 @@ describe("gent ctl against a running server", () => {
           const digest = yield* fs.readFileString(`${out}/digest.md`)
           expect(digest).toContain("rounds: @gent/machines not loaded")
           expect(digest).not.toContain("## Machine rounds per role and model")
+          expect(digest).toContain("roles: @gent/machines not loaded")
+          expect(digest).not.toContain("## Machine roles per model")
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
       ),
     30_000,
@@ -1316,6 +1328,27 @@ describe("gent ctl against a running server", () => {
           const digest = yield* fs.readFileString(`${out}/digest.md`)
           expect(digest).toContain(`| writer | ${TEST_MODEL_ID}@low | 1 | 0 | verdict 1 |`)
           expect(digest).toContain(`| reviewer | ${TEST_MODEL_ID} | 1 | 0 | verdict 1 |`)
+          // The run's roles: the reviewer first, each round counted, each rate under five a dash.
+          const roles = yield* Effect.flatMap(fs.readFileString(`${out}/roles.jsonl`), (text) =>
+            Effect.forEach(
+              text.split("\n").filter((line) => line.length > 0),
+              (line) => Schema.decodeEffect(Schema.fromJsonString(RoleScore))(line),
+            ),
+          )
+          expect(
+            roles.map((score) => {
+              const [first] = score.measures
+              return `${score.role} ${score.model ?? "?"} ${score.effort ?? "-"} ${first?._tag} ${first?.name} ${first?.n}`
+            }),
+          ).toEqual([
+            `reviewer ${TEST_MODEL_ID} - Count rounds 1`,
+            `writer ${TEST_MODEL_ID} low Count rounds 1`,
+          ])
+          expect(digest).toContain("## Machine roles per model")
+          expect(digest).toContain(
+            `| reviewer | ${TEST_MODEL_ID} | - | rounds 1; confirmed-defect-per-round — (n 1);`,
+          )
+          expect(digest).toContain(`| writer | ${TEST_MODEL_ID} | low | rounds 1 |`)
           yield* minerLines(out)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("40 seconds")),
       ),

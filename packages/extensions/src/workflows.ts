@@ -103,6 +103,7 @@ const implementorRound = (
   ].join("\n"),
   on: { ready: "repeats", blocked: "blocked" },
   oversize: OVERSIZE,
+  evidence: "fixes" as const,
   ...entry,
 })
 
@@ -122,6 +123,7 @@ const repeatCheck = (pass: string) => ({
   timeoutSeconds: 1200,
   on: { pass, fail: "fix", error: "decide" },
   screen: true,
+  evidence: "repeats" as const,
   // One visit before each review, and one per failed check or recheck.
   maxVisits: 20,
   exhausted: "decide",
@@ -145,6 +147,8 @@ const decideAsk = (latest: string, recheck: string) => ({
   kind: "ask" as const,
   ask: `Unit {{input.unit}} decides. {{visit.note}} Latest: ${latest} Check the request's claims against the code in the unit dir {{input.dir}}. merge runs the gate and the merge-only legs, then pushes to main; fix sends your note to the implementor as a failed round (a red acceptance check), changes to a new implementor, replan to the planner; rewrite ends this run for a new one from base; recheck reruns the repeat-test check, counting nothing, once you repaired what stopped it (a Check error note). At a cap or after stuck, write {{input.dir}}/diagnosis.md before changes, replan or rewrite: under ## Premise, the one claim the spec or the implementation relied on that failed; under ## Counterexample, a concrete input, state or file:line that shows it false.`,
   requires: DIAGNOSIS,
+  // A merge or a fix settles the findings the implementor disputed, unless the note names them.
+  judges: ["merge", "fix"],
   on: {
     merge: "gate",
     fix: "fix",
@@ -195,7 +199,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       instructions: [
         WORKER_RULES,
         BLOCKED_RULE,
-        "You are the implementor, the sole writer. When the unit dir holds diagnosis.md (an earlier approach failed), read it first: your approach must not rest on its Premise, and your request answers its Counterexample. Work in your cwd on its branch, and change only the files the spec gives the unit. Commit in Conventional Commits form, one logical unit each, staged by exact path. When the spec leaves a choice open, take the simpler, reversible option and record it in state.md. Before each request, run the gate the round message names into gate-N.log in the unit dir and read its exit line. Write round-N-request.md: the spec path, the base and head commits, what changed by file, how to run it, the gate log and its exit line, the acceptance check's result, known gaps; from round 2, a fix report that names every finding of the last round as fixed <hash> or rejected: <reason>. When a finding is a repeat of an earlier round's (repeat of rN <id>), the round's first commit is a generated property or model test that owns that class, red on the unfixed code for every earlier instance, before any case fix. The request names that test on a line of its own for each repeated Blocker or Major: Repeat test: rN <id> <test file>... -- <command> :: <test name>, with the rN <id> the finding names, the test files by path from the repository root, a command run at the root, and the test's name. Before review, the machine runs the command in clean checkouts with packages installed, and its output must name the test in both runs (use a reporter that lists passing tests): it must fail at the head the last review saw, with your test files, and pass at your head. A missing line or a wrong result is a failed round (FAIL), with its reasons in round-N-repeat-check.md; a check that cannot run (ERROR) goes to the orchestrator and counts nothing. Work outside the spec goes under Follow-ups in state.md. Verdict: ready or blocked.",
+        "You are the implementor, the sole writer. When the unit dir holds diagnosis.md (an earlier approach failed), read it first: your approach must not rest on its Premise, and your request answers its Counterexample. Work in your cwd on its branch, and change only the files the spec gives the unit. Commit in Conventional Commits form, one logical unit each, staged by exact path. When the spec leaves a choice open, take the simpler, reversible option and record it in state.md. Before each request, run the gate the round message names into gate-N.log in the unit dir and read its exit line. Write round-N-request.md: the spec path, the base and head commits, what changed by file, how to run it, the gate log and its exit line, the acceptance check's result, known gaps; from round 2, a fix report with a line Fixed: rN <id>, rN <id>, ... for the findings you fixed, each fix's commit named in what changed, and a line Disputed: rN <id> — <reason> for each finding you did not fix, so every Blocker and Major of the last findings, and a failed verify (rN verify), is on one of them. When a finding is a repeat of an earlier round's (repeat of rN <id>), the round's first commit is a generated property or model test that owns that class, red on the unfixed code for every earlier instance, before any case fix. The request names that test on a line of its own for each repeated Blocker or Major: Repeat test: rN <id> <test file>... -- <command> :: <test name>, with the rN <id> the finding names, the test files by path from the repository root, a command run at the root, and the test's name. Before review, the machine runs the command in clean checkouts with packages installed, and its output must name the test in both runs (use a reporter that lists passing tests): it must fail at the head the last review saw, with your test files, and pass at your head. A missing line or a wrong result is a failed round (FAIL), with its reasons in round-N-repeat-check.md; a check that cannot run (ERROR) goes to the orchestrator and counts nothing. Work outside the spec goes under Follow-ups in state.md. Verdict: ready or blocked.",
       ].join("\n"),
     },
     reviewer: {
@@ -203,7 +207,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       against: "implementor",
       instructions: [
         WORKER_RULES,
-        "You are the reviewer: read-only on the deliverables, you write only into the unit dir. Read the spec, the request, the diff from its base to its head, and the earlier rounds' findings. Attack the change: look for reasons it is wrong, not reasons it is fine. A round is the N of the request's round-N-request.md. From round 2, check every line of the fix report against the code, then review the diff from the last findings' head to the new head, with the callers, invariants and tests the new commits can reach; leave the rest of the earlier diff to the earlier rounds. From round 3, a finding about test strength alone (a generator narrower than its rule, a mutant that survives, an oracle that excuses) goes under Test strength, never Major: only a product failure (an input or state → a wrong result a user meets) blocks. Write round-N-findings.md: first line Verdict: ACCEPTED, PROVEN, CHANGES REQUIRED or STUCK; then Blockers, Major, Minor and Optional, and from round 3 Test strength, each with an id, file:line, a concrete failure and the expected repair; a new trigger of an earlier finding says repeat of rN <id>. A remaining Blocker or Major is changes; only Minor or Optional is accepted, or proven when the spec's Path is not deep and the request's gate log exit line and acceptance check result show green at its head, so no verifier runs; stuck is for a unit no further round can help, or a review you could not finish, never accepted. Verdict: accepted, proven, changes or stuck.",
+        "You are the reviewer: read-only on the deliverables, you write only into the unit dir. Read the spec, the request, the diff from its base to its head, and the earlier rounds' findings. Attack the change: look for reasons it is wrong, not reasons it is fine. A round is the N of the request's round-N-request.md. From round 2, check every line of the fix report against the code, then review the diff from the last findings' head to the new head, with the callers, invariants and tests the new commits can reach; leave the rest of the earlier diff to the earlier rounds. From round 3, a finding about test strength alone (a generator narrower than its rule, a mutant that survives, an oracle that excuses) goes under Test strength, never Major: only a product failure (an input or state → a wrong result a user meets) blocks. Write round-N-findings.md: first line Verdict: ACCEPTED, PROVEN, CHANGES REQUIRED or STUCK; then Blockers, Major, Minor and Optional, and from round 3 Test strength, each finding a list item that starts with its id (B1, M1, m1, O1, T1), then file:line, a concrete failure and the expected repair; each Blocker and Major also says class: defect (the code is wrong), test-strength (a test misses the rule), spec (the spec is wrong or silent) or environment (the toolchain, the machine or the gate); a new trigger of an earlier finding says repeat of rN <id>. A finding the fix report disputed that you still hold, you raise again as a repeat of it. A remaining Blocker or Major is changes; only Minor or Optional is accepted, or proven when the spec's Path is not deep and the request's gate log exit line and acceptance check result show green at its head, so no verifier runs; stuck is for a unit no further round can help, or a review you could not finish, never accepted. Verdict: accepted, proven, changes or stuck.",
       ].join("\n"),
     },
     verifier: {
@@ -253,6 +257,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       ].join("\n"),
       on: { accepted: "verify", proven: "decide", changes: "fix", stuck: "decide" },
       oversize: OVERSIZE,
+      evidence: "findings",
       fresh: true,
       // A deep unit's first review runs the deep reviewer's models and efforts.
       switches: [{ role: "deep-reviewer", when: "plan.reply.path", is: "deep", visits: 1 }],
@@ -267,6 +272,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       ].join("\n"),
       on: { pass: "decide", fail: "fix", stuck: "decide" },
       oversize: OVERSIZE,
+      evidence: "verify",
       fresh: true,
       // An interactive unit's check runs the live verifier's models and efforts.
       switches: [{ role: "live-verifier", when: "plan.reply.interactive", is: true }],

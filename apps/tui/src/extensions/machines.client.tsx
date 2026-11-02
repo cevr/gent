@@ -19,13 +19,15 @@
  *
  * `gent ctl review` writes `rounds.jsonl`, every round that ended in its
  * window, from `MachinesRpc.Review` (a server request), and adds the rounds
- * table per role and model to `digest.md`.
+ * table per role and model to `digest.md`. It writes `roles.jsonl`, each
+ * model's measures in each machine role over the runs that moved in the
+ * window, from `MachinesRpc.Roles`, and adds their table to `digest.md`.
  */
 import { DateTime, Effect, Option, Order, Predicate, Schema, Stream } from "effect"
 import { createEffect, createRoot, For, on, Show } from "solid-js"
 import { omitUndefined, ref } from "@gent/core/extensions/api"
 import { cleanReviewText, type LaneReport } from "@gent/core/protocol"
-import { type MachineRunView, MachinesRpc, ReviewRound } from "@gent/extensions/client"
+import { type MachineRunView, MachinesRpc, ReviewRound, RoleScore } from "@gent/extensions/client"
 import {
   ClientContext,
   clientContributions,
@@ -396,6 +398,43 @@ const readRounds = <E,>(window: CtlReviewWindow<E>) =>
     return { digest: renderRounds(totals) }
   })
 
+const rolesRef = ref(MachinesRpc.Roles)
+const encodeRole = Schema.encodeEffect(Schema.fromJsonString(RoleScore))
+
+/** A measure as the roles table prints it: a ratio under its least `n` prints `—` and its `n`. */
+const measureCell = (measure: RoleScore["measures"][number]) => {
+  if (measure._tag === "Count") return `${measure.name} ${measure.n}`
+  if (Predicate.isUndefined(measure.value)) return `${measure.name} — (n ${measure.n})`
+  return `${measure.name} ${Number(measure.value.toFixed(2))} (n ${measure.n})`
+}
+
+/** The roles table: one row per role and model and effort, its measures in one cell. */
+const renderRoles = (scores: ReadonlyArray<RoleScore>) =>
+  [
+    "## Machine roles per model",
+    "",
+    "| Role | Model | Effort | Measures |",
+    "| --- | --- | --- | --- |",
+    ...scores.map(
+      (score) =>
+        `| ${score.role} | ${score.model ?? "?"} | ${score.effort ?? "-"} | ${score.measures.map(measureCell).join("; ")} |`,
+    ),
+    "",
+  ].join("\n")
+
+/**
+ * `roles.jsonl`: one line per role and model and effort, its measures over
+ * the runs that moved in the window (`MachinesRpc.Roles`, a server request).
+ */
+const readRoles = <E,>(window: CtlReviewWindow<E>) =>
+  Effect.gen(function* () {
+    const scores = yield* window.ask(rolesRef, { since: window.since })
+    yield* Effect.forEach(scores, (score) => Effect.flatMap(encodeRole(score), window.write), {
+      discard: true,
+    })
+    return { digest: renderRoles(scores) }
+  })
+
 // ── extension ───────────────────────────────────────────────────────────────
 
 const statusRef = ref(MachinesRpc.Status)
@@ -491,5 +530,8 @@ export default defineClientExtension(statusRef.extensionId, {
       input: (run) => ({ run }),
     }),
   ],
-  review: [{ file: "rounds.jsonl", read: readRounds }],
+  review: [
+    { file: "rounds.jsonl", read: readRounds },
+    { file: "roles.jsonl", read: readRoles },
+  ],
 })

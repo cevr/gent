@@ -97,6 +97,7 @@ import {
 } from "./exec-tools.js"
 import type { ChildUsage } from "./child-turns.js"
 import { generationOf, Integration, type GateKey, type GateRecord } from "./integration.js"
+import { RoleScore, scoreRoles } from "./scorecard.js"
 import {
   currentThreadPlace,
   StartParams,
@@ -210,6 +211,14 @@ const ThreadState = Schema.Struct({
    */
   fresh: Schema.optionalKey(Schema.Union([Schema.Boolean, PositiveInt])),
   oversize: Schema.optionalKey(Oversize),
+  /**
+   * The evidence a round's reply file (`reply.file`) holds, which the engine
+   * reads at the round's end on a verdict (`Findings`, `Fixes`): `findings`
+   * a review's round-N-findings.md, `fixes` an implementor's
+   * round-N-request.md, `verify` a check's round-N-verify.md. Absent: the
+   * engine reads no file.
+   */
+  evidence: Schema.optionalKey(Schema.Literals(["findings", "fixes", "verify"])),
   ...VisitCap,
 })
 type ThreadState = typeof ThreadState.Type
@@ -251,6 +260,11 @@ const RunState = Schema.Struct({
    * reused visit writes it too, naming the pass it reused and that output.
    */
   log: Schema.optionalKey(Template),
+  /**
+   * `repeats`: the state runs the repeat-test check, so its pass confirms the
+   * open repeat findings and the findings they repeat (`judgeRepeats`).
+   */
+  evidence: Schema.optionalKey(Schema.Literal("repeats")),
   ...VisitCap,
 })
 type RunState = typeof RunState.Type
@@ -335,6 +349,12 @@ const AskState = Schema.Struct({
   /** The allowed answers, each with its next state. */
   on: Schema.Record(Verdict, StateName),
   requires: Schema.optionalKey(AnswerRequirement),
+  /**
+   * The choices that settle the run's disputed findings: an answer by one of
+   * them rejects each disputed finding its note does not name
+   * (`judgeAnswer`). Each is a key of `on`.
+   */
+  judges: Schema.optionalKey(Schema.Array(Verdict)),
 })
 
 const FinalState = Schema.Struct({
@@ -375,7 +395,7 @@ const MachineDefinition = Schema.Struct({
     Schema.Record(FileName, Schema.String.check(Schema.isMaxLength(64_000))),
   ),
 })
-type MachineDefinition = typeof MachineDefinition.Type
+export type MachineDefinition = typeof MachineDefinition.Type
 
 /**
  * Why a run asks. `interrupted`: a command lost its process to a stop, or a
@@ -523,6 +543,25 @@ const RoundTokens = Schema.Struct({
   cacheWrite: Schema.Finite,
 })
 
+/**
+ * One finding as the engine read it from a reply file (`findingsIn`):
+ * `round` the N of its file, `id` its first word, lowercase (`m2`; a failed
+ * verify is the one finding `verify`, severity `fail`), `class` what its
+ * text says (`class: spec`), `unclassified` when it says none or another,
+ * and `repeatOf` the keys of the earlier findings it repeats.
+ */
+const Finding = Schema.Struct({
+  round: PositiveInt,
+  id: Schema.String,
+  severity: Schema.Literals(["blocker", "major", "minor", "optional", "test-strength", "fail"]),
+  class: Schema.Literals(["defect", "test-strength", "spec", "environment", "unclassified"]),
+  repeatOf: Schema.optionalKey(Schema.Array(Schema.String)),
+})
+type Finding = typeof Finding.Type
+
+/** A finding's status once someone other than its writer judged it (`Judged`). */
+const FindingStatus = Schema.Literals(["confirmed", "rejected"])
+
 /** One row of the append-only log. */
 const MachineStep = Schema.TaggedUnion({
   /** `project`: the project the run's cwd works in (`Accounts.project`). */
@@ -586,6 +625,30 @@ const MachineStep = Schema.TaggedUnion({
   Saved: { state: StateName, value: Schema.Json },
   /** A `retry` answer to an `exhausted` ask granted the state one visit past its cap. */
   Granted: { state: StateName },
+  /** The findings a round's reply file named (`ThreadState.evidence`), written before its move. */
+  Findings: { state: StateName, round: PositiveInt, findings: Schema.Array(Finding) },
+  /**
+   * An implementor's request's answer to the findings (`ThreadState.evidence`
+   * `fixes`): the keys (`r1 m2`) it fixed, and those it disputed, each with
+   * its reason.
+   */
+  Fixes: {
+    state: StateName,
+    round: PositiveInt,
+    fixed: Schema.Array(Schema.String),
+    disputed: Schema.Array(Schema.Struct({ key: Schema.String, reason: Schema.String })),
+  },
+  /**
+   * A finding judged by someone other than its writer: `fixed` the
+   * implementor's request, `repeat-test` a repeat-test check's pass, `review`
+   * a later review that did not raise a disputed finding again, `answer` an
+   * ask's answer (`AskState.judges`) whose note did not name it.
+   */
+  Judged: {
+    key: Schema.String,
+    status: FindingStatus,
+    by: Schema.Literals(["fixed", "repeat-test", "review", "answer"]),
+  },
   /**
    * `note`: why the run moved, for `to`'s template (`{{visit.note}}`): a size
    * stop's (`Oversize`), a check error's (`RunState`).
@@ -617,9 +680,10 @@ const MachineStep = Schema.TaggedUnion({
   Settled: { mayStillRun: Schema.optionalKey(Schema.Boolean) },
   Notified: {},
 })
-type MachineStep = typeof MachineStep.Type
+export type MachineStep = typeof MachineStep.Type
 type RoundEnded = Extract<MachineStep, { readonly _tag: "RoundEnded" }>
 type MovedStep = Extract<MachineStep, { readonly _tag: "Moved" }>
+type JudgedStep = Extract<MachineStep, { readonly _tag: "Judged" }>
 
 /** One step of a run's log, as a model's quality is read from it. */
 interface RunOutcome {
@@ -811,6 +875,8 @@ const stateProblems = (
     const guarded = state.requires?.choices ?? []
     const unknown = guarded.filter((choice) => !Object.hasOwn(state.on, choice))
     problems.push(...unknown.map((choice) => `${name}: requires names no choice ${choice}`))
+    const unjudged = (state.judges ?? []).filter((choice) => !Object.hasOwn(state.on, choice))
+    problems.push(...unjudged.map((choice) => `${name}: judges names no choice ${choice}`))
     const verdicts = new Set(Object.values(definition.states).flatMap(threadVerdictsOf))
     const edges = state.requires?.after ?? []
     const unreachable = edges.filter((edge) => !MOVE_KINDS.has(edge) && !verdicts.has(edge))
@@ -1172,6 +1238,8 @@ interface RunMemo {
    * The next push to the branch leases on it (`openPr`).
    */
   readonly prBranchHead: Option.Option<string>
+  /** The run's findings by key (`r1 m2`), with their status (`ledgerAfter`). */
+  readonly findings: FindingLedger
 }
 
 type Run = RunRecord & RunMemo
@@ -1254,6 +1322,28 @@ const decodeReviewRows = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ run: RunId, machine: MachineName, ...StepRow.fields })),
 )
 
+/** The steps the role scorecard reads of a run (`scoreRoles`). */
+const ROLE_STEP_TAGS = [
+  "Recorded",
+  "RoundEnded",
+  "Findings",
+  "Judged",
+  "Moved",
+  "Answered",
+  "Finished",
+] as const
+
+const decodeRoleRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ run: RunId, definition_json: Schema.String, ...StepRow.fields })),
+)
+
+/** A run of the role window: its definition's JSON and its steps, oldest first. */
+interface RoleRunRow {
+  readonly run: RunId
+  readonly definitionJson: string
+  readonly steps: ReadonlyArray<MachineStep>
+}
+
 /** A step of a run in the review window, with its machine and its time. */
 interface ReviewStep {
   readonly run: RunId
@@ -1282,6 +1372,297 @@ const stateOfStep = (step: MachineStep, fallback: StateName): StateName => {
       return fallback
   }
 }
+
+// ── findings ────────────────────────────────────────────────────────────────
+
+/**
+ * A finding of the run and its status: `open` until someone judges it,
+ * `disputed` once a request disputed it and no one judged it yet,
+ * `confirmed` or `rejected` once someone other than its writer did
+ * (`Judged`).
+ */
+interface LedgerEntry {
+  readonly finding: Finding
+  readonly status: "open" | "disputed" | typeof FindingStatus.Type
+}
+type FindingLedger = ReadonlyMap<string, LedgerEntry>
+
+/** A finding's key: its round and its id, `r1 m2`. */
+const findingKey = (finding: Pick<Finding, "round" | "id">) => `r${finding.round} ${finding.id}`
+
+/** An id as a key holds it: lowercase, without the punctuation around it (`**M2**:` is `m2`). */
+const cleanId = (id: string) => id.replace(/^[(`*_[]+|[.,;:)`*_\]]+$/g, "").toLowerCase()
+
+/** The finding keys a text names, `r1 M2` and `R1 m2.` both `r1 m2`. */
+const keysIn = (text: string): ReadonlyArray<string> =>
+  Array.from(text.matchAll(/\b(r\d+)\s+([^\s,;]+)/gi), (match) =>
+    `${(match[1] ?? "").toLowerCase()} ${cleanId(match[2] ?? "")}`.trim(),
+  )
+
+/** A reply file's round and kind, from its name: `round-2-findings.md` is round 2, `findings`. */
+const replyFileOf = (
+  file: string,
+): Option.Option<{ readonly round: number; readonly kind: string }> =>
+  Option.map(Option.fromNullishOr(/(?:^|[\\/])round-(\d+)-([a-z]+)\.md$/.exec(file)), (match) => ({
+    round: Number(match[1]),
+    kind: match[2] ?? "",
+  }))
+
+/** A line's heading text: an ATX heading, a whole-line bold label, or a bare severity label. */
+const headingOf = (line: string): Option.Option<string> => {
+  const atx = Option.fromNullishOr(/^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/.exec(line))
+  if (Option.isSome(atx)) return Option.some(atx.value[1] ?? "")
+  const bold = Option.fromNullishOr(/^\s*(\*\*|__)(.+?)\1\s*:?\s*$/.exec(line))
+  if (Option.isSome(bold)) return Option.some(bold.value[2] ?? "")
+  const bare = Option.fromNullishOr(
+    /^\s*((blockers?|majors?|minors?|optional|test strength)\s*(\(.*\))?)\s*:?\s*$/i.exec(line),
+  )
+  return Option.map(bare, (match) => match[1] ?? "")
+}
+
+/** The severity a heading opens; none for any other heading (Summary, Rejected). */
+const severityOf = (heading: string): Option.Option<Finding["severity"]> => {
+  const text = heading.trim().toLowerCase()
+  if (/^blockers?\b/.test(text)) return Option.some("blocker")
+  if (/^majors?\b/.test(text)) return Option.some("major")
+  if (/^minors?\b/.test(text)) return Option.some("minor")
+  if (/^optional\b/.test(text)) return Option.some("optional")
+  if (/^test strength\b/.test(text)) return Option.some("test-strength")
+  return Option.none()
+}
+
+/** The class a finding's text says (`class: spec`); `unclassified` when it says none or another. */
+const classOf = (text: string): Finding["class"] => {
+  const said = Option.fromNullishOr(/\bclass\W{0,3}\s*([a-z-]+)/i.exec(text))
+  const name = Option.getOrElse(
+    Option.map(said, (match) => (match[1] ?? "").toLowerCase()),
+    () => "",
+  )
+  if (name === "defect" || name === "test-strength" || name === "spec" || name === "environment")
+    return name
+  return "unclassified"
+}
+
+/**
+ * The findings of a findings file of round `round`: under each severity
+ * heading, a list item starts a finding, its first word (with a digit) its
+ * id; the item's text runs to the next item or heading. Items under any other
+ * heading, or whose first word holds no digit (`none`), are no finding.
+ */
+const findingsIn = (round: number, text: string): ReadonlyArray<Finding> => {
+  const findings: Array<Finding> = []
+  let severity = Option.none<Finding["severity"]>()
+  let open = Option.none<{
+    readonly id: string
+    readonly severity: Finding["severity"]
+    text: string
+  }>()
+  const close = () => {
+    for (const item of Option.toArray(open)) {
+      const repeatOf = keysIn(
+        Array.from(item.text.matchAll(/repeat of (r\d+ \S+)/gi), (match) => match[1] ?? "").join(
+          " ",
+        ),
+      )
+      findings.push({
+        round,
+        id: item.id,
+        severity: item.severity,
+        class: classOf(item.text),
+        ...omitUndefined({
+          repeatOf: Option.getOrUndefined(
+            Option.liftPredicate(repeatOf, (keys) => keys.length > 0),
+          ),
+        }),
+      })
+    }
+    open = Option.none()
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const heading = headingOf(line)
+    if (Option.isSome(heading)) {
+      close()
+      severity = severityOf(heading.value)
+      continue
+    }
+    const item = Option.fromNullishOr(/^\s{0,1}(?:[-*+]|\d+[.)])\s+(\S+)(.*)$/.exec(line))
+    if (Option.isSome(item)) {
+      close()
+      const id = cleanId(item.value[1] ?? "")
+      if (Option.isSome(severity) && /\d/.test(id) && id.length <= 16) {
+        open = Option.some({ id, severity: severity.value, text: item.value[2] ?? "" })
+      }
+      continue
+    }
+    for (const current of Option.toArray(open)) current.text = `${current.text}\n${line}`
+  }
+  close()
+  return findings
+}
+
+/** A verify file's finding: a first line `Verdict: FAIL` is the one finding `rN verify`. */
+const verifyFindingsIn = (round: number, text: string): ReadonlyArray<Finding> => {
+  const first = text.trimStart().split(/\r?\n/, 1)[0] ?? ""
+  if (!/^\W*verdict\W*\s*fail\b/i.test(first)) return []
+  return [{ round, id: "verify", severity: "fail", class: "unclassified" }]
+}
+
+/**
+ * A request's answer to the findings: each `Fixed:` line's keys, and each
+ * `Disputed: rN <id> — <reason>` line's key and reason.
+ */
+const fixesIn = (text: string) => {
+  const fixed: Array<string> = []
+  const disputed: Array<{ readonly key: string; readonly reason: string }> = []
+  for (const line of text.split(/\r?\n/)) {
+    const said = Option.fromNullishOr(
+      /^\s*(?:[-*+]\s+)?(?:\*\*|__)?(fixed|disputed)(?:\*\*|__)?\s*:(?:\*\*|__)?\s*(.*)$/i.exec(
+        line,
+      ),
+    )
+    if (Option.isNone(said)) continue
+    const rest = said.value[2] ?? ""
+    if ((said.value[1] ?? "").toLowerCase() === "fixed") {
+      fixed.push(...keysIn(rest))
+      continue
+    }
+    const one = Option.fromNullishOr(/^(r\d+)\s+(\S+)\s*(?:[—–:-]+\s*)?(.*)$/i.exec(rest.trim()))
+    for (const match of Option.toArray(one)) {
+      const key = `${(match[1] ?? "").toLowerCase()} ${cleanId(match[2] ?? "")}`
+      disputed.push({ key, reason: (match[3] ?? "").trim() })
+    }
+  }
+  return { fixed, disputed }
+}
+
+/**
+ * The ledger after `step`: a `Findings` step adds its findings (a key already
+ * held stays as it is), a `Fixes` step marks the open findings it disputes,
+ * a `Judged` step sets its finding's status.
+ */
+const ledgerAfter = (ledger: FindingLedger, step: MachineStep): FindingLedger => {
+  switch (step._tag) {
+    case "Findings": {
+      const next = new Map(ledger)
+      for (const finding of step.findings) {
+        const key = findingKey(finding)
+        if (!next.has(key)) next.set(key, { finding, status: "open" })
+      }
+      return next
+    }
+    case "Fixes": {
+      const next = new Map(ledger)
+      for (const { key } of step.disputed) {
+        const entry = next.get(key)
+        if (Predicate.isNotUndefined(entry) && entry.status === "open")
+          next.set(key, { ...entry, status: "disputed" })
+      }
+      return next
+    }
+    case "Judged": {
+      const entry = ledger.get(step.key)
+      if (Predicate.isUndefined(entry)) return ledger
+      return new Map(ledger).set(step.key, { ...entry, status: step.status })
+    }
+    default:
+      return ledger
+  }
+}
+
+const isBlocking = (finding: Finding) =>
+  finding.severity === "blocker" || finding.severity === "major"
+
+/** Whether no one judged the finding yet: open or disputed. */
+const isUnjudged = (entry: LedgerEntry) => entry.status === "open" || entry.status === "disputed"
+
+const judged = (key: string, status: JudgedStep["status"], by: JudgedStep["by"]) =>
+  MachineStep.cases.Judged.make({ key, status, by })
+
+/** A request's `Fixed` keys confirm each unjudged finding they name: the implementor fixed it. */
+const judgeFixes = (ledger: FindingLedger, fixed: ReadonlyArray<string>) =>
+  Array.from(new Set(fixed))
+    .filter((key) => Option.exists(Option.fromUndefinedOr(ledger.get(key)), isUnjudged))
+    .map((key) => judged(key, "confirmed", "fixed"))
+
+/**
+ * A review of round `round` rejects each disputed finding of an earlier round
+ * that none of its Blockers or Majors repeats: the next reviewer dropped it.
+ */
+const judgeReview = (ledger: FindingLedger, round: number, findings: ReadonlyArray<Finding>) => {
+  const repeated = new Set(findings.filter(isBlocking).flatMap((finding) => finding.repeatOf ?? []))
+  return Array.from(ledger)
+    .filter(
+      ([key, entry]) =>
+        entry.status === "disputed" && entry.finding.round < round && !repeated.has(key),
+    )
+    .map(([key]) => judged(key, "rejected", "review"))
+}
+
+/**
+ * A repeat-test check's pass confirms each unjudged Blocker or Major that
+ * repeats an earlier finding, and the findings it repeats: a test red on the
+ * unfixed code showed them.
+ */
+const judgeRepeats = (ledger: FindingLedger) => {
+  const repeats = Array.from(ledger).filter(
+    ([, entry]) =>
+      isUnjudged(entry) && isBlocking(entry.finding) && (entry.finding.repeatOf ?? []).length > 0,
+  )
+  const keys = new Set(repeats.flatMap(([key, entry]) => [key, ...(entry.finding.repeatOf ?? [])]))
+  return Array.from(keys)
+    .filter((key) => Option.exists(Option.fromUndefinedOr(ledger.get(key)), isUnjudged))
+    .map((key) => judged(key, "confirmed", "repeat-test"))
+}
+
+/** An answer that judges (`AskState.judges`) rejects each disputed finding its note does not name. */
+const judgeAnswer = (ledger: FindingLedger, note: string) => {
+  const named = new Set(keysIn(note))
+  return Array.from(ledger)
+    .filter(([key, entry]) => entry.status === "disputed" && !named.has(key))
+    .map(([key]) => judged(key, "rejected", "answer"))
+}
+
+/**
+ * The evidence steps of a round that ended with a verdict on a state with
+ * `evidence`: the reply file's (`reply.file`, from the run's cwd) findings or
+ * fixes, then the judgments they make. A reply with no file, a file of
+ * another kind or round name, or one that cannot be read leaves none.
+ */
+const evidenceSteps = Effect.fn("Machines.evidenceSteps")(function* (
+  run: Run,
+  name: StateName,
+  state: ThreadState,
+  reply: Schema.Json,
+) {
+  const none: ReadonlyArray<MachineStep> = []
+  const evidence = Option.fromUndefinedOr(state.evidence)
+  const file = Option.map(
+    Schema.decodeUnknownOption(Schema.Struct({ file: Schema.String }))(reply),
+    (named) => named.file,
+  )
+  if (Option.isNone(evidence) || Option.isNone(file)) return none
+  const kinds = { findings: "findings", fixes: "request", verify: "verify" } as const
+  const named = Option.filter(replyFileOf(file.value), (of) => of.kind === kinds[evidence.value])
+  if (Option.isNone(named)) return none
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const text = yield* fs.readFileString(path.resolve(run.cwd, file.value)).pipe(Effect.option)
+  if (Option.isNone(text)) return none
+  const round = named.value.round
+  if (evidence.value === "fixes") {
+    const { fixed, disputed } = fixesIn(text.value)
+    const step = MachineStep.cases.Fixes.make({ state: name, round, fixed, disputed })
+    return [step, ...judgeFixes(ledgerAfter(run.findings, step), fixed)]
+  }
+  if (evidence.value === "verify") {
+    const findings = verifyFindingsIn(round, text.value)
+    if (findings.length === 0) return none
+    return [MachineStep.cases.Findings.make({ state: name, round, findings })]
+  }
+  const findings = findingsIn(round, text.value)
+  const step = MachineStep.cases.Findings.make({ state: name, round, findings })
+  return [step, ...judgeReview(ledgerAfter(run.findings, step), round, findings)]
+})
 
 // ── storage ─────────────────────────────────────────────────────────────────
 
@@ -1365,10 +1746,10 @@ const createReceiptTables = Effect.gen(function* () {
 })
 
 const ensureMachineTables = Effect.andThen(
-  // Version 3: a pending round and a recorded step may name the round's effort.
+  // Version 4: a run's log holds its findings, a request's fixes and their judgments.
   ensureExtensionTables({
     owner: "@gent/machines",
-    version: 3,
+    version: 4,
     tables: ["machine_steps", "machine_runs"],
     create: createMachineTables,
   }),
@@ -1503,6 +1884,16 @@ interface MachineStoreService {
     after: Option.Option<RunId>,
     limit: number,
   ) => Effect.Effect<ReadonlyArray<ReviewStep>, MachineStorageError>
+  /**
+   * One page of the role window: the first `limit` runs past `after`, by
+   * run id, that moved at or after `since`, each with its definition and
+   * the steps the role scorecard reads, oldest first.
+   */
+  readonly rolesPage: (
+    since: number,
+    after: Option.Option<RunId>,
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<RoleRunRow>, MachineStorageError>
   /** The run and state of the newest round recorded on `thread`. */
   readonly roundOn: (
     thread: SessionId,
@@ -1689,6 +2080,7 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
                   lastMove: before.lastMove,
                   owed: before.owed,
                   prBranchHead: before.prBranchHead,
+                  findings: before.findings,
                 },
                 steps,
               )
@@ -1808,6 +2200,40 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
             }))
           },
           Effect.mapError(storageError("Failed to read the review window")),
+        ),
+        rolesPage: Effect.fn("MachineStore.rolesPage")(
+          function* (since, after, limit) {
+            const afterRun = Option.match(after, {
+              onNone: () => sql.literal(""),
+              onSome: (run) => sql`AND run > ${run}`,
+            })
+            const rows = yield* sql`SELECT r.run, r.definition_json, s.seq, s.at, s.step_json FROM (
+                SELECT run, definition_json FROM machine_runs
+                WHERE updated_at >= ${since} ${afterRun}
+                ORDER BY run ASC LIMIT ${limit}
+              ) r
+              JOIN machine_steps s ON s.run = r.run
+              WHERE json_extract(s.step_json, '$._tag') IN (${sql.literal(
+                ROLE_STEP_TAGS.map((tag) => `'${tag}'`).join(", "),
+              )})
+              ORDER BY r.run ASC, s.seq ASC`
+            const decoded = yield* decodeRoleRows(rows)
+            const runs: Array<{ run: RunId; definitionJson: string; steps: Array<MachineStep> }> =
+              []
+            for (const row of decoded) {
+              const last = runs.at(-1)
+              if (Predicate.isNotUndefined(last) && last.run === row.run)
+                last.steps.push(row.step_json)
+              else
+                runs.push({
+                  run: row.run,
+                  definitionJson: row.definition_json,
+                  steps: [row.step_json],
+                })
+            }
+            return runs
+          },
+          Effect.mapError(storageError("Failed to read the role window")),
         ),
         roundOn: Effect.fn("MachineStore.roundOn")(
           function* (thread) {
@@ -2115,6 +2541,7 @@ const EMPTY_MEMO: RunMemo = {
   lastMove: Option.none(),
   owed: new Set(),
   prBranchHead: Option.none(),
+  findings: new Map(),
 }
 
 /** The owed ask states after `step`: a dispatch with `requires` adds, a met answer removes. */
@@ -2161,6 +2588,10 @@ const foldStep = (memo: RunMemo, step: MachineStep): RunMemo => {
       if (action._tag !== "Integrate" || Predicate.isUndefined(action.pr)) return memo
       return { ...memo, prBranchHead: Option.fromUndefinedOr(action.sha) }
     }
+    case "Findings":
+    case "Fixes":
+    case "Judged":
+      return { ...memo, findings: ledgerAfter(memo.findings, step) }
     default:
       return memo
   }
@@ -2171,7 +2602,16 @@ const foldSteps = (memo: RunMemo, steps: ReadonlyArray<MachineStep>): RunMemo =>
   steps.reduce(foldStep, memo)
 
 /** The steps `foldStep` reads: a read of the memo loads only these, and a PR's `Recorded`. */
-const MEMO_TAGS = ["Dispatched", "Finished", "Granted", "Saved", "Moved"] as const
+const MEMO_TAGS = [
+  "Dispatched",
+  "Finished",
+  "Granted",
+  "Saved",
+  "Moved",
+  "Findings",
+  "Fixes",
+  "Judged",
+] as const
 
 /**
  * The steps `stateVisits` reads: a visit's start, its receipts, its rounds,
@@ -4834,10 +5274,14 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
   // A round too big for one round stops on size before a retry, a rerun or
   // its verdict: a round of the same size would hand off again.
   const sizeStop = sizeStopOf(name, state, action, view, Option.flatten(verdict))
+  // A round's verdict comes with the findings or fixes its reply file names.
+  let evidence: ReadonlyArray<MachineStep> = []
+  if (!dead) evidence = yield* evidenceSteps(run, name, state, view.reply)
   if (Option.isSome(sizeStop)) {
     const { to, note } = sizeStop.value
     return yield* settleRound(run, state, action, action.thread, to, [
       ended,
+      ...evidence,
       MachineStep.cases.Saved.make({ state: name, value }),
       MachineStep.cases.Moved.make({ from: name, to, by: "oversize", note }),
     ])
@@ -4893,6 +5337,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
   })
   yield* settleRound(run, state, action, action.thread, to, [
     ended,
+    ...evidence,
     MachineStep.cases.Saved.make({ state: name, value }),
     MachineStep.cases.Moved.make({
       from: name,
@@ -5170,6 +5615,12 @@ const passHolds = (before: ReceiptKey, after: ReceiptKey) =>
 /** The characters of a command's output an `error` move's note keeps: its last ones. */
 const ERROR_NOTE_OUTPUT_CHARS = 1_000
 
+/** A repeat-test check's pass (`RunState.evidence`) confirms the repeat findings its tests showed. */
+const repeatJudgments = (state: RunState, by: string, ledger: FindingLedger) => {
+  if (state.evidence !== "repeats" || by !== "pass") return []
+  return judgeRepeats(ledger)
+}
+
 /** A command's move: its target, the edge it took, and the note it carries. */
 interface CommandMove {
   readonly to: StateName
@@ -5281,6 +5732,8 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
             }),
           }),
           MachineStep.cases.Saved.make({ state: action.state, value }),
+          // A repeat-test check's pass confirms the repeat findings its tests showed.
+          ...repeatJudgments(state, by, current.findings),
           MachineStep.cases.Moved.make({
             from: action.state,
             to,
@@ -5972,9 +6425,14 @@ const answer = Effect.fn("Machines.answer")(function* (params: AnswerParams) {
       MachineStep.cases.Granted.make({ state: action.state }),
       () => params.choice === "retry" && action.reason === "exhausted",
     )
+    // An answer that judges settles the disputed findings its note does not name.
+    let judgments: ReadonlyArray<MachineStep> = []
+    if (state.kind === "ask" && (state.judges ?? []).includes(params.choice))
+      judgments = judgeAnswer(run.findings, params.note ?? "")
     let after: RunRecord = { ...run, status: "running", state: move.to, pending: Option.none() }
     let steps: ReadonlyArray<MachineStep> = [
       answered,
+      ...judgments,
       MachineStep.cases.Saved.make({ state: action.state, value }),
       ...Option.toArray(granted),
       MachineStep.cases.Moved.make({
@@ -7019,6 +7477,34 @@ const reviewRoundsPage = Effect.fn("Machines.reviewRoundsPage")(function* (
   }
 })
 
+export { RoleScore }
+
+const ReviewRolesParams = Schema.Struct({ since: Schema.Finite })
+
+/**
+ * The role scorecard of the runs that moved since a time, read page by page
+ * (`REVIEW_RUNS` runs each): each model's measures in each role. A run
+ * whose definition no longer decodes is left out.
+ */
+const reviewRoles = Effect.fn("Machines.reviewRoles")(function* (
+  params: typeof ReviewRolesParams.Type,
+) {
+  const store = yield* MachineStore
+  const runs: Array<{ definition: MachineDefinition; steps: ReadonlyArray<MachineStep> }> = []
+  let after = Option.none<RunId>()
+  let full = true
+  while (full) {
+    const page = yield* store.rolesPage(params.since, after, REVIEW_RUNS)
+    for (const row of page) {
+      for (const definition of Option.toArray(decodeDefinitionJson(row.definitionJson)))
+        runs.push({ definition, steps: row.steps })
+    }
+    after = Option.fromUndefinedOr(page.at(-1)?.run)
+    full = page.length >= REVIEW_RUNS
+  }
+  return scoreRoles(runs)
+})
+
 /**
  * What a client outside any turn reads of runs and does to them (`gent ctl
  * request`, the TUI's band and run page), asked as a session of the owner's
@@ -7086,6 +7572,16 @@ export const MachinesRpc = defineRequests(MACHINES_EXTENSION_ID, {
     output: ReviewRoundsPage,
     resources: [MachineStoreResource],
     execute: reviewRoundsPage,
+  }),
+  Roles: request({
+    scope: "server",
+    id: "review-roles",
+    description:
+      "Read each model's measures in each machine role over the runs that moved since a time",
+    input: ReviewRolesParams,
+    output: Schema.Array(RoleScore),
+    resources: [MachineStoreResource],
+    execute: reviewRoles,
   }),
 })
 
@@ -7177,6 +7673,7 @@ export const MachinesExtension = defineExtension({
       MachinesRpc.Runs,
       MachinesRpc.Quality,
       MachinesRpc.Review,
+      MachinesRpc.Roles,
     )
     yield* host.on("wakeDue", (input) => runDue(input))
     yield* host.on("loopOpen", () => repairHost().pipe(logFailure("machines.repair.failed")))

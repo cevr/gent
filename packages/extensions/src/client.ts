@@ -73,4 +73,5 @@ export {
   MachinesRpc,
   ModelQuality,
   ReviewRound,
+  RoleScore,
 } from "./machines.js"

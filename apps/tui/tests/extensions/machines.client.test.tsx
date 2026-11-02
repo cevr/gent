@@ -15,7 +15,7 @@ import {
 } from "@gent/core/protocol"
 import { BranchId, ref, SessionId } from "@gent/core/extensions/api"
 import { EventId } from "@gent/core/test-utils"
-import { type MachineRunView, MachinesRpc, ReviewRound } from "@gent/extensions/client"
+import { type MachineRunView, MachinesRpc, ReviewRound, RoleScore } from "@gent/extensions/client"
 import machinesExtension, {
   type BandData,
   bandRows,
@@ -1185,5 +1185,44 @@ describe("the review rounds file", () => {
           "| rev | gpt-y | 1 | 0 | verdict 1 | 2.0 | 0.5M | 0.0M | 1.0k | $0.50 |",
         )
       }),
+  )
+})
+
+describe("the review roles file", () => {
+  it.effect("writes each role and model as a line, and prints a rate under five as a dash", () =>
+    Effect.gen(function* () {
+      const review = Option.getOrThrow(Option.fromUndefinedOr(machinesExtension.review?.[1]))
+      expect(review.file).toBe("roles.jsonl")
+      // The reply as the server sends it: a ratio under five carries no value.
+      const scores = [
+        `{"role":"reviewer","model":"gpt-y","effort":"high","measures":[`,
+        `{"_tag":"Count","name":"rounds","n":6},`,
+        `{"_tag":"Ratio","name":"rejected-per-round","n":6,"value":${1 / 3}},`,
+        `{"_tag":"Ratio","name":"escapes-per-accepted-review","n":3}]},`,
+        `{"role":"writer","measures":[{"_tag":"Count","name":"rounds","n":1}]}`,
+      ].join("")
+      const asked: Array<Schema.Json> = []
+      const lines: Array<string> = []
+      const read = yield* review.read<never>({
+        since: 500,
+        ask: (request, input) => {
+          asked.push(input)
+          return Schema.decodeEffect(Schema.fromJsonString(request.output))(`[${scores}]`).pipe(
+            Effect.orDie,
+          )
+        },
+        write: (line) => Effect.sync(() => void lines.push(line)),
+      })
+      expect(asked).toEqual([{ since: 500 }])
+      const written = yield* Effect.forEach(lines, (line) =>
+        Schema.decodeEffect(Schema.fromJsonString(RoleScore))(line),
+      )
+      expect(written.map((score) => score.role)).toEqual(["reviewer", "writer"])
+      expect(read.digest).toContain("## Machine roles per model")
+      expect(read.digest).toContain(
+        "| reviewer | gpt-y | high | rounds 6; rejected-per-round 0.33 (n 6); escapes-per-accepted-review — (n 3) |",
+      )
+      expect(read.digest).toContain("| writer | ? | - | rounds 1 |")
+    }),
   )
 })

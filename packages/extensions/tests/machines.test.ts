@@ -83,6 +83,7 @@ import {
   roundEndSignal,
   shipDefinition,
 } from "../src/machines.js"
+import { type RoleScore, scoreWordsIn } from "../src/scorecard.js"
 import { THREAD_ROUND_END_TYPE } from "../src/threads.js"
 import { ORCHESTRATE_LIGHT_MACHINE, ORCHESTRATE_MACHINE } from "../src/workflows.js"
 import {
@@ -193,6 +194,8 @@ interface MachineModels {
   readonly calls: Ref.Ref<ReadonlyArray<string>>
   /** Each worker round's rendered message, by `<state>:<visit>`. */
   readonly texts: Ref.Ref<ReadonlyArray<readonly [string, string]>>
+  /** Each tool a model call offered, owner's or worker's: its name and description. */
+  readonly tools: Ref.Ref<ReadonlySet<string>>
   readonly worker: (round: RoundCall) => Effect.Effect<WorkerStream>
   /** Runs before each owner model call, with the call's prompt. */
   readonly owner?: (prompt: Prompt.Prompt) => Effect.Effect<void>
@@ -202,6 +205,14 @@ interface MachineModels {
 const machineModels = (models: MachineModels) =>
   LanguageModelLayers.testStream((options) =>
     Effect.gen(function* () {
+      yield* Ref.update(
+        models.tools,
+        (all) =>
+          new Set([
+            ...all,
+            ...options.tools.map((tool) => `${tool.name}: ${tool.description ?? ""}`),
+          ]),
+      )
       if (!isWorkerRequest(options.prompt)) {
         if (Predicate.isNotUndefined(models.owner)) yield* models.owner(options.prompt)
         return starterStep(options.prompt)
@@ -223,7 +234,8 @@ const makeModels = (
   Effect.gen(function* () {
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
     const texts = yield* Ref.make<ReadonlyArray<readonly [string, string]>>([])
-    return { calls, texts, worker, ...omitUndefined({ owner }) }
+    const tools = yield* Ref.make<ReadonlySet<string>>(new Set())
+    return { calls, texts, tools, worker, ...omitUndefined({ owner }) }
   })
 
 // ── machines ────────────────────────────────────────────────────────────────
@@ -405,7 +417,10 @@ const StepView = Schema.Struct({
   windowTokens: Schema.optionalKey(Schema.Finite),
   askId: Schema.optionalKey(Schema.String),
   reused: Schema.optionalKey(Schema.Boolean),
-  round: Schema.optionalKey(Schema.String),
+  // A round's id, or a findings step's round number.
+  round: Schema.optionalKey(Schema.Union([Schema.String, Schema.Finite])),
+  key: Schema.optionalKey(Schema.String),
+  status: Schema.optionalKey(Schema.String),
   model: Schema.optionalKey(Schema.String),
   maker: Schema.optionalKey(Schema.String),
   costUsd: Schema.optionalKey(Schema.Finite),
@@ -3893,13 +3908,24 @@ const SeededFinish = Schema.TaggedStruct("Finished", {
   state: Schema.String,
   accepted: Schema.optionalKey(Schema.Boolean),
 })
-const SeededStep = Schema.Union([SeededStarted, SeededRound, SeededMove, SeededFinish])
+const SeededAnswer = Schema.TaggedStruct("Answered", {
+  askId: Schema.String,
+  choice: Schema.String,
+})
+const SeededStep = Schema.Union([
+  SeededStarted,
+  SeededRound,
+  SeededMove,
+  SeededFinish,
+  SeededAnswer,
+])
 const encodeSeededStep = Schema.encodeSync(Schema.fromJsonString(SeededStep))
 
 /** The state a seeded step's row is filed under, as the store files it. */
 const seededState = (step: typeof SeededStep.Type): string => {
   if (step._tag === "Moved") return step.to
   if (step._tag === "Started") return "work"
+  if (step._tag === "Answered") return "decide"
   return step.state
 }
 
@@ -6434,8 +6460,8 @@ type UnitAct = (cwd: string, dir: string) => Effect.Effect<void>
 
 /**
  * Each round replies the verdict `verdicts` names for its `state:visit`, else
- * its state's happy one, with a file of its own, after the act `acts` names
- * for it, once.
+ * its state's happy one, with a file of its own (`extras` may name
+ * another), after the act `acts` names for it, once.
  */
 const unitWorker =
   (
@@ -6448,7 +6474,7 @@ const unitWorker =
     const at = `${round.state}:${round.visit}`
     const next = verdicts[at] ?? UNIT_VERDICTS.get(round.state) ?? "unknown"
     const file = `${round.state}-${round.visit}.md`
-    const reply = replyWith(round, { ...extras[at], next, file })
+    const reply = replyWith(round, { next, file, ...extras[at] })
     const act = acts[at]
     if (Predicate.isUndefined(act) || acted(round.prompt)) return Effect.succeed(reply)
     return Effect.as(act(cwd, `${cwd}/unit`), reply)
@@ -6617,6 +6643,270 @@ describe("the shipped orchestrate machine", () => {
           expect(texts.get(round)).toContain(`Spec: ${dir}/spec.md`)
           expect(texts.get(round)).toContain("the newest round-N-request.md")
         }
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a unit's findings are judged by others, and the roles read only what others judged",
+    () =>
+      Effect.gen(function* () {
+        const write = (name: string, body: string) => (_cwd: string, unitDir: string) =>
+          Effect.orDie(writeText(`${unitDir}/${name}`, body))
+        const file = (name: string) => ({ file: `unit/${name}` })
+        // The merge pushes for real: a command that passes stands in for it.
+        const definition: MachineDefinitionJson = {
+          ...ORCHESTRATE_MACHINE,
+          states: {
+            ...ORCHESTRATE_MACHINE.states,
+            merge: { kind: "run", run: "true", on: { pass: "merged", fail: "resume" } },
+          },
+        }
+        const { home, models, client, owner, run } = yield* unitRun(
+          { "review:1": "changes", "verify:1": "fail" },
+          {
+            definition,
+            gate: "echo gate-ran",
+            extras: {
+              "implement:1": file("round-1-request.md"),
+              "review:1": file("round-1-findings.md"),
+              "fix:1": file("round-2-request.md"),
+              "review:2": file("round-2-findings.md"),
+              "verify:1": file("round-2-verify.md"),
+              "fix:2": file("round-3-request.md"),
+              "review:3": file("round-3-findings.md"),
+              "verify:2": file("round-3-verify.md"),
+            },
+            acts: {
+              "implement:1": write("round-1-request.md", "READY\n\nThe parser reads two tokens.\n"),
+              "review:1": write(
+                "round-1-findings.md",
+                [
+                  "CHANGES",
+                  "",
+                  "## Major",
+                  "",
+                  "- M1: parser.ts:12 drops the second token. class: defect",
+                  "- M2: the spec asks for a third token. class: spec",
+                  "",
+                ].join("\n"),
+              ),
+              "fix:1": write(
+                "round-2-request.md",
+                [
+                  "READY",
+                  "",
+                  "Fixed: r1 M1",
+                  "Disputed: r1 M2 — the spec names two tokens, not three.",
+                  "",
+                ].join("\n"),
+              ),
+              "review:2": write("round-2-findings.md", "ACCEPTED\n\n## Major\n\nNone.\n"),
+              "verify:1": write(
+                "round-2-verify.md",
+                "Verdict: FAIL\n\nThe second token is lost.\n",
+              ),
+              "fix:2": write("round-3-request.md", "READY\n\nFixed: r2 verify\n"),
+              "review:3": write("round-3-findings.md", "ACCEPTED\n"),
+              "verify:2": write("round-3-verify.md", "Verdict: PASS\n"),
+            },
+          },
+        )
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "merge")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 15_000, "the run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(moves(steps)).toEqual([
+          "plan→approve",
+          "approve→implement",
+          "implement→repeats",
+          "repeats→review",
+          "review→fix",
+          "fix→repeats",
+          "repeats→review",
+          "review→verify",
+          "verify→fix",
+          "fix→repeats",
+          "repeats→review",
+          "review→verify",
+          "verify→decide",
+          "decide→gate",
+          "gate→merge",
+          "merge→merged",
+        ])
+        // The fix confirms M1; the next review drops the disputed M2; the fix confirms the failed verify.
+        expect(
+          steps.flatMap((step) => {
+            if (step._tag !== "Judged") return []
+            return [`${step.key ?? ""} ${step.status ?? ""} ${step.by ?? ""}`]
+          }),
+        ).toEqual(["r1 m1 confirmed fixed", "r1 m2 rejected review", "r2 verify confirmed fixed"])
+        const rolesRef = ref(MachinesRpc.Roles)
+        const roles = client.extension
+          .serverRequest({
+            extensionId: rolesRef.extensionId,
+            capabilityId: rolesRef.capabilityId,
+            input: { since: 0 },
+          })
+          .pipe(Effect.flatMap(decodeRequestReply(rolesRef.output)))
+        // One run: every count is exact, and every rate, under five, holds no value.
+        const measures = (scores: ReadonlyArray<RoleScore>, role: string) =>
+          Object.fromEntries(
+            (scores.find((score) => score.role === role)?.measures ?? []).map((measure) => {
+              if (measure._tag === "Count") return [measure.name, measure.n]
+              return [measure.name, [measure.n, measure.value ?? "—"]]
+            }),
+          )
+        const one = yield* roles
+        expect(one.map((score) => `${score.role} ${score.model ?? "?"}`)).toEqual([
+          `planner ${OPUS}`,
+          `implementor ${HAIKU}`,
+          `reviewer ${SOL}`,
+          `verifier ${HAIKU}`,
+        ])
+        expect(measures(one, "implementor")).toEqual({
+          rounds: 3,
+          units: 1,
+          "round-1-accepted": [1, "—"],
+          "rounds-until-accepted": [1, "—"],
+          "cost-per-merged-unit": [1, "—"],
+          "escapes-per-merged-unit": [1, "—"],
+        })
+        expect(measures(one, "reviewer")).toEqual({
+          rounds: 3,
+          "confirmed-defect-per-round": [3, "—"],
+          "confirmed-test-strength-per-round": [3, "—"],
+          "confirmed-spec-per-round": [3, "—"],
+          "confirmed-environment-per-round": [3, "—"],
+          "confirmed-unclassified-per-round": [3, "—"],
+          "rejected-per-round": [3, "—"],
+          "escapes-per-accepted-review": [2, "—"],
+        })
+        expect(measures(one, "verifier")).toEqual({
+          verifies: 2,
+          "confirmed-fails": 1,
+          "escapes-per-pass": [1, "—"],
+        })
+        // Four more copies of the run: five units, so each rate holds its value.
+        yield* home.sql(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            for (const copy of [1, 2, 3, 4]) {
+              const id = `run-c00000000000000${copy}`
+              yield* sql`CREATE TEMP TABLE copied_run AS SELECT * FROM machine_runs WHERE run = ${run}`
+              yield* sql`UPDATE copied_run SET run = ${id}`
+              yield* sql`INSERT INTO machine_runs SELECT * FROM copied_run`
+              yield* sql`DROP TABLE copied_run`
+              yield* sql`CREATE TEMP TABLE copied_steps AS SELECT * FROM machine_steps WHERE run = ${run}`
+              yield* sql`UPDATE copied_steps SET run = ${id}`
+              yield* sql`INSERT INTO machine_steps SELECT * FROM copied_steps`
+              yield* sql`DROP TABLE copied_steps`
+            }
+          }),
+        )
+        const five = yield* roles
+        expect(measures(five, "implementor")).toMatchObject({
+          rounds: 15,
+          units: 5,
+          // The first review asked for changes; the second implementor round was accepted.
+          "round-1-accepted": [5, 0],
+          "rounds-until-accepted": [5, 2],
+          // The review the verify failed was an escape of the round it accepted.
+          "escapes-per-merged-unit": [5, 1],
+        })
+        expect(measures(five, "reviewer")).toMatchObject({
+          rounds: 15,
+          "confirmed-defect-per-round": [15, 1 / 3],
+          "confirmed-spec-per-round": [15, 0],
+          "rejected-per-round": [15, 1 / 3],
+          "escapes-per-accepted-review": [10, 0.5],
+        })
+        expect(measures(five, "verifier")).toEqual({
+          verifies: 10,
+          "confirmed-fails": 5,
+          "escapes-per-pass": [5, 0],
+        })
+        expect(measures(five, "planner")).toEqual({
+          plans: 5,
+          "units-per-plan": [5, 1],
+          "replans-per-plan": [5, 0],
+          "rewrites-per-plan": [5, 0],
+          "size-stops-per-plan": [5, 0],
+          "merged-units-per-plan": [5, 1],
+        })
+        // No text a model reads names a measure: the rounds, the tools, the asks, the run's status.
+        const [status] = yield* call(client, owner, [["machine.status", "status-1", { run }]])
+        const snapshot = yield* client.session.getSnapshot(owner)
+        const read = [
+          ...(yield* Ref.get(models.texts)).map(([, text]) => text),
+          ...(yield* Ref.get(models.tools)),
+          encodeJson(ofType(snapshot.messages, MACHINE_ASK_TYPE)),
+          encodeJson(status?.result),
+        ]
+        const offered = Array.from(yield* Ref.get(models.tools), (tool) => tool.split(":")[0])
+        expect(offered).toEqual(expect.arrayContaining(["machine__status", "thread__reply"]))
+        expect(read.flatMap(scoreWordsIn)).toEqual([])
+      }).pipe(Effect.scoped, Effect.timeout("50 seconds")),
+    55_000,
+  )
+
+  it.live(
+    "an escape is a red merge gate, a failed verify or a send-back after a pass; a screen's fail is none",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run } = yield* unitRun({})
+        yield* askDetails(client, owner, 1)
+        const ended = (state: string, role: string, model: string, verdict: string) =>
+          SeededRound.make({ state, round: `${state}-1`, dead: false, role, model, verdict })
+        const accepted = [
+          ended("implement", "implementor", HAIKU, "ready"),
+          ended("review", "reviewer", SOL, "accepted"),
+        ]
+        // Five units each: the merge red after a verify pass, the repeat-test
+        // screen failed after a pass, and decide's fix after a pass.
+        const units = [
+          [
+            ...accepted,
+            ended("verify", "verifier", HAIKU, "pass"),
+            SeededMove.make({ from: "merge", to: "resume", by: "red" }),
+          ],
+          [...accepted, SeededMove.make({ from: "repeats", to: "fix", by: "fail" })],
+          [...accepted, SeededAnswer.make({ askId: "ask-1", choice: "fix" })],
+        ]
+        yield* home.sql(
+          Effect.forEach(
+            units.flatMap((steps, kind) => [0, 1, 2, 3, 4].map((copy) => ({ steps, kind, copy }))),
+            ({ steps, kind, copy }) => {
+              const id = `run-e0000000000000${kind}${copy}`
+              return Effect.gen(function* () {
+                yield* copyRun(run, id)
+                const sql = yield* SqlClient.SqlClient
+                yield* sql`UPDATE machine_runs SET status = 'final', notified_at = 0 WHERE run = ${id}`
+                yield* seedSteps(id, steps)
+              })
+            },
+            { discard: true },
+          ),
+        )
+        const rolesRef = ref(MachinesRpc.Roles)
+        const scores = yield* client.extension
+          .serverRequest({
+            extensionId: rolesRef.extensionId,
+            capabilityId: rolesRef.capabilityId,
+            input: { since: 0 },
+          })
+          .pipe(Effect.flatMap(decodeRequestReply(rolesRef.output)))
+        const ratio = (role: string, name: string) =>
+          scores
+            .find((score) => score.role === role)
+            ?.measures.find((measure) => measure.name === name)
+        // The red merge and the fix count; the screen's fail does not: 10 of 15.
+        expect(ratio("reviewer", "escapes-per-accepted-review")).toMatchObject({
+          n: 15,
+          value: 10 / 15,
+        })
+        // Only the red merge follows a verify that passed.
+        expect(ratio("verifier", "escapes-per-pass")).toMatchObject({ n: 5, value: 1 })
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )

@@ -18,6 +18,8 @@ import {
   ORCHESTRATE_MACHINE,
   WorkflowsExtension,
 } from "../src/workflows.js"
+import type { MachineDefinitionJson } from "../src/machines.js"
+import { scoreWordsIn } from "../src/scorecard.js"
 import { e2ePreset } from "./helpers/test-preset"
 import { type BranchId, messagePartsText, type SessionId } from "@gent/core/protocol"
 
@@ -327,6 +329,8 @@ describe("WorkflowsExtension via RPC", () => {
           `${machineFile} differs from the orchestrate machine this gent ships (an edited or older copy) and was kept`,
         )
         expect(empty).toBe("Ask which plan or goal to orchestrate.")
+        // The recipe never tells the orchestrator its roles are measured.
+        expect(scoreWordsIn(shipped ?? "")).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
     10_000,
   )
@@ -407,6 +411,33 @@ describe("WorkflowsExtension via RPC", () => {
       ),
     10_000,
   )
+})
+
+/** The text a definition gives its models: every instruction, round message and ask, not its files. */
+const modelText = (definition: MachineDefinitionJson) =>
+  encodeJson({ threads: definition.threads, states: definition.states })
+
+describe("the shipped orchestrate machines never tell a model it is measured", () => {
+  for (const machine of [ORCHESTRATE_MACHINE, ORCHESTRATE_LIGHT_MACHINE]) {
+    test(`${machine.name}: no instruction, round message or ask names a measure`, () => {
+      expect(scoreWordsIn(modelText(machine))).toEqual([])
+    })
+  }
+
+  test("a measure named in the reviewer's instructions is found", () => {
+    const reviewer = ORCHESTRATE_MACHINE.threads?.["reviewer"] ?? {}
+    const planted: MachineDefinitionJson = {
+      ...ORCHESTRATE_MACHINE,
+      threads: {
+        ...ORCHESTRATE_MACHINE.threads,
+        reviewer: {
+          ...reviewer,
+          instructions: `${reviewer.instructions ?? ""} Your score drops with each escape.`,
+        },
+      },
+    }
+    expect(scoreWordsIn(modelText(planted))).toEqual(["score", "escape"])
+  })
 })
 
 describe("the merge gate and merge of the shipped orchestrate machines", () => {
