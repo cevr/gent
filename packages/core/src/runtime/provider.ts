@@ -3742,6 +3742,14 @@ const PEER_LABEL_SETTLE_MS = 60_000
  * or hold names a later time. A guess.
  */
 const LANE_SPENT_RETRY_MS = 60_000
+/**
+ * How far over its pace a provider's lanes admit: a start that takes the
+ * load up to 5% past the supply still goes (owner, 2026-11-01). The
+ * orchestrate budget admits Claude agents and Codex turns with the same
+ * leeway over the same limit (dotfiles `budget.json` `leeway`), so the two
+ * agree on a start. A supply of none stays none.
+ */
+const LANE_PACE_LEEWAY = 0.05
 
 /**
  * Why a run gets no lane now. `pool`: the account's windows are full, which
@@ -6823,7 +6831,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     // whatever an unread rate or a later refill would say.
     if (scoped.length > 0 && scoped.every((account) => account.sustainable === 0))
       sustainable = Option.some(0)
-    const supply = Option.filter(sustainable, () => scoped.length > 0)
+    // The lanes admit up to the leeway over the pace; the band's capacity
+    // counts it, so the band and admission agree.
+    const supply = Option.map(
+      Option.filter(sustainable, () => scoped.length > 0),
+      (value) => value * (1 + LANE_PACE_LEEWAY),
+    )
     const capacity = Option.map(supply, (value) => Math.floor(value + 1e-9))
     return {
       lanes: {

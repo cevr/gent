@@ -6089,22 +6089,23 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
-  it.effect("rolling weekly refills give the seven-account pool eight free lanes", () =>
+  it.effect("rolling weekly refills give the seven-account pool nine free lanes", () =>
     Effect.gen(function* () {
       const { lanes, admit, pool } = yield* rollingPool
       // Plain hours, 100% target: in-view fuel = 930 M × 5.2973809524.
       // Rolling = 29.324787415 M/h; floor = 902.1 M / 166 h.
       // Weekly ceiling = 6482.1 M / 166 h; 5h ceiling = 167.4 M / 5 h.
-      // floor(min(29.324787415, 39.0487951807, 33.48) / 3.4) = 8.
-      // Before rolling: floor((902.1 / 166) / 3.4) = 1.
+      // floor(min(29.324787415, 39.0487951807, 33.48) / 3.4 × 1.05) = 9,
+      // the leeway over the pace.
+      // Before rolling: floor((902.1 / 166) / 3.4 × 1.05) = 1.
       const report = yield* lanes(pool)
-      expect(report.capacity).toBe(8)
+      expect(report.capacity).toBe(9)
       expect(yield* lanes([a])).toMatchObject({ capacity: 1 }) // a pin cannot borrow refills
       // Forecasts do not make a rejected account eligible for placement now.
       expect(
         report.accounts.filter((account) => account.held).map((account) => account.slot),
       ).toEqual(pool.slice(1))
-      for (let index = 0; index < 8; index += 1)
+      for (let index = 0; index < 9; index += 1)
         expect(yield* admit(pool, `rolling-${index}`)).toBe("admitted")
       expect(yield* admit(pool, "rolling-full")).toBe("queued")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
@@ -6114,8 +6115,8 @@ describe("account lanes", () => {
     Effect.gen(function* () {
       const fixture = yield* rollingPool
       const { mini } = yield* priceModels(fixture)
-      // 8.6 mean runs: seventeen half-price runs, not eight.
-      for (let index = 0; index < 17; index += 1)
+      // 9.06 mean runs with the leeway: eighteen half-price runs, not nine.
+      for (let index = 0; index < 18; index += 1)
         expect(yield* fixture.admit(fixture.pool, `mini-${index}`, mini)).toBe("admitted")
       expect(yield* fixture.admit(fixture.pool, "mini-full", mini)).toBe("queued")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
@@ -6154,8 +6155,9 @@ describe("account lanes", () => {
         { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
       ])
       // 10 M lasts to +1h, then the 90 M short room to +5h: 10 M/h.
-      // Capped at the weekly 10 M with no refill: 2 M/h, zero lanes.
-      expect((yield* lanes([a])).capacity).toBe(2)
+      // floor(10 / 3.4 × 1.05) = 3. Capped at the weekly 10 M with no
+      // refill: 2 M/h, zero lanes.
+      expect((yield* lanes([a])).capacity).toBe(3)
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -8126,8 +8128,9 @@ describe("account lanes", () => {
         const report = yield* after.lanes([a])
         expect(weightOf(report, glm)?.fitted).not.toBe(true)
         expect(report.load).toBeCloseTo(100_000 / report.fuelPerHour, 6)
-        // Its window admits floor(39.6) runs at the measured burn, the open one among them.
-        for (let index = 1; index < 39; index += 1)
+        // Its window admits floor(39.6 × 1.05) = 41 runs at the measured
+        // burn, the open one among them.
+        for (let index = 1; index < 41; index += 1)
           expect(yield* after.admit([a], `glm-${index}`, glm)).toBe("admitted")
         expect(yield* after.admit([a], "glm-full", glm)).toBe("queued")
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
@@ -9104,19 +9107,19 @@ describe("account lanes", () => {
             yield* freeAll(fixture, keys)
             return keys.length
           })
-          expect(yield* admitted).toBe(8)
+          expect(yield* admitted).toBe(9)
           yield* noted(fixture, line(1), pool)
-          // 8 lanes, 2 of them the peer's.
-          expect(yield* admitted).toBe(6)
+          // 9 lanes, 2 of them the peer's.
+          expect(yield* admitted).toBe(7)
           yield* TestClock.adjust("91 seconds")
           expect(logged.named("credential-placement.peer.silent")).toHaveLength(1)
-          // min(8 - 2, 8 / 2)
+          // min(9 - 2, floor(9.06 / 2))
           expect(yield* admitted).toBe(4)
           yield* TestClock.adjust("30 minutes")
-          expect(yield* admitted).toBe(8)
+          expect(yield* admitted).toBe(9)
           // A line ends the silence at once.
           yield* noted(fixture, line(2), pool)
-          expect(yield* admitted).toBe(6)
+          expect(yield* admitted).toBe(7)
           expect(logged.named("credential-placement.peer.silent")).toHaveLength(1)
         }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
       },
@@ -9128,7 +9131,7 @@ describe("account lanes", () => {
         Effect.gen(function* () {
           const fixture = yield* rollingPool
           const { pool } = fixture
-          yield* noted(fixture, peerLine("peer", 1, [{ accounts: [a], count: 8 }]), pool)
+          yield* noted(fixture, peerLine("peer", 1, [{ accounts: [a], count: 9 }]), pool)
           yield* TestClock.adjust("91 seconds")
           expect(yield* fixture.admit(pool, "cut")).toBe("queued")
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
@@ -9263,13 +9266,13 @@ describe("account lanes", () => {
         return Effect.gen(function* () {
           const fixture = yield* rollingPool
           const { pool } = fixture
-          for (let index = 0; index < 6; index += 1)
+          for (let index = 0; index < 7; index += 1)
             expect(yield* fixture.admit(pool, `own-${index}`)).toBe("admitted")
           const overshoots = () =>
             logged
               .named("credential-placement.pool-overshoot")
               .map((entry) => entry.annotations.get("load"))
-          // 6 own runs beside the peer's: over 8.6 lanes at 3.
+          // 7 own runs beside the peer's: over 9.06 lanes at 3.
           for (const [seq, count] of [
             [1, 2],
             [2, 3],
@@ -9278,12 +9281,12 @@ describe("account lanes", () => {
             [5, 3],
           ] as const)
             yield* noted(fixture, peerLine("peer", seq, [{ accounts: [a], count }]), pool)
-          expect(overshoots()).toEqual(["9", "9"])
-          // Back under at 8 lanes; then a reading lowers the capacity under them.
+          expect(overshoots()).toEqual(["10", "10"])
+          // Back under at 9 lanes; then a reading lowers the capacity under them.
           yield* noted(fixture, peerLine("peer", 6, [{ accounts: [a], count: 2 }]), pool)
           const now = yield* Clock.currentTimeMillis
           yield* fixture.read(a, [{ window: "7d", utilization: 0.6, resetAt: now + 166 * HOUR }])
-          expect(overshoots()).toEqual(["9", "9", "8"])
+          expect(overshoots()).toEqual(["10", "10", "9"])
         }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
       },
     )
