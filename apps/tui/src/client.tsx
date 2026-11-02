@@ -1,5 +1,6 @@
 import {
   Cause,
+  Clock,
   Context,
   DateTime,
   Effect,
@@ -45,6 +46,7 @@ import {
   type GentClientRpcError,
   type GentNamespacedClient,
   initialSessionMetrics,
+  type LaneReport,
   type QueueSnapshot,
   type UpdateSessionSettingsInput,
   type SessionRuntimeMetrics,
@@ -73,6 +75,13 @@ import {
   useRequiredContext,
 } from "./utils"
 import { useWorkspace } from "./workspace"
+
+/**
+ * The largest move of a re-measured server clock that keeps the held offset.
+ * Two measures on one clock differ by their replies' trips, milliseconds on a
+ * link a remote client uses; a clock that was set moves by more.
+ */
+const SERVER_CLOCK_STEP_MS = 1_000
 
 // ── client logging ──────────────────────────────────────────────────────────
 
@@ -474,21 +483,24 @@ interface ClientTransportValue {
   setConnectionIssue: (issue: Option.Option<string>) => void
 
   /**
-   * The server's clock less this one, in milliseconds, as the last snapshot
-   * measured it (`measureServerClock`). A server time (a running call's
-   * `startedAt`, the runtime's `startedAtMs`) never meets this clock
-   * directly: `now + offset` is this clock's now on the server's, and
-   * `at - offset` is a server time on this clock. None before the first
-   * snapshot, and from a server that sends no time: then no age shows.
+   * The server's clock less this one, in milliseconds, as the last lanes
+   * reply measured it (`accountLanes`; the shell reads one on each connect).
+   * A server time (a running call's `startedAt`, the runtime's
+   * `startedAtMs`) never meets this clock directly: `now + offset` is this
+   * clock's now on the server's, and `at - offset` is a server time on this
+   * clock. None before the first reply, and from a server that sends no
+   * time: then no age shows.
    */
   serverClockOffset: () => Option.Option<number>
   /**
-   * Take the server's clock from a reply: `serverNow` the server's time as it
-   * sent the snapshot, `receivedAt` this clock's as the reply landed. A
-   * reply with no server time clears the offset. The reply's trip is the
-   * error, a few milliseconds on a local link.
+   * The server's account lanes (`accounts.lanes`), and the server's clock
+   * measured from the same reply: this clock is read as the request leaves
+   * and as the reply lands, and the server's `serverNow` is taken at the
+   * midpoint. The error is half the trip, whatever the reply's size. A
+   * measure within `SERVER_CLOCK_STEP_MS` of the held offset keeps it; a
+   * reply with no server time clears it.
    */
-  measureServerClock: (serverNow: Option.Option<number>, receivedAt: number) => void
+  accountLanes: Effect.Effect<LaneReport, GentClientRpcError>
 
   // Extension state-change pulse subscription. Fires once per
   // `ExtensionStateChanged` event seen on the active session for each
@@ -895,18 +907,27 @@ export function ClientProvider(props: ClientProviderProps) {
   const clearConnectionIssue = (): void => {
     setConnectionIssueState(Option.none())
   }
-  // The connection's server clock less this one. Equal values keep their
-  // readers still: a reconnect that measures the same offset moves no timer.
+  // The connection's server clock less this one. Two measures differ by their
+  // replies' trips even on one clock, so a measure within the step keeps the
+  // held offset, the same value: a reconnect on the same clock moves no timer.
   const [serverClockOffset, setServerClockOffset] = createSignal<Option.Option<number>>(
     Option.none(),
-    { equals: Equal.equals },
   )
-  const measureServerClock: ClientTransportValue["measureServerClock"] = (
-    serverNow,
-    receivedAt,
-  ) => {
-    setServerClockOffset(Option.map(serverNow, (server) => server - receivedAt))
-  }
+  const accountLanes: ClientTransportValue["accountLanes"] = Effect.gen(function* () {
+    const sentAt = yield* Clock.currentTimeMillis
+    const report = yield* client.accounts.lanes()
+    const receivedAt = yield* Clock.currentTimeMillis
+    const measured = Option.map(
+      Option.fromUndefinedOr(report.serverNow),
+      (serverNow) => serverNow - (sentAt + receivedAt) / 2,
+    )
+    setServerClockOffset((held) => {
+      if (Option.isNone(held) || Option.isNone(measured)) return measured
+      if (Math.abs(measured.value - held.value) <= SERVER_CLOCK_STEP_MS) return held
+      return measured
+    })
+    return report
+  })
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
 
@@ -1030,6 +1051,22 @@ export function ClientProvider(props: ClientProviderProps) {
     },
     Option.none<number>(),
     { equals: Option.makeEquivalence<number>((left, right) => left === right) },
+  )
+
+  // Each connection measures the server's clock once it opens, before any
+  // view needs it and whether or not a session is open: the lanes reply is
+  // small, server-wide and answered by a server older than the field.
+  createEffect(
+    on(connectedGeneration, (generation) => {
+      if (Option.isNone(generation)) return
+      cast(
+        accountLanes.pipe(
+          Effect.catchEager((error) =>
+            Effect.sync(() => log.warn("server.clock.measure.failed", { error: String(error) })),
+          ),
+        ),
+      )
+    }),
   )
 
   const isReconnecting = () => {
@@ -1345,7 +1382,7 @@ export function ClientProvider(props: ClientProviderProps) {
     connectionIssue,
     setConnectionIssue,
     serverClockOffset,
-    measureServerClock,
+    accountLanes,
     onExtensionStateChanged: eventHub.onExtensionStateChanged,
     onSessionEvent: eventHub.onSessionEvent,
     resetSessionEvents: eventHub.resetSessionEvents,

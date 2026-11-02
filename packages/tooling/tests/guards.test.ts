@@ -243,22 +243,41 @@ describe("SQL bound list guard", () => {
   })
 })
 
-// ── a client extension reads the server's clock ─────────────────────────────
+// ── the TUI reads the server's clock ────────────────────────────────────────
 
 describe("client wall clock guard", () => {
-  test("reports a DateTime.nowUnsafe read in a client extension, and only there", () => {
+  test("reports a DateTime.nowUnsafe read in TUI source outside its three owners", () => {
     const text = [
       "const stamp = yield* Clock.currentTimeMillis",
       "const age = DateTime.toEpochMillis(DateTime.nowUnsafe()) - row.createdAt",
       "// DateTime.nowUnsafe() in a comment is prose",
+      'const title = "DateTime.nowUnsafe() in a string is text"',
       "const onServer = transport.serverNow() - row.createdAt",
     ].join("\n")
     const findings = findClientWallClockReads("apps/tui/src/extensions/agents.client.tsx", text)
     expect(findings.map((finding) => finding.line)).toEqual([2])
-    expect(findings[0]?.message).toContain("transport.serverNow()")
-    expect(findClientWallClockReads("apps/tui/src/extensions/builtins.tsx", text).length).toBe(1)
+    expect(findings[0]?.message).toContain("serverNowAt(offset)")
+    expect(findClientWallClockReads("apps/tui/src/message-list.tsx", text).length).toBe(1)
+    expect(findClientWallClockReads("apps/tui/src/session.tsx", text).length).toBe(1)
+    expect(findClientWallClockReads("apps/tui/src/utils.ts", text)).toEqual([])
     expect(findClientWallClockReads("apps/tui/src/client.tsx", text)).toEqual([])
+    expect(findClientWallClockReads("apps/tui/src/ops.ts", text)).toEqual([])
     expect(findClientWallClockReads("apps/tui/tests/agents.test.tsx", text)).toEqual([])
+  })
+
+  test("reports a server clock read given no offset, in any TUI file", () => {
+    const text = [
+      "const now = serverNowAt(Option.none())",
+      "const tick = onServerClock(start + elapsed(), Option.none())",
+      "const held = serverNowAt(serverClockOffset())",
+      "const moved = onServerClock(start + elapsed(), offset)",
+      "const empty = Option.none()",
+    ].join("\n")
+    const findings = findClientWallClockReads("apps/tui/src/utils.ts", text)
+    expect(findings.map((finding) => finding.line)).toEqual([1, 2])
+    expect(findings[0]?.message).toContain("never `Option.none()`")
+    expect(findClientWallClockReads("apps/tui/src/session.tsx", text).length).toBe(2)
+    expect(findClientWallClockReads("apps/tui/tests/session.test.ts", text)).toEqual([])
   })
 })
 

@@ -884,20 +884,33 @@ const readSnapshot = Effect.fn("Ctl.snapshot")(function* (
 
 /**
  * `status`: the branch's runtime state and the server that answered. The
- * snapshot carries the runtime's start and the server's now in one reply,
- * both on the server's clock: `runningMs` is their difference, true on a
- * ctl whose clock runs ahead or behind. A server older than `serverNow`
- * is read against this clock, as before.
+ * state is the runtime stream's first value, which reads no history. The
+ * server's now comes from the lanes reply (`LaneReport.serverNow`), small
+ * and server-wide: `runningMs` is the runtime's start subtracted from it,
+ * two server times, true on a ctl whose clock runs ahead or behind. A server
+ * older than the field, or a lanes read that fails, is read against this
+ * clock: status does not fail because the accounts do.
  */
 const readStatus = Effect.fn("Ctl.status")(function* (
   connection: CtlConnection,
   target: CtlTarget,
 ) {
-  const snapshot = yield* connection.client.session
-    .getSnapshot(target)
-    .pipe(Effect.mapError(rpcFailure))
-  const runtime = snapshot.runtime
-  const now = yield* Option.match(Option.fromUndefinedOr(snapshot.serverNow), {
+  const { state, serverNow } = yield* Effect.all(
+    {
+      state: connection.client.session
+        .watchRuntime(target)
+        .pipe(Stream.runHead, Effect.mapError(rpcFailure)),
+      serverNow: connection.client.accounts.lanes().pipe(
+        Effect.map((report) => Option.fromUndefinedOr(report.serverNow)),
+        Effect.orElseSucceed(() => Option.none<number>()),
+      ),
+    },
+    { concurrency: 2 },
+  )
+  if (Option.isNone(state))
+    return yield* new CtlFailed({ message: "the runtime stream ended at once" })
+  const runtime = state.value
+  const now = yield* Option.match(serverNow, {
     onNone: () => Clock.currentTimeMillis,
     onSome: Effect.succeed,
   })

@@ -194,22 +194,24 @@ export interface ClientTransport {
    */
   readonly connection: () => Option.Option<number>
   /**
-   * The server's clock less this one, in milliseconds, as the last snapshot
-   * measured it: `now + offset` is this clock's now on the server's, the
-   * clock a server time (a run's start, a row's last step) is on. Reactive;
-   * None before the first snapshot and from a server that sends no time.
+   * The server's clock less this one, in milliseconds, as the last lanes
+   * reply measured it (the shell reads one on each connect): `now + offset`
+   * is this clock's now on the server's, the clock a server time (a run's
+   * start, a row's last step) is on. Reactive; None before the first reply
+   * and from a server that sends no time.
    */
   readonly serverClockOffset: () => Option.Option<number>
   /**
    * The wall clock's now on the server's clock, in epoch milliseconds
    * (`onServerClock`): what an age or a countdown of a server time reads.
-   * Reactive in the offset; this clock's own now before the first snapshot.
+   * Reactive in the offset; this clock's own now before the first reply.
    */
   readonly serverNow: () => number
   /**
    * The server's account lanes (`accounts.lanes`): each provider gent read a
    * quota window of, its free lanes and its fuel rates. The accounts are the
-   * server's, so no session names the read.
+   * server's, so no session names the read. The reply measures the server's
+   * clock before it returns, so a view of it never reads this clock's.
    */
   readonly accountLanes: Effect.Effect<LaneReport, ClientTransportRequestError>
   /**
@@ -262,6 +264,8 @@ export type ClientShellTransport = Pick<
   | "serverClockOffset"
 > & {
   readonly client: GentNamespacedClient
+  /** The shell's lanes read, which measures the server's clock as it lands. */
+  readonly accountLanes: Effect.Effect<LaneReport, GentClientRpcError>
 }
 
 /** Seal the shell's authority behind the typed transport an extension sees. */
@@ -279,10 +283,7 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   connection: payload.connection,
   serverClockOffset: payload.serverClockOffset,
   serverNow: () => serverNowAt(payload.serverClockOffset()),
-  // Built when it runs: building the facet reaches no server.
-  accountLanes: Effect.suspend(() =>
-    shellRead(payload, "accounts.lanes", (client) => client.accounts.lanes()),
-  ),
+  accountLanes: shellRead(payload, "accounts.lanes", () => payload.accountLanes),
   agentDetail: (key) => agentDetailAt(payload, key),
   deleteSession: (sessionId) =>
     shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(

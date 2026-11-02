@@ -11,7 +11,6 @@ import { describe, expect, it, test } from "effect-bun-test"
 import {
   addRetry,
   addStep,
-  currentMillis,
   emptyTurnSteps,
   flushTranscriptForExit,
   formatTurnLine,
@@ -84,7 +83,6 @@ import {
   ToolFrame,
   useSpinnerClock,
 } from "../src/ui"
-import { useClient } from "../src/client"
 import {
   BUILTIN_TOOL_RENDERERS,
   FoldOperationsProvider,
@@ -96,6 +94,7 @@ import {
 } from "../src/tool-renderers"
 import {
   answerPalette,
+  createMockClient,
   darkTerminalColors,
   destroyRenderSetup,
   renderFrame,
@@ -248,12 +247,8 @@ describe("session event labels", () => {
           seq: 1,
         })
         const setup = yield* renderScoped(
-          () => (
-            <OnServerClock skewMs={skewMs}>
-              <MessageList items={[event]} disclosure="preview" syntaxStyle={syntaxStyle} />
-            </OnServerClock>
-          ),
-          { width: 80, height: 10 },
+          () => <MessageList items={[event]} disclosure="preview" syntaxStyle={syntaxStyle} />,
+          { width: 80, height: 10, client: onServerClock(skewMs) },
         )
         const frame = yield* waitForFrame(setup, (next) => next.includes("resets"), "the row")
         const row = frame.split("\n").find((line) => line.includes("Rate limit exceeded")) ?? ""
@@ -672,15 +667,19 @@ const compactionMessage = (): ListMessage =>
     },
   })
 
+/** The wall clock's now, the clock a running row's timer reads. */
+const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
+
 /**
- * Children behind a connection whose server clock reads `skewMs` ahead of
- * this one, as the session feed measures it when a snapshot lands.
+ * A client whose server's clock reads `skewMs` ahead of this one: its lanes
+ * reply carries the server's now, as the shell measures it on each connect.
  */
-function OnServerClock(props: { readonly skewMs: number; readonly children: JSX.Element }) {
-  const now = currentMillis()
-  useClient().measureServerClock(Option.some(now + props.skewMs), now)
-  return props.children
-}
+const onServerClock = (skewMs: number) =>
+  createMockClient({
+    accounts: {
+      lanes: () => Effect.sync(() => ({ providers: [], serverNow: currentMillis() + skewMs })),
+    },
+  })
 
 /** Children on the spinner clock, with `onRead` called on each read of its tick. */
 function CountingClock(props: { readonly onRead: () => void; readonly children: JSX.Element }) {
@@ -7479,12 +7478,8 @@ describe("collapse ladder", () => {
   ]
   const draw = (items: SessionItem[], disclosure: DisclosureLevel, width: number) =>
     renderScoped(
-      () => (
-        <OnServerClock skewMs={0}>
-          <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />
-        </OnServerClock>
-      ),
-      { width, height: 60 },
+      () => <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />,
+      { width, height: 60, client: onServerClock(0) },
     ).pipe(Effect.map(renderFrame))
   const lines = (frame: string) => frame.split("\n").map((line) => line.trimEnd())
   /** The rows under the group header, up to the first blank row. */
@@ -8283,12 +8278,8 @@ describe("collapse ladder", () => {
   const timerRun = (items: SessionItem[], disclosure: DisclosureLevel, text: string, skewMs = 0) =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(
-        () => (
-          <OnServerClock skewMs={skewMs}>
-            <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />
-          </OnServerClock>
-        ),
-        { width: 100, height: 20 },
+        () => <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />,
+        { width: 100, height: 20, client: onServerClock(skewMs) },
       )
       const first = rowWith(
         yield* waitForFrame(
@@ -8357,7 +8348,7 @@ describe("collapse ladder", () => {
   it.scopedLive("a server that sends no time draws no timer on a running row", () =>
     Effect.gen(function* () {
       const items = [timedCell("sleep 60", 90_000, 41_000)]
-      // No `OnServerClock`: the connection has no server time to read.
+      // No server time in the lanes reply: the connection has no offset.
       const preview = yield* renderScoped(
         () => <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />,
         { width: 100, height: 20 },
@@ -8399,7 +8390,7 @@ describe("collapse ladder", () => {
       let runningReads = 0
       const setup = yield* renderScoped(
         () => (
-          <OnServerClock skewMs={0}>
+          <>
             <CountingClock onRead={() => (settledReads += 1)}>
               <MessageList items={[settled]} disclosure="preview" syntaxStyle={syntaxStyle} />
               <MessageList items={[settled]} disclosure="full" syntaxStyle={syntaxStyle} />
@@ -8411,9 +8402,9 @@ describe("collapse ladder", () => {
                 syntaxStyle={syntaxStyle}
               />
             </CountingClock>
-          </OnServerClock>
+          </>
         ),
-        { width: 100, height: 40 },
+        { width: 100, height: 40, client: onServerClock(0) },
       )
       const mounted = runningReads
       yield* waitForFrame(setup, () => runningReads >= mounted + 5, "five ticks of the running row")

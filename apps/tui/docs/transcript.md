@@ -148,16 +148,19 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   its running ops), so a reloaded TUI counts from the real start. Both are
   the envelope's server time, live or replayed, and a `--connect` client's
   clock can read minutes off the server's: the timer never subtracts a
-  server time from this client's clock. The snapshot reply carries the
-  server's `serverNow`; the feed takes its own clock as the reply lands and
-  keeps the difference as the connection's one offset
-  (`serverClockOffset`). A row reads the server's now as this clock plus the
+  server time from this client's clock. Each connection reads the lanes
+  report (`accounts.lanes`, a small server-wide reply that carries the
+  server's `serverNow`) and keeps the server's time less the midpoint of
+  its own send and receive times as the connection's one offset
+  (`serverClockOffset`, client.tsx). A row reads the server's now as this clock plus the
   offset, so `startedAt` and every other server time stay in the server's
   frame, with one conversion. The live line's turn count does the reverse
   at the same point: the runtime's `startedAtMs` minus the offset is its
-  start on this clock. A per-snapshot "server now, advanced by a local tick"
-  is the same arithmetic anchored at the same reply; one offset on the
-  connection serves every reader, and a later reply measures it again. Every
+  start on this clock. One offset on the connection serves every reader,
+  the snapshot included: no reader waits for a snapshot to read an age. A
+  reconnect measures again and keeps the held offset unless the new one
+  moves by more than a second (`SERVER_CLOCK_STEP_MS`), so a reconnect
+  does not move every age by a few milliseconds of noise. Every
   other age of a server time reads through the same offset: a pending
   retry's countdown, live or replayed, a usage-limit row's test of whether
   its reset falls today, and each extension's ages
@@ -165,8 +168,11 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   with its envelope's server time, as a replayed row is, so a live turn line
   sorts among the stored messages on one clock; a row dated on this
   client's clock sat above its answer, or below the next ask, by the skew. The
-  offset is off by the reply's one-way latency, under a second on a sound
-  link. A server that sends no time gives no offset, and a running row then
+  midpoint is off by at most half the round trip, and only by how unequal
+  the two legs are; the reply is small, so its size does not lengthen the
+  return leg. A first-byte time would be closer, but the RPC socket hands
+  over whole decoded messages. A server that sends no time gives no offset,
+  and a running row then
   shows no timer, never one off by the skew. A narrow
   running row cuts its subject to keep its timer (`headBeside`), as a failure
   row keeps its outcome word: the live line already names the running call,

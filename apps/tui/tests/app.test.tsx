@@ -57,6 +57,7 @@ import {
   QueueEntryInfo,
   QueueSnapshot,
   userMessageIdForRequest,
+  assistantMessageIdForTurn,
   SessionRuntimeStateSchema,
   ExtensionHealthIssue,
 } from "@gent/core/protocol"
@@ -596,6 +597,24 @@ const mountApp = (
   })
 
 type ThemeColors = ReturnType<typeof useTheme>["theme"]
+
+/**
+ * A lanes reply on the server's clock `serverNow`, and whether the two reads
+ * that measure the clock offset as the app opens (the connection's and the
+ * lanes band's) are answered. A test that moves the test clock waits for
+ * both first: a read that spans the move takes the move for clock skew.
+ */
+const lanesOnServerClock = (serverNow: () => number) => {
+  let answered = 0
+  return {
+    lanes: () =>
+      Effect.sync(() => {
+        answered += 1
+        return { providers: [], serverNow: serverNow() }
+      }),
+    measured: () => answered >= 2,
+  }
+}
 
 /** The drawn spans of the first row that holds `marker`, blank spans left out. */
 const rowSpans = (setup: TestSetup, marker: string) =>
@@ -7157,9 +7176,12 @@ describe("TUI renderer surfaces", () => {
             readonly queue: typeof running.queue
           }>()
           const events = yield* Queue.unbounded<EventEnvelope>()
+          // The test clock reads 0 as the lanes reply lands.
+          const lanes = lanesOnServerClock(() => skewMs)
           const { setup } = yield* mountApp({
             runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
             client: {
+              accounts: { lanes: lanes.lanes },
               session: {
                 getSnapshot: () =>
                   Effect.succeed({
@@ -7171,8 +7193,6 @@ describe("TUI renderer surfaces", () => {
                     agent: AgentName.make("main"),
                     runtime: running,
                     metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-                    // The test clock reads 0 as the reply lands.
-                    serverNow: skewMs,
                   }),
                 watchRuntime: () => Stream.concat(Stream.make(running), Stream.fromQueue(runtimes)),
                 events: () => Stream.fromQueue(events),
@@ -7186,7 +7206,11 @@ describe("TUI renderer surfaces", () => {
               EventEnvelope.make({ id: EventId.make(id), createdAt: id, event: agentEvent }),
             )
           // No answer text yet: the model thinks.
-          yield* waitForFrame(setup, (next) => next.includes("✻ Thinking ·"), "the turn")
+          yield* waitForFrame(
+            setup,
+            (next) => lanes.measured() && next.includes("✻ Thinking ·"),
+            "the turn",
+          )
           yield* clock.adjust(Duration.seconds(4))
           yield* waitForFrame(setup, (next) => next.includes("✻ Thinking (4s)"), "4s in")
           // A tool call changes the phase word, not the count.
@@ -7274,9 +7298,11 @@ describe("TUI renderer surfaces", () => {
           queue: emptyQueueSnapshot(),
         })
         const events = yield* Queue.unbounded<EventEnvelope>()
+        const lanes = lanesOnServerClock(() => 0)
         const { setup } = yield* mountApp({
           runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
           client: {
+            accounts: { lanes: lanes.lanes },
             session: {
               getSnapshot: () =>
                 Effect.succeed({
@@ -7288,7 +7314,6 @@ describe("TUI renderer surfaces", () => {
                   agent: AgentName.make("main"),
                   runtime: running,
                   metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-                  serverNow: 0,
                 }),
               watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
               events: () => Stream.fromQueue(events),
@@ -7296,7 +7321,7 @@ describe("TUI renderer surfaces", () => {
           },
           initialSession: sessionNamed(sessionId, branchId, "Retry phase"),
         })
-        // The server's clock is the test clock (the snapshot measured no
+        // The server's clock is the test clock (the lanes reply measured no
         // offset): each event is dated when it is sent.
         const event = (id: number, agentEvent: AgentEvent) =>
           Queue.offer(
@@ -7307,7 +7332,11 @@ describe("TUI renderer surfaces", () => {
               event: agentEvent,
             }),
           )
-        yield* waitForFrame(setup, (next) => next.includes("✻ Thinking ·"), "the turn")
+        yield* waitForFrame(
+          setup,
+          (next) => lanes.measured() && next.includes("✻ Thinking ·"),
+          "the turn",
+        )
         yield* event(
           1,
           AgentEvent.cases.ProviderRetrying.make({
@@ -7397,6 +7426,9 @@ describe("TUI renderer surfaces", () => {
             const { setup } = yield* mountApp({
               runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
               client: {
+                accounts: {
+                  lanes: () => Effect.sync(() => ({ providers: [], serverNow: serverNow() })),
+                },
                 session: {
                   getSnapshot: () =>
                     Effect.succeed({
@@ -7408,7 +7440,6 @@ describe("TUI renderer surfaces", () => {
                       agent: AgentName.make("main"),
                       runtime: running,
                       metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-                      serverNow: serverNow(),
                     }),
                   watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
                   events: () => Stream.fromQueue(events),
@@ -7454,6 +7485,9 @@ describe("TUI renderer surfaces", () => {
           const { setup } = yield* mountApp({
             runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
             client: {
+              accounts: {
+                lanes: () => Effect.sync(() => ({ providers: [], serverNow: serverNow() })),
+              },
               session: {
                 getSnapshot: () =>
                   Effect.succeed({
@@ -7465,7 +7499,6 @@ describe("TUI renderer surfaces", () => {
                     agent: AgentName.make("main"),
                     runtime: running,
                     metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-                    serverNow: serverNow(),
                   }),
                 watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
                 events: () => Stream.fromQueue(events),
@@ -7528,16 +7561,194 @@ describe("TUI renderer surfaces", () => {
     )
   }
 
+  // A streamed answer's draft is dated by its envelope, a server time, as
+  // the stored message that replaces it is: on a client whose clock is off,
+  // the draft sits between its ask and the next one, and the stored answer
+  // takes its place without a move.
+  for (const [where, skewMs] of [
+    ["two minutes behind", 120_000],
+    ["two minutes ahead of", -120_000],
+  ] as const) {
+    it.scopedLive(
+      `a streamed draft keeps its place as the stored answer replaces it on a client ${where} the server`,
+      () =>
+        Effect.gen(function* () {
+          const clock = yield* TestClock.make()
+          yield* clock.adjust(Duration.minutes(10))
+          const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+          const sessionId = SessionId.make("session-draft")
+          const branchId = BranchId.make("branch-draft")
+          const running = SessionRuntimeStateSchema.cases.Running.make({
+            startedAtMs: clock.currentTimeMillisUnsafe() + skewMs,
+            queue: emptyQueueSnapshot(),
+          })
+          const events = yield* Queue.unbounded<EventEnvelope>()
+          const serverNow = () => clock.currentTimeMillisUnsafe() + skewMs
+          const { setup } = yield* mountApp({
+            runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
+            client: {
+              accounts: {
+                lanes: () => Effect.sync(() => ({ providers: [], serverNow: serverNow() })),
+              },
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed({
+                    sessionId,
+                    branchId,
+                    messages: [],
+                    lastEventId: nullValue,
+                    reasoningLevel: absent,
+                    agent: AgentName.make("main"),
+                    runtime: running,
+                    metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+                  }),
+                watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+                events: () => Stream.fromQueue(events),
+              },
+            },
+            initialSession: sessionNamed(sessionId, branchId, "Draft"),
+          })
+          let next = 0
+          /** A live event, sent `at` ms after the server's now. */
+          const event = (agentEvent: AgentEvent, at: number) => {
+            next += 1
+            return Queue.offer(
+              events,
+              EventEnvelope.make({
+                id: EventId.make(next),
+                createdAt: serverNow() + at,
+                event: agentEvent,
+              }),
+            )
+          }
+          /** A stored message dated `createdAt`, sent `at` ms after the server's now. */
+          const message = (
+            id: MessageId,
+            role: "user" | "assistant",
+            text: string,
+            createdAt: number,
+            at: number,
+          ) =>
+            event(
+              AgentEvent.cases.MessageReceived.make({
+                message: StoredMessage.cases.regular.make({
+                  id,
+                  sessionId,
+                  branchId,
+                  role,
+                  parts: [Prompt.textPart({ text })],
+                  createdAt: dateFromMillis(serverNow() + createdAt),
+                }),
+              }),
+              at,
+            )
+          const ask = MessageId.make("draft-ask")
+          yield* waitForFrame(setup, (frame) => frame.includes("✻ Thinking ·"), "the turn")
+          yield* message(ask, "user", "DRAFT-ASK", 0, 0)
+          yield* event(
+            AgentEvent.cases.StreamStarted.make({
+              model: ModelId.make("anthropic/claude-sonnet-5"),
+              messageId: ask,
+              step: 1,
+              sessionId,
+              branchId,
+            }),
+            1_000,
+          )
+          yield* event(
+            AgentEvent.cases.StreamChunk.make({
+              sessionId,
+              branchId,
+              offset: 0,
+              chunk: "DRAFT-ANSWER",
+            }),
+            1_500,
+          )
+          yield* message(MessageId.make("draft-later"), "user", "DRAFT-LATER", 5_000, 5_000)
+          const shown = () => `${terminalText(setup)}\n${renderFrame(setup)}`
+          /** The three rows in their order, one answer row among them. */
+          const expectInOrder = () => {
+            const text = shown()
+            const askAt = text.indexOf("DRAFT-ASK")
+            const answerAt = text.indexOf("DRAFT-ANSWER")
+            expect(askAt).toBeGreaterThanOrEqual(0)
+            expect(askAt).toBeLessThan(answerAt)
+            expect(answerAt).toBeLessThan(text.indexOf("DRAFT-LATER"))
+            // The terminal holds the screen and what scrolled off it: one answer row.
+            expect(terminalText(setup).split("DRAFT-ANSWER").length).toBe(2)
+          }
+          yield* waitForFrame(
+            setup,
+            () => shown().includes("DRAFT-ANSWER") && shown().includes("DRAFT-LATER"),
+            "the draft and the next ask",
+          )
+          expectInOrder()
+          yield* message(
+            assistantMessageIdForTurn(ask, 1),
+            "assistant",
+            "DRAFT-ANSWER, stored",
+            1_000,
+            6_000,
+          )
+          yield* waitForFrame(setup, () => shown().includes("DRAFT-ANSWER, stored"), "the answer")
+          expectInOrder()
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+
+  // The lanes band reads the server's now before any snapshot lands: the
+  // connection measures the clock from a lanes reply as it opens, and the
+  // band's own lanes reply measures it before the band sees the report.
+  for (const [where, skewMs] of [
+    ["two minutes behind", 120_000],
+    ["two minutes ahead of", -120_000],
+  ] as const) {
+    it.scopedLive(
+      `the lanes band ages the peer on the server's clock before a snapshot, on a client ${where} it`,
+      () =>
+        Effect.gen(function* () {
+          const lanes = () =>
+            Effect.sync(() => {
+              const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + skewMs
+              return {
+                providers: [],
+                peer: {
+                  heard: { host: "workbox", at: serverNow - 5 * 60_000 },
+                  runs: 2,
+                  silent: false,
+                  down: [],
+                },
+                serverNow,
+              }
+            })
+          const { setup } = yield* mountApp({
+            client: {
+              accounts: { lanes },
+              session: { getSnapshot: () => Effect.never },
+            },
+          })
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes("⇄ peer workbox"),
+            "the peer row",
+          )
+          const row = frame.split("\n").find((line) => line.includes("⇄ peer workbox")) ?? ""
+          expect(row.trim()).toBe("⇄ peer workbox 2 runs · 5m")
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+
   // ── the live line's reasoning heading ──
   // Codex's status indicator names what the model works on: the newest
   // heading of its reasoning (`**Investigating rendering code**`), never the
   // reasoning itself, and `Thinking` until a heading arrives.
 
   /**
-   * A turn that started at 100 on the server's clock, whose snapshot the
+   * A turn that started at 100 on the server's clock, whose lanes reply the
    * server sent at 200 to a test clock that reads 0: the turn is 100 ms old,
-   * so the live line shows no count, and every event it sends is dated by 200. `event` feeds it live events; `attempts` is the turn's
-   * model-call receipt, which the status row reads.
+   * so the live line shows no count, and every event it sends is dated by
+   * 200. `event` feeds it live events; `attempts` is the turn's model-call
+   * receipt, which the status row reads.
    */
   const mountLiveLine = (width: number, attempts: Option.Option<ModelAttempts> = Option.none()) =>
     Effect.gen(function* () {
@@ -7555,6 +7766,7 @@ describe("TUI renderer surfaces", () => {
         width,
         height: 24,
         client: {
+          accounts: { lanes: () => Effect.sync(() => ({ providers: [], serverNow: 200 })) },
           session: {
             getSnapshot: () =>
               Effect.succeed({
@@ -7575,7 +7787,6 @@ describe("TUI renderer surfaces", () => {
                     onSome: (turnModelAttempts) => ({ turnModelAttempts }),
                   }),
                 },
-                serverNow: 200,
               }),
             watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
             events: () => Stream.fromQueue(events),

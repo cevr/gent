@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   Clock,
+  DateTime,
   Deferred,
   Effect,
   Fiber,
@@ -93,7 +94,6 @@ import { waitUntil, waitUntilAdvancing } from "./helpers-boundary"
 import * as Prompt from "effect/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
-  currentMillis,
   getSessionEventLabel,
   type Message as FeedMessage,
   messageToolCalls,
@@ -1446,7 +1446,6 @@ const feedClientStub = (
 ): FeedClient => ({
   log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
   setConnectionIssue: () => {},
-  measureServerClock: () => {},
   waitForTransportReady: Effect.void,
   applySessionRuntime: () => {},
   applySessionSnapshot: () => {},
@@ -2629,22 +2628,16 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.live("a live call keeps its server start, and the snapshot's server time sets the clock", () =>
+  it.live("a live call keeps its server start, the envelope's server time", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-server-clock")
       const branchId = BranchId.make("branch-feed-server-clock")
       const cellId = ToolCallId.make("tool-call-server-clock-cell")
       const opId = ToolCallId.make("tool-call-server-clock-op")
       // The server's clock runs two minutes ahead of this one.
-      const serverNow = currentMillis() + 120_000
-      const measured: Array<readonly [Option.Option<number>, number]> = []
+      const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + 120_000
       const { cellOf, dispose } = openFeed({
-        snapshot: SessionSnapshot.make({ ...snapshotFor(sessionId, branchId), serverNow }),
-        client: {
-          measureServerClock: (now, receivedAt) => {
-            measured.push([now, receivedAt])
-          },
-        },
+        snapshot: SessionSnapshot.make(snapshotFor(sessionId, branchId)),
         events: [
           makeEnvelope(
             1,
@@ -2691,11 +2684,6 @@ describe("useSessionFeed", () => {
             const cell = Option.getOrUndefined(cellOf())
             expect(cell?.startedAt).toBe(serverNow - 10_000)
             expect(cell?.operations?.[0]?.startedAt).toBe(serverNow - 4_000)
-            // The server's time from the snapshot, against this clock as the reply landed.
-            expect(measured.length).toBe(1)
-            const [now, receivedAt] = measured[0] ?? [Option.none(), Number.NaN]
-            expect(now).toEqual(Option.some(serverNow))
-            expect(Math.abs(currentMillis() - receivedAt)).toBeLessThan(10_000)
           }),
         ),
         Effect.ensuring(Effect.sync(dispose)),

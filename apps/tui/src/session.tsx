@@ -77,6 +77,7 @@ import {
   onServerClock,
   randomId,
   SEND_RETRY,
+  serverNowAt,
   useRequiredContext,
 } from "./utils"
 import type { RGBA } from "@opentui/core"
@@ -122,7 +123,6 @@ import {
   addRetry,
   addStep,
   AssistantSegment,
-  currentMillis,
   emptyTurnSteps,
   getSessionEventLabel,
   leaveTerminal,
@@ -1576,7 +1576,11 @@ function useAutocompleteFrecency(): AutocompleteFrecency {
   return {
     lookup: readFrecencyLookup(workspace.home),
     record: (prefix: string, id: string) => {
-      cast(recordFrecencyPick(workspace.home, prefix, id, currentMillis()))
+      cast(
+        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          recordFrecencyPick(workspace.home, prefix, id, now),
+        ),
+      )
     },
     reset: () => {
       cast(clearFrecencyStore(workspace.home))
@@ -1938,7 +1942,6 @@ type SessionFeedClient = Pick<
   | "runtime"
   | "log"
   | "setConnectionIssue"
-  | "measureServerClock"
   | "waitForTransportReady"
   | "applySessionRuntime"
   | "applySessionSnapshot"
@@ -2717,9 +2720,6 @@ export function useSessionFeed(
                 sessionId: session,
                 branchId: branch,
               })
-              // The reply's server time against ours as it lands: every age
-              // of a server time reads through it.
-              const receivedAt = yield* Clock.currentTimeMillis
               // Pending interactions hydrate on session entry from
               // event-stream replay via the `after` cursor below.
 
@@ -2730,7 +2730,6 @@ export function useSessionFeed(
               })
 
               yield* Effect.sync(() => {
-                client.measureServerClock(Option.fromUndefinedOr(snapshot.serverNow), receivedAt)
                 client.applySessionSnapshot(snapshot)
                 callbacks.onRuntime(snapshot.runtime)
                 applySnapshotMessages(snapshot.messages)
@@ -3582,13 +3581,10 @@ export function createSessionController(props: {
   const retryPhase = (retry: Extract<SessionEvent, { _tag: "retrying" }>): string =>
     getSessionEventLabel(
       retry,
-      onServerClock(
-        Option.match(timerStart(), {
-          onNone: currentMillis,
-          onSome: (start) => start + elapsed(),
-        }),
-        client.serverClockOffset(),
-      ),
+      Option.match(timerStart(), {
+        onNone: () => serverNowAt(client.serverClockOffset()),
+        onSome: (start) => onServerClock(start + elapsed(), client.serverClockOffset()),
+      }),
     )
 
   // What the model works on, as Codex's status header names it: the newest

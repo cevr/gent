@@ -1253,34 +1253,62 @@ export const findSqlBoundLists = (file: string, text: string): ReadonlyArray<Fin
 // ── a client extension reads the server's clock ─────────────────────────────
 
 /**
- * Guard: a client extension reads no wall clock of its own.
+ * Guard: the TUI reads no wall clock of its own for an age.
  *
- * The times a client extension draws an age or a countdown from (a row's
- * `createdAt`, a run's start, a heard peer) are the server's, and a
- * `--connect` client's clock can read minutes off the server's. The
- * extension reads the server's now through `transport.serverNow()`
- * (`ClientTransport`, the connection's one clock offset): a client never
- * subtracts a server time from its own clock. `DateTime.nowUnsafe` is the
- * synchronous wall clock a widget reaches for while it draws, and each age
- * that read it there was off by the skew. `Clock.currentTimeMillis` stays
- * allowed: a request stamp, a frecency score and a tick read it, and a tick
- * that counts a server time moves it onto the server's clock
- * (`onServerClock`). The host's own files outside `extensions/` read the
- * wall clock for log lines and frecency, so the scan stops at the
- * extensions directory.
+ * The times the TUI draws an age or a countdown from (a row's `createdAt`, a
+ * run's start, a heard peer) are the server's, and a `--connect` client's
+ * clock can read minutes off the server's. The TUI reads the server's now
+ * through `serverNowAt(offset)` (`transport.serverNow()` in an extension):
+ * a client never subtracts a server time from its own clock. Two spellings
+ * fail anywhere under `apps/tui/src/`:
+ *
+ * - `DateTime.nowUnsafe`, the synchronous wall clock a widget reaches for
+ *   while it draws. Three files own a read: `utils.ts` (`serverNowAt`, which
+ *   adds the offset), `client.tsx` and `ops.ts` (a log line's stamp).
+ * - `serverNowAt` or `onServerClock` given `Option.none()`: the server's now
+ *   with no offset is this client's clock under another name.
+ *
+ * Out of reach: `Clock.currentTimeMillis` stays allowed. A request stamp, a
+ * frecency score, a tick and the clock measurement read it, and an age read
+ * off it is the same text, so a lexical scan cannot tell them apart; a tick
+ * that counts a server time moves it onto the server's clock with
+ * `onServerClock`, and the review holds that edge. `Date.now()` and
+ * `new Date()` are oxlint's (`effect/noGlobals`), in every file.
  */
-const CLIENT_EXTENSION_SOURCE = /^apps\/tui\/src\/extensions\//
+const TUI_SOURCE = /^apps\/tui\/src\//
+const WALL_CLOCK_OWNERS = new Set([
+  "apps/tui/src/utils.ts",
+  "apps/tui/src/client.tsx",
+  "apps/tui/src/ops.ts",
+])
 const WALL_CLOCK_READ = /\bDateTime\.nowUnsafe\b/g
+const SERVER_CLOCK_CALL = /\b(?:serverNowAt|onServerClock)\s*\(/g
+const NO_OFFSET = /\bOption\.none\s*\(\s*\)/
 
 export const findClientWallClockReads = (file: string, text: string): ReadonlyArray<Finding> => {
-  if (!CLIENT_EXTENSION_SOURCE.test(file)) return []
-  const code = withoutComments(file, text)
-  return Array.from(code.matchAll(WALL_CLOCK_READ), (match) => ({
-    file,
-    line: lineAt(code, match.index),
-    message:
-      "a client extension reads the server's now through `transport.serverNow()`, never `DateTime.nowUnsafe`: a server time less this client's clock is off by the clock skew",
-  }))
+  if (!TUI_SOURCE.test(file)) return []
+  const forms = sourceForms(file, text)
+  const code = forms.codeOnly
+  const wallClock = Array.from(code.matchAll(WALL_CLOCK_READ))
+    .filter(() => !WALL_CLOCK_OWNERS.has(file))
+    .map((match) => ({
+      file,
+      line: lineAt(code, match.index),
+      message:
+        "the TUI reads the server's now through `serverNowAt(offset)` (`transport.serverNow()` in an extension), never `DateTime.nowUnsafe`: a server time less this client's clock is off by the clock skew",
+    }))
+  const noOffset = Array.from(code.matchAll(SERVER_CLOCK_CALL))
+    .filter((match) => {
+      const open = match.index + match[0].length - 1
+      return NO_OFFSET.test(code.slice(open, bracketEnd(forms, open)))
+    })
+    .map((match) => ({
+      file,
+      line: lineAt(code, match.index),
+      message:
+        "`serverNowAt` and `onServerClock` take the connection's offset (`transport.serverClockOffset()`), never `Option.none()`: the server's now with no offset is this client's clock",
+    }))
+  return [...wallClock, ...noOffset]
 }
 
 // ── the portable import graph ───────────────────────────────────────────────

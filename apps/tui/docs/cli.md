@@ -153,9 +153,11 @@ into a `status` flag (`ctlProjection` in the client contribution): `status
 `View` with the encoded reply in `view`.
 
 ctl never subtracts a server time from its own clock: a `--connect` call
-from another machine has another clock. `status` reads the session
-snapshot, and its `runningMs` is the snapshot's `serverNow` less the
-runtime's `startedAtMs`, both on the server's clock. `lanes --line` reads
+from another machine has another clock. `status` reads the session's
+runtime state (the first value of `session.watchRuntime`) and the lanes
+report together, never the session snapshot, which carries the whole
+history. Its `runningMs` is the report's `serverNow` less the runtime's
+`startedAtMs`, both on the server's clock. `lanes --line` reads
 its ages, and whether a clock time is today, against the report's `serverNow`. A server older
 than `serverNow` is read against the local clock.
 

@@ -163,6 +163,7 @@ export const makeClientTestTransport = (
     selectedModel: opts.selectedModel ?? (() => Option.some("test/model")),
     connection: opts.connection ?? (() => Option.some(1)),
     serverClockOffset: opts.serverClockOffset ?? (() => Option.none()),
+    accountLanes: Effect.suspend(() => client.accounts.lanes()),
   }
 }
 
@@ -190,6 +191,7 @@ export const makeUnreachableTransport = (): ClientShellTransport => ({
   selectedModel: () => Option.some("test/model"),
   connection: () => Option.some(1),
   serverClockOffset: () => Option.none(),
+  accountLanes: Effect.sync(() => throwOnAccess("accountLanes")),
 })
 
 export const makeClientExtensionRuntime = (

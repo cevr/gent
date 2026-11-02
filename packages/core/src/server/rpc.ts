@@ -207,14 +207,6 @@ export class SessionSnapshot extends Schema.Class<
    * walked (`sessionAccount`). Absent until the session has a pin or its last
    * step's receipt names an account; a placement alone names none. */
   account: Schema.optional(SessionAccount),
-  /**
-   * The server's clock as it sent this reply. The snapshot's times (a
-   * running call's `startedAt`, the runtime's `startedAtMs`) and every
-   * envelope's `createdAt` are on that clock, and a remote client's clock is
-   * not: a client turns them into ages against this, never against its own
-   * clock. Absent from a server older than the field.
-   */
-  serverNow: Schema.optional(Schema.Finite),
 }) {}
 
 /**

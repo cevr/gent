@@ -683,13 +683,11 @@ describe("the lanes band reads", () => {
         for (const cb of subscribers) cb(envelope)
       }
       const base = makeClientTestTransport(options)
-      const transport = {
-        ...base,
-        client: createMockClient({
-          extension: base.client.extension,
-          accounts: { lanes: () => Ref.get(report) },
-        }),
-      }
+      const client = createMockClient({
+        extension: base.client.extension,
+        accounts: { lanes: () => Ref.get(report) },
+      })
+      const transport = { ...base, client, accountLanes: client.accounts.lanes() }
       const contributions = yield* provideClientServices(
         machinesExtension.setup.pipe(Effect.provideService(Clock.Clock, clock)),
         { ...options, transport },
@@ -757,13 +755,11 @@ describe("the lanes band reads", () => {
             requestEffect: () => Effect.succeed([run({ createdAt: serverNow - 9 * MINUTE })]),
           }
           const base = makeClientTestTransport(options)
-          const transport = {
-            ...base,
-            client: createMockClient({
-              extension: base.client.extension,
-              accounts: { lanes: () => Effect.succeed(report) },
-            }),
-          }
+          const client = createMockClient({
+            extension: base.client.extension,
+            accounts: { lanes: () => Effect.succeed(report) },
+          })
+          const transport = { ...base, client, accountLanes: client.accounts.lanes() }
           const contributions = yield* provideClientServices(machinesExtension.setup, {
             ...options,
             transport,

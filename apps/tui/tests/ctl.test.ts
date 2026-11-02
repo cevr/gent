@@ -32,6 +32,7 @@ import {
   Sink,
   Stdio,
   Stream,
+  Tracer,
 } from "effect"
 import { CTL_EXIT, CtlResult, runCtlCli } from "../src/ctl"
 
@@ -49,7 +50,8 @@ interface CtlRun {
  * stdout die, as a closed pipe can. `stdout` lets a test read stdout while
  * the call still runs. `stdin` is what the call reads on its stdin, which
  * then closes; none by default. `clock` is the call's own clock, not the
- * server's; the wall clock by default.
+ * server's; the wall clock by default. `tracer` takes the call's spans, one
+ * per RPC it sends.
  */
 const runCtl = (
   home: string,
@@ -59,6 +61,7 @@ const runCtl = (
     readonly stdout?: Ref.Ref<string>
     readonly stdin?: string
     readonly clock?: Clock.Clock
+    readonly tracer?: Tracer.Tracer
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -66,9 +69,13 @@ const runCtl = (
     const err = yield* Ref.make("")
     const capture = (into: Ref.Ref<string>) =>
       Sink.forEach((chunk: string | Uint8Array) => Ref.update(into, (text) => text + String(chunk)))
-    const cli = Option.match(Option.fromUndefinedOr(options.clock), {
+    const clocked = Option.match(Option.fromUndefinedOr(options.clock), {
       onNone: () => runCtlCli(args, "test"),
       onSome: (clock) => runCtlCli(args, "test").pipe(Effect.provideService(Clock.Clock, clock)),
+    })
+    const cli = Option.match(Option.fromUndefinedOr(options.tracer), {
+      onNone: () => clocked,
+      onSome: (tracer) => clocked.pipe(Effect.withTracer(tracer)),
     })
     const exit = yield* cli.pipe(
       Effect.provide(
@@ -312,6 +319,37 @@ describe("gent ctl against a running server", () => {
       30_000,
     )
   }
+
+  // status reads the runtime's first state and the lanes reply's server
+  // time, never the snapshot: the snapshot folds every event of the branch.
+  it.live(
+    "status reads the runtime and the lanes reply, never the snapshot",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { home, server } = yield* serveScratchHome
+          const { client } = yield* Gent.client(server, { cwd: home })
+          yield* client.session.create({
+            cwd: home,
+            modelId: TEST_MODEL_ID,
+            initialPrompt: "debug ask",
+          })
+          const rpcs: Array<string> = []
+          const tracer = Tracer.make({
+            span(options) {
+              rpcs.push(options.name)
+              return new Tracer.NativeSpan(options)
+            },
+          })
+          const run = yield* runCtl(home, ["status", "--cwd", home], { tracer })
+          yield* resultAs("Status")(run)
+          expect(rpcs.some((name) => name.endsWith("session.watchRuntime"))).toBe(true)
+          expect(rpcs.some((name) => name.endsWith("accounts.lanes"))).toBe(true)
+          expect(rpcs.filter((name) => name.endsWith("session.getSnapshot"))).toEqual([])
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
 
   it.live(
     "a send retried under one request id admits one message",

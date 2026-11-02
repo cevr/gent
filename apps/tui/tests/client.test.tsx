@@ -13,7 +13,8 @@ import {
   TurnCompleted,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Exit, Fiber, Option, Predicate, Ref } from "effect"
+import { Clock, Deferred, Duration, Effect, Exit, Fiber, Option, Predicate, Ref } from "effect"
+import { TestClock } from "effect/testing"
 import {
   AgentEvent,
   AgentName,
@@ -44,10 +45,11 @@ import {
   useClient,
   useRuntime,
 } from "../src/client"
-import { createSignal, onMount, Show } from "solid-js"
+import { createEffect, createRoot, createSignal, onMount, Show } from "solid-js"
 import {
   applySnapshotAgent,
   createMockClient,
+  createMockRuntime,
   createMutableRuntime,
   mountClient,
   renderScoped,
@@ -1106,6 +1108,98 @@ describe("ClientProvider session lifecycle", () => {
       expect(listings).toBe(2)
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // ── the server clock ──
+  // The connection measures the server's clock from a lanes reply as it
+  // opens, session or not. The server's now is set against the midpoint of
+  // the request's trip, so a slow reply moves the offset by none of its trip.
+  for (const [where, skewMs] of [
+    ["two minutes behind", 120_000],
+    ["two minutes ahead of", -120_000],
+  ] as const) {
+    it.scopedLive(
+      `a connection measures the server's clock at its lanes reply's midpoint, on a client ${where} it`,
+      () =>
+        Effect.gen(function* () {
+          const clock = yield* TestClock.make()
+          yield* clock.adjust(Duration.minutes(10))
+          const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+          // The reply takes 400 ms; the server answers at the trip's middle.
+          const lanes = () =>
+            Effect.gen(function* () {
+              yield* clock.adjust(Duration.millis(200))
+              const serverNow = clock.currentTimeMillisUnsafe() + skewMs
+              yield* clock.adjust(Duration.millis(200))
+              return { providers: [], serverNow }
+            })
+          const { client } = yield* mountClient({
+            client: createMockClient({ accounts: { lanes } }),
+            runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
+          })
+          yield* waitUntil(() => Option.isSome(client.serverClockOffset()), "the measure")
+          expect(client.serverClockOffset()).toEqual(Option.some(skewMs))
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+  // Two measures on one clock differ by their trips. A reconnect that
+  // measures within a second of the held offset keeps it, and its readers
+  // stay still; a clock that was set moves it; a reply with no time clears it.
+  it.scopedLive("a reconnect keeps the server clock offset unless it moves by over a second", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make()
+      const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+      const lifecycle = createMutableRuntime(
+        ConnectionState.cases.Connected.make({ generation: 0 }),
+      )
+      let skewMs = Option.some(120_000)
+      let measures = 0
+      const lanes = () =>
+        Effect.sync(() => {
+          measures += 1
+          return {
+            providers: [],
+            serverNow: Option.getOrUndefined(
+              Option.map(skewMs, (skew) => clock.currentTimeMillisUnsafe() + skew),
+            ),
+          }
+        })
+      const { client } = yield* mountClient({
+        client: createMockClient({ accounts: { lanes } }),
+        runtime: { ...lifecycle.runtime, cast: onClock.cast, fork: onClock.fork },
+      })
+      yield* waitUntil(() => measures === 1, "the first measure")
+      let reads = 0
+      const dispose = createRoot((disposeRoot) => {
+        createEffect(() => {
+          client.serverClockOffset()
+          reads += 1
+        })
+        return disposeRoot
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(dispose))
+      expect(client.serverClockOffset()).toEqual(Option.some(120_000))
+      const readsBefore = reads
+      let generation = 0
+      const reconnect = () =>
+        Effect.gen(function* () {
+          const before = measures
+          generation += 1
+          lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation }))
+          lifecycle.emit(ConnectionState.cases.Connected.make({ generation }))
+          yield* waitUntil(() => measures === before + 1, "the reconnect's measure")
+        })
+      skewMs = Option.some(120_500)
+      yield* reconnect()
+      expect(client.serverClockOffset()).toEqual(Option.some(120_000))
+      expect(reads).toBe(readsBefore)
+      skewMs = Option.some(121_200)
+      yield* reconnect()
+      expect(client.serverClockOffset()).toEqual(Option.some(121_200))
+      skewMs = Option.none()
+      yield* reconnect()
+      expect(client.serverClockOffset()).toEqual(Option.none())
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   // The catalog is a session's profile: another session's may lack a model
   // A runs. While B's catalog loads, and after its load fails, A's models are
   // never offered as B's.

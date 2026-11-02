@@ -256,8 +256,6 @@ const retryReason = (reason: string): string => {
   return ` · ${line}`
 }
 
-export const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
-
 /**
  * The turn line, `Worked for 1m 48s · 6/8 model calls · 2 retries · ↑38k
  * ↓2.1k · $0.04`: the whole turn's time, then the model calls it used of its
@@ -1385,7 +1383,8 @@ function ToolCallGroup(props: {
   const clockWhile = (runs: boolean): Option.Option<number> => {
     if (!runs) return Option.none()
     tick()
-    return Option.map(serverClockOffset(), (offset) => currentMillis() + offset)
+    const offset = serverClockOffset()
+    return Option.map(offset, () => serverNowAt(offset))
   }
   // A call that failed is the group's failure; ops that failed inside a cell
   // that recovered, or a command that exited nonzero, are a warning; the
