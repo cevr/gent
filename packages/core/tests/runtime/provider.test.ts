@@ -6031,7 +6031,8 @@ describe("account lanes", () => {
 
   /**
    * Seven accounts: a read through real receipts, six rejected weeks that
-   * reset over the next 108 hours. The pool carries 8.6 mean runs.
+   * reset over the next 108 hours. The pool carries 8.6 mean runs at the
+   * pace, 9.27 with its 7.4% leeway.
    */
   const rollingPool = Effect.gen(function* () {
     const fixture = yield* accounts()
@@ -6095,9 +6096,11 @@ describe("account lanes", () => {
       // Plain hours, 100% target: in-view fuel = 930 M × 5.2973809524.
       // Rolling = 29.324787415 M/h; floor = 902.1 M / 166 h.
       // Weekly ceiling = 6482.1 M / 166 h; 5h ceiling = 167.4 M / 5 h.
-      // floor(min(29.324787415, 39.0487951807, 33.48) / 3.4 × 1.05) = 9,
-      // the leeway over the pace.
-      // Before rolling: floor((902.1 / 166) / 3.4 × 1.05) = 1.
+      // The pace, 29.3248 M/h, is 0.757 of the even supply (7 × 930 M /
+      // 168 h = 38.75 M/h): a 7.43% leeway.
+      // floor(min(29.324787415, 39.0487951807, 33.48) / 3.4 × 1.0743) = 9.
+      // Before rolling, a alone: 5.434 M/h of its 5.536, a 5.2% leeway:
+      // floor((902.1 / 166) / 3.4 × 1.052) = 1.
       const report = yield* lanes(pool)
       expect(report.capacity).toBe(9)
       expect(yield* lanes([a])).toMatchObject({ capacity: 1 }) // a pin cannot borrow refills
@@ -6118,7 +6121,7 @@ describe("account lanes", () => {
   const evenPool = (weekHours: number, others: number, rejected = 0) =>
     Effect.gen(function* () {
       const fixture = yield* accounts()
-      const { read, spend, lanes } = fixture
+      const { read, spend, lanes, admit } = fixture
       const now = yield* Clock.currentTimeMillis
       const pool = [
         a,
@@ -6148,14 +6151,19 @@ describe("account lanes", () => {
           },
           { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
         ])
-      return (yield* lanes(pool)).capacity
+      const capacity = (yield* lanes(pool)).capacity
+      // Admission reads the same leeway: starts until one queues.
+      let admitted = 0
+      while (admitted < 100 && (yield* admit(pool, `even-${admitted}`)) === "admitted")
+        admitted += 1
+      return { capacity, admitted }
     })
 
   it.effect("a pace at half the even weekly supply admits 10% over it", () =>
     Effect.gen(function* () {
       // 3.49 weeks left of 7 over 168 h: 19.32 M/h, under half the supply.
       // floor(19.32 / 3.4 × 1.10) = 6; at 5% it would be 5.
-      expect(yield* evenPool(168, 0.58)).toBe(6)
+      expect(yield* evenPool(168, 0.58)).toEqual({ capacity: 6, admitted: 6 })
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -6165,7 +6173,7 @@ describe("account lanes", () => {
       // 21.98 M/h is 0.57 of the seven-account supply, a 9.3% leeway:
       // floor(21.98 / 3.4 × 1.093) = 7. Against the four open accounts'
       // supply alone it would be 5%, and 6.
-      expect(yield* evenPool(168, 0, 3)).toBe(7)
+      expect(yield* evenPool(168, 0, 3)).toEqual({ capacity: 7, admitted: 7 })
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -6173,7 +6181,7 @@ describe("account lanes", () => {
     Effect.gen(function* () {
       // 6.79 weeks left, every one resetting in 84 h: 75.18 M/h, about
       // twice the supply. floor(75.18 / 3.4 × 1.05) = 23; at 10% it would be 24.
-      expect(yield* evenPool(84, 0.03)).toBe(23)
+      expect(yield* evenPool(84, 0.03)).toEqual({ capacity: 23, admitted: 23 })
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -6181,7 +6189,7 @@ describe("account lanes", () => {
     Effect.gen(function* () {
       const fixture = yield* rollingPool
       const { mini } = yield* priceModels(fixture)
-      // 9.06 mean runs with the leeway: eighteen half-price runs, not nine.
+      // 9.27 mean runs with the leeway: eighteen half-price runs, not nineteen.
       for (let index = 0; index < 18; index += 1)
         expect(yield* fixture.admit(fixture.pool, `mini-${index}`, mini)).toBe("admitted")
       expect(yield* fixture.admit(fixture.pool, "mini-full", mini)).toBe("queued")
@@ -9179,7 +9187,7 @@ describe("account lanes", () => {
           expect(yield* admitted).toBe(7)
           yield* TestClock.adjust("91 seconds")
           expect(logged.named("credential-placement.peer.silent")).toHaveLength(1)
-          // min(9 - 2, floor(9.06 / 2))
+          // min(9 - 2, floor(9.27 / 2))
           expect(yield* admitted).toBe(4)
           yield* TestClock.adjust("30 minutes")
           expect(yield* admitted).toBe(9)
@@ -9338,7 +9346,7 @@ describe("account lanes", () => {
             logged
               .named("credential-placement.pool-overshoot")
               .map((entry) => entry.annotations.get("load"))
-          // 7 own runs beside the peer's: over 9.06 lanes at 3.
+          // 7 own runs beside the peer's: over 9.27 lanes at 3.
           for (const [seq, count] of [
             [1, 2],
             [2, 3],
