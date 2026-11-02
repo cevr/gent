@@ -124,8 +124,14 @@ describe("verify helpers", () => {
         // `--data` seeds an account ledger the server reads as it starts: one
         // window 30% used, two 2-point segments of 240k fuel, so 120k a point:
         // 60 points to the 90% stop over 2 h hold one run. They last 2 and 8
-        // minutes, so the fit tells gent's fuel from time, at ±14%.
+        // minutes, so the fit tells gent's fuel from time, at ±14%. The fit
+        // weighs each segment by the clock hour it ends in, so both end in
+        // one hour: the last ends 2 minutes ago, or at the end of the last
+        // hour when that leaves the first in the hour before.
         const now = yield* Clock.currentTimeMillis
+        const hourStart = Math.floor((now - 120_000) / 3_600_000) * 3_600_000
+        let lastEnd = now - 120_000
+        if (lastEnd - 480_000 < hourStart) lastEnd = hourStart - 1_000
         const segment = (openedAt: number, endedAt: number) => ({
           provider: "anthropic",
           slot: "default",
@@ -154,8 +160,8 @@ describe("verify helpers", () => {
               },
             ],
             segments: [
-              segment(now - 720_000, now - 600_000),
-              segment(now - 600_000, now - 120_000),
+              segment(lastEnd - 600_000, lastEnd - 480_000),
+              segment(lastEnd - 480_000, lastEnd),
             ],
           }),
         )
