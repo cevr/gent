@@ -4946,12 +4946,13 @@ const oneLaneHeld = (pair: ReadonlyArray<ModelId>, options: OneLaneOptions = {})
         return second.client
       })
     const owner = ownerOf(yield* client.session.create({}))
-    // The week moves a point over the owner's two steps: about 1.3 runs to its reset, one lane.
+    // The week moves a point on each of the owner's two steps after the first:
+    // two segments that agree set the rate, about 1.3 runs to its reset, one lane.
     const now = yield* Clock.currentTimeMillis
-    yield* Ref.set(readings, weekAt(now, 0.1))
-    yield* callOn(client, owner, [["machine.list", "list-before", {}]])
-    yield* Ref.set(readings, weekAt(now, 0.11))
-    yield* callOn(client, owner, [["machine.list", "list-after", {}]])
+    for (const [index, utilization] of [0.1, 0.11, 0.12].entries()) {
+      yield* Ref.set(readings, weekAt(now, utilization))
+      yield* callOn(client, owner, [["machine.list", `list-${index}`, {}]])
+    }
     expect((yield* client.accounts.lanes()).providers[0]?.capacity).toBe(1)
     const hold = yield* startRunOn(client, owner, pairOnce("hold", "hold"), "hold")
     yield* waitFor(

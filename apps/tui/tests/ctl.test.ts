@@ -753,6 +753,60 @@ describe("gent ctl against a running server", () => {
   )
 
   it.live(
+    "a stored lone segment sets no rate: the band reads the provider unknown, not 0 free",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // A ledger an older gent wrote on an account Claude Code shares: one
+          // 12k-token turn of 20,000 fuel spanned a 1-point move of both windows.
+          // A lone segment judges no outside spend, so it names no rate on load.
+          const now = yield* Clock.currentTimeMillis
+          const windows = [
+            { window: "5h", utilization: 0.3, resetAt: now + 3 * 3_600_000 },
+            { window: "7d", utilization: 0.89, resetAt: now + 50 * 3_600_000 },
+          ]
+          const seeded = yield* serveScratchHomeWith({
+            ledger: {
+              buckets: [],
+              readings: windows.map((window) => ({
+                provider: "anthropic",
+                slot: "default",
+                ...window,
+                readAt: now - 60_000,
+                rejected: false,
+              })),
+              segments: windows.map(({ window }) => ({
+                provider: "anthropic",
+                slot: "default",
+                window,
+                endedAt: now - 60_000,
+                fuel: 20_000,
+                deltaPct: 1,
+                tokens: { input: 12_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+              })),
+            },
+          })
+          const lanes = yield* Effect.flatMap(runCtl(seeded.home, ["lanes"]), resultAs("Lanes"))
+          const [anthropic] = lanes.providers
+          expect(anthropic?.capacity).toBeUndefined()
+          const fitted = anthropic?.accounts[0]?.windows ?? []
+          expect(fitted.map(({ window, samples }) => ({ window, samples }))).toEqual([
+            { window: "5h", samples: 0 },
+            { window: "7d", samples: 0 },
+          ])
+          for (const window of fitted) expect(window.fuelPerPct).toBeUndefined()
+          const line = yield* runCtl(seeded.home, ["lanes", "--line"])
+          expect(line).toEqual({
+            code: CTL_EXIT.ok,
+            stdout: "lanes anthropic unknown\n",
+            stderr: "",
+          })
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
     "pool needs no session: one Pool value and exit 0, or with --follow bare PoolFacts lines until the server stops",
     () =>
       Effect.scoped(

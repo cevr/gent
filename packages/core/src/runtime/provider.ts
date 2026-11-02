@@ -3683,6 +3683,13 @@ const QUOTA_HALF_LIFE_ACTIVE_HOURS = 24
  */
 const QUOTA_OUTSIDE_POINTS = 3
 /**
+ * The kept segments a window's fit needs before it names a rate. One segment
+ * has none to judge it by, so outside spend in it would read as gent's: one
+ * 12k-token turn across a 1% move Claude Code made set a week at 1.9 M fuel
+ * and every lane of the pool to 0 (measured, 2026-11-02).
+ */
+const QUOTA_JUDGED_SEGMENTS = 2
+/**
  * The hours a model's segments must span before its quota weight leaves its
  * list price: whole-percent readings of a short stretch are too coarse to
  * weigh one model against another (context-mileage B4).
@@ -5091,10 +5098,13 @@ const fitProviderWindows = (
  * rate reads the rest. Each segment is judged against the rate of the other
  * kept segments, never one it is part of (outside spend in a segment lowers
  * the rate it would be judged by), with every fuel at the models' quota
- * weights: a dearer model's step is its price, not spend outside gent. The judging repeats until the kept
- * set holds still. A segment with no other kept segment to judge it by is
- * kept. The band is `±0.5 / Σ points` of the kept segments (lanes r3): the
- * half-step of the 1% quantization over the move they span.
+ * weights: a dearer model's step is its price, not spend outside gent. The
+ * judging repeats until the kept set holds still. A segment with no other
+ * kept segment to judge it by stays while the others are judged, but a
+ * window that keeps fewer than `QUOTA_JUDGED_SEGMENTS` names no rate and
+ * keeps none: the rate, the band, the pool's rate and the model fit read
+ * only judged segments. The band is `±0.5 / Σ points` of the kept segments
+ * (lanes r3): the half-step of the 1% quantization over the move they span.
  */
 const fitWindow = (
   segments: ReadonlyArray<FuelSegment>,
@@ -5127,12 +5137,16 @@ const fitWindow = (
   const keptPoints = kept.reduce((sum, segment) => sum + segment.deltaPct, 0)
   let outsideShare = 0
   if (totalPoints > 0) outsideShare = (totalPoints - keptPoints) / totalPoints
+  // The outside share stands as judged; an unjudged segment is no rate.
+  let judged = kept
+  if (kept.length < QUOTA_JUDGED_SEGMENTS) judged = []
+  const judgedPoints = judged.reduce((sum, segment) => sum + segment.deltaPct, 0)
   return {
-    fuelPerPct: weightedRate(kept),
-    band: Option.liftPredicate(0.5 / keptPoints, () => keptPoints > 0),
-    kept,
+    fuelPerPct: weightedRate(judged),
+    band: Option.liftPredicate(0.5 / judgedPoints, () => judgedPoints > 0),
+    kept: judged,
     outsideShare,
-    mixFuelPerPct: weightedRate(kept, fuelOf),
+    mixFuelPerPct: weightedRate(judged, fuelOf),
   }
 }
 

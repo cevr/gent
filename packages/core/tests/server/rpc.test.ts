@@ -5049,6 +5049,7 @@ describe("AccountsRpcs", () => {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             { ...textStep("ok"), quota: quota(0.25) },
             { ...textStep("ok"), quota: quota(0.27) },
+            { ...textStep("ok"), quota: quota(0.29) },
           ])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
@@ -5083,6 +5084,7 @@ describe("AccountsRpcs", () => {
             })
           yield* turn("first", 0)
           yield* turn("second", 1)
+          yield* turn("third", 2)
           const { providers } = yield* client.accounts.lanes()
           expect(
             providers.map((lanes) => ({ provider: lanes.provider, scope: lanes.scope })),
@@ -5092,8 +5094,9 @@ describe("AccountsRpcs", () => {
           )
           expect(
             windows?.map(({ slot, window, utilization }) => ({ slot, window, utilization })),
-          ).toEqual([{ slot: work, window: "5h", utilization: 0.27 }])
-          // The first step's 11 fuel moved the window 2 points.
+          ).toEqual([{ slot: work, window: "5h", utilization: 0.29 }])
+          // Each of the first two steps' 11 fuel moved the window 2 points:
+          // two segments that agree name the rate.
           expect(windows?.[0]?.fuelPerPct).toBeCloseTo(5.5, 6)
         }).pipe(Effect.timeout("8 seconds")),
       ),
@@ -5165,7 +5168,8 @@ describe("AccountsRpcs", () => {
           })
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             { ...toolCallStep("lane_model", {}), quota: quota(0.25) },
-            { ...textStep("done"), quota: quota(0.27) },
+            { ...toolCallStep("lane_model", {}), quota: quota(0.27) },
+            { ...textStep("done"), quota: quota(0.29) },
           ])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...e2ePreset,
@@ -5195,12 +5199,13 @@ describe("AccountsRpcs", () => {
             "the probed turn settles",
           )
           // The test model's week is spent; `other`'s windows have room.
-          expect(yield* Ref.get(admitted)).toEqual(["Spent", "Admitted"])
+          expect(yield* Ref.get(admitted)).toEqual(["Spent", "Admitted", "Spent", "Admitted"])
           const { providers } = yield* client.accounts.lanes()
           const own = providers[0]?.accounts[0]?.windows.find(
             (window) => window.window === "5h" && window.model === TEST_MODEL_ID,
           )
-          // The first step's 30 fuel moved the route model's window 2 points.
+          // Each tool step's 30 fuel moved the route model's window 2 points:
+          // two segments that agree name the rate.
           expect(own?.fuelPerPct).toBeCloseTo(15, 6)
         }).pipe(Effect.timeout("8 seconds")),
       ),

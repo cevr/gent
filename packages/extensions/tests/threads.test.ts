@@ -475,6 +475,9 @@ const accountsRig = (options: RigAccounts) =>
       Effect.flatMap(one(at, op("thread.start", { task, account })), decodeStarted)
     const stop = (at: SessionKey, thread: string) =>
       Effect.flatMap(one(at, op("thread.stop", { thread })), decodeStopped)
+    // With quota readings, the starter takes one step first: a window's fit
+    // needs two segments, so the test's first act, two steps, closes both.
+    if (Predicate.isNotUndefined(options.quota)) yield* act(starter, [])
     return {
       client,
       cwd,
@@ -657,7 +660,10 @@ interface RigAccounts {
   }
   readonly pricing?: ModelPricing
   readonly usage?: StepUsage
-  /** The quota windows the starter's `step`-th request names; threads' requests name none. */
+  /**
+   * The quota windows the starter's `step`-th request names; threads' requests
+   * name none. With them, the rig's own first step is step 1.
+   */
   readonly quota?: (step: number) => ReadonlyArray<QuotaReading>
   /** The owner's Sabbath, beside `order` in the user config. */
   readonly sabbath?: {
@@ -1040,17 +1046,15 @@ describe("threads", () => {
       usage: { inputTokens: 1_000, outputTokens: 0 },
     }
     /**
-     * The starter's first step reads the week at 10% and every later one at
-     * 11%: one million fuel per point, 89 points left and 20 hours to the
-     * reset carry 1.3 runs at the prior's 3.4 M fuel per run-hour, one lane.
+     * The starter's first step reads the week at 10%, its second at 11% and
+     * every later one at 12%: two segments of one million fuel per point, 88
+     * points left and 20 hours to the reset carry 1.3 runs at the prior's
+     * 3.4 M fuel per run-hour, one lane.
      */
     const oneLane = (now: number) => (step: number) => [
       {
         window: "7d",
-        utilization: Option.getOrElse(
-          Option.liftPredicate(0.1, () => step === 1),
-          () => 0.11,
-        ),
+        utilization: (10 + Math.min(step - 1, 2)) / 100,
         resetAt: now + 20 * 3_600_000,
         rejected: false,
       },
@@ -1361,11 +1365,12 @@ describe("threads", () => {
           Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis
             const resetAt = now + 3_600_000
-            // The fourth starter step reads the window rejected until the reset.
+            // The fifth starter step, the fourth after the rig's own, reads the
+            // window rejected until the reset.
             const rig = yield* accountsRig({
               ...metered,
               quota: (step) => {
-                if (step < 4) return oneLane(now)(step)
+                if (step < 5) return oneLane(now)(step)
                 return [{ window: "7d", utilization: 1, resetAt, rejected: true }]
               },
             })
@@ -1485,12 +1490,13 @@ describe("threads", () => {
             yield* writeAutoResume(home, "{}")
             const now = yield* Clock.currentTimeMillis
             const resetAt = now + 3_600_000
-            // The fourth starter step reads the window rejected until the reset.
+            // The fifth starter step, the fourth after the rig's own, reads the
+            // window rejected until the reset.
             const rig = yield* accountsRig({
               ...metered,
               home,
               quota: (step) => {
-                if (step < 4) return oneLane(now)(step)
+                if (step < 5) return oneLane(now)(step)
                 return [{ window: "7d", utilization: 1, resetAt, rejected: true }]
               },
             })
