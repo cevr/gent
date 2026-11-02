@@ -162,6 +162,13 @@ export const SendMessageInput = Schema.Struct({
   content: Schema.String,
   requestId: Schema.optional(RequestId),
   /**
+   * `"admission"`: the call returns once the loop holds the turn. Omitted,
+   * a send with a `requestId` returns when the turn ends (the headless run
+   * reads a failed send as the end of its turn); one without returns at
+   * admission.
+   */
+  completion: Schema.optional(Schema.Literals(["admission"])),
+  /**
    * No user watches the turn this message opens (a headless run). The
    * server keeps it on the message (`MessageMetadata.unattended`).
    */

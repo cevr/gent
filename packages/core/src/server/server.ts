@@ -1530,6 +1530,7 @@ const RpcHandlers = GentRpcs.toLayer(
             branchId: input.branchId,
             content: input.content,
             requestId: input.requestId,
+            ...omitUndefined({ completion: input.completion }),
             metadata: clientMetadata(omitUndefined({ unattended: input.unattended })),
           })
           .pipe(

@@ -794,6 +794,7 @@ const waitFor = Effect.fn("Ctl.wait")(function* (
  * with `fresh`. The request id makes a retry safe: the server creates one
  * session per id (its durable `session.create` receipt) and admits one
  * message per id. The message id is the one its turn's `TurnCompleted` names.
+ * It returns once the loop holds the turn; `--wait` waits for the turn.
  */
 const sendMessage = Effect.fn("Ctl.send")(function* (
   client: GentNamespacedClient,
@@ -829,8 +830,9 @@ const sendMessage = Effect.fn("Ctl.send")(function* (
         Effect.mapError(() => new CtlUsage({ message: "send needs a session or --new" })),
       ),
   })
+  // At admission: a send with a request id otherwise holds until its turn ends.
   yield* client.message
-    .send({ ...target, content: options.content, requestId })
+    .send({ ...target, content: options.content, requestId, completion: "admission" })
     .pipe(Effect.mapError(rpcFailure))
   return CtlResult.cases.Sent.make({
     ...target,

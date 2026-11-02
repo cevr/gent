@@ -141,7 +141,10 @@ record per line, so `events --limit 3` prints five lines. `events` prints one
 compact record per stored event; `--full` prints the stored envelopes. A
 `StreamChunk` is live only, so `events` never lists one, and `wait --until
 turn` reads its reply from the answers the turn stored. Each record's `id` is a cursor
-for `--since` and `--after`. `send --request-id <id>` makes a retry safe: the
+for `--since` and `--after`. `send` prints `Sent` once the loop holds the
+turn (`message.send` with `completion: "admission"`); it does not wait for
+the turn. `send --wait` waits for the turn and prints `TurnEnded`, and
+`--timeout` bounds that wait. `send --request-id <id>` makes a retry safe: the
 server admits one message per id, and with `--new` creates one session per id,
 so a repeated `send --new --request-id <id>` names the same session and
 message. `request` sends one extension request, as a client extension does,

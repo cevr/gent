@@ -351,6 +351,43 @@ describe("gent ctl against a running server", () => {
     30_000,
   )
 
+  // `send` returns at admission; only `--wait` waits for the turn. The
+  // scripted `debug ask` turn runs `sleep 20`, past the call's time limit.
+  it.live(
+    "send without --wait returns while its turn still runs",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { home, server } = yield* serveScratchHome
+          const gent = ctlIn(home)
+          const sent = yield* gent
+            .as("Sent", ["send", "--new", "--model", TEST_MODEL_ID, "debug ask"])
+            .pipe(Effect.timeout("10 seconds"))
+          const { client } = yield* Gent.client(server, { cwd: home })
+          const runtime = yield* client.session
+            .watchRuntime({ sessionId: sent.sessionId, branchId: sent.branchId })
+            .pipe(Stream.runHead)
+          expect(Option.map(runtime, (state) => state._tag)).not.toEqual(Option.some("Idle"))
+          // `--timeout` bounds the whole wait, the send's turn included.
+          const waited = yield* gent
+            .run([
+              "send",
+              "--new",
+              "--model",
+              TEST_MODEL_ID,
+              "--wait",
+              "--timeout",
+              "1",
+              "debug ask",
+            ])
+            .pipe(Effect.timeout("10 seconds"))
+          expect(waited.code).toBe(CTL_EXIT.timedOut)
+          expect((yield* errorOf(waited))._tag).toBe("CtlWaitTimedOut")
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
   it.live(
     "a send retried under one request id admits one message",
     () =>
