@@ -269,11 +269,22 @@ const MachineState = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("kind"))
 type MachineState = typeof MachineState.Type
 
+/** A shipped file's name: a slug with at most one extension, `repeat-tests.ts`. */
+const FileName = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,63}(\.[a-z0-9]{1,8})?$/))
+
 const MachineDefinition = Schema.Struct({
   name: MachineName,
   threads: Schema.Record(RoleName, ThreadRole),
   start: StateName,
   states: Schema.Record(StateName, MachineState),
+  /**
+   * Files the definition ships, by name: a script a `run` state runs. Each
+   * command gets them written to a temp directory of its own, removed when
+   * it ends, and `{{files.<name>}}` renders a file's path.
+   */
+  files: Schema.optionalKey(
+    Schema.Record(FileName, Schema.String.check(Schema.isMaxLength(64_000))),
+  ),
 })
 type MachineDefinition = typeof MachineDefinition.Type
 
@@ -536,7 +547,7 @@ const storageError = (message: string) => (cause: unknown) =>
 const DEFAULT_MAX_VISITS = 10
 
 const RESERVED_KEYS: ReadonlySet<string> = new Set(["retry", "stop", "continue"])
-const TEMPLATE_HEADS: ReadonlySet<string> = new Set(["input", "all", "visit"])
+const TEMPLATE_HEADS: ReadonlySet<string> = new Set(["input", "all", "visit", "files"])
 
 /** `{{ref}}`: the one template form. */
 const TEMPLATE_SLOT = /\{\{\s*([^{}\s]+)\s*\}\}/g
@@ -635,18 +646,32 @@ const slotResolves = (names: ReadonlySet<string>, slot: ReadonlyArray<string>) =
   if (head === "all") return names.has(next)
   // `visit` renders the visit number and `visit.note` the move's note (`visitSlot`), nothing more.
   if (head === "visit") return slot.length === 1 || (slot.length === 2 && next === "note")
+  // `files` resolves only in a run state's command (`templateProblems`).
+  if (head === "files") return false
   return TEMPLATE_HEADS.has(head) || names.has(head)
 }
 
 const templateProblems = (
+  definition: MachineDefinition,
   names: ReadonlySet<string>,
   name: string,
   state: MachineState,
-): ReadonlyArray<string> =>
-  templatesOf(state)
+): ReadonlyArray<string> => {
+  const files = new Set(Object.keys(definition.files ?? {}))
+  return templatesOf(state)
     .flatMap(slotsOf)
-    .filter((slot) => !slotResolves(names, slot))
-    .map((slot) => `${name}: {{${slot.join(".")}}} names no state`)
+    .flatMap((slot) => {
+      const [head = "", ...rest] = slot
+      const shown = `${name}: {{${slot.join(".")}}}`
+      if (head !== "files") {
+        if (slotResolves(names, slot)) return []
+        return [`${shown} names no state`]
+      }
+      if (state.kind !== "run") return [`${shown} names a file, and only a run state has files`]
+      if (files.has(rest.join("."))) return []
+      return [`${shown} names no shipped file`]
+    })
+}
 
 /** Every state an edge from `start` reaches. */
 const reachedFrom = (definition: MachineDefinition, start: string): ReadonlySet<string> => {
@@ -774,7 +799,7 @@ const definitionProblems = (definition: MachineDefinition): ReadonlyArray<string
     .toArray()
   const perState = Object.entries(definition.states).flatMap(([name, state]) => [
     ...stateProblems(definition, names, name, state),
-    ...templateProblems(names, name, state),
+    ...templateProblems(definition, names, name, state),
   ])
   return [
     ...reserved,
@@ -841,6 +866,8 @@ interface TemplateScope {
   readonly context: RunContext
   readonly visit: number
   readonly note: Option.Option<string>
+  /** A shipped file's path by name: a run state's command has them, no other template. */
+  readonly files: Readonly<Record<string, string>>
 }
 
 /** `{{visit}}` is the visit's number, `{{visit.note}}` the note of the move into it. */
@@ -854,6 +881,12 @@ const slotValue = (scope: TemplateScope, slot: ReadonlyArray<string>): Option.Op
   const [head = "", ...rest] = slot
   if (head === "visit") return visitSlot(scope, rest)
   if (head === "input") return Option.map(pathInto(scope.input, rest), jsonText)
+  if (head === "files") {
+    const file = rest.join(".")
+    return Option.liftPredicate(scope.files, (files) => Object.hasOwn(files, file)).pipe(
+      Option.flatMap((files) => Option.fromUndefinedOr(files[file])),
+    )
+  }
   if (head === "all") {
     const [state = "", ...path] = rest
     const values = Option.fromUndefinedOr(scope.context.all[state])
@@ -2520,7 +2553,9 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
       const committed = yield* commitMove(run, { ...run, pending: Option.some(action) }, [
         MachineStep.cases.Dispatched.make({ action }),
       ])
-      if (Option.isSome(committed)) yield* startCommand(committed.value, state, action)
+      if (Option.isSome(committed)) {
+        yield* startCommand(committed.value, state, action, definition.files ?? {})
+      }
       return
     }
     case "integrate": {
@@ -2557,6 +2592,7 @@ const templateScope = (run: Run, visit: number): TemplateScope => ({
   context: run.context,
   visit,
   note: run.moveNote,
+  files: {},
 })
 
 const threadStateOf = Effect.fn("Machines.threadStateOf")(function* (run: Run, name: StateName) {
@@ -3646,6 +3682,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
   run: Run,
   state: RunState,
   action: CommandAction,
+  shipped: Readonly<Record<string, string>>,
 ) {
   const drivers = yield* MachineDrivers
   const permits = (yield* ExtensionContext).Permits
@@ -3653,7 +3690,21 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
   const services = yield* Effect.context<
     MachineStore | FileSystem.FileSystem | Path.Path | Crypto.Crypto | ChildProcessSpawner
   >()
-  const command = render(state.run, templateScope(run, action.visit))
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  // The definition's files, in a temp directory the command's scope removes.
+  const writtenFiles = Effect.gen(function* () {
+    const entries = Object.entries(shipped)
+    if (entries.length === 0) return {}
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-machine-files-" })
+    const written: Record<string, string> = {}
+    for (const [name, content] of entries) {
+      const file = path.join(dir, name)
+      yield* fs.writeFileString(file, content)
+      written[name] = file
+    }
+    return written
+  })
   const timeout = Duration.seconds(state.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS)
   const record = (process: CommandProcess) =>
     whileCommandPending(run.run, action, (current) => {
@@ -3704,12 +3755,16 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
         ],
       }
     })
-  const commandResult = runBashCommand(
-    command,
-    Option.some(run.cwd),
-    Option.none(),
-    Option.some({ launch: action.launch, recorded: record }),
-  ).pipe(
+  const commandResult = Effect.gen(function* () {
+    const files = yield* writtenFiles
+    const command = render(state.run, { ...templateScope(run, action.visit), files })
+    return yield* runBashCommand(
+      command,
+      Option.some(run.cwd),
+      Option.none(),
+      Option.some({ launch: action.launch, recorded: record }),
+    )
+  }).pipe(
     Effect.scoped,
     Effect.timeoutOption(timeout),
     Effect.map(

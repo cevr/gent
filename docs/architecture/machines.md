@@ -139,6 +139,15 @@
     sleeping, so a stale arm cannot hide a committed stop.
   - An `integrate` state pushes the run's head through the integration gate
     and moves by `on.green` or `on.red` (Integration gate in `shipped-extensions.md`).
+  - A definition can ship files (`files`, a name to its text, each at most
+    64,000 characters), so a check travels with the definition, not with a
+    project. A `run` state names one as `{{files.<name>}}`: each command
+    writes the definition's files to its own scoped temp directory, renders
+    the slot as that file's path, and removes the directory when the command
+    ends; a failed write fails the command. `machine.define` refuses the slot
+    outside a `run` state and a name the definition does not ship, and
+    `files` is a reserved state name (the other heads are `input`, `visit`
+    and `all`).
   - A client reads runs as a session of the owner's thread:
     `MachinesRpc.Status` (`run-status`, `gent ctl status --run`, what
     `machine.status` gives), `MachinesRpc.Runs` (`run-list`) and

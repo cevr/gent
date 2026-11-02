@@ -1187,6 +1187,80 @@ describe("a machine command past its time budget", () => {
   )
 })
 
+// ── a definition's shipped files ────────────────────────────────────────────
+
+/** A command that prints the shipped file's path, then runs it. */
+const SHIPPED_FILE = {
+  name: "shipped-file",
+  threads: {},
+  start: "check",
+  states: {
+    check: {
+      kind: "run",
+      run: 'echo "{{files.probe.sh}}"\nbash "{{files.probe.sh}}" {{input.word}}',
+      on: { pass: "done", fail: "done" },
+    },
+    done: { kind: "final" },
+  },
+  files: { "probe.sh": 'echo "probe ran with $1"' },
+}
+
+describe("a definition's shipped files", () => {
+  it.live("a command runs a shipped file from a temp directory its end removes", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(trackWorker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, SHIPPED_FILE, "shipped-file", { word: "hello" })
+      yield* waitFor(home.sql(runRow(run)), isSettled, 15_000, "the run's end was told")
+      const steps = yield* home.sql(stepsOf(run))
+      expect(moves(steps)).toEqual(["check→done"])
+      const output = steps.flatMap((step) => {
+        if (step._tag !== "Saved" || step.state !== "check") return []
+        return [Schema.decodeUnknownSync(Schema.Struct({ output: Schema.String }))(step.value)]
+      })[0]?.output
+      const [path = "", ran = ""] = (output ?? "").split("\n")
+      expect(path).toEndWith("/probe.sh")
+      expect(ran).toBe("probe ran with hello")
+      expect(yield* fileExists(path)).toBe(false)
+    }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+  )
+
+  it.live("machine.define refuses a file slot outside a run state, or one naming no file", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(trackWorker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const definition = {
+        name: "files-refused",
+        threads: { worker: {} },
+        start: "work",
+        states: {
+          work: { kind: "thread", thread: "worker", say: "{{files.probe.sh}}", next: "check" },
+          check: {
+            kind: "run",
+            run: 'bash "{{files.other.sh}}"',
+            on: { pass: "done", fail: "done" },
+          },
+          done: { kind: "final" },
+        },
+        files: { "probe.sh": "true" },
+      }
+      const [refused] = yield* call(client, owner, [
+        ["machine.define", "define-files-refused", { definition }],
+      ])
+      expect(refused?.failed).toBe(true)
+      const text = encodeJson(refused?.result)
+      expect(text).toContain(
+        "work: {{files.probe.sh}} names a file, and only a run state has files",
+      )
+      expect(text).toContain("check: {{files.other.sh}} names no shipped file")
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+})
+
 describe("a stopped machine command with no process to stop", () => {
   it.live(
     "a stop that cannot show the command's processes gone settles saying they may still run",
