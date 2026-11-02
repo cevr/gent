@@ -389,6 +389,14 @@ export const runProcess = (
         forceKillAfter: PROCESS_FORCE_KILL_AFTER,
       })
       const handle = yield* spawn
+      // A run that does not succeed (a timeout, an interrupt) stops the child
+      // before its stdin feed. The scope stops the feed first, and Effect 4.1
+      // on Bun waits for good on a write into a pipe the child does not read
+      // (Effect-TS/effect#10314); a stopped child closes the pipe under it.
+      yield* Effect.addFinalizer((exit) => {
+        if (Exit.isSuccess(exit)) return Effect.void
+        return Effect.ignore(handle.kill({ forceKillAfter: PROCESS_FORCE_KILL_AFTER }))
+      })
       let collectStdout: Effect.Effect<
         Option.Option<ReadonlyArray<Uint8Array>>,
         PlatformError.PlatformError

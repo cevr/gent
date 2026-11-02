@@ -3,6 +3,7 @@ import {
   Config,
   Duration,
   Effect,
+  Exit,
   Fiber,
   FileSystem,
   Option,
@@ -990,10 +991,11 @@ type Patch = Stream.Stream<Uint8Array, PlatformError.PlatformError>
  * handover gives the terminal back. (`git --paginate` or `gh pr diff` on a
  * terminal would start the pager as their own child, out of gent's reach.)
  *
- * An interrupt stops the pager first, as a shell's ctrl+c does: the patch
- * then writes into a closed pipe and stops. The spawner's scope stops the
- * patch before the pager, and a patch held by a pager that does not read
- * never stops (Effect 4.1 waits on the full pipe).
+ * A page that does not succeed (an interrupt) stops the pager first, as a
+ * shell's ctrl+c does: the patch then writes into a closed pipe and stops.
+ * The spawner's scope stops the patch before the pager, and Effect 4.1 on
+ * Bun waits for good on a write the pager does not read
+ * (Effect-TS/effect#10314).
  */
 const pagePatch = (cwd: string, pager: string, patch: Patch) =>
   Effect.gen(function* () {
@@ -1015,13 +1017,13 @@ const pagePatch = (cwd: string, pager: string, patch: Patch) =>
           }),
         )
         .pipe(
-          Effect.flatMap((handle) =>
-            handle.exitCode.pipe(
-              Effect.onInterrupt(() =>
-                Effect.ignore(handle.kill({ forceKillAfter: FORCE_KILL_AFTER })),
-              ),
-            ),
+          Effect.tap((handle) =>
+            Effect.addFinalizer((exit) => {
+              if (Exit.isSuccess(exit)) return Effect.void
+              return Effect.ignore(handle.kill({ forceKillAfter: FORCE_KILL_AFTER }))
+            }),
           ),
+          Effect.flatMap((handle) => handle.exitCode),
           Effect.map(Number),
         ),
     )

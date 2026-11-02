@@ -6,8 +6,9 @@ import {
   useSelectionHandler,
   useTerminalDimensions as useRendererTerminalDimensions,
 } from "@opentui/solid"
-import { Config, Effect, Option, Stream } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/process"
+import { runProcess } from "@gent/core/extensions/api"
+import { Config, Duration, Effect, Option, Stream } from "effect"
+import type { ChildProcessSpawner } from "effect/process"
 import {
   type Accessor,
   createContext,
@@ -67,23 +68,15 @@ const loadTmuxBuffer = (
   Effect.gen(function* () {
     const tmux = yield* Config.option(Config.String("TMUX"))
     if (!Option.exists(tmux, (value) => value.length > 0)) return Option.none()
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-    const loaded = yield* spawner
-      .exitCode(
-        ChildProcess.make("tmux", ["load-buffer", "-w", "-"], {
-          stdin: Stream.make(new TextEncoder().encode(text)),
-          stdout: "ignore",
-          stderr: "ignore",
-          // The timeout stops the run with SIGTERM; a tmux that ignores it
-          // would hold the run's cleanup open for good.
-          forceKillAfter: "1 second",
-        }),
-      )
-      .pipe(
-        Effect.map((exitCode) => exitCode === 0),
-        Effect.timeout("2 seconds"),
-        Effect.orElseSucceed(() => false),
-      )
+    const loaded = yield* runProcess("tmux", ["load-buffer", "-w", "-"], {
+      stdin: Stream.make(new TextEncoder().encode(text)),
+      stdout: "ignore",
+      stderr: "ignore",
+      timeout: Duration.seconds(2),
+    }).pipe(
+      Effect.map((result) => result.exitCode === 0),
+      Effect.orElseSucceed(() => false),
+    )
     return Option.some(loaded)
   }).pipe(Effect.orElseSucceed(() => Option.none()))
 

@@ -8553,6 +8553,13 @@ const runPoolPeer = (
         stderr: "pipe",
         forceKillAfter: PEER_FORCE_KILL_AFTER,
       })
+      // A run that does not succeed stops the command before its stdin feed,
+      // as `runProcess` does: a command that stopped reading holds a full pipe
+      // the feed's stop would wait on for good (Effect-TS/effect#10314).
+      yield* Effect.addFinalizer((exit) => {
+        if (Exit.isSuccess(exit)) return Effect.void
+        return Effect.ignore(handle.kill({ forceKillAfter: PEER_FORCE_KILL_AFTER }))
+      })
       const lines = handle.stdout.pipe(
         Stream.decodeText,
         Stream.splitLines,

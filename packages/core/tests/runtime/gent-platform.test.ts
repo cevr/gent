@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Duration, Effect, FileSystem, Layer, Path, Predicate } from "effect"
+import { Clock, Duration, Effect, FileSystem, Layer, Path, Predicate, Stream } from "effect"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   GentPlatform,
@@ -201,6 +201,24 @@ describe("runProcess", () => {
         const elapsed = (yield* Clock.currentTimeMillis) - started
         expect(failed.timedOut).toBe(true)
         expect(elapsed).toBeLessThan(5_000)
+      }).pipe(Effect.timeout("6 seconds")),
+    processTestTimeout,
+  )
+  it.live(
+    "a timeout holds for a child that leaves a full stdin pipe unread",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Clock.currentTimeMillis
+        // More input than the pipe holds, into a child that never reads it.
+        const failed = yield* provideBun(
+          runProcess("sleep", ["30"], {
+            stdin: Stream.make(new Uint8Array(1_000_000)),
+            timeout: Duration.millis(300),
+          }).pipe(Effect.flip),
+        )
+        const elapsed = (yield* Clock.currentTimeMillis) - started
+        expect(failed.timedOut).toBe(true)
+        expect(elapsed).toBeLessThan(3_000)
       }).pipe(Effect.timeout("6 seconds")),
     processTestTimeout,
   )

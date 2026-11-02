@@ -11,7 +11,6 @@ import {
   Result,
   Schema,
 } from "effect"
-import type { SecureRandom } from "effect/crypto"
 import { Digest } from "effect/crypto"
 import { Hex } from "effect/encoding"
 import { parse as parseYaml } from "yaml"
@@ -182,11 +181,7 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
   static Live = (options: {
     cwd: string
     home: string
-  }): Layer.Layer<
-    Skills,
-    never,
-    FileSystem.FileSystem | Path.Path | Digest.Digest | SecureRandom.SecureRandom
-  > =>
+  }): Layer.Layer<Skills, never, FileSystem.FileSystem | Path.Path | Digest.Digest> =>
     Layer.effect(
       Skills,
       Effect.gen(function* () {

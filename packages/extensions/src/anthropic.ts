@@ -16,7 +16,6 @@ import {
   SynchronizedRef,
 } from "effect"
 import { Digest, SecureRandom } from "effect/crypto"
-import { Hex } from "effect/encoding"
 import {
   type ApiClassContribution,
   type ApiEndpoint,
@@ -373,18 +372,12 @@ export const extractFirstUserMessageText = (messages: ReadonlyArray<object>): st
   )
 
 /**
- * Hex SHA-256 of `text` (UTF-8). A digest of an in-memory buffer does not
- * fail on a working runtime, so a failure is a defect.
+ * Hex SHA-256 of `text` (UTF-8).
  */
-const sha256Hex = (
-  text: string,
-): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
+const sha256Hex = (text: string): Effect.Effect<string, never, Digest.Digest> =>
   Effect.gen(function* () {
-    const crypto = yield* Digest.Digest
-    const digest = yield* crypto
-      .digest(Digest.sha256, new TextEncoder().encode(text))
-      .pipe(Effect.orDie)
-    return Hex.encode(digest)
+    const digest = yield* Digest.Digest
+    return yield* digest.digestHex(Digest.sha256, new TextEncoder().encode(text))
   })
 
 /**
@@ -393,9 +386,7 @@ const sha256Hex = (
  * doesn't match the first user message we send, so this MUST be
  * recomputed per request.
  */
-const computeCch = (
-  messageText: string,
-): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
+const computeCch = (messageText: string): Effect.Effect<string, never, Digest.Digest> =>
   sha256Hex(messageText).pipe(Effect.map((hex) => hex.slice(0, 5)))
 
 /**
@@ -408,7 +399,7 @@ const computeCch = (
 const computeVersionSuffix = (
   messageText: string,
   version: string,
-): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
+): Effect.Effect<string, never, Digest.Digest> =>
   Effect.gen(function* () {
     const sampled = [4, 7, 20]
       .map((index) => Option.getOrElse(Option.fromNullishOr(messageText[index]), () => "0"))
@@ -426,7 +417,7 @@ export const buildBillingHeaderValue = (
   messages: ReadonlyArray<object>,
   version: string,
   entrypoint: string,
-): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
+): Effect.Effect<string, never, Digest.Digest> =>
   Effect.gen(function* () {
     const text = extractFirstUserMessageText(messages)
     const suffix = yield* computeVersionSuffix(text, version)
@@ -610,11 +601,7 @@ const PRIMARY_SOURCE: ClaudeCodeSource = ClaudeCodeSource.cases.Primary.make({})
  */
 const linkedSource = (
   input: string,
-): Effect.Effect<
-  LinkedSource,
-  ProviderAuthError,
-  Digest.Digest | SecureRandom.SecureRandom | Path.Path
-> =>
+): Effect.Effect<LinkedSource, ProviderAuthError, Digest.Digest | Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     if (!path.isAbsolute(input)) {
@@ -1362,10 +1349,7 @@ const rotateAndWriteBack = (base: RefreshBase) =>
 // `refreshLinked` are the whole state machine; docs/architecture/credentials.md
 // (Credential slots) states it, with the windows that stay and the bounds.
 
-type LinkedIORequirements =
-  | AnthropicCredentialIORequirements
-  | Digest.Digest
-  | SecureRandom.SecureRandom
+type LinkedIORequirements = AnthropicCredentialIORequirements | Digest.Digest
 
 /**
  * What a read of a linked source found. `SignedOut` is a confirmed absence
@@ -1461,9 +1445,7 @@ const writeLinkedSource = (
   })
 
 /** One login at one rotation: what `compareAndWrite` compares, as a fingerprint gent may store. */
-const loginFingerprint = (
-  creds: ClaudeCredentials,
-): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
+const loginFingerprint = (creds: ClaudeCredentials): Effect.Effect<string, never, Digest.Digest> =>
   sha256Hex(`${creds.accessToken}\n${creds.refreshToken}\n${creds.expiresAt}`)
 
 const sameLogin = Schema.toEquivalence(ClaudeCredentials)
@@ -2281,7 +2263,7 @@ const linkedDirectory = (
  * out of the generic provider boundary.
  */
 
-type KeychainTransformRequirements = Digest.Digest | SecureRandom.SecureRandom | AnthropicPlatform
+type KeychainTransformRequirements = Digest.Digest | AnthropicPlatform
 
 // ── Constants ──
 
@@ -3348,9 +3330,7 @@ const UUID_VARIANT_DIGITS = "89ab"
  * a restart as well, and no store holds it. A gent session id is a version 7
  * UUID, whose version digit and leading timestamp no Claude Code session has.
  */
-const claudeCodeSessionId = (
-  root: SessionId,
-): Effect.Effect<string, never, Digest.Digest | SecureRandom.SecureRandom> =>
+const claudeCodeSessionId = (root: SessionId): Effect.Effect<string, never, Digest.Digest> =>
   Effect.map(sha256Hex(`gent-claude-code-session\u0000${root}`), (hex) => {
     const variant = UUID_VARIANT_DIGITS.charAt(Number.parseInt(hex.charAt(16), 16) % 4)
     return [
