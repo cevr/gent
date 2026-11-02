@@ -2563,6 +2563,107 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // A resumed feed replays the started receipts behind the snapshot cursor
+  // without applying them: the snapshot holds the running calls, so the
+  // live line's label comes from it, as a live feed's comes from the events.
+  it.live("a resumed feed names the running call the snapshot holds, an op inside its cell", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-resumed-running")
+      const branchId = BranchId.make("branch-feed-resumed-running")
+      const shellId = ToolCallId.make("tool-call-resumed-shell")
+      const cellId = ToolCallId.make("tool-call-resumed-cell")
+      const opId = ToolCallId.make("tool-call-resumed-op")
+      const running = {
+        status: "running",
+        summary: absent,
+        output: absent,
+        durationMs: absent,
+      } as const
+      const snapshot: SessionSnapshot = SessionSnapshot.make({
+        ...snapshotFor(sessionId, branchId, 4),
+        messages: [
+          projectMessage(
+            Message.cases.regular.make({
+              id: MessageId.make("resumed-running-assistant"),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: [
+                Prompt.toolCallPart({
+                  id: shellId,
+                  name: "bash",
+                  params: {},
+                  providerExecuted: false,
+                }),
+                Prompt.toolCallPart({
+                  id: cellId,
+                  name: "cell",
+                  params: {},
+                  providerExecuted: false,
+                }),
+              ],
+              createdAt: dateFromMillis(0),
+            }),
+            [
+              new ToolInteraction({
+                id: shellId,
+                toolName: "bash",
+                input: { command: "sleep 20" },
+                ...running,
+              }),
+              new ToolInteraction({
+                id: cellId,
+                toolName: "cell",
+                input: { code: "await tools.read({path: 'a.txt'})" },
+                ...running,
+                operations: [
+                  { id: opId, toolName: "read", input: { path: "/work/proj/a.txt" }, ...running },
+                ],
+              }),
+            ],
+          ),
+        ],
+      })
+      const started = (
+        id: number,
+        toolCallId: ToolCallId,
+        toolName: string,
+        input: Readonly<Record<string, string>>,
+      ) =>
+        makeEnvelope(
+          id,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId,
+            toolName,
+            input,
+            ...(toolCallId === opId && { parentToolCallId: cellId }),
+          }),
+        )
+      const { activeTool, dispose } = openFeed({
+        snapshot,
+        // Every receipt sits at or behind the snapshot cursor: a replay.
+        events: [
+          started(1, shellId, "bash", { command: "sleep 20" }),
+          started(2, cellId, "cell", { code: "await tools.read({path: 'a.txt'})" }),
+          started(3, opId, "read", { path: "/work/proj/a.txt" }),
+        ],
+      })
+      yield* waitUntil(() => Option.isSome(activeTool())).pipe(
+        Effect.andThen(
+          Effect.sync(() =>
+            // The cell waits on its op, so the op names it.
+            expect(Option.getOrElse(activeTool(), () => "")).toBe(
+              "Running sleep 20 · Reading a.txt",
+            ),
+          ),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.live("an op still running when its cell fails reads as failed, as a reload draws it", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-interrupted-cell")

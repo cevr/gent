@@ -58,7 +58,9 @@ import {
   QueueSnapshot,
   userMessageIdForRequest,
   assistantMessageIdForTurn,
+  projectMessage,
   SessionRuntimeStateSchema,
+  ToolInteraction,
   ExtensionHealthIssue,
 } from "@gent/core/protocol"
 import {
@@ -7284,6 +7286,84 @@ describe("TUI renderer surfaces", () => {
         }).pipe(Effect.timeout("10 seconds")),
     )
   }
+
+  // A TUI opened on a turn whose step runs a tool reads the call from the
+  // snapshot: its started receipt is behind the snapshot cursor, a replay.
+  it.scopedLive("a resumed session's live line names the tool its step runs", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-resumed-tool")
+      const branchId = BranchId.make("branch-resumed-tool")
+      const callId = ToolCallId.make("resumed-tool-call")
+      const running = SessionRuntimeStateSchema.cases.Running.make({
+        startedAtMs: 0,
+        queue: emptyQueueSnapshot(),
+      })
+      const answer = projectMessage(
+        StoredMessage.cases.regular.make({
+          id: MessageId.make("resumed-tool-answer"),
+          sessionId,
+          branchId,
+          role: "assistant",
+          parts: [
+            Prompt.toolCallPart({ id: callId, name: "bash", params: {}, providerExecuted: false }),
+          ],
+          createdAt: dateFromMillis(0),
+        }),
+        [
+          new ToolInteraction({
+            id: callId,
+            toolName: "bash",
+            status: "running",
+            input: { command: "RESUMED-TOOL" },
+            summary: absent,
+            output: absent,
+            durationMs: absent,
+          }),
+        ],
+      )
+      const { setup } = yield* mountApp({
+        client: {
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [answer],
+                lastEventId: 1,
+                reasoningLevel: absent,
+                agent: AgentName.make("main"),
+                runtime: running,
+                metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+              }),
+            watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+            events: () =>
+              Stream.concat(
+                Stream.make(
+                  EventEnvelope.make({
+                    id: EventId.make(1),
+                    createdAt: 0,
+                    event: AgentEvent.cases.ToolCallStarted.make({
+                      sessionId,
+                      branchId,
+                      toolCallId: callId,
+                      toolName: "bash",
+                      input: { command: "RESUMED-TOOL" },
+                    }),
+                  }),
+                ),
+                Stream.never,
+              ),
+          },
+        },
+        initialSession: sessionNamed(sessionId, branchId, "Resumed"),
+      })
+      yield* waitForFrame(
+        setup,
+        (next) => next.includes("✻ Running RESUMED-TOOL") && !next.includes("Thinking"),
+        "the running tool",
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 
   it.scopedLive(
     "a pending retry is the live line's phase and counts down; the transcript draws no row for it",

@@ -2354,6 +2354,36 @@ const runningLabel = (calls: ReadonlyArray<RunningCall>): Option.Option<string> 
   return Option.some(leaves.map((call) => call.label).join(" · "))
 }
 
+/**
+ * The running calls a snapshot holds: those on the newest answer, the step
+ * in flight, as a live feed holds the calls its step started (a new step
+ * clears them). A replay skips the started receipts the snapshot holds, so a
+ * resumed feed takes the live line's label from here. An op counts only
+ * under a running call, as a result ends its call's ops.
+ */
+const snapshotRunningCalls = (
+  messages: ReadonlyArray<Message>,
+  place: PathPlace,
+): ReadonlyArray<RunningCall> => {
+  const running = (
+    calls: ReadonlyArray<ToolCall>,
+    parent: Option.Option<string>,
+  ): ReadonlyArray<RunningCall> =>
+    calls
+      .filter((call) => call.status === "running")
+      .flatMap((call) => [
+        { id: call.id, parent, label: runningCallLabel(call.toolName, call.input, place) },
+        ...running(call.operations ?? [], Option.some(call.id)),
+      ])
+  return Option.match(
+    Option.fromUndefinedOr(messages.findLast((message) => message.role === "assistant")),
+    {
+      onNone: () => [],
+      onSome: (answer) => running(messageToolCalls(answer), Option.none()),
+    },
+  )
+}
+
 /** Put a new call on its owning message, or under the cell that admitted it. */
 const startToolCall = (
   setStore: SetStoreFunction<SessionFeedStore>,
@@ -2557,6 +2587,7 @@ export function useSessionFeed(
   const applySnapshotMessages = (messages: ReadonlyArray<ProjectedMessage>) => {
     snapshotAnswers = new Set(messages.map((message) => String(message.id)))
     const next = buildMessages(messages)
+    setRunningCalls(snapshotRunningCalls(next, client.pathPlace()))
     setOpenAnswer(Option.filter(openAnswer(), (id) => !snapshotAnswers.has(id)))
     const inProgress = Option.flatMap(openAnswer(), (id) =>
       Option.fromNullishOr(store.messages.find((message) => message.id === id)),

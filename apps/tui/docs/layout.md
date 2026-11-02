@@ -70,7 +70,10 @@ the line. The client sees reasoning only in a step's stored message, so the
 heading names the last step that ended and stays through its tool calls; a
 retry's countdown takes the line while it waits. The phase is the
 running call's words while one runs (a `cell` reads in its source's verbs,
-`Reading 3 files`, never its code: `runningCallLabel` in `utils.ts`); and
+`Reading 3 files`, never its code: `runningCallLabel` in `utils.ts`). A client
+that joins a running step (`gent resume`, a reconnect) seeds those calls from
+the snapshot's newest assistant message, because the replayed starts are
+already in the snapshot (`snapshotRunningCalls` in `session.tsx`); and
 `Waiting for your answer` while the turn waits on an ask. The count runs from
 the runtime's `startedAtMs` (`SessionControllerState.turn` in `session.tsx`),
 the start the turn's `Worked for` total counts from: a new step, a tool call or
