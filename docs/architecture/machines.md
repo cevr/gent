@@ -136,13 +136,52 @@
     counted as itself (`constructor` included). A round's `Recorded` step
     keeps the model and effort its session runs, and a pending round
     keeps its effort; `effort` stays optional for a round that names none
-    (table version 3: version 2 had no `effort`, and a version change
-    drops every run). `MachinesRpc.Review`, a
+    (table version 4: version 2 had no `effort`, version 3 no findings,
+    and a version change drops every run). `MachinesRpc.Review`, a
     server request (no session), reads every run that changed since a time,
     20 runs a page by run id, and folds each round that ended in the window
     with its outcome: `gent ctl review` writes them to `rounds.jsonl`. The owner is woken only by an ask (`machine-ask`), a final
     state or a failure (`machine-end`), each a queued message under a
     source id the queue drops a repeat of, at a delivery place saved first.
+  - Findings are judged by someone other than their writer. A thread state
+    with `evidence` reads its round's reply file (`reply.file`, from the
+    run's cwd) at the round's end on a verdict: `findings` a review's
+    `round-N-findings.md` (each list item under a Blocker, Major, Minor,
+    Optional or Test strength heading, its first word with a digit its id,
+    `class: defect|test-strength|spec|environment`, else `unclassified`),
+    `verify` a check's `round-N-verify.md` (a FAIL is one finding, id
+    `verify`), `fixes` an implementor's `round-N-request.md` (lines
+    `Fixed: r1 M1, r1 M2` and `Disputed: r1 M3 — <reason>`). The steps
+    are `Findings`, `Fixes` and `Judged` (`confirmed` or `rejected`,
+    with who judged): a `Fixed` key confirms its finding (`fixed`), a
+    repeat-test pass confirms the Blockers and Majors that repeat an earlier
+    finding (`repeat-test`), the next review rejects a disputed finding no
+    Blocker or Major of it repeats (`review`), and an answer of an ask
+    whose `judges` holds the choice (`decide`'s `merge` and `fix`)
+    rejects each disputed finding its note does not name (`answer`). An
+    open finding stays unjudged. The run's memo keeps the ledger.
+  - The role scorecard (`scorecard.ts`) measures each model in each
+    orchestrate role over the runs that moved since a time, from the steps
+    alone: what others judged, the moves, the answers and the costs, never
+    a model's word about itself. The implementor: rounds, units, round-1
+    accept rate, mean rounds until accepted, cost per merged unit, escapes
+    per merged unit. The reviewer: rounds, confirmed Blockers and Majors
+    per round by class, rejected findings per round, escapes per accepted
+    review. The planner: plans, units, replans, rewrites, size stops and
+    merged units per plan. The verifier: verifies, confirmed fails, escapes
+    per pass. Each measure names its n, a rate under n 5 has no value, and
+    there is no combined score. The escape rule is one function
+    (`escapesAt`): a failed verify, a red gate (`fail`/`red` off a run
+    state that is not a screen, or an integrate state) or an answer that
+    sends the work back (`fix`, `changes`) after a review that accepted
+    it escapes that review and its implementor's round; a red gate after a
+    verify that passed escapes that verify. `MachinesRpc.Roles`, a server
+    request, is the scorecard's only reader, and `gent ctl review` its
+    only client: it writes `roles.jsonl` and the digest's roles table. No
+    prompt, tool or status names a measure (`SCORE_WORDS`, tested), and
+    a guard (`findScorecardReaders`) fails any other module that loads
+    `scorecard.ts`, and any read of it in `machines.ts` outside its
+    review section.
   - Answers check in one order: an answered ask is decided by its answer
     (the same choice and note again is admitted, any other conflicts), an
     ask never answered and no longer current is stale, a choice not offered

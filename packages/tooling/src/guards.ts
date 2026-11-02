@@ -1408,6 +1408,63 @@ export const hostOnlyEdges = (
   return [...edges].sort()
 }
 
+// ── the role scorecard is read only by the review ───────────────────────────
+
+/**
+ * Guard: the role scorecard (`packages/extensions/src/scorecard.ts`) reaches
+ * no model. Only the machines extension loads it, and there only its
+ * `// ── review` section, the owner's `gent ctl review` request, reads its
+ * names; tests read it too. A thread, a tool or a prompt that loads it could
+ * tell a model how it is measured, and a measure a model can see is one it can
+ * game.
+ */
+const SCORECARD_SPECIFIER = /(?:^|\/)scorecard(?:\.[cm]?[jt]sx?)?$/
+const SCORECARD_READER = "packages/extensions/src/machines.ts"
+const SCORECARD_SECTION = "review"
+const SECTION_BANNER = /^\/\/ ── (.+?) ─/
+const DYNAMIC_IMPORT = /\bimport\(\s*["'`]([^"'`]+)["'`]/g
+
+export const findScorecardReaders = (file: string, text: string): ReadonlyArray<Finding> => {
+  if (TEST_FILE.test(file) || file === "packages/extensions/src/scorecard.ts") return []
+  const forms = sourceForms(file, text)
+  const reads = forms.module.reads.filter(({ specifier }) => SCORECARD_SPECIFIER.test(specifier))
+  if (file !== SCORECARD_READER) {
+    // A bare `import("./scorecard.js")` binds nothing, so only its specifier is read.
+    const bare = Array.from(forms.code.matchAll(DYNAMIC_IMPORT), (match) => ({
+      specifier: match[1] ?? "",
+      line: lineAt(forms.code, match.index),
+    })).filter(
+      ({ specifier, line }) =>
+        SCORECARD_SPECIFIER.test(specifier) && !reads.some((read) => read.line === line),
+    )
+    return [...reads, ...bare]
+      .toSorted((a, b) => a.line - b.line)
+      .map(({ specifier, line }) => ({
+        file,
+        line,
+        message: `\`${specifier}\` loads the role scorecard, which only the machines extension's review request reads; a model must never see how it is measured`,
+      }))
+  }
+  const bound = reads.flatMap(({ names, namespaces }) => [...names, ...namespaces])
+  if (bound.length === 0) return []
+  const used = new RegExp(`\\b(?:${bound.join("|")})\\b`)
+  const importLines = new Set(reads.map(({ line }) => line))
+  const banners = text.split("\n")
+  let section = ""
+  return forms.codeOnly.split("\n").flatMap((code, index) => {
+    section = SECTION_BANNER.exec(banners[index] ?? "")?.[1] ?? section
+    const line = index + 1
+    if (importLines.has(line) || section === SCORECARD_SECTION || !used.test(code)) return []
+    return [
+      {
+        file,
+        line,
+        message: `the role scorecard is read here, in the \`${section}\` section; only the \`${SCORECARD_SECTION}\` section, the owner's review request, reads it`,
+      },
+    ]
+  })
+}
+
 // ── names describe the product, not the process ─────────────────────────────
 
 /**

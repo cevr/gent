@@ -14,6 +14,7 @@ import {
   findE2eFixtureImportFindings,
   findHostOnlyImports,
   findProcessNames,
+  findScorecardReaders,
   findSqlBoundLists,
   findEffectVersionDrift,
   findPreCommitHookFindings,
@@ -377,6 +378,7 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findE2eFixtureImportFindings,
   findHostOnlyImports,
   findProcessNames,
+  findScorecardReaders,
   findSqlBoundLists,
   findUnparsedSources,
 ]

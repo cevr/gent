@@ -11,6 +11,7 @@ import {
   findE2eFixtureImportFindings,
   findHostOnlyImports,
   findProcessNames,
+  findScorecardReaders,
   findSqlBoundLists,
   findEffectVersionDrift,
   findPreCommitHookFindings,
@@ -343,6 +344,58 @@ describe("host-only import guard", () => {
     expect(findHostOnlyImports("packages/extensions/src/cell-worker-boundary.ts", globals)).toEqual(
       [],
     )
+  })
+})
+
+// ── the role scorecard ──────────────────────────────────────────────────────
+
+describe("role scorecard reader guard", () => {
+  const machines = [
+    'import { RoleScore, scoreRoles } from "./scorecard.js"',
+    "// ── tools ─────────────",
+    "// scoreRoles in a comment reads nothing",
+    "const tool = () => scoreRoles([])",
+    "// ── review ────────────",
+    "export { RoleScore }",
+    "const review = () => scoreRoles([])",
+    "// ── registration ──────",
+    "const output = RoleScore",
+  ].join("\n")
+
+  test("a thread's import of the scorecard fails, by any form", () => {
+    const planted = [
+      'import { scoreRoles } from "./scorecard.js"',
+      'export { SCORE_WORDS } from "./scorecard"',
+      'import type { RoleScore } from "@gent/extensions/src/scorecard.ts"',
+      'const late = () => import("./scorecard.js")',
+      'import { Effect } from "effect"',
+    ].join("\n")
+    const findings = findScorecardReaders("packages/extensions/src/threads.ts", planted)
+    expect(findings.map((finding) => finding.line)).toEqual([1, 2, 3, 4])
+    expect(findings[0]?.message).toContain("only the machines extension's review request")
+    expect(
+      findScorecardReaders("apps/tui/src/extensions/machines.client.tsx", planted),
+    ).toHaveLength(4)
+  })
+
+  test("the machines extension reads its names only in the review section", () => {
+    const findings = findScorecardReaders("packages/extensions/src/machines.ts", machines)
+    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
+      [
+        4,
+        "the role scorecard is read here, in the `tools` section; only the `review` section, the owner's review request, reads it",
+      ],
+      [
+        9,
+        "the role scorecard is read here, in the `registration` section; only the `review` section, the owner's review request, reads it",
+      ],
+    ])
+  })
+
+  test("the scorecard itself and the tests read it", () => {
+    const read = 'import { scoreWordsIn } from "../src/scorecard.js"\nscoreWordsIn("")'
+    expect(findScorecardReaders("packages/extensions/tests/machines.test.ts", read)).toEqual([])
+    expect(findScorecardReaders("packages/extensions/src/scorecard.ts", read)).toEqual([])
   })
 })
 
