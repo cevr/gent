@@ -25,7 +25,7 @@
     marker is in the file schema (`DefinitionFile`), which `machine.start`
     reads, and means nothing to a run: the run keeps the definition alone,
     so a marked file runs as the unmarked one. Only a missing file is absent (an unreadable one fails the ship),
-    and a ship never replaces a file that appeared or changed since its
+    and a ship replaces no file that appeared or changed before its last
     read: a first write publishes a staged, synced file by hard link, which
     fails on a file already there; an upgrade reads the file again after
     staging and renames over it only when it still holds the text the

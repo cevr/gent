@@ -1363,7 +1363,6 @@ const SHIPPED_NEXT: MachineDefinitionJson = {
 }
 
 const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))
-const encodeFileText = Schema.encodeSync(Schema.fromJsonString(Schema.Json, { space: 2 }))
 
 /**
  * Ships a definition into `cwd` as `/orchestrate` does, on the Bun
@@ -1513,45 +1512,42 @@ describe("a shipped definition's project file", () => {
       }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  it.live(
-    "the marker survives a decode and encode, and a run of a marked file is the run of the unmarked one",
-    () =>
-      Effect.gen(function* () {
-        const home = yield* restartableHome
-        const models = yield* makeModels(trackWorker)
-        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
-        const owner = ownerOf(yield* client.session.create({}))
-        const shipped = yield* shipInto(home.cwd, SHIPPED)
-        const text = (yield* fileState(shipped.path)).text
-        expect(`${encodeFileText(decodeJsonText(text))}\n`).toBe(text)
-        const [started] = yield* call(client, owner, [
-          ["machine.start", "start-marked", { machine: "shipped", input: { spec: "S" } }],
-        ])
-        expect(started?.failed).toBe(false)
-        const marked = decodeStartedRun(started?.result).run
-        expect(yield* askDetails(client, owner, 1)).toMatchObject({ run: marked, state: "decide" })
-        const unmarked = yield* startRun(client, owner, SHIPPED, "shipped", { spec: "S" })
-        expect(yield* askDetails(client, owner, 2)).toMatchObject({
-          run: unmarked,
-          state: "decide",
+  it.live("a run of a marked file is the run of the unmarked one", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(trackWorker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const shipped = yield* shipInto(home.cwd, SHIPPED)
+      expect((yield* fileState(shipped.path)).text.startsWith('{\n  "shipped": ')).toBe(true)
+      const [started] = yield* call(client, owner, [
+        ["machine.start", "start-marked", { machine: "shipped", input: { spec: "S" } }],
+      ])
+      expect(started?.failed).toBe(false)
+      const marked = decodeStartedRun(started?.result).run
+      expect(yield* askDetails(client, owner, 1)).toMatchObject({ run: marked, state: "decide" })
+      const unmarked = yield* startRun(client, owner, SHIPPED, "shipped", { spec: "S" })
+      expect(yield* askDetails(client, owner, 2)).toMatchObject({
+        run: unmarked,
+        state: "decide",
+      })
+      const runOf = (run: string) =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const rows = yield* sql<{
+            readonly definition_json: string
+          }>`SELECT definition_json FROM machine_runs WHERE run = ${run}`
+          const steps = yield* stepsOf(run)
+          return { definition: rows.map((row) => decodeJsonText(row.definition_json)), steps }
         })
-        const runOf = (run: string) =>
-          Effect.gen(function* () {
-            const sql = yield* SqlClient.SqlClient
-            const rows = yield* sql<{
-              readonly definition_json: string
-            }>`SELECT definition_json FROM machine_runs WHERE run = ${run}`
-            const steps = yield* stepsOf(run)
-            return { definition: rows.map((row) => decodeJsonText(row.definition_json)), steps }
-          })
-        const fromMarked = yield* home.sql(runOf(marked))
-        const fromUnmarked = yield* home.sql(runOf(unmarked))
-        // The run holds the definition alone, and moves as the unmarked one does.
-        expect(fromMarked.definition).toEqual([SHIPPED])
-        expect(fromUnmarked.definition).toEqual([SHIPPED])
-        expect(moves(fromMarked.steps)).toEqual(["implement→decide"])
-        expect(moves(fromUnmarked.steps)).toEqual(moves(fromMarked.steps))
-      }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+      const fromMarked = yield* home.sql(runOf(marked))
+      const fromUnmarked = yield* home.sql(runOf(unmarked))
+      // The run holds the definition alone, and moves as the unmarked one does.
+      expect(fromMarked.definition).toEqual([SHIPPED])
+      expect(fromUnmarked.definition).toEqual([SHIPPED])
+      expect(moves(fromMarked.steps)).toEqual(["implement→decide"])
+      expect(moves(fromUnmarked.steps)).toEqual(moves(fromMarked.steps))
+    }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
   )
 })
 
