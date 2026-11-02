@@ -1002,8 +1002,23 @@ const definitionProblems = (definition: MachineDefinition): ReadonlyArray<string
 }
 
 const DefinitionJson = Schema.fromJsonString(MachineDefinition)
-const DefinitionFile = Schema.fromJsonString(MachineDefinition, { space: 2 })
 const decodeDefinitionJson = Schema.decodeUnknownOption(DefinitionJson)
+
+/**
+ * A definition's project file, `.gent/machines/<name>.json`: the definition,
+ * and `shipped` when gent wrote it as an extension ships it. The marker is
+ * the SHA-256 (16 hex) of the file's text without its marker line, so a
+ * file whose text still hashes to it is the shipped write nobody edited,
+ * and the next shipped version replaces it (`shipDefinition`). It means
+ * nothing to a run: the run's definition (`DefinitionJson`) has no marker.
+ */
+const DefinitionFile = Schema.fromJsonString(
+  Schema.Struct({ shipped: Schema.optionalKey(Schema.String), ...MachineDefinition.fields }),
+  { space: 2 },
+)
+
+/** The marker line a shipped write puts first in its file, as `DefinitionFile` encodes it. */
+const SHIPPED_MARK = /^\{\n {2}"shipped": "([0-9a-f]{16})",\n/
 
 /** A definition the schema and the graph checks admit, or every reason it is refused. */
 const checkedDefinition = (definition: MachineDefinition) => {
@@ -5977,67 +5992,71 @@ const DefineResult = Schema.Struct({
 })
 
 /**
- * Where a definition's project file stands after a write: written, already
- * the same content, or `kept` -- a different file a write that does not
- * replace left as it was.
+ * Where a definition's project file stands after a write: `written` where
+ * no file was, `upgraded` from a shipped version nobody edited since gent
+ * wrote it, `unchanged` when it already holds the definition, or `kept` --
+ * a file of the owner's a ship leaves as it was.
  */
-type DefinitionWrite = "written" | "unchanged" | "kept"
+type DefinitionWrite = "written" | "upgraded" | "unchanged" | "kept"
 
 /**
- * Checks a definition as `machine.define` does, then writes its project file
- * atomically. `replace: false` keeps a different file already there.
+ * A definition the `machine.define` checks admit, its project file, and
+ * the file's text with no marker and with the shipped one: the marker is
+ * the unmarked text's digest (16 hex).
  */
-const writeDefinition = Effect.fn("Machines.writeDefinition")(function* (
+const definitionText = Effect.fn("Machines.definitionText")(function* (
   proposed: MachineDefinition,
-  options: { readonly replace: boolean },
 ) {
   const definition = yield* checkedDefinition(proposed)
+  const path = yield* definitionPath(definition.name)
+  const text = `${yield* Schema.encodeEffect(DefinitionFile)(definition)}\n`
+  const digest = (yield* sha256Hex(text)).slice(0, 16)
+  const marked = `${yield* Schema.encodeEffect(DefinitionFile)({ shipped: digest, ...definition })}\n`
+  return { name: definition.name, path, digest, text, marked }
+})
+
+/** A file's text, or none when no file is there: an unreadable one fails. */
+const readIfThere = Effect.fn("Machines.readIfThere")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const file = yield* definitionPath(definition.name)
-  const content = `${yield* Schema.encodeEffect(DefinitionFile)(definition)}\n`
-  const digest = (yield* sha256Hex(content)).slice(0, 16)
-  // Only a missing file is absent: an unreadable one fails the write.
-  const read = fs.readFileString(file).pipe(
+  return yield* fs.readFileString(file).pipe(
     Effect.asSome,
     Effect.catchIf(
       (error) => error.reason._tag === "NotFound",
       () => Effect.succeedNone,
     ),
   )
-  const existing = yield* read
-  const written = (outcome: DefinitionWrite) => ({
-    name: definition.name,
-    path: file,
-    digest,
-    outcome,
-  })
-  const settled = (found: Option.Option<string>) => {
-    if (Option.contains(found, content)) return written("unchanged")
-    return written("kept")
-  }
-  if (Option.contains(existing, content)) return written("unchanged")
-  if (Option.isSome(existing) && !options.replace) return settled(existing)
-  yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-  if (options.replace) {
-    yield* writeFileAtomic(file, content)
-    return written("written")
-  }
-  // A hard link publishes the whole file and fails on a file that appeared
-  // since the read, so a write that does not replace never replaces.
-  const crypto = yield* Crypto.Crypto
-  const staged = `${file}.${yield* crypto.randomUUIDv7()}.tmp`
-  const linked = yield* fs.writeFileString(staged, content).pipe(
-    Effect.andThen(fs.link(staged, file)),
-    Effect.as(true),
-    Effect.catchIf(
-      (error) => error.reason._tag === "AlreadyExists",
-      () => Effect.succeed(false),
-    ),
-    Effect.ensuring(fs.remove(staged).pipe(Effect.ignore)),
+})
+
+/** Whether a file's text is a shipped write nobody edited: without its marker line it hashes to the marker. */
+const untouchedShipped = Effect.fn("Machines.untouchedShipped")(function* (text: string) {
+  const mark = Option.fromNullOr(SHIPPED_MARK.exec(text))
+  if (Option.isNone(mark)) return false
+  const unmarked = `{\n${text.slice(mark.value[0].length)}`
+  return (yield* sha256Hex(unmarked)).slice(0, 16) === mark.value[1]
+})
+
+/** Writes `text` to a new file at `staged` and syncs it, so a rename or link publishes text the disk holds. */
+const stageFile = (staged: string, text: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const handle = yield* fs.open(staged, { flag: "wx" })
+      yield* handle.writeAll(new TextEncoder().encode(text))
+      yield* handle.sync
+    }),
   )
-  if (linked) return written("written")
-  return settled(yield* read)
+
+/** `machine.define`'s write: the file becomes the definition, with no marker, so it is the owner's. */
+const defineFile = Effect.fn("Machines.defineFile")(function* (proposed: MachineDefinition) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const { text, marked: _marked, ...target } = yield* definitionText(proposed)
+  if (Option.contains(yield* readIfThere(target.path), text)) {
+    return { ...target, outcome: "unchanged" as const }
+  }
+  yield* fs.makeDirectory(path.dirname(target.path), { recursive: true })
+  yield* writeFileAtomic(target.path, text)
+  return { ...target, outcome: "written" as const }
 })
 
 /** A definition as JSON holds it, before the schema brands its names. */
@@ -6045,8 +6064,15 @@ export type MachineDefinitionJson = typeof MachineDefinition.Encoded
 
 /**
  * Writes a definition another extension ships, through the checks
- * `machine.define` runs. A project file of that name with other content is
- * the owner's: it is kept, and the outcome says so.
+ * `machine.define` runs, marked as shipped (`DefinitionFile`). A file a
+ * ship wrote that nobody edited since is replaced by this version
+ * (`upgraded`); any other file of that name -- edited, written by
+ * `machine.define`, or by a gent before the marker -- is the owner's: it is
+ * kept, and the outcome says so. A ship never replaces a file that appeared
+ * or changed since its read: a new file is published by a hard link, which
+ * fails on a file already there, and an upgrade reads the file again after
+ * staging and renames only over the text it read. The window left is that
+ * second read to the rename.
  */
 export const shipDefinition = Effect.fn("Machines.shipDefinition")(function* (
   definition: MachineDefinitionJson,
@@ -6054,7 +6080,47 @@ export const shipDefinition = Effect.fn("Machines.shipDefinition")(function* (
   const decoded = yield* Schema.decodeEffect(MachineDefinition)(definition).pipe(
     Effect.mapError((cause) => new MachineError({ message: `Not a machine: ${cause.message}` })),
   )
-  return yield* writeDefinition(decoded, { replace: false })
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const crypto = yield* Crypto.Crypto
+  const { text, marked, ...target } = yield* definitionText(decoded)
+  const result = (outcome: DefinitionWrite) => ({ ...target, outcome })
+  // The file holds this definition, as a ship or as machine.define wrote it.
+  const settled = (found: Option.Option<string>) => {
+    if (Option.contains(found, marked) || Option.contains(found, text)) return result("unchanged")
+    return result("kept")
+  }
+  const before = yield* readIfThere(target.path)
+  if (Option.isSome(before)) {
+    const found = settled(before)
+    if (found.outcome === "unchanged" || !(yield* untouchedShipped(before.value))) return found
+  }
+  yield* fs.makeDirectory(path.dirname(target.path), { recursive: true })
+  const staged = `${target.path}.${yield* crypto.randomUUIDv7()}.tmp`
+  const publish = Option.match(before, {
+    // A hard link fails on a file that appeared since the read.
+    onNone: () =>
+      fs.link(staged, target.path).pipe(
+        Effect.as(true),
+        Effect.catchIf(
+          (error) => error.reason._tag === "AlreadyExists",
+          () => Effect.succeed(false),
+        ),
+      ),
+    // A rename replaces only the text the decision read.
+    onSome: (read) =>
+      Effect.flatMap(readIfThere(target.path), (now) => {
+        if (!Option.contains(now, read)) return Effect.succeed(false)
+        return Effect.as(fs.rename(staged, target.path), true)
+      }),
+  })
+  const published = yield* stageFile(staged, marked).pipe(
+    Effect.andThen(publish),
+    Effect.ensuring(fs.remove(staged).pipe(Effect.ignore)),
+  )
+  if (!published) return settled(yield* readIfThere(target.path))
+  if (Option.isSome(before)) return result("upgraded")
+  return result("written")
 })
 
 const MachineDefineTool = tool({
@@ -6066,7 +6132,7 @@ const MachineDefineTool = tool({
   params: Schema.Struct({ definition: MachineDefinition }),
   output: DefineResult,
   execute: Effect.fn("MachineDefineTool.execute")(function* (params) {
-    const { outcome, ...written } = yield* writeDefinition(params.definition, { replace: true })
+    const { outcome, ...written } = yield* defineFile(params.definition)
     return { ...written, written: outcome === "written" }
   }),
 })
@@ -6118,7 +6184,8 @@ const MachineStartTool = tool({
             new MachineError({ message: `No machine ${params.machine}: ${file} is not readable` }),
         ),
       )
-    const definition = yield* Schema.decodeEffect(DefinitionJson)(text).pipe(
+    // Read as the file it is; the run's definition encoding has no marker.
+    const definition = yield* Schema.decodeEffect(DefinitionFile)(text).pipe(
       Effect.mapError(
         (cause) => new MachineError({ message: `${file} is not a machine: ${cause.message}` }),
       ),

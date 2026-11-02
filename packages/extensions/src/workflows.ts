@@ -362,10 +362,10 @@ export const ORCHESTRATE_LIGHT_MACHINE: MachineDefinitionJson = {
   },
 }
 
-/** What the command tells the orchestrator of a machine file it wrote, or kept. */
+/** What the command tells the orchestrator of a machine file it wrote, upgraded, or kept. */
 const machineLine = (name: string, shipped: Effect.Success<ReturnType<typeof shipDefinition>>) => {
   if (shipped.outcome === "kept") {
-    return `The project's ${shipped.path} differs from the shipped ${name} machine and was kept: tell the user, and run it as it is.`
+    return `The project's ${shipped.path} differs from the ${name} machine this gent ships (an edited or older copy) and was kept: tell the user it runs the project's graph, not the shipped one, and run it as it is.`
   }
   return `The ${name} machine is ${shipped.path}.`
 }

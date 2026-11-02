@@ -81,6 +81,7 @@ import {
   MachinesRpc,
   MachineStore,
   roundEndSignal,
+  shipDefinition,
 } from "../src/machines.js"
 import { THREAD_ROUND_END_TYPE } from "../src/threads.js"
 import { ORCHESTRATE_LIGHT_MACHINE, ORCHESTRATE_MACHINE } from "../src/workflows.js"
@@ -1335,6 +1336,222 @@ describe("a definition's shipped files", () => {
         expect(text).toContain("work: {{bun}} names the runtime, and only a run state runs it")
         expect(text).toContain("check: {{bun.path}} names no runtime: the slot is {{bun}}")
       }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+})
+
+// ── a shipped definition's project file ─────────────────────────────────────
+
+/** implement (thread) → decide (ask) → done: a definition an extension ships. */
+const SHIPPED: MachineDefinitionJson = {
+  name: "shipped",
+  threads: { impl: {} },
+  start: "implement",
+  states: {
+    implement: { kind: "thread", thread: "impl", say: "STATE implement {{visit}}", next: "decide" },
+    decide: { kind: "ask", ask: "Merge {{input.spec}}?", on: { merge: "done", drop: "done" } },
+    done: { kind: "final", say: "shipped finished" },
+  },
+}
+
+/** The same machine as a later gent ships it: its ask reads differently. */
+const SHIPPED_NEXT: MachineDefinitionJson = {
+  ...SHIPPED,
+  states: {
+    ...SHIPPED.states,
+    decide: { kind: "ask", ask: "Merge {{input.spec}} now?", on: { merge: "done", drop: "done" } },
+  },
+}
+
+const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))
+const encodeFileText = Schema.encodeSync(Schema.fromJsonString(Schema.Json, { space: 2 }))
+
+/**
+ * Ships a definition into `cwd` as `/orchestrate` does, on the Bun
+ * platform; `fs` stands in for its file system when given.
+ */
+const shipInto = (
+  cwd: string,
+  definition: MachineDefinitionJson,
+  fs: Option.Option<Layer.Layer<FileSystem.FileSystem>> = Option.none(),
+) => {
+  const shipped = shipDefinition(definition).pipe(
+    Effect.provideService(ExtensionContext, testLeafContext(testToolContext({ cwd }))),
+  )
+  return Option.match(fs, {
+    onNone: () => shipped,
+    onSome: (layer) => Effect.provide(shipped, layer),
+  }).pipe(Effect.provide(BunServices.layer))
+}
+
+/**
+ * A file system on which another writer puts `racer` at `file` the moment a
+ * ship stages its own text: a write between the ship's read and its publish.
+ */
+const racingFileSystem = (file: string, racer: string) =>
+  Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (fs) => ({
+      ...fs,
+      open: (path: string, options?: Parameters<FileSystem.FileSystem["open"]>[1]) => {
+        if (!path.startsWith(`${file}.`)) return fs.open(path, options)
+        return Effect.andThen(fs.writeFileString(file, racer), fs.open(path, options))
+      },
+    })),
+  ).pipe(Layer.provide(BunServices.layer))
+
+/** A file's text, and its inode and modification time: a write that replaces it changes them. */
+const fileState = (file: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const info = yield* fs.stat(file)
+    return { text: yield* fs.readFileString(file), ino: info.ino, mtime: info.mtime }
+  }).pipe(Effect.provide(BunServices.layer))
+
+const writeText = (file: string, text: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.writeFileString(file, text)).pipe(
+    Effect.provide(BunServices.layer),
+  )
+
+const scratchCwd = Effect.flatMap(FileSystem.FileSystem, (fs) =>
+  fs.makeTempDirectoryScoped({ prefix: "gent-shipped-" }),
+).pipe(Effect.provide(BunServices.layer))
+
+describe("a shipped definition's project file", () => {
+  it.live(
+    "a shipped file nobody edited takes the next shipped version, and the same version writes nothing",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* scratchCwd
+        const first = yield* shipInto(cwd, SHIPPED)
+        expect(first.outcome).toBe("written")
+        expect(first.path).toBe(`${cwd}/.gent/machines/shipped.json`)
+        const written = yield* fileState(first.path)
+        // The marker opens the file: the digest of its text without that line.
+        expect(written.text.startsWith(`{\n  "shipped": "${first.digest}",\n  "name"`)).toBe(true)
+        const again = yield* shipInto(cwd, SHIPPED)
+        expect(again.outcome).toBe("unchanged")
+        expect(yield* fileState(first.path)).toEqual(written)
+        const next = yield* shipInto(cwd, SHIPPED_NEXT)
+        expect(next.outcome).toBe("upgraded")
+        expect(next.digest).not.toBe(first.digest)
+        const upgraded = yield* fileState(first.path)
+        expect(upgraded.text).toContain("Merge {{input.spec}} now?")
+        expect(upgraded.text.startsWith(`{\n  "shipped": "${next.digest}",\n`)).toBe(true)
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live("a shipped file the owner edited is kept, its marker left as gent wrote it", () =>
+    Effect.gen(function* () {
+      const cwd = yield* scratchCwd
+      const first = yield* shipInto(cwd, SHIPPED)
+      const shipped = yield* fileState(first.path)
+      const edited = shipped.text.replace('"say": "shipped finished"', '"say": "mine"')
+      expect(edited).not.toBe(shipped.text)
+      yield* writeText(first.path, edited)
+      const next = yield* shipInto(cwd, SHIPPED_NEXT)
+      expect(next.outcome).toBe("kept")
+      expect((yield* fileState(first.path)).text).toBe(edited)
+      // A change to formatting alone is an edit too: the marker proves the text.
+      const reformatted = shipped.text.replace('"name": "shipped"', '"name":  "shipped"')
+      yield* writeText(first.path, reformatted)
+      expect((yield* shipInto(cwd, SHIPPED_NEXT)).outcome).toBe("kept")
+      expect((yield* fileState(first.path)).text).toBe(reformatted)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live(
+    "machine.define writes no marker: a later ship keeps its file, and a ship of the same definition writes nothing",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels(trackWorker)
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        const owner = ownerOf(yield* client.session.create({}))
+        const file = `${home.cwd}/.gent/machines/shipped.json`
+        // A shipped file the owner then defines becomes the owner's.
+        expect((yield* shipInto(home.cwd, SHIPPED)).outcome).toBe("written")
+        const [defined] = yield* call(client, owner, [
+          ["machine.define", "define-shipped", { definition: SHIPPED }],
+        ])
+        expect(defined?.failed).toBe(false)
+        const own = yield* fileState(file)
+        expect(own.text).not.toContain('"shipped":')
+        expect(decodeJsonText(own.text)).toEqual(SHIPPED)
+        expect((yield* shipInto(home.cwd, SHIPPED)).outcome).toBe("unchanged")
+        expect(yield* fileState(file)).toEqual(own)
+        expect((yield* shipInto(home.cwd, SHIPPED_NEXT)).outcome).toBe("kept")
+        expect(yield* fileState(file)).toEqual(own)
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live(
+    "a file another writer puts in place between the read and the publish is never replaced",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* scratchCwd
+        const file = `${cwd}/.gent/machines/shipped.json`
+        // No file at the read: the hard link refuses the one that appeared.
+        const appeared = yield* shipInto(
+          cwd,
+          SHIPPED,
+          Option.some(racingFileSystem(file, "appeared\n")),
+        )
+        expect(appeared.outcome).toBe("kept")
+        expect((yield* fileState(file)).text).toBe("appeared\n")
+        // A shipped file nobody edited at the read: the upgrade renames over only that text.
+        yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(file)).pipe(
+          Effect.provide(BunServices.layer),
+        )
+        expect((yield* shipInto(cwd, SHIPPED)).outcome).toBe("written")
+        const changed = yield* shipInto(
+          cwd,
+          SHIPPED_NEXT,
+          Option.some(racingFileSystem(file, "changed\n")),
+        )
+        expect(changed.outcome).toBe("kept")
+        expect((yield* fileState(file)).text).toBe("changed\n")
+      }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+
+  it.live(
+    "the marker survives a decode and encode, and a run of a marked file is the run of the unmarked one",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels(trackWorker)
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        const owner = ownerOf(yield* client.session.create({}))
+        const shipped = yield* shipInto(home.cwd, SHIPPED)
+        const text = (yield* fileState(shipped.path)).text
+        expect(`${encodeFileText(decodeJsonText(text))}\n`).toBe(text)
+        const [started] = yield* call(client, owner, [
+          ["machine.start", "start-marked", { machine: "shipped", input: { spec: "S" } }],
+        ])
+        expect(started?.failed).toBe(false)
+        const marked = decodeStartedRun(started?.result).run
+        expect(yield* askDetails(client, owner, 1)).toMatchObject({ run: marked, state: "decide" })
+        const unmarked = yield* startRun(client, owner, SHIPPED, "shipped", { spec: "S" })
+        expect(yield* askDetails(client, owner, 2)).toMatchObject({
+          run: unmarked,
+          state: "decide",
+        })
+        const runOf = (run: string) =>
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            const rows = yield* sql<{
+              readonly definition_json: string
+            }>`SELECT definition_json FROM machine_runs WHERE run = ${run}`
+            const steps = yield* stepsOf(run)
+            return { definition: rows.map((row) => decodeJsonText(row.definition_json)), steps }
+          })
+        const fromMarked = yield* home.sql(runOf(marked))
+        const fromUnmarked = yield* home.sql(runOf(unmarked))
+        // The run holds the definition alone, and moves as the unmarked one does.
+        expect(fromMarked.definition).toEqual([SHIPPED])
+        expect(fromUnmarked.definition).toEqual([SHIPPED])
+        expect(moves(fromMarked.steps)).toEqual(["implement→decide"])
+        expect(moves(fromUnmarked.steps)).toEqual(moves(fromMarked.steps))
+      }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
   )
 })
 

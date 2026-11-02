@@ -264,13 +264,20 @@ describe("WorkflowsExtension via RPC", () => {
         const machineFile = path.join(cwd, ".gent", "machines", "orchestrate.json")
         const lightFile = path.join(cwd, ".gent", "machines", "orchestrate-light.json")
         yield* orchestrate("  plans/next.md  ")
-        // The file machine.start reads, as machine.define would write it.
-        expect(decodeJson(yield* fs.readFileString(machineFile))).toEqual(ORCHESTRATE_MACHINE)
+        // The file machine.start reads, marked as shipped, so a later gent upgrades it.
+        const shippedMark = expect.stringMatching(/^[0-9a-f]{16}$/)
+        expect(decodeJson(yield* fs.readFileString(machineFile))).toEqual({
+          shipped: shippedMark,
+          ...ORCHESTRATE_MACHINE,
+        })
         // The verifier's clean checkout is a new worktree too.
         expect(ORCHESTRATE_MACHINE.threads?.["verifier"]?.instructions).toContain(
           "with the project's packages installed there first",
         )
-        expect(decodeJson(yield* fs.readFileString(lightFile))).toEqual(ORCHESTRATE_LIGHT_MACHINE)
+        expect(decodeJson(yield* fs.readFileString(lightFile))).toEqual({
+          shipped: shippedMark,
+          ...ORCHESTRATE_LIGHT_MACHINE,
+        })
         // Every round of both machines stops on size at two of the model's windows and goes to decide.
         for (const machine of [ORCHESTRATE_MACHINE, ORCHESTRATE_LIGHT_MACHINE]) {
           const sizes = Object.values(machine.states).flatMap((state) => {
@@ -317,7 +324,7 @@ describe("WorkflowsExtension via RPC", () => {
         expect(shipped).toContain(`The orchestrate machine is ${machineFile}.`)
         expect(shipped).toContain(`The orchestrate-light machine is ${lightFile}.`)
         expect(kept).toContain(
-          `${machineFile} differs from the shipped orchestrate machine and was kept`,
+          `${machineFile} differs from the orchestrate machine this gent ships (an edited or older copy) and was kept`,
         )
         expect(empty).toBe("Ask which plan or goal to orchestrate.")
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),

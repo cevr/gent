@@ -9,6 +9,28 @@
   `machine.start` snapshots the definition into a run (`run-` and 16 hex of
   SHA-256 over the caller's session, branch and tool call id) and returns at
   admission.
+  - Shipped definitions. An extension writes the definitions it ships
+    (`/orchestrate`'s two) by `shipDefinition`, through `machine.define`'s
+    checks. A shipped write puts a marker first in the file (`"shipped"`,
+    the SHA-256, 16 hex, of the file's text without that line), so the file
+    carries its own proof: no store row, no migration, and a copied or
+    committed file keeps it. The next ship of that name replaces a file
+    whose text without the marker line still hashes to the marker
+    (`upgraded`); it keeps an edited file, an unmarked one (written by
+    `machine.define` or by a gent before the marker) and one that does not
+    parse (`kept`, and `/orchestrate`'s prompt says the file differs from
+    what this gent ships); a file that already holds the definition, marked
+    or not, is `unchanged` and nothing is written. `machine.define` writes
+    no marker: a defined file is the owner's, and later ships keep it. The
+    marker is in the file schema (`DefinitionFile`), which `machine.start`
+    reads, and means nothing to a run: the run keeps the definition alone,
+    so a marked file runs as the unmarked one. Only a missing file is absent (an unreadable one fails the ship),
+    and a ship never replaces a file that appeared or changed since its
+    read: a first write publishes a staged, synced file by hard link, which
+    fails on a file already there; an upgrade reads the file again after
+    staging and renames over it only when it still holds the text the
+    decision read. The window left is that second read to the rename; a
+    writer inside it is replaced.
   - A run is one row in `machine_runs` and an append-only log in
     `machine_steps` (at the machines' own schema version). Every
     write compares and sets the row's `seq`. A run's visits and its saved
