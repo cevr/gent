@@ -33,7 +33,7 @@ Script `drives/commands.json`:
 5. **Palette filter.** `send branch`, `waitFor › branch`, `cap 35-palette-filtered`. Four rows, `Create Branch` first.
 6. **Category.** `keys esc` (clears the filter), `keys tab`, `waitFor Commands \d+ \[Appearance\]`, `cap 36-palette-category`.
 7. **Close.** `keys esc`, `cap 37-palette-closed`. The composer has focus again.
-8. **New session.** `send /new`, `keys enter`, `cap 38-new-session`. The status row reads `ready · work`.
+8. **New session.** `send /new`, `keys enter`, `cap 38-new-session`. The status row reads `Claude Sonnet 5 (Anthropic) · high`, with no context gauge before the first turn.
 9. **Narrow.** `resize 60 20`, then the popup (`cap 39-slash-narrow`) and the palette (`cap 40-palette-narrow`).
 
 ## Gotchas

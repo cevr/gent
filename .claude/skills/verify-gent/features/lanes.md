@@ -1,29 +1,30 @@
 # Lanes band
 
-Under the status row, a band shows how many runs the accounts can carry now and what runs on their own. Its first row is the free lanes per provider (`≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%`: free over capacity, the binding window's fuel per percent, its band and the spend outside gent). Each active machine run of this session's thread follows it (`▸ soak check r1 3s`: machine, state, round, age; `◷ … · wait 13:47` while its round waits for its account; `?` while it asks). The band hides while gent read no quota window and no run is active. `gent ctl lanes` prints the same lanes as JSON, and `--line` prints the band's row.
+The lanes say how many runs the accounts can carry now (`≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%`: free over capacity, the binding window's fuel per percent, its band and the spend outside gent). The band under the status row shows only what needs the owner: a lanes row with no free lane (none free, the Sabbath, a lost login), a peer that holds runs or whose link is down, and each active machine run of this session's thread (`▸ soak check r1 3s`: machine, state, round, age; `◷ … · wait 13:47` while its round waits for its account; `?` while it asks). Otherwise the band hides; `/status` lists every lanes row.
 
 ## Sub-features
 
-- `band-measured`: a run whose ledger holds a reading and a fitted rate shows `≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%` at rest.
-- `band-hidden`: a run with no reading shows no band at rest.
-- `band-unknown`: with no reading, an active run shows `≡ lanes unknown` above its row.
-- `band-run`: `debug machine` starts the `soak` machine; `▸ soak check r1 <age>` shows until its 45 s command ends, then goes.
-- `band-narrow`: at 60 columns the full row fits; at 44 it drops the share and the band and keeps `1/1 free`.
-- `ctl-lanes`: `gent ctl lanes` prints `Lanes` with one provider record per line; `--line` prints the band's row text.
+- `band-hidden`: at rest no band shows, with a reading or without one.
+- `status-measured`: a run whose ledger holds a reading and a fitted rate shows `≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%` in `/status`, after one `up`.
+- `status-unknown`: with no reading, `/status` shows `≡ lanes unknown`.
+- `band-run`: `debug machine` starts the `soak` machine; `▸ soak check r1 <age>` shows alone under the status row (no `≡` row: the lane is free or unknown) until its 45 s command ends, then goes.
+- `band-narrow`: the run row fits at 60 and 44 columns.
+- `ctl-lanes`: `gent ctl lanes` prints `Lanes` with one provider record per line; `--line` prints the lanes rows' text.
 - `band-sabbath`: in the owner's Sabbath the band's first row is `≡ sabbath · no run starts until <end>`, alone with no reading; narrower, `≡ sabbath until <end>`, then `≡ sabbath`. The end reads `HH:MM` when it falls on today's local date, else with its date, so the width each form needs moves with it: with a dated end the row is `sabbath until` at 44 columns, with a clock only it is still the full row. The owner's own turn still answers. `gent ctl lanes` holds `sabbathEnd`, and `--line` prints the row.
-- `band-login-lost`: after the provider answers 401 to a sign-in's key, `≡ login! anthropic default refused · sign in with /auth` follows the provider's row, once however many turns it refuses; at 44 columns `≡ login! anthropic default refused`, at 28 `≡ login! anthropic default`.
-- `band-resets`: banked resets under the provider's row: [banked-resets.md](banked-resets.md).
+- `band-login-lost`: after the provider answers 401 to a sign-in's key, the band shows `≡ login! anthropic default refused · sign in with /auth`, once however many turns it refuses; at 44 columns `≡ login! anthropic default refused`, at 28 `≡ login! anthropic default`.
+- `band-resets`: banked resets under the provider's row, in `/status` only: [banked-resets.md](banked-resets.md).
 - `band-peer`: the peer's row after the provider rows, its runs, silence and links down: [lanes-peer.md](lanes-peer.md).
 
 ## How to get to it (user POV)
 
-- It shows by itself under the status row; there is no key or command.
+- The band shows by itself under the status row when a row needs the owner; there is no key.
+- `/status` lists every lanes row.
 - `gent ctl lanes` and `gent ctl lanes --line` from a shell, with no session.
 
 ## Driving it with verify:drive
 
-- **Preconditions:** `band-measured` needs a run launched with a ledger: write `credential-usage.json` with current times (the recipe below), then `verify:launch --dir "$RUN" --data "$(dirname "$RUN")/evidence/credential-usage.json"`. `--data` takes a file only from the run, its sibling `evidence/` directory or the repository's test fixtures. `band-hidden` and `band-unknown` use the baseline run. The scripted model reports no quota window, so a measured row needs the ledger.
-- **States:** default (measured, hidden), loading (the run's command runs), empty (no reading: hidden, then `lanes unknown`). Focus, open and error are `n/a`.
+- **Preconditions:** `status-measured` needs a run launched with a ledger: write `credential-usage.json` with current times (the recipe below), then `verify:launch --dir "$RUN" --data "$(dirname "$RUN")/evidence/credential-usage.json"`. `--data` takes a file only from the run, its sibling `evidence/` directory or the repository's test fixtures. `band-hidden` and `status-unknown` use the baseline run. The scripted model reports no quota window, so a measured row needs the ledger.
+- **States:** default (measured, hidden), open (`/status`), loading (the run's command runs), empty (no reading: `lanes unknown` in `/status`). Focus and error are `n/a`.
 - **Regression:** `apps/tui/tests/extensions/machines.client.test.tsx`, `packages/core/tests/runtime/provider.test.ts` (`lost logins`), `packages/core/tests/runtime/turn.test.ts` (lost login), `apps/tui/tests/ctl.test.ts` (`lanes needs no session`), `packages/extensions/tests/machines.test.ts` (`through the RPC harness`), `packages/e2e/tests/verify.test.ts`.
 
 Ledger recipe, run in the run's sibling `evidence/` directory (`mkdir -p "$(dirname "$RUN")/evidence"` first):
@@ -37,17 +38,18 @@ await Bun.write("credential-usage.json", JSON.stringify({ buckets: [], readings:
 
 Script `drives/lanes.json` (the run with the ledger, 120x40):
 
-1. **At rest.** `waitFor lanes anthropic 1/1 free`, `cap 71-lanes-at-rest`. Row 5 reads `≡ lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%`.
-2. **Second view.** `sh gent ctl lanes --line` and `sh gent ctl lanes`. The line file holds the same row; the JSON holds `capacity: 1`, `fuelPerPct: 120000`.
-3. **A run.** `send debug machine`, `keys enter`, `waitFor soak check r1`, `cap 72-band-with-run`. `▸ soak check r1 0s` under the lanes row.
-4. **Its record.** `sh gent ctl request --extension @gent/machines --id run-list`. One run, `machine: "soak"`, `status: "running"`.
-5. **Resize.** `resize 60 20`, `cap 73-band-narrow`; `resize 44 20`, `cap 73b-band-narrower` (`≡ lanes anthropic 1/1 free · 5h 120k/%`); `resize 120 40`, `cap 74-band-wide-again`.
-6. **The end.** `waitFor` a screen without `soak check r1` (about 45 s), `cap 75-run-ended`. The `machine-end` row lands and the lanes row stays.
+1. **At rest.** `expectNot ≡`, `cap 71-lanes-at-rest`. The status row is the last row; no band.
+2. **Second view.** `sh gent ctl lanes --line` and `sh gent ctl lanes`. The line file holds `lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%`; the JSON holds `capacity: 1`, `fuelPerPct: 120000`.
+3. **In /status.** `send /status`, `keys enter`, `waitFor Status`, `keys up`, `waitFor` the full row, `cap 71b-lanes-in-status`, `keys esc`. The lanes rows are the pane's last lines.
+4. **A run.** `send debug machine`, `keys enter`, `waitFor soak check r1`, `expectNot ≡`, `cap 72-band-with-run`. `▸ soak check r1 0s` alone under the status row.
+5. **Its record.** `sh gent ctl request --extension @gent/machines --id run-list`. One run, `machine: "soak"`, `status: "running"`.
+6. **Resize.** `resize 60 20`, `cap 73-band-narrow`; `resize 44 20`, `cap 73b-band-narrower` (the status row reads `ctx 0%`); `resize 120 40`, `cap 74-band-wide-again`.
+7. **The end.** `waitFor` a screen without `soak check r1` (about 45 s), `cap 75-run-ended`. The `machine-end` row lands and the band goes.
 
 Script `drives/lanes-unknown.json` (the baseline run, 100x30):
 
 1. **Hidden.** `cap 76-no-band`: nothing under the status row. `sh gent ctl lanes --line` prints `lanes unknown`.
-2. **A run.** `send debug machine`, `keys enter`, `waitFor soak check r1`, `cap 77-unknown-with-run`: `≡ lanes unknown`, then `▸ soak check r1 0s`.
+2. **A run.** `send debug machine`, `keys enter`, `waitFor soak check r1`, `expectNot lanes unknown`, `cap 77-unknown-with-run`: the run row alone. The [status](status.md) drive shows `≡ lanes unknown` in `/status`.
 3. **Narrow.** `resize 60 20`, `cap 78-unknown-narrow`.
 
 Script `drives/lanes-sabbath.json` (the baseline run, 120x40). Before the drive, add a `sabbath` to `$RUN/home/.gent/config.json` for a place where the Sabbath holds now (the server reads the file again when it changes): Friday after about 11:00 UTC, `{"latitude": 23.81, "longitude": 90.41, "timeZone": "Asia/Dhaka"}`; check with `gent ctl lanes --line` first. It waits for the Sabbath row, sends a turn that answers, and resizes to 60, 44 and 26 columns. Take the key out again and `gent ctl lanes --line` prints `lanes unknown`.

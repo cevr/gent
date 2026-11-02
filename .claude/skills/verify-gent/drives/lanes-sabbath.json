@@ -4,7 +4,7 @@
   "rows": 40,
   "out": "replaced-by-verify-drive-out",
   "steps": [
-    ["waitFor", "ready · work", 30000],
+    ["waitFor", "Sonnet 5", 30000],
     ["waitFor", "≡ sabbath · no run starts until (\\d{4}-\\d\\d-\\d\\d )?\\d\\d:\\d\\d", 40000],
     ["settle"],
     ["cap", "81-sabbath-band"],

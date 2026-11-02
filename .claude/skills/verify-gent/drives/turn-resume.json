@@ -4,7 +4,7 @@
   "rows": 30,
   "out": "replaced-by-verify-drive-out",
   "steps": [
-    ["waitFor", "idle · work", 30000],
+    ["waitFor", "Sonnet 5", 30000],
     ["settle"],
     ["cap", "21-resumed"],
     ["send", "debug think"],

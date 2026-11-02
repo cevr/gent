@@ -25,7 +25,7 @@ A user browses and switches sessions. `/sessions` docks the `Sessions` pane unde
 
 Script `drives/sessions.json`:
 
-1. **Empty session.** `waitFor ready · work`, `cap 71-empty-session`.
+1. **Empty session.** `waitFor Sonnet 5`, `cap 71-empty-session`.
 2. **Another session.** `sh gent ctl send --new --wait "debug think"`. It prints `TurnEnded`.
 3. **Pane.** `send /sessions`, `settle 300`, `keys enter`, `waitFor Sessions · \d+`, `waitFor ○ debug think`, `wait 300`, `cap 72-sessions-pane`.
 4. **Filter.** `send debug think`, `waitFor › debug think│`, `cap 73-sessions-filtered`. The detail column ends `Both chrome paths draw once.`
@@ -35,7 +35,7 @@ Script `drives/sessions.json`:
 
 Script `drives/sessions-routes.json`, the other entry points:
 
-1. **`left` key.** `waitFor ready · work`, `keys left`, `waitFor Sessions · \d+`, `wait 300`, `cap 76-left-key`; `keys esc`, `cap 77-left-closed`.
+1. **`left` key.** `waitFor Sonnet 5`, `keys left`, `waitFor Sessions · \d+`, `wait 300`, `cap 76-left-key`; `keys esc`, `cap 77-left-closed`.
 2. **Palette row.** `keys ctrl+p`, `send sessions`, `waitFor Sessions .*\[left\]`, `cap 78-palette-row`.
 3. **Palette open.** `keys enter`, `waitFor Sessions · \d+`, `wait 300`, `cap 79-palette-sessions`; `keys esc`.
 4. **Narrow.** `resize 60 20`, `keys left`, `waitFor Sessions · \d+`, `wait 300`, `cap 80-left-narrow`.

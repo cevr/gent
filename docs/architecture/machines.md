@@ -370,11 +370,13 @@
     run's totals, where Enter opens a visit's round thread and a double
     Ctrl+X stops an active run (`agents.client.tsx`, the run page in
     `threads.md`). The TUI's lanes band
-    (`machines.client.tsx`, under the status line) shows the server's free
-    lanes (`accounts.lanes`, the rows `gent ctl lanes --line` prints), then
-    each active run as `<machine> <state> r<visits> <age>`, with
-    `· wait <clock>` while its round waits for its account. It hides with no
-    reading and no active run, and reads again on `TurnCompleted`, on a
+    (`machines.client.tsx`, under the status line) shows the server's lanes
+    rows that need the owner (`accounts.lanes`, the rows `gent ctl lanes
+    --line` prints: no free lane, the Sabbath, a lost login, a peer with runs
+    or a link down), then each active run as `<machine> <state> r<visits>
+    <age>`, with `· wait <clock>` while its round waits for its account.
+    `/status` lists every lanes row. The band hides when no row needs the
+    owner and no run is active, and reads again on `TurnCompleted`, on a
     reconnect and every 30 s. A run's age, the peer's age and whether a
     `wait` clock falls today read the server's now
     (`ClientTransport.serverNow`): a run's start is the server's time, and a

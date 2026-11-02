@@ -4,7 +4,7 @@
   "rows": 30,
   "out": "replaced-by-verify-drive-out",
   "steps": [
-    ["waitFor", "ready · work", 30000],
+    ["waitFor", "Sonnet 5", 30000],
     ["send", "!"],
     ["settle", 300],
     ["cap", "51-shell-prompt"],

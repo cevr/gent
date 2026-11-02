@@ -27,7 +27,7 @@ A user picks the session's model and reasoning effort. The status row shows both
 
 Script `drives/model-and-effort.json`:
 
-1. **Status.** `waitFor ready · work`, `cap 41-status-before`. `Claude Sonnet 5 (Anthropic) · high`.
+1. **Status.** `waitFor Sonnet 5`, `cap 41-status-before`. `Claude Sonnet 5 (Anthropic) · high`.
 2. **Picker.** `send /model`, `keys enter`, `waitFor Model · \d+`, `cap 42-model-picker`.
 3. **Filter.** `send opus`, `waitFor › opus`, `cap 43-model-filtered`.
 4. **Close.** `keys esc` twice (clear, then close), `cap 44-picker-closed`.

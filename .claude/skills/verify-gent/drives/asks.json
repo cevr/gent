@@ -4,7 +4,7 @@
   "rows": 30,
   "out": "replaced-by-verify-drive-out",
   "steps": [
-    ["waitFor", "ready · work", 30000],
+    ["waitFor", "Sonnet 5", 30000],
     ["send", "debug ask"],
     ["keys", "enter"],
     ["waitFor", "1 open question", 15000],

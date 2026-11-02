@@ -1138,9 +1138,9 @@ export const screenShowsWorkingChild = (screenText: string): boolean =>
  * Whether the run is idle: every turn has ended in the record and the
  * screen shows no working child. The record holds the turn state; no screen
  * row stands for it. The live line and the turn line share the `✻` glyph, so
- * a screen check on it read a finished turn as busy. The footer cannot say idle
- * either: its first slot shows `idle`, `ready`, a held error or an extension
- * notice (`apps/tui/src/app.tsx`, `phaseLabels`), the last two free text.
+ * a screen check on it read a finished turn as busy. The status row cannot say
+ * idle either: it names no phase, and leads with a held error or an extension
+ * notice when one shows (`apps/tui/src/app.tsx`, `cueLabels`), both free text.
  */
 const isIdle = (screenText: string, record: RunRecord): boolean =>
   record.open.length === 0 && !screenShowsWorkingChild(screenText)

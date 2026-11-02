@@ -4,7 +4,7 @@
   "rows": 30,
   "out": "replaced-by-verify-drive-out",
   "steps": [
-    ["waitFor", "ready · work", 30000],
+    ["waitFor", "Sonnet 5", 30000],
     ["settle"],
     ["cap", "76-no-band"],
     ["sh", "gent ctl lanes --line > \"$EVIDENCE/ctl-lanes-line.txt\""],
@@ -12,9 +12,11 @@
     ["keys", "enter"],
     ["waitFor", "soak check r1", 20000],
     ["settle"],
+    ["expectNot", "lanes unknown"],
     ["cap", "77-unknown-with-run"],
     ["resize", 60, 20],
     ["settle"],
+    ["fits"],
     ["cap", "78-unknown-narrow"]
   ]
 }

@@ -72,8 +72,8 @@
   turn keeps the fold beside its step reads (`KnownSteps.rent`), each
   projection carries the costliest five of what it sends
   (`ModelContextProjected.renters`, none once it hands off), `context.status()`
-  returns them, and the TUI's gauge names the costliest (`ctx 42% · read
-  12k`). Gent charges a tool result at its bounded size, the text its model
+  returns them, and the TUI's `/status` pane names the costliest
+  (`costliest read 12k`). Gent charges a tool result at its bounded size, the text its model
   sees. The meter reads the turn's calls only: a compaction summary's call
   reports its usage on `CompactionOutcome.cases.Summarized`, not on a step. A forked branch
   starts its meter fresh.

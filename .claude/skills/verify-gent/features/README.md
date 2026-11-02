@@ -7,7 +7,7 @@ The maintained source for verifying what a gent TUI user can do. Read this index
 - `bun run --silent verify:launch --dir "$RUN"` makes the run: a scratch home whose config names `anthropic/claude-sonnet-5` (status row `Claude Sonnet 5 (Anthropic) · high`), the scripted model, an empty workspace `$RUN/work`.
 - `bun run --silent verify:doctor --dir "$RUN"` prints `Healthy` before the first drive.
 - A drive is `bun run --silent verify:drive --dir "$RUN" --script .claude/skills/verify-gent/drives/<script>.json --out "$EVIDENCE/<feature>"`. The scripts run in any order on one run; each opens its own TUI.
-- The TUI at rest: row 1 `gent · ctrl+p commands`, the composer `┃`, then the status row (`ready · work · …` in a new session, `idle · work · …` after a turn).
+- The TUI at rest: row 1 `gent · ctrl+p commands`, the composer `┃`, then the status row `Claude Sonnet 5 (Anthropic) · high`, with `ctx <held>/963k` on its right once a turn ran. Wait for `Sonnet 5` before the first send. Nothing shows under the status row at rest.
 
 ## Proof and skip reporting
 
@@ -41,6 +41,7 @@ Name user paths, screen text, keys, commands and observable results. Keep source
 - [Asks](asks.md): a background question, its footer row and the `/answer` form.
 - [Sessions](sessions.md): the Sessions pane by `/sessions`, the palette and the `left` key, its filter, switching sessions.
 - [Run page](run-page.md): a machine run's row in the Sessions pane, its page of state visits, narrow, Enter to a round's thread, the double Ctrl+X stop.
-- [Lanes band](lanes.md): free lanes and active machine runs under the status row, at rest, with a run, narrow, and `gent ctl lanes`.
-- [Banked resets](banked-resets.md): the resets each account holds, on the lanes band and in `gent ctl lanes`, at rest and narrow.
-- [Lanes peer](lanes-peer.md): the peer machine's row on the lanes band and in `gent ctl lanes`: its runs, silence and links down, at rest and narrow.
+- [Status](status.md): the status row at rest and with a running child, and the `/status` pane with what the row leaves out, at 120x40, 60x20 and a resize.
+- [Lanes band](lanes.md): lanes in `/status`, and the band of lanes that need the owner and active machine runs under the status row, at rest, with a run, narrow, and `gent ctl lanes`.
+- [Banked resets](banked-resets.md): the resets each account holds, in `/status` and in `gent ctl lanes`, narrow.
+- [Lanes peer](lanes-peer.md): the peer machine's row in `/status`, on the band while it needs action, and in `gent ctl lanes`: its runs, silence and links down, at rest and narrow.

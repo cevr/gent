@@ -4,7 +4,7 @@
   "rows": 30,
   "out": "replaced-by-verify-drive-out",
   "steps": [
-    ["waitFor", "ready · work", 30000],
+    ["waitFor", "Sonnet 5", 30000],
     [
       "sh",
       "mkdir -p .gent/machines && printf '%s\\n' '{\"name\":\"soak\",\"threads\":{\"writer\":{},\"reviewer\":{}},\"start\":\"draft\",\"states\":{\"draft\":{\"kind\":\"thread\",\"thread\":\"writer\",\"say\":\"Write one line about the cache.\",\"next\":\"check\"},\"check\":{\"kind\":\"run\",\"run\":\"true\",\"on\":{\"pass\":\"review\",\"fail\":\"draft\"}},\"review\":{\"kind\":\"thread\",\"thread\":\"reviewer\",\"say\":\"Review the line about the cache.\",\"next\":\"lint\"},\"lint\":{\"kind\":\"run\",\"run\":\"false\",\"on\":{\"pass\":\"settle\",\"fail\":\"settle\"}},\"settle\":{\"kind\":\"run\",\"run\":\"sleep 120\",\"on\":{\"pass\":\"done\",\"fail\":\"done\"}},\"done\":{\"kind\":\"final\"}}}' > .gent/machines/soak.json && chmod 555 .gent/machines"

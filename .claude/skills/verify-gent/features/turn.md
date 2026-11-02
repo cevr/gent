@@ -27,7 +27,7 @@ A user types a message and presses enter. gent shows a running line with a timer
 
 Script `drives/turn.json`:
 
-1. **Home.** `waitFor` `ready · work`, `cap 01-home`. Row 1 reads `gent · ctrl+p commands`.
+1. **Home.** `waitFor` `Sonnet 5`, `cap 01-home`. Row 1 reads `gent · ctrl+p commands`; the status row reads `Claude Sonnet 5 (Anthropic) · high` and nothing else.
 2. **Send.** `send debug tools`, `keys enter`, `waitFor esc cancel`, `cap 02-running`. The running line `✻ … · esc cancel` shows a timer.
 3. **Answer.** `waitFor ✻ Worked for`, `capAll 03-answered`. The summary row names one failed call, `└ Ran sleep 2; ls gent-debug-tools/d.ts || exit 2 · exit 2 …`, and the answer ends `it does not exist yet.`
 4. **Second view.** `sh gent ctl wait --until idle`, `sh gent ctl events --tags ToolCallStarted,ToolCallFailed,TurnCompleted`, `sh cat gent-debug-tools/a.ts`. The events hold the `ToolCallStarted` rows and one `TurnCompleted`; the `ls` that exits 2 is a call that ran, not a `ToolCallFailed`. `a.ts` holds the edited greeting, `hello, world`.
@@ -38,12 +38,11 @@ Script `drives/turn.json`:
 
 Script `drives/turn-prompt-flag.json`: `gent -p "debug tools"`, `waitFor ✻ Worked for`, `cap 11-prompt-flag`, then `gent ctl events --tags MessageReceived,TurnCompleted --limit 3`. The first prompt ran with no key pressed.
 
-Script `drives/turn-resume.json`: `gent resume`, `waitFor idle · work`, `cap 21-resumed` (the `debug tools` transcript is back), `send debug think`, `keys enter`, `waitFor Both chrome paths draw once`, `cap 22-second-prompt`, `gent ctl snapshot --limit 2`.
+Script `drives/turn-resume.json`: `gent resume`, `waitFor Sonnet 5`, `cap 21-resumed` (the `debug tools` transcript is back), `send debug think`, `keys enter`, `waitFor Both chrome paths draw once`, `cap 22-second-prompt`, `gent ctl snapshot --limit 2`.
 
 ## Gotchas
 
 - `settle` of 1000 ms or more fails while a turn runs: the running line's timer ticks every second. Use `waitFor` on the end text, then `settle`.
 - `waitFor` matches the whole screen, old rows too. After a first `debug tools`, `Worked for` already shows: wait for text only the new state draws (`Interrupted`, the second answer).
-- After a turn the status row starts with `idle`, not `ready`. A script that waits for `ready · work` after `gent resume` waits its full timeout.
 - `gent resume` on a session with two branches (after `/branch`) opens a `Resume: <name>` branch picker before the transcript.
 - `ctrl+c` once shows `ctrl+c again to exit`; the drive's own cleanup sends it, so a script needs no exit step.
