@@ -146,42 +146,70 @@
   - Findings are judged by someone other than their writer. A thread state
     with `evidence` reads its round's reply file (`reply.file`, from the
     run's cwd) at the round's end on a verdict: `findings` a review's
-    `round-N-findings.md` (each list item under a Blocker, Major, Minor,
-    Optional or Test strength heading, its first word with a digit its id,
-    `class: defect|test-strength|spec|environment`, else `unclassified`),
-    `verify` a check's `round-N-verify.md` (a FAIL is one finding, id
-    `verify`), `fixes` an implementor's `round-N-request.md` (lines
-    `Fixed: r1 M1, r1 M2` and `Disputed: r1 M3 — <reason>`). The steps
-    are `Findings`, `Fixes` and `Judged` (`confirmed` or `rejected`,
-    with who judged): a `Fixed` key confirms its finding (`fixed`), a
-    repeat-test pass confirms the Blockers and Majors that repeat an earlier
-    finding (`repeat-test`), the next review rejects a disputed finding no
-    Blocker or Major of it repeats (`review`), and an answer of an ask
-    whose `judges` holds the choice (`decide`'s `merge` and `fix`)
-    rejects each disputed finding its note does not name (`answer`). An
-    open finding stays unjudged. The run's memo keeps the ledger.
-  - The role scorecard (`scorecard.ts`) measures each model in each
-    orchestrate role over the runs that moved since a time, from the steps
-    alone: what others judged, the moves, the answers and the costs, never
-    a model's word about itself. The implementor: rounds, units, round-1
-    accept rate, mean rounds until accepted, cost per merged unit, escapes
-    per merged unit. The reviewer: rounds, confirmed Blockers and Majors
-    per round by class, rejected findings per round, escapes per accepted
-    review. The planner: plans, units, replans, rewrites, size stops and
-    merged units per plan. The verifier: verifies, confirmed fails, escapes
-    per pass. Each measure names its n, a rate under n 5 has no value, and
-    there is no combined score. The escape rule is one function
-    (`escapesAt`): a failed verify, a red gate (`fail`/`red` off a run
-    state that is not a screen, or an integrate state) or an answer that
-    sends the work back (`fix`, `changes`) after a review that accepted
-    it escapes that review and its implementor's round; a red gate after a
-    verify that passed escapes that verify. `MachinesRpc.Roles`, a server
-    request, is the scorecard's only reader, and `gent ctl review` its
-    only client: it writes `roles.jsonl` and the digest's roles table. No
-    prompt, tool or status names a measure (`SCORE_WORDS`, tested), and
-    a guard (`findScorecardReaders`) fails any other module that loads
-    `scorecard.ts`, and any read of it in `machines.ts` outside its
-    review section.
+    `round-N-findings.md`, `verify` a check's `round-N-verify.md` (a first
+    line `Verdict: FAIL` is one finding, id `verify`), `fixes` an
+    implementor's `round-N-request.md`. A finding starts on a list item, at
+    any indentation, under a Blocker, Major, Minor, Optional or Test
+    strength heading whose first word is an id (`B1`, `M2`, `m1`, `O1`,
+    `T1`; never a path such as `b1.ts:4`), or on a line that names its
+    severity and number (`Major 2:`) anywhere but under another heading.
+    Its id's letter is its severity, its class the last
+    `class: defect|test-strength|spec|environment` it says (else
+    `unclassified`), and its key its round and id (`r1 M1` is not `r1 m1`).
+    A request answers with `Fixed: r1 M1 <commit>, r1 M2 <commit>`,
+    `Disputed: r1 M3 — <reason>`, `Disputed (r1 M3): <reason>`, or the
+    list items under a `Fixed` or `Disputed` heading; a review holds a
+    dispute with `Still holds: r1 M3 — <reason>`, or a Blocker or Major
+    that says `repeat of r1 M3`. The steps are `Findings` (with the keys
+    held), `Fixes` and `Judged` (`confirmed`, `rejected` or `withdrawn`,
+    with who judged), folded by one function (`ledgerAfter`) for the
+    engine and the scorecard. A `Fixed` key confirms its finding (`fixed`);
+    a held key a request marked fixed refutes that fix. The repeat-test
+    check's PASS confirms each Blocker and Major whose repeat it tested
+    (its `Repeats:` line; a SKIP names none), and the findings it repeats
+    (`repeat-test`). The next review withdraws a disputed finding no review
+    held (`withdrawn`; a disputed failed verify is `rejected`).
+    An answer of an ask whose `judges` holds the choice (`decide`'s `merge`
+    and `fix`) confirms each disputed finding its note names (`answer`);
+    a `merge` rejects the rest, a `fix` keeps them open. An open finding
+    stays unjudged. The run's memo keeps the ledger (table version 5).
+  - The role scorecard (`scorecard.ts`) measures each model and effort in
+    each orchestrate role (`ROLE_MACHINES`: `orchestrate`,
+    `orchestrate-light`; another machine's threads count nothing) over the
+    runs that moved since a time, from the steps alone: what others judged,
+    the moves, the answers and the costs, never a model's word about
+    itself. The implementor: `rounds`, `units`, `round-1-accepted`,
+    `rounds-until-accepted`, `cost-per-merged-unit` (with its share of
+    priced rounds), `escapes-per-reviewed-unit`, `fix-claims-refuted`,
+    `findings-left-unanswered` (Blockers, Majors, failed verifies and held
+    keys of the round before a request that it neither fixed nor
+    disputed). The reviewer: `rounds`, `units`, `rounds-per-unit`,
+    `changes-per-unit`, `confirmed-<class>-per-round`,
+    `confirmed-by-repeat-test`, `-fix` and `-answer-per-round`,
+    `rejected-per-round`, `withdrawn-per-round`, `escapes-per-unit`. The
+    planner: `plans`, `replans`, `rewrites`, `size-stops` and
+    `merged-units-per-plan`. The verifier: `verifies`, `units`,
+    `confirmed-fails`, `rejected-fails-per-verify`, `escapes-per-unit`.
+    Each measure names its n, a ratio under n 5 has no value, and there is
+    no combined score. The unit's first passing review is its accept, of
+    the implementor whose round it judged; a `resume` round counts no
+    round toward it, and an escape undoes it. The escape rule is one
+    function (`escapesAt`): a failed verify, a red gate (`fail`/`red` off a
+    run state that is not a screen, or an integrate state) or an answer
+    that sends the work back (`fix`, `changes`) after a review that
+    accepted it escapes that review and its implementor's round; a red gate
+    after a verify that passed escapes that verify. A gate that timed out
+    and an answer after `declined` are no escapes. `MachinesRpc.Roles`, a
+    server request, pages 20 runs (each with its `Started` step) and is the
+    scorecard's only reader; `gent ctl review` is its only client: it
+    writes `roles.jsonl` and the digest's roles table, and refuses under
+    `GENT_COMMAND_TOKEN` (a gent tool or machine command; a worker with a
+    full shell can still unset it or read the data dir). No prompt, tool or
+    status names a measure (`SCORE_WORDS`, tested). A guard
+    (`findScorecardReaders`) fails any other module that loads
+    `scorecard.ts` (an import, an export, a `require` anywhere, a computed
+    import in the extensions) and any read of it in `machines.ts` outside
+    its review section.
   - Answers check in one order: an answered ask is decided by its answer
     (the same choice and note again is admitted, any other conflicts), an
     ask never answered and no longer current is stale, a choice not offered
@@ -370,7 +398,12 @@
     "{{input.dir}}"`. Each Blocker or Major of the last findings that says
     `repeat of rN <id>` needs a line in the newest request:
     `Repeat test: rN <id> <test file>... -- <command> :: <test name>`.
-    Every heading resets the section; only `Blocker(s)` and `Major(s)` block.
+    It reads the findings as the engine does: a Blocker or Major is a list
+    item whose first word is a `B` or `M` id under a severity heading, or a
+    `Blocker N:`/`Major N:` line under no other heading. After its verdict
+    it prints `Repeats: r1 M1, …`, the earlier findings whose repeat it
+    tested (`none` when it ran no test): on a PASS the engine confirms
+    them and their repeats.
     In clean worktrees under `<unit dir>/repeat-check/`, which each check
     clears first (a killed check's too), with the lock file's packages
     installed, the command must exit 1 to 125 at the head the last review

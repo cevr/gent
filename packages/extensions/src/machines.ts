@@ -97,7 +97,7 @@ import {
 } from "./exec-tools.js"
 import type { ChildUsage } from "./child-turns.js"
 import { generationOf, Integration, type GateKey, type GateRecord } from "./integration.js"
-import { RoleScore, scoreRoles } from "./scorecard.js"
+import { scoreRoles } from "./scorecard.js"
 import {
   currentThreadPlace,
   StartParams,
@@ -261,8 +261,10 @@ const RunState = Schema.Struct({
    */
   log: Schema.optionalKey(Template),
   /**
-   * `repeats`: the state runs the repeat-test check, so its pass confirms the
-   * open repeat findings and the findings they repeat (`judgeRepeats`).
+   * `repeats`: the state runs the repeat-test check, so a pass whose output
+   * names the earlier findings its tests showed (`Repeat-test check PASS`,
+   * `Repeats: r1 M1`) confirms the findings that repeat them and every
+   * finding their chains repeat (`judgeRepeats`). A skip shows none.
    */
   evidence: Schema.optionalKey(Schema.Literal("repeats")),
   ...VisitCap,
@@ -350,11 +352,12 @@ const AskState = Schema.Struct({
   on: Schema.Record(Verdict, StateName),
   requires: Schema.optionalKey(AnswerRequirement),
   /**
-   * The choices that settle the run's disputed findings: an answer by one of
-   * them rejects each disputed finding its note does not name
-   * (`judgeAnswer`). Each is a key of `on`.
+   * The choices whose answer judges the run's disputed findings
+   * (`judgeAnswer`): it confirms each one its note names (`rN <id>`), and
+   * for each one the note does not name, `reject` rejects it and `keep`
+   * leaves it disputed. Each is a key of `on`.
    */
-  judges: Schema.optionalKey(Schema.Array(Verdict)),
+  judges: Schema.optionalKey(Schema.Record(Verdict, Schema.Literals(["reject", "keep"]))),
 })
 
 const FinalState = Schema.Struct({
@@ -545,10 +548,12 @@ const RoundTokens = Schema.Struct({
 
 /**
  * One finding as the engine read it from a reply file (`findingsIn`):
- * `round` the N of its file, `id` its first word, lowercase (`m2`; a failed
- * verify is the one finding `verify`, severity `fail`), `class` what its
- * text says (`class: spec`), `unclassified` when it says none or another,
- * and `repeatOf` the keys of the earlier findings it repeats.
+ * `round` the N of its file, `id` its id in the severity grammar
+ * (`FINDING_IDS`: `B1`, `M2`, `m2`, `O1`, `T1`; a failed verify is the
+ * one finding `verify`, severity `fail`), `severity` the one its id's
+ * letter names, `class` what its text says last (`class: spec`),
+ * `unclassified` when it says none, and `repeatOf` the keys of the earlier
+ * findings it repeats.
  */
 const Finding = Schema.Struct({
   round: PositiveInt,
@@ -559,8 +564,12 @@ const Finding = Schema.Struct({
 })
 type Finding = typeof Finding.Type
 
-/** A finding's status once someone other than its writer judged it (`Judged`). */
-const FindingStatus = Schema.Literals(["confirmed", "rejected"])
+/**
+ * A finding's status once someone other than its writer judged it
+ * (`Judged`): `withdrawn` when the next review did not hold a disputed
+ * finding of its own role, `rejected` when another role made the call.
+ */
+const FindingStatus = Schema.Literals(["confirmed", "rejected", "withdrawn"])
 
 /** One row of the append-only log. */
 const MachineStep = Schema.TaggedUnion({
@@ -625,11 +634,20 @@ const MachineStep = Schema.TaggedUnion({
   Saved: { state: StateName, value: Schema.Json },
   /** A `retry` answer to an `exhausted` ask granted the state one visit past its cap. */
   Granted: { state: StateName },
-  /** The findings a round's reply file named (`ThreadState.evidence`), written before its move. */
-  Findings: { state: StateName, round: PositiveInt, findings: Schema.Array(Finding) },
+  /**
+   * The findings a round's reply file named (`ThreadState.evidence`), written
+   * before its move; `held` the keys of the disputed findings it still holds
+   * (`Still holds: r1 M2 — <reason>`).
+   */
+  Findings: {
+    state: StateName,
+    round: PositiveInt,
+    findings: Schema.Array(Finding),
+    held: Schema.optionalKey(Schema.Array(Schema.String)),
+  },
   /**
    * An implementor's request's answer to the findings (`ThreadState.evidence`
-   * `fixes`): the keys (`r1 m2`) it fixed, and those it disputed, each with
+   * `fixes`): the keys (`r1 M2`) it fixed, and those it disputed, each with
    * its reason.
    */
   Fixes: {
@@ -640,9 +658,10 @@ const MachineStep = Schema.TaggedUnion({
   },
   /**
    * A finding judged by someone other than its writer: `fixed` the
-   * implementor's request, `repeat-test` a repeat-test check's pass, `review`
-   * a later review that did not raise a disputed finding again, `answer` an
-   * ask's answer (`AskState.judges`) whose note did not name it.
+   * implementor's request, `repeat-test` a repeat-test check's pass (which
+   * also turns a `fixed` confirmation into its own), `review` a later
+   * review that held no disputed finding, `answer` an ask's answer
+   * (`AskState.judges`).
    */
   Judged: {
     key: Schema.String,
@@ -684,6 +703,7 @@ export type MachineStep = typeof MachineStep.Type
 type RoundEnded = Extract<MachineStep, { readonly _tag: "RoundEnded" }>
 type MovedStep = Extract<MachineStep, { readonly _tag: "Moved" }>
 type JudgedStep = Extract<MachineStep, { readonly _tag: "Judged" }>
+type FindingsStep = Extract<MachineStep, { readonly _tag: "Findings" }>
 
 /** One step of a run's log, as a model's quality is read from it. */
 interface RunOutcome {
@@ -875,7 +895,9 @@ const stateProblems = (
     const guarded = state.requires?.choices ?? []
     const unknown = guarded.filter((choice) => !Object.hasOwn(state.on, choice))
     problems.push(...unknown.map((choice) => `${name}: requires names no choice ${choice}`))
-    const unjudged = (state.judges ?? []).filter((choice) => !Object.hasOwn(state.on, choice))
+    const unjudged = Object.keys(state.judges ?? {}).filter(
+      (choice) => !Object.hasOwn(state.on, choice),
+    )
     problems.push(...unjudged.map((choice) => `${name}: judges names no choice ${choice}`))
     const verdicts = new Set(Object.values(definition.states).flatMap(threadVerdictsOf))
     const edges = state.requires?.after ?? []
@@ -1322,11 +1344,17 @@ const decodeReviewRows = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ run: RunId, machine: MachineName, ...StepRow.fields })),
 )
 
-/** The steps the role scorecard reads of a run (`scoreRoles`). */
+/**
+ * The steps the role scorecard reads of a run (`scoreRoles`). `Started`
+ * opens every run, so each run of a page holds a step and the page counts it.
+ */
 const ROLE_STEP_TAGS = [
+  "Started",
   "Recorded",
   "RoundEnded",
+  "CommandEnded",
   "Findings",
+  "Fixes",
   "Judged",
   "Moved",
   "Answered",
@@ -1376,28 +1404,102 @@ const stateOfStep = (step: MachineStep, fallback: StateName): StateName => {
 // ── findings ────────────────────────────────────────────────────────────────
 
 /**
- * A finding of the run and its status: `open` until someone judges it,
- * `disputed` once a request disputed it and no one judged it yet,
- * `confirmed` or `rejected` once someone other than its writer did
- * (`Judged`).
+ * A finding of the run and where it stands. `status`: `open` until someone
+ * other than its writer judges it (`Judged`), then that judgment, and `by`
+ * who made it. `answer`: the implementor's last answer to it in a request
+ * (`Fixes`), `none` again once a review held a fixed one. `held`: a later
+ * review held it, on a `Still holds` line or as a Blocker or Major that
+ * repeats it. `refuted`: how many times a review held it after a request
+ * marked it fixed. The role scorecard reads this same fold.
  */
 interface LedgerEntry {
   readonly finding: Finding
-  readonly status: "open" | "disputed" | typeof FindingStatus.Type
+  readonly status: "open" | typeof FindingStatus.Type
+  readonly by: Option.Option<JudgedStep["by"]>
+  readonly answer: "none" | "fixed" | "disputed"
+  readonly held: boolean
+  readonly refuted: number
 }
-type FindingLedger = ReadonlyMap<string, LedgerEntry>
+export type FindingLedger = ReadonlyMap<string, LedgerEntry>
 
-/** A finding's key: its round and its id, `r1 m2`. */
+/** A finding's key: its round and its id, `r1 M2`; `r1 m2` is another finding. */
 const findingKey = (finding: Pick<Finding, "round" | "id">) => `r${finding.round} ${finding.id}`
 
-/** An id as a key holds it: lowercase, without the punctuation around it (`**M2**:` is `m2`). */
-const cleanId = (id: string) => id.replace(/^[(`*_[]+|[.,;:)`*_\]]+$/g, "").toLowerCase()
+/**
+ * The severity grammar of a finding's id: `B` a Blocker, `M` a Major, `m` a
+ * Minor, `O` an Optional, `T` a Test strength finding, then its number. A
+ * lowercase `b`, `o` or `t` reads as its uppercase; `M` and `m` differ.
+ */
+const FINDING_IDS = /^([BMmOTbot])(\d+)$/
+const SEVERITY_OF_LETTER = new Map<string, Finding["severity"]>([
+  ["B", "blocker"],
+  ["M", "major"],
+  ["m", "minor"],
+  ["O", "optional"],
+  ["T", "test-strength"],
+])
+/** The letter of a severity word, as a `Major 2:` line names it. */
+const LETTER_OF_WORD = new Map<string, string>([
+  ["blocker", "B"],
+  ["major", "M"],
+  ["minor", "m"],
+  ["optional", "O"],
+  ["test strength", "T"],
+  ["test-strength", "T"],
+])
 
-/** The finding keys a text names, `r1 M2` and `R1 m2.` both `r1 m2`. */
+/** An id in the grammar, without the punctuation around it (`**M2**:` is `M2`); `verify` a failed verify's. */
+const idOf = (word: string): Option.Option<string> => {
+  const bare = word.replace(/^[(`*_[]+|[.,;:)`*_\]]+$/g, "")
+  if (bare.toLowerCase() === "verify") return Option.some("verify")
+  return Option.map(Option.fromNullishOr(FINDING_IDS.exec(bare)), (match) => {
+    const letter = match[1] ?? ""
+    if (letter === "m") return `m${match[2] ?? ""}`
+    return `${letter.toUpperCase()}${match[2] ?? ""}`
+  })
+}
+
+/** The severity an id's letter names; `fail` for a failed verify's. */
+const severityOfId = (id: string): Finding["severity"] =>
+  SEVERITY_OF_LETTER.get(id.slice(0, 1)) ?? "fail"
+
+/** A reference to a finding: `r1 M2`, `R1 **m2**`, `r2 verify`. */
+const REFERENCE = /\b[rR](\d+)\s+[(`*_[]*([BMmOTbot]\d+|[vV]erify)\b/g
+
+/** The finding keys a text names, in order: `r1 M2` and `R1 **M2**.` both `r1 M2`. */
 const keysIn = (text: string): ReadonlyArray<string> =>
-  Array.from(text.matchAll(/\b(r\d+)\s+([^\s,;]+)/gi), (match) =>
-    `${(match[1] ?? "").toLowerCase()} ${cleanId(match[2] ?? "")}`.trim(),
+  Array.from(text.matchAll(REFERENCE), (match) =>
+    Option.match(idOf(match[2] ?? ""), {
+      onNone: () => [],
+      onSome: (id) => [`r${match[1] ?? ""} ${id}`],
+    }),
+  ).flat()
+
+/** The references a text starts with (`r1 M2, r1 M3 — <reason>`), and the reason after them. */
+const LEADING_REFERENCES =
+  /^(?:[\s,]*(?:and\s+)?[rR]\d+\s+[(`*_[]*(?:[BMmOTbot]\d+|[vV]erify)\b[)`*_\].:]*)+/
+const leadingKeysOf = (text: string) => {
+  const lead = Option.getOrElse(
+    Option.map(Option.fromNullishOr(LEADING_REFERENCES.exec(text)), (match) => match[0]),
+    () => "",
   )
+  return {
+    keys: keysIn(lead),
+    reason: text
+      .slice(lead.length)
+      .replace(/^[\s—–:-]+/, "")
+      .trim(),
+  }
+}
+
+/**
+ * The keys and reason of an answer line's text: those in its label's
+ * parentheses (`Disputed (r1 M6): <reason>`), else those it starts with.
+ */
+const answerOf = (named: string, rest: string) => {
+  if (named.trim().length === 0) return leadingKeysOf(rest)
+  return { keys: keysIn(named), reason: rest.replace(/^[\s—–:-]+/, "").trim() }
+}
 
 /** A reply file's round and kind, from its name: `round-2-findings.md` is round 2, `findings`. */
 const replyFileOf = (
@@ -1420,78 +1522,86 @@ const headingOf = (line: string): Option.Option<string> => {
   return Option.map(bare, (match) => match[1] ?? "")
 }
 
-/** The severity a heading opens; none for any other heading (Summary, Rejected). */
-const severityOf = (heading: string): Option.Option<Finding["severity"]> => {
-  const text = heading.trim().toLowerCase()
-  if (/^blockers?\b/.test(text)) return Option.some("blocker")
-  if (/^majors?\b/.test(text)) return Option.some("major")
-  if (/^minors?\b/.test(text)) return Option.some("minor")
-  if (/^optional\b/.test(text)) return Option.some("optional")
-  if (/^test strength\b/.test(text)) return Option.some("test-strength")
-  return Option.none()
-}
+/** Whether a heading opens a severity's list (Blockers, Major, Test strength); not Summary or Rejected. */
+const isSeverityHeading = (heading: string) =>
+  /^(blockers?|majors?|minors?|optional|test strength)\b/.test(heading.trim().toLowerCase())
 
-/** The class a finding's text says (`class: spec`); `unclassified` when it says none or another. */
+/** The class a finding's text says last (`class: spec`); `unclassified` when it says none. */
 const classOf = (text: string): Finding["class"] => {
-  const said = Option.fromNullishOr(/\bclass\W{0,3}\s*([a-z-]+)/i.exec(text))
-  const name = Option.getOrElse(
-    Option.map(said, (match) => (match[1] ?? "").toLowerCase()),
-    () => "",
-  )
-  if (name === "defect" || name === "test-strength" || name === "spec" || name === "environment")
-    return name
+  const said = Array.from(
+    text.matchAll(/\bclass:\s*(defect|test-strength|spec|environment)\b/gi),
+    (match) => (match[1] ?? "").toLowerCase(),
+  ).at(-1)
+  if (said === "defect" || said === "test-strength" || said === "spec" || said === "environment")
+    return said
   return "unclassified"
 }
 
+/** A line that starts a finding by its severity and number (`Major 2: …`, `**Minor 1:** …`). */
+const SEVERITY_LINE =
+  /^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:#{1,6}\s+)?(?:\*\*|__)?(blocker|major|minor|optional|test[- ]strength)s?\s+(\d+)(?:\*\*|__)?\s*[:.)\u2014\u2013-](.*)$/i
+
+/** A list item at any indentation: its first word and the rest. */
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(\S+)(.*)$/
+
+/** A finding of round `round`, its id and its text. */
+const findingOf = (round: number, id: string, text: string): Finding => {
+  const repeated = Array.from(text.matchAll(/repeat of\s+([rR]\d+\s+\S+)/gi), (match) =>
+    keysIn(match[1] ?? ""),
+  ).flat()
+  return {
+    round,
+    id,
+    severity: severityOfId(id),
+    class: classOf(text),
+    ...omitUndefined({
+      repeatOf: Option.getOrUndefined(
+        Option.liftPredicate(Array.from(new Set(repeated)), (keys) => keys.length > 0),
+      ),
+    }),
+  }
+}
+
 /**
- * The findings of a findings file of round `round`: under each severity
- * heading, a list item starts a finding, its first word (with a digit) its
- * id; the item's text runs to the next item or heading. Items under any other
- * heading, or whose first word holds no digit (`none`), are no finding.
+ * The findings of a findings file of round `round`. A finding starts on a
+ * list item, at any indentation, under a severity heading whose first word
+ * is an id in the grammar (`M1:`), or on a line that names its severity and
+ * number (`Major 2:`) anywhere but under another heading; its text runs to
+ * the next finding or heading. Its id's letter is its severity. A list item
+ * whose first word is no id (`a.ts:3`, `none`) is part of the finding above.
  */
 const findingsIn = (round: number, text: string): ReadonlyArray<Finding> => {
   const findings: Array<Finding> = []
-  let severity = Option.none<Finding["severity"]>()
-  let open = Option.none<{
-    readonly id: string
-    readonly severity: Finding["severity"]
-    text: string
-  }>()
+  // Where a line is: before any heading, under a severity heading, or under another one.
+  let section: "start" | "severity" | "other" = "start"
+  let open = Option.none<{ readonly id: string; text: string }>()
   const close = () => {
-    for (const item of Option.toArray(open)) {
-      const repeatOf = keysIn(
-        Array.from(item.text.matchAll(/repeat of (r\d+ \S+)/gi), (match) => match[1] ?? "").join(
-          " ",
-        ),
-      )
-      findings.push({
-        round,
-        id: item.id,
-        severity: item.severity,
-        class: classOf(item.text),
-        ...omitUndefined({
-          repeatOf: Option.getOrUndefined(
-            Option.liftPredicate(repeatOf, (keys) => keys.length > 0),
-          ),
-        }),
-      })
-    }
+    for (const item of Option.toArray(open)) findings.push(findingOf(round, item.id, item.text))
     open = Option.none()
   }
   for (const line of text.split(/\r?\n/)) {
+    const named = Option.fromNullishOr(SEVERITY_LINE.exec(line))
+    if (Option.isSome(named) && section !== "other") {
+      close()
+      const word = (named.value[1] ?? "").toLowerCase()
+      const id = `${LETTER_OF_WORD.get(word) ?? ""}${named.value[2] ?? ""}`
+      open = Option.some({ id, text: named.value[3] ?? "" })
+      continue
+    }
     const heading = headingOf(line)
     if (Option.isSome(heading)) {
       close()
-      severity = severityOf(heading.value)
+      section = "other"
+      if (isSeverityHeading(heading.value)) section = "severity"
       continue
     }
-    const item = Option.fromNullishOr(/^\s{0,1}(?:[-*+]|\d+[.)])\s+(\S+)(.*)$/.exec(line))
-    if (Option.isSome(item)) {
+    const item = Option.filter(Option.fromNullishOr(LIST_ITEM.exec(line)), (match) =>
+      Option.isSome(Option.filter(idOf(match[1] ?? ""), (id) => id !== "verify")),
+    )
+    if (Option.isSome(item) && section === "severity") {
       close()
-      const id = cleanId(item.value[1] ?? "")
-      if (Option.isSome(severity) && /\d/.test(id) && id.length <= 16) {
-        open = Option.some({ id, severity: severity.value, text: item.value[2] ?? "" })
-      }
+      const id = Option.getOrElse(idOf(item.value[1] ?? ""), () => "")
+      open = Option.some({ id, text: item.value[2] ?? "" })
       continue
     }
     for (const current of Option.toArray(open)) current.text = `${current.text}\n${line}`
@@ -1500,6 +1610,19 @@ const findingsIn = (round: number, text: string): ReadonlyArray<Finding> => {
   return findings
 }
 
+/** A line that holds a disputed finding: `Still holds: r1 M2 — <reason>`. */
+const HELD_LINE =
+  /^\s*(?:[-*+]\s+)?(?:\*\*|__)?still holds(?:\*\*|__)?\s*(?:\(([^)]*)\))?\s*:(?:\*\*|__)?(.*)$/i
+
+/** The keys a findings file still holds, on its `Still holds` lines. */
+const heldIn = (text: string): ReadonlyArray<string> =>
+  text.split(/\r?\n/).flatMap((line) =>
+    Option.match(Option.fromNullishOr(HELD_LINE.exec(line)), {
+      onNone: () => [],
+      onSome: (match) => answerOf(match[1] ?? "", match[2] ?? "").keys,
+    }),
+  )
+
 /** A verify file's finding: a first line `Verdict: FAIL` is the one finding `rN verify`. */
 const verifyFindingsIn = (round: number, text: string): ReadonlyArray<Finding> => {
   const first = text.trimStart().split(/\r?\n/, 1)[0] ?? ""
@@ -1507,119 +1630,230 @@ const verifyFindingsIn = (round: number, text: string): ReadonlyArray<Finding> =
   return [{ round, id: "verify", severity: "fail", class: "unclassified" }]
 }
 
+/** An answer line of a request: `Fixed: …`, `Disputed (r1 M6): …`, bold or a list item. */
+const ANSWER_LINE =
+  /^\s*(?:[-*+]\s+)?(?:\*\*|__)?(fixed|disputed)(?:\*\*|__)?\s*(?:\(([^)]*)\))?\s*:(?:\*\*|__)?\s*(.*)$/i
+
 /**
- * A request's answer to the findings: each `Fixed:` line's keys, and each
- * `Disputed: rN <id> — <reason>` line's key and reason.
+ * A request's answer to the findings. A `Fixed:` line fixes every key it
+ * names (`Fixed: r1 M1 <commit>, r1 M2 <commit>`); a `Disputed:` line
+ * disputes the keys it starts with, or those in its label's parentheses
+ * (`Disputed (r1 M6):`), for the reason after them. A `Fixed` or `Disputed`
+ * heading, or such a line with nothing after it, answers each list item
+ * below it the same way, up to the next heading.
  */
 const fixesIn = (text: string) => {
   const fixed: Array<string> = []
   const disputed: Array<{ readonly key: string; readonly reason: string }> = []
+  const answer = (kind: string, named: string, rest: string) => {
+    if (kind === "fixed") {
+      fixed.push(...keysIn(`${named} ${rest}`))
+      return
+    }
+    const { keys, reason } = answerOf(named, rest)
+    disputed.push(...keys.map((key) => ({ key, reason })))
+  }
+  let list = Option.none<string>()
   for (const line of text.split(/\r?\n/)) {
-    const said = Option.fromNullishOr(
-      /^\s*(?:[-*+]\s+)?(?:\*\*|__)?(fixed|disputed)(?:\*\*|__)?\s*:(?:\*\*|__)?\s*(.*)$/i.exec(
-        line,
-      ),
-    )
-    if (Option.isNone(said)) continue
-    const rest = said.value[2] ?? ""
-    if ((said.value[1] ?? "").toLowerCase() === "fixed") {
-      fixed.push(...keysIn(rest))
+    const said = Option.fromNullishOr(ANSWER_LINE.exec(line))
+    if (Option.isSome(said)) {
+      const kind = (said.value[1] ?? "").toLowerCase()
+      const named = said.value[2] ?? ""
+      const rest = said.value[3] ?? ""
+      list = Option.none()
+      if (named.trim().length === 0 && rest.trim().length === 0) list = Option.some(kind)
+      else answer(kind, named, rest)
       continue
     }
-    const one = Option.fromNullishOr(/^(r\d+)\s+(\S+)\s*(?:[—–:-]+\s*)?(.*)$/i.exec(rest.trim()))
-    for (const match of Option.toArray(one)) {
-      const key = `${(match[1] ?? "").toLowerCase()} ${cleanId(match[2] ?? "")}`
-      disputed.push({ key, reason: (match[3] ?? "").trim() })
+    const heading = headingOf(line)
+    if (Option.isSome(heading)) {
+      list = Option.map(
+        Option.fromNullishOr(/^(fixed|disputed)\s*:?$/i.exec(heading.value.trim())),
+        (match) => (match[1] ?? "").toLowerCase(),
+      )
+      continue
     }
+    const item = Option.fromNullishOr(/^\s*(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line))
+    for (const kind of Option.toArray(list))
+      for (const match of Option.toArray(item)) answer(kind, "", match[1] ?? "")
   }
-  return { fixed, disputed }
+  return { fixed: Array.from(new Set(fixed)), disputed }
 }
 
+const isBlocking = (finding: Finding) =>
+  finding.severity === "blocker" || finding.severity === "major"
+
 /**
- * The ledger after `step`: a `Findings` step adds its findings (a key already
- * held stays as it is), a `Fixes` step marks the open findings it disputes,
- * a `Judged` step sets its finding's status.
+ * The ledger after `step`. A `Findings` step adds its findings (a key
+ * already held stays as it is) and holds each earlier finding a Blocker or
+ * Major repeats or a `Still holds` line names: a hold of a finding a request
+ * marked fixed refutes that answer. A `Fixes` step sets the answer of each finding it names.
+ * A `Judged` step sets its finding's status.
  */
-const ledgerAfter = (ledger: FindingLedger, step: MachineStep): FindingLedger => {
+export const ledgerAfter = (ledger: FindingLedger, step: MachineStep): FindingLedger => {
   switch (step._tag) {
-    case "Findings": {
-      const next = new Map(ledger)
-      for (const finding of step.findings) {
-        const key = findingKey(finding)
-        if (!next.has(key)) next.set(key, { finding, status: "open" })
-      }
-      return next
-    }
+    case "Findings":
+      return ledgerAfterFindings(ledger, step)
     case "Fixes": {
       const next = new Map(ledger)
-      for (const { key } of step.disputed) {
+      const answers = [
+        ...step.fixed.map((key) => ({ key, answer: "fixed" as const })),
+        ...step.disputed.map(({ key }) => ({ key, answer: "disputed" as const })),
+      ]
+      for (const { key, answer } of answers) {
         const entry = next.get(key)
-        if (Predicate.isNotUndefined(entry) && entry.status === "open")
-          next.set(key, { ...entry, status: "disputed" })
+        if (Predicate.isNotUndefined(entry)) next.set(key, { ...entry, answer })
       }
       return next
     }
     case "Judged": {
       const entry = ledger.get(step.key)
       if (Predicate.isUndefined(entry)) return ledger
-      return new Map(ledger).set(step.key, { ...entry, status: step.status })
+      return new Map(ledger).set(step.key, {
+        ...entry,
+        status: step.status,
+        by: Option.some(step.by),
+      })
     }
     default:
       return ledger
   }
 }
 
-const isBlocking = (finding: Finding) =>
-  finding.severity === "blocker" || finding.severity === "major"
+/** The ledger after a `Findings` step: its new findings, and the earlier ones it holds. */
+const ledgerAfterFindings = (ledger: FindingLedger, step: FindingsStep): FindingLedger => {
+  const next = new Map(ledger)
+  for (const finding of step.findings) {
+    const key = findingKey(finding)
+    if (!next.has(key))
+      next.set(key, {
+        finding,
+        status: "open",
+        by: Option.none(),
+        answer: "none",
+        held: false,
+        refuted: 0,
+      })
+  }
+  const holds = new Set([
+    ...step.findings.filter(isBlocking).flatMap((finding) => finding.repeatOf ?? []),
+    ...(step.held ?? []),
+  ])
+  for (const key of holds) {
+    const entry = next.get(key)
+    if (Predicate.isUndefined(entry) || entry.finding.round >= step.round) continue
+    if (entry.answer === "fixed")
+      next.set(key, { ...entry, held: true, answer: "none", refuted: entry.refuted + 1 })
+    else next.set(key, { ...entry, held: true })
+  }
+  return next
+}
 
-/** Whether no one judged the finding yet: open or disputed. */
-const isUnjudged = (entry: LedgerEntry) => entry.status === "open" || entry.status === "disputed"
+/** Whether a request disputed the finding and no one judged it yet. */
+const isDisputed = (entry: LedgerEntry) => entry.status === "open" && entry.answer === "disputed"
+
+/** Whether the finding stands on the implementor's word alone: confirmed by a request's `Fixed`. */
+const isConfirmedByFix = (entry: LedgerEntry) =>
+  entry.status === "confirmed" && Option.contains(entry.by, "fixed")
 
 const judged = (key: string, status: JudgedStep["status"], by: JudgedStep["by"]) =>
   MachineStep.cases.Judged.make({ key, status, by })
 
-/** A request's `Fixed` keys confirm each unjudged finding they name: the implementor fixed it. */
+/**
+ * Confirms each finding of `keys` and each earlier finding their `repeatOf`
+ * chains reach, every one still open; a `repeat-test` confirmation also
+ * takes over a `fixed` one, as the stronger evidence.
+ */
+const confirmChain = (ledger: FindingLedger, keys: Iterable<string>, by: JudgedStep["by"]) => {
+  const queue = Array.from(keys)
+  const seen = new Set<string>()
+  const steps: Array<JudgedStep> = []
+  for (let at = 0; at < queue.length; at += 1) {
+    const key = queue[at] ?? ""
+    const entry = ledger.get(key)
+    if (seen.has(key) || Predicate.isUndefined(entry)) continue
+    seen.add(key)
+    queue.push(...(entry.finding.repeatOf ?? []))
+    if (entry.status === "open" || (by === "repeat-test" && isConfirmedByFix(entry)))
+      steps.push(judged(key, "confirmed", by))
+  }
+  return steps
+}
+
+/** A request's `Fixed` keys confirm each open finding they name, and the findings each repeats. */
 const judgeFixes = (ledger: FindingLedger, fixed: ReadonlyArray<string>) =>
-  Array.from(new Set(fixed))
-    .filter((key) => Option.exists(Option.fromUndefinedOr(ledger.get(key)), isUnjudged))
-    .map((key) => judged(key, "confirmed", "fixed"))
+  confirmChain(ledger, fixed, "fixed")
 
 /**
- * A review of round `round` rejects each disputed finding of an earlier round
- * that none of its Blockers or Majors repeats: the next reviewer dropped it.
+ * A review of round `round` judges each disputed finding of an earlier round
+ * that no review held: its writer's own finding is `withdrawn`, a failed
+ * verify (another role's) `rejected`.
  */
-const judgeReview = (ledger: FindingLedger, round: number, findings: ReadonlyArray<Finding>) => {
-  const repeated = new Set(findings.filter(isBlocking).flatMap((finding) => finding.repeatOf ?? []))
-  return Array.from(ledger)
-    .filter(
-      ([key, entry]) =>
-        entry.status === "disputed" && entry.finding.round < round && !repeated.has(key),
-    )
-    .map(([key]) => judged(key, "rejected", "review"))
-}
+const judgeReview = (ledger: FindingLedger, round: number) =>
+  Array.from(ledger)
+    .filter(([, entry]) => isDisputed(entry) && entry.finding.round < round && !entry.held)
+    .map(([key, entry]) => {
+      if (entry.finding.severity === "fail") return judged(key, "rejected", "review")
+      return judged(key, "withdrawn", "review")
+    })
 
 /**
- * A repeat-test check's pass confirms each unjudged Blocker or Major that
- * repeats an earlier finding, and the findings it repeats: a test red on the
- * unfixed code showed them.
+ * The earlier findings a repeat-test check's output says its tests showed:
+ * the keys of its `Repeats:` line, when it says `Repeat-test check PASS`.
+ * A skip, which ran no test, shows none.
  */
-const judgeRepeats = (ledger: FindingLedger) => {
-  const repeats = Array.from(ledger).filter(
-    ([, entry]) =>
-      isUnjudged(entry) && isBlocking(entry.finding) && (entry.finding.repeatOf ?? []).length > 0,
+const testedRepeatsIn = (output: string): ReadonlySet<string> => {
+  if (!/^Repeat-test check PASS\b/m.test(output)) return new Set()
+  return new Set(
+    Option.match(Option.fromNullishOr(/^Repeats: (.*)$/m.exec(output)), {
+      onNone: () => [],
+      onSome: (match) => keysIn(match[1] ?? ""),
+    }),
   )
-  const keys = new Set(repeats.flatMap(([key, entry]) => [key, ...(entry.finding.repeatOf ?? [])]))
-  return Array.from(keys)
-    .filter((key) => Option.exists(Option.fromUndefinedOr(ledger.get(key)), isUnjudged))
-    .map((key) => judged(key, "confirmed", "repeat-test"))
 }
 
-/** An answer that judges (`AskState.judges`) rejects each disputed finding its note does not name. */
-const judgeAnswer = (ledger: FindingLedger, note: string) => {
+/**
+ * A repeat-test check's pass confirms each Blocker or Major that repeats a
+ * finding its tests showed (`tested`), open or confirmed only by a fix, and
+ * the findings it repeats: a test red on the unfixed code showed them.
+ */
+const judgeRepeats = (ledger: FindingLedger, tested: ReadonlySet<string>) =>
+  confirmChain(
+    ledger,
+    Array.from(ledger)
+      .filter(
+        ([, entry]) =>
+          isBlocking(entry.finding) &&
+          (entry.finding.repeatOf ?? []).some((key) => tested.has(key)) &&
+          (entry.status === "open" || isConfirmedByFix(entry)),
+      )
+      .map(([key]) => key),
+    "repeat-test",
+  )
+
+/**
+ * An answer that judges (`AskState.judges`) confirms each disputed finding
+ * its note names, with the findings each repeats; `reject` rejects each
+ * other disputed finding, `keep` leaves it disputed.
+ */
+const judgeAnswer = (ledger: FindingLedger, note: string, unnamed: "reject" | "keep") => {
   const named = new Set(keysIn(note))
-  return Array.from(ledger)
-    .filter(([key, entry]) => entry.status === "disputed" && !named.has(key))
-    .map(([key]) => judged(key, "rejected", "answer"))
+  const disputed = Array.from(ledger)
+    .filter(([, entry]) => isDisputed(entry))
+    .map(([key]) => key)
+  const upheld = confirmChain(
+    ledger,
+    disputed.filter((key) => named.has(key)),
+    "answer",
+  )
+  if (unnamed === "keep") return upheld
+  const confirmed = new Set(upheld.map((step) => step.key))
+  return [
+    ...upheld,
+    ...disputed
+      .filter((key) => !named.has(key) && !confirmed.has(key))
+      .map((key) => judged(key, "rejected", "answer")),
+  ]
 }
 
 /**
@@ -1660,8 +1894,14 @@ const evidenceSteps = Effect.fn("Machines.evidenceSteps")(function* (
     return [MachineStep.cases.Findings.make({ state: name, round, findings })]
   }
   const findings = findingsIn(round, text.value)
-  const step = MachineStep.cases.Findings.make({ state: name, round, findings })
-  return [step, ...judgeReview(ledgerAfter(run.findings, step), round, findings)]
+  const held = Option.liftPredicate(heldIn(text.value), (keys) => keys.length > 0)
+  const step = MachineStep.cases.Findings.make({
+    state: name,
+    round,
+    findings,
+    ...omitUndefined({ held: Option.getOrUndefined(held) }),
+  })
+  return [step, ...judgeReview(ledgerAfter(run.findings, step), round)]
 })
 
 // ── storage ─────────────────────────────────────────────────────────────────
@@ -1746,10 +1986,10 @@ const createReceiptTables = Effect.gen(function* () {
 })
 
 const ensureMachineTables = Effect.andThen(
-  // Version 4: a run's log holds its findings, a request's fixes and their judgments.
+  // Version 5: a finding's key keeps its id's case, a review's held findings, a withdrawn status.
   ensureExtensionTables({
     owner: "@gent/machines",
-    version: 4,
+    version: 5,
     tables: ["machine_steps", "machine_runs"],
     create: createMachineTables,
   }),
@@ -5616,9 +5856,9 @@ const passHolds = (before: ReceiptKey, after: ReceiptKey) =>
 const ERROR_NOTE_OUTPUT_CHARS = 1_000
 
 /** A repeat-test check's pass (`RunState.evidence`) confirms the repeat findings its tests showed. */
-const repeatJudgments = (state: RunState, by: string, ledger: FindingLedger) => {
+const repeatJudgments = (state: RunState, by: string, ledger: FindingLedger, output: string) => {
   if (state.evidence !== "repeats" || by !== "pass") return []
-  return judgeRepeats(ledger)
+  return judgeRepeats(ledger, testedRepeatsIn(output))
 }
 
 /** A command's move: its target, the edge it took, and the note it carries. */
@@ -5733,7 +5973,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
           }),
           MachineStep.cases.Saved.make({ state: action.state, value }),
           // A repeat-test check's pass confirms the repeat findings its tests showed.
-          ...repeatJudgments(state, by, current.findings),
+          ...repeatJudgments(state, by, current.findings, result.output),
           MachineStep.cases.Moved.make({
             from: action.state,
             to,
@@ -6425,10 +6665,13 @@ const answer = Effect.fn("Machines.answer")(function* (params: AnswerParams) {
       MachineStep.cases.Granted.make({ state: action.state }),
       () => params.choice === "retry" && action.reason === "exhausted",
     )
-    // An answer that judges settles the disputed findings its note does not name.
+    // An answer that judges confirms the disputed findings its note names; its choice says what the rest become.
     let judgments: ReadonlyArray<MachineStep> = []
-    if (state.kind === "ask" && (state.judges ?? []).includes(params.choice))
-      judgments = judgeAnswer(run.findings, params.note ?? "")
+    if (state.kind === "ask") {
+      const unnamed = state.judges?.[params.choice]
+      if (Predicate.isNotUndefined(unnamed))
+        judgments = judgeAnswer(run.findings, params.note ?? "", unnamed)
+    }
     let after: RunRecord = { ...run, status: "running", state: move.to, pending: Option.none() }
     let steps: ReadonlyArray<MachineStep> = [
       answered,
@@ -7477,14 +7720,36 @@ const reviewRoundsPage = Effect.fn("Machines.reviewRoundsPage")(function* (
   }
 })
 
-export { RoleScore }
+/**
+ * One measure of a role's model: `Count` a number of things, `Ratio` a
+ * number per `n` things, `Share` how many (`of`) of `n` things. A ratio
+ * over fewer than the scorecard's least `n` holds no value: the review
+ * prints `—` and its `n`.
+ */
+export const RoleMeasure = Schema.TaggedUnion({
+  Count: { name: Schema.String, n: Schema.Int },
+  Ratio: { name: Schema.String, n: Schema.Int, value: Schema.optionalKey(Schema.Finite) },
+  Share: { name: Schema.String, of: Schema.Int, n: Schema.Int },
+})
+export type RoleMeasure = typeof RoleMeasure.Type
+
+/** One role's measures for one model and effort, a line of `roles.jsonl`. */
+export const RoleScore = Schema.Struct({
+  role: Schema.String,
+  model: Schema.optionalKey(Schema.String),
+  effort: Schema.optionalKey(Schema.String),
+  measures: Schema.Array(RoleMeasure),
+})
+export type RoleScore = typeof RoleScore.Type
 
 const ReviewRolesParams = Schema.Struct({ since: Schema.Finite })
 
 /**
  * The role scorecard of the runs that moved since a time, read page by page
- * (`REVIEW_RUNS` runs each): each model's measures in each role. A run
- * whose definition no longer decodes is left out.
+ * (`REVIEW_RUNS` runs each, every run with its `Started` step, so a page
+ * of fewer runs is the last): each model's measures in each role of the
+ * orchestrate machines. A run whose definition no longer decodes is left
+ * out.
  */
 const reviewRoles = Effect.fn("Machines.reviewRoles")(function* (
   params: typeof ReviewRolesParams.Type,

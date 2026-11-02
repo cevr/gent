@@ -6,7 +6,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
-import { ReviewRound, RoleScore } from "@gent/extensions/client"
+import { ReviewRound } from "@gent/extensions/client"
 import {
   defineExtension,
   ExtensionHost,
@@ -66,7 +66,7 @@ interface CtlRun {
  * the call still runs. `stdin` is what the call reads on its stdin, which
  * then closes; none by default. `clock` is the call's own clock, not the
  * server's; the wall clock by default. `tracer` takes the call's spans, one
- * per RPC it sends.
+ * per RPC it sends. `env` adds variables to the call's environment.
  */
 const runCtl = (
   home: string,
@@ -77,6 +77,7 @@ const runCtl = (
     readonly stdin?: string
     readonly clock?: Clock.Clock
     readonly tracer?: Tracer.Tracer
+    readonly env?: Readonly<Record<string, string>>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -105,7 +106,7 @@ const runCtl = (
             stderr: () => capture(err),
             stdin: Stream.make(new TextEncoder().encode(options.stdin ?? "")),
           }),
-          ConfigProvider.layer(ConfigProvider.fromEnv({ env: { HOME: home } })),
+          ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ...options.env, HOME: home } })),
         ),
       ),
       Effect.exit,
@@ -1261,6 +1262,27 @@ describe("gent ctl against a running server", () => {
   )
 
   it.live(
+    "review under a gent tool or machine command fails plainly and keeps no file",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { home } = yield* serveScratchHome
+          const fs = yield* FileSystem.FileSystem
+          const out = `${home}/review`
+          const run = yield* runCtl(home, ["review", "--since", "7d", "--out", out], {
+            env: { GENT_COMMAND_TOKEN: "token-of-a-tool" },
+          })
+          expect(run.code).toBe(CTL_EXIT.failed)
+          const error = yield* errorOf(run)
+          expect(error._tag).toBe("CtlFailed")
+          expect(error.message).toContain("GENT_COMMAND_TOKEN is set")
+          expect(yield* fs.exists(out)).toBe(false)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
     "review writes a machine run's two rounds with role, effort, tokens and outcome",
     () =>
       Effect.scoped(
@@ -1328,27 +1350,10 @@ describe("gent ctl against a running server", () => {
           const digest = yield* fs.readFileString(`${out}/digest.md`)
           expect(digest).toContain(`| writer | ${TEST_MODEL_ID}@low | 1 | 0 | verdict 1 |`)
           expect(digest).toContain(`| reviewer | ${TEST_MODEL_ID} | 1 | 0 | verdict 1 |`)
-          // The run's roles: the reviewer first, each round counted, each rate under five a dash.
-          const roles = yield* Effect.flatMap(fs.readFileString(`${out}/roles.jsonl`), (text) =>
-            Effect.forEach(
-              text.split("\n").filter((line) => line.length > 0),
-              (line) => Schema.decodeEffect(Schema.fromJsonString(RoleScore))(line),
-            ),
-          )
-          expect(
-            roles.map((score) => {
-              const [first] = score.measures
-              return `${score.role} ${score.model ?? "?"} ${score.effort ?? "-"} ${first?._tag} ${first?.name} ${first?.n}`
-            }),
-          ).toEqual([
-            `reviewer ${TEST_MODEL_ID} - Count rounds 1`,
-            `writer ${TEST_MODEL_ID} low Count rounds 1`,
-          ])
+          // A machine of its own, not an orchestrate machine: its `reviewer` thread is no role.
+          expect(yield* fs.readFileString(`${out}/roles.jsonl`)).toBe("")
           expect(digest).toContain("## Machine roles per model")
-          expect(digest).toContain(
-            `| reviewer | ${TEST_MODEL_ID} | - | rounds 1; confirmed-defect-per-round — (n 1);`,
-          )
-          expect(digest).toContain(`| writer | ${TEST_MODEL_ID} | low | rounds 1 |`)
+          expect(digest).not.toContain(`| reviewer | ${TEST_MODEL_ID} | - |`)
           yield* minerLines(out)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("40 seconds")),
       ),

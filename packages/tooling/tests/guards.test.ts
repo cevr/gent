@@ -368,28 +368,74 @@ describe("role scorecard reader guard", () => {
       'export { SCORE_WORDS } from "./scorecard"',
       'import type { RoleScore } from "@gent/extensions/src/scorecard.ts"',
       'const late = () => import("./scorecard.js")',
+      'export * from "./scorecard.js"',
+      'import "./scorecard.js"',
       'import { Effect } from "effect"',
     ].join("\n")
     const findings = findScorecardReaders("packages/extensions/src/threads.ts", planted)
-    expect(findings.map((finding) => finding.line)).toEqual([1, 2, 3, 4])
+    expect(findings.map((finding) => finding.line)).toEqual([1, 2, 3, 4, 5, 6])
     expect(findings[0]?.message).toContain("only the machines extension's review request")
     expect(
       findScorecardReaders("apps/tui/src/extensions/machines.client.tsx", planted),
-    ).toHaveLength(4)
+    ).toHaveLength(6)
   })
 
-  test("the machines extension reads its names only in the review section", () => {
+  test("the machines extension reads its names only in the review section, and exports none", () => {
     const findings = findScorecardReaders("packages/extensions/src/machines.ts", machines)
+    const exported =
+      "the role scorecard is exported here; only the `review` section reads it, and nothing outside the machines extension may"
     expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
       [
         4,
         "the role scorecard is read here, in the `tools` section; only the `review` section, the owner's review request, reads it",
       ],
+      [6, exported],
       [
         9,
         "the role scorecard is read here, in the `registration` section; only the `review` section, the owner's review request, reads it",
       ],
     ])
+    // Every export form, the review section's included.
+    const exports = [
+      'import { RoleScore, scoreRoles } from "./scorecard.js"',
+      "// ── review ────────────",
+      'export * from "./scorecard.js"',
+      "export const roles = scoreRoles",
+      "export type Score = RoleScore",
+      "const review = () => scoreRoles([])",
+    ].join("\n")
+    expect(
+      findScorecardReaders("packages/extensions/src/machines.ts", exports).map((finding) => [
+        finding.line,
+        finding.message,
+      ]),
+    ).toEqual([
+      [3, exported],
+      [4, exported],
+      [5, exported],
+    ])
+  })
+
+  test("a load the guard cannot read fails: a require anywhere, a computed import in the extensions", () => {
+    const planted = [
+      "// ── review ────────────",
+      'const card = require("./scorecard.js")',
+      'const name = "./score" + "card.js"',
+      "const late = () => import(name)",
+      "const later = () => import(`./${name}`)",
+      'const literal = () => import("./threads.js")',
+    ].join("\n")
+    for (const file of [
+      "packages/extensions/src/machines.ts",
+      "packages/extensions/src/threads.ts",
+    ])
+      expect(findScorecardReaders(file, planted).map((finding) => finding.line)).toEqual([2, 4, 5])
+    // Outside the extensions, only the require is the scorecard's.
+    expect(
+      findScorecardReaders("apps/tui/src/extensions/machines.client.tsx", planted).map(
+        (finding) => finding.line,
+      ),
+    ).toEqual([2])
   })
 
   test("the scorecard itself and the tests read it", () => {

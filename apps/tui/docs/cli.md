@@ -193,8 +193,10 @@ round that ended in the window, with its machine, run, unit, state, visit,
 role, model, effort, tokens, cost, minutes and outcome (the verdict move, the
 ask, the wait or the error it led to). `roles.jsonl` is its second
 (`MachinesRpc.Roles`): one line per orchestrate role, model and effort over
-the runs that moved in the window, with its measures, each a count or a rate
-with its n (a rate under n 5 has no value). A projection whose extension the
+the runs that moved in the window, with its measures, each a count, a rate
+with its n (a rate under n 5 has no value) or a share (`priced 7/9`). It is the
+owner's: a `gent ctl review` that a gent tool or machine command runs
+(`GENT_COMMAND_TOKEN` set) fails before it reads them. A projection whose extension the
 server's launch profile does not run is skipped, and `digest.md` notes it
 (`rounds: @gent/machines not loaded`, `roles: …`). `digest.md` sums them: the tokens per
 model, the costliest sessions by cache read, the owner's messages repeated in

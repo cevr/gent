@@ -1,6 +1,16 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Array as Arr, Clock, DateTime, Effect, Option, Queue, Ref, Schema } from "effect"
+import {
+  Array as Arr,
+  Clock,
+  ConfigProvider,
+  DateTime,
+  Effect,
+  Option,
+  Queue,
+  Ref,
+  Schema,
+} from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal } from "solid-js"
 import {
@@ -1165,6 +1175,7 @@ describe("the review rounds file", () => {
             return Schema.decodeEffect(request.output)(pages[asked.length - 1]).pipe(Effect.orDie)
           },
           write: (line) => Effect.sync(() => void lines.push(line)),
+          fail: (message) => Effect.die(message),
         })
         // The second page reads past the run the first named; the last names none.
         expect(asked).toEqual([{ since: 500 }, { since: 500, after: "run-00000000000000a1" }])
@@ -1189,6 +1200,8 @@ describe("the review rounds file", () => {
 })
 
 describe("the review roles file", () => {
+  /** An environment with no gent command token: the owner's own shell. */
+  const ownerShell = ConfigProvider.fromEnv({ env: { HOME: "/home/owner" } })
   it.effect("writes each role and model as a line, and prints a rate under five as a dash", () =>
     Effect.gen(function* () {
       const review = Option.getOrThrow(Option.fromUndefinedOr(machinesExtension.review?.[1]))
@@ -1198,7 +1211,8 @@ describe("the review roles file", () => {
         `{"role":"reviewer","model":"gpt-y","effort":"high","measures":[`,
         `{"_tag":"Count","name":"rounds","n":6},`,
         `{"_tag":"Ratio","name":"rejected-per-round","n":6,"value":${1 / 3}},`,
-        `{"_tag":"Ratio","name":"escapes-per-accepted-review","n":3}]},`,
+        `{"_tag":"Ratio","name":"escapes-per-unit","n":3},`,
+        `{"_tag":"Share","name":"priced","of":7,"n":9}]},`,
         `{"role":"writer","measures":[{"_tag":"Count","name":"rounds","n":1}]}`,
       ].join("")
       const asked: Array<Schema.Json> = []
@@ -1212,6 +1226,7 @@ describe("the review roles file", () => {
           )
         },
         write: (line) => Effect.sync(() => void lines.push(line)),
+        fail: (message) => Effect.die(message),
       })
       expect(asked).toEqual([{ since: 500 }])
       const written = yield* Effect.forEach(lines, (line) =>
@@ -1220,9 +1235,40 @@ describe("the review roles file", () => {
       expect(written.map((score) => score.role)).toEqual(["reviewer", "writer"])
       expect(read.digest).toContain("## Machine roles per model")
       expect(read.digest).toContain(
-        "| reviewer | gpt-y | high | rounds 6; rejected-per-round 0.33 (n 6); escapes-per-accepted-review — (n 3) |",
+        "| reviewer | gpt-y | high | rounds 6; rejected-per-round 0.33 (n 6); escapes-per-unit — (n 3); priced 7/9 |",
       )
       expect(read.digest).toContain("| writer | ? | - | rounds 1 |")
-    }),
+    }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, ownerShell)),
+  )
+
+  it.effect(
+    "refuses a review a gent tool or machine command runs, and asks the server nothing",
+    () =>
+      Effect.gen(function* () {
+        const review = Option.getOrThrow(Option.fromUndefinedOr(machinesExtension.review?.[1]))
+        const asked: Array<Schema.Json> = []
+        const lines: Array<string> = []
+        const failed = yield* Effect.flip(
+          review.read<string>({
+            since: 500,
+            ask: (request, input) => {
+              asked.push(input)
+              return Schema.decodeEffect(Schema.fromJsonString(request.output))("[]").pipe(
+                Effect.orDie,
+              )
+            },
+            write: (line) => Effect.sync(() => void lines.push(line)),
+            fail: (message) => Effect.fail(message),
+          }),
+        )
+        expect(failed).toContain("GENT_COMMAND_TOKEN is set")
+        expect(asked).toEqual([])
+        expect(lines).toEqual([])
+      }).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({ env: { HOME: "/home/owner", GENT_COMMAND_TOKEN: "tok" } }),
+        ),
+      ),
   )
 })

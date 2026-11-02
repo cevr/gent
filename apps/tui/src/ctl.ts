@@ -1307,6 +1307,7 @@ const writeReview = Effect.fn("Ctl.review")(function* (
                   ),
                 ),
             write: (line) => writeLine(file, line),
+            fail: (message) => Effect.fail(new CtlFailed({ message })),
           })
           .pipe(Effect.catchTag("SchemaError", (error) => Effect.fail(encodeFailed(error))))
         extensions.push({ file: review.file, digest: read.digest })

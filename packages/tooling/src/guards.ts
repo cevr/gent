@@ -1414,55 +1414,126 @@ export const hostOnlyEdges = (
  * Guard: the role scorecard (`packages/extensions/src/scorecard.ts`) reaches
  * no model. Only the machines extension loads it, and there only its
  * `// ── review` section, the owner's `gent ctl review` request, reads its
- * names; tests read it too. A thread, a tool or a prompt that loads it could
- * tell a model how it is measured, and a measure a model can see is one it can
- * game.
+ * names, and no line exports them; tests read it too. A thread, a tool or a
+ * prompt that loads it could tell a model how it is measured, and a measure
+ * a model can see is one it can game. A path this guard cannot read is a
+ * load it cannot judge: a `require` of the scorecard fails anywhere, and a
+ * dynamic import of a computed path fails in the extensions' source.
  */
 const SCORECARD_SPECIFIER = /(?:^|\/)scorecard(?:\.[cm]?[jt]sx?)?$/
 const SCORECARD_READER = "packages/extensions/src/machines.ts"
 const SCORECARD_SECTION = "review"
+/** The source a computed dynamic import could reach the scorecard from. */
+const COMPUTED_IMPORT_SCOPE = "packages/extensions/src/"
 const SECTION_BANNER = /^\/\/ ── (.+?) ─/
 const DYNAMIC_IMPORT = /\bimport\(\s*["'`]([^"'`]+)["'`]/g
+const REQUIRE_CALL = /\brequire\s*\(\s*["'`]([^"'`]+)["'`]/g
+/** In code whose strings are blanked: `import(` and where its argument starts. */
+const IMPORT_CALL = /\bimport\s*\(/g
+/** A literal argument, its text blanked: a quoted string or a template with no expression. */
+const LITERAL_ARGUMENT = /^\s*(?:(["'])[^"'\n]*\1|`[^`$]*`)\s*[,)]/
+const QUOTED = /["'`]([^"'`\n]+)["'`]/g
+/** A line that starts an import or export statement. */
+const STATEMENT_HEAD = /^\s*(?:import|export)\b/
+
+/** The loads no file makes, the review's own included: a `require` of the scorecard and a computed dynamic import. */
+const unreadableScorecardLoads = (
+  file: string,
+  forms: SourceForms,
+): ReadonlyArray<{ readonly line: number; readonly message: string }> => {
+  const required = Array.from(forms.code.matchAll(REQUIRE_CALL))
+    .filter((match) => SCORECARD_SPECIFIER.test(match[1] ?? ""))
+    .map((match) => ({
+      line: lineAt(forms.code, match.index),
+      message: `\`require("${match[1] ?? ""}")\` loads the role scorecard; only the machines extension's review section imports it`,
+    }))
+  if (!file.startsWith(COMPUTED_IMPORT_SCOPE)) return required
+  const computed = Array.from(forms.codeOnly.matchAll(IMPORT_CALL))
+    .filter((match) => !LITERAL_ARGUMENT.test(forms.codeOnly.slice(match.index + match[0].length)))
+    .map((match) => ({
+      line: lineAt(forms.codeOnly, match.index),
+      message:
+        "a dynamic import of a computed path may load the role scorecard, which only the machines extension's review section imports; import a literal path",
+    }))
+  return [...required, ...computed]
+}
 
 export const findScorecardReaders = (file: string, text: string): ReadonlyArray<Finding> => {
   if (TEST_FILE.test(file) || file === "packages/extensions/src/scorecard.ts") return []
   const forms = sourceForms(file, text)
   const reads = forms.module.reads.filter(({ specifier }) => SCORECARD_SPECIFIER.test(specifier))
+  const unreadable = unreadableScorecardLoads(file, forms)
   if (file !== SCORECARD_READER) {
+    const codeLines = forms.code.split("\n")
+    const loads = new Map<number, string>(reads.map(({ specifier, line }) => [line, specifier]))
     // A bare `import("./scorecard.js")` binds nothing, so only its specifier is read.
-    const bare = Array.from(forms.code.matchAll(DYNAMIC_IMPORT), (match) => ({
-      specifier: match[1] ?? "",
-      line: lineAt(forms.code, match.index),
-    })).filter(
-      ({ specifier, line }) =>
-        SCORECARD_SPECIFIER.test(specifier) && !reads.some((read) => read.line === line),
+    for (const match of forms.code.matchAll(DYNAMIC_IMPORT)) {
+      const line = lineAt(forms.code, match.index)
+      if (SCORECARD_SPECIFIER.test(match[1] ?? "") && !loads.has(line))
+        loads.set(line, match[1] ?? "")
+    }
+    // `export * from`, a bare `import "./scorecard.js"` and the other statements that name the
+    // scorecard without reading a name of it: each statement head that quotes its specifier,
+    // beside an import of it or not.
+    const specifiers = new Set(
+      forms.module.specifiers.filter((named) => SCORECARD_SPECIFIER.test(named)),
     )
-    return [...reads, ...bare]
+    codeLines.forEach((code, index) => {
+      const quoted = Array.from(code.matchAll(QUOTED)).find((match) =>
+        specifiers.has(match[1] ?? ""),
+      )
+      if (Predicate.isNotUndefined(quoted) && STATEMENT_HEAD.test(code) && !loads.has(index + 1))
+        loads.set(index + 1, quoted[1] ?? "")
+    })
+    const required = new Set(unreadable.map(({ line }) => line))
+    return [
+      ...Array.from(loads)
+        .filter(([line]) => !required.has(line))
+        .map(([line, specifier]) => ({
+          line,
+          message: `\`${specifier}\` loads the role scorecard, which only the machines extension's review request reads; a model must never see how it is measured`,
+        })),
+      ...unreadable,
+    ]
       .toSorted((a, b) => a.line - b.line)
-      .map(({ specifier, line }) => ({
-        file,
-        line,
-        message: `\`${specifier}\` loads the role scorecard, which only the machines extension's review request reads; a model must never see how it is measured`,
-      }))
+      .map(({ line, message }) => ({ file, line, message }))
   }
   const bound = reads.flatMap(({ names, namespaces }) => [...names, ...namespaces])
-  if (bound.length === 0) return []
   const used = new RegExp(`\\b(?:${bound.join("|")})\\b`)
   const importLines = new Set(reads.map(({ line }) => line))
+  const exportLines = new Set(forms.module.exports.map(({ line }) => line))
   const banners = text.split("\n")
+  const codeLines = forms.code.split("\n")
   let section = ""
-  return forms.codeOnly.split("\n").flatMap((code, index) => {
+  const misread = forms.codeOnly.split("\n").flatMap((code, index) => {
     section = SECTION_BANNER.exec(banners[index] ?? "")?.[1] ?? section
     const line = index + 1
-    if (importLines.has(line) || section === SCORECARD_SECTION || !used.test(code)) return []
+    const exported = /^\s*export\b/.test(code) || exportLines.has(line)
+    const reexported =
+      /^\s*export\b/.test(code) &&
+      Array.from((codeLines[index] ?? "").matchAll(QUOTED)).some((match) =>
+        SCORECARD_SPECIFIER.test(match[1] ?? ""),
+      )
+    const uses = bound.length > 0 && used.test(code)
+    if (reexported || (exported && uses))
+      return [
+        {
+          line,
+          message:
+            "the role scorecard is exported here; only the `review` section reads it, and nothing outside the machines extension may",
+        },
+      ]
+    if (importLines.has(line) || section === SCORECARD_SECTION || !uses) return []
     return [
       {
-        file,
         line,
         message: `the role scorecard is read here, in the \`${section}\` section; only the \`${SCORECARD_SECTION}\` section, the owner's review request, reads it`,
       },
     ]
   })
+  return [...misread, ...unreadable]
+    .toSorted((a, b) => a.line - b.line)
+    .map(({ line, message }) => ({ file, line, message }))
 }
 
 // ── names describe the product, not the process ─────────────────────────────

@@ -1303,6 +1303,8 @@ export interface CtlReviewWindow<E> {
   ) => Effect.Effect<Output, E>
   /** Writes one line of the projection's file. */
   readonly write: (line: string) => Effect.Effect<void, E>
+  /** Ends the review with `message`, a plain error: no file of it is kept. */
+  readonly fail: (message: string) => Effect.Effect<never, E>
 }
 
 /** A review projection's section of `digest.md`. */

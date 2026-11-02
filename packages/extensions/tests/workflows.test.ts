@@ -438,6 +438,28 @@ describe("the shipped orchestrate machines never tell a model it is measured", (
     }
     expect(scoreWordsIn(modelText(planted))).toEqual(["score", "escape"])
   })
+
+  test("each word of a measure is found, in any case", () => {
+    const words = [
+      "metric",
+      "metrics",
+      "performance",
+      "grade",
+      "graded",
+      "reward",
+      "evaluate",
+      "evaluation",
+      "accuracy",
+      "percent",
+      "benchmark",
+      "leaderboard",
+    ]
+    expect(
+      scoreWordsIn(words.map((word) => `The ${word.toUpperCase()} counts.`).join(" ")),
+    ).toEqual(words)
+    // A longer word that holds one is not one.
+    expect(scoreWordsIn("A percentage of rewarding, ungraded benchmarking.")).toEqual([])
+  })
 })
 
 describe("the merge gate and merge of the shipped orchestrate machines", () => {

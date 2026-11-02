@@ -18,6 +18,12 @@
 // from 1 to 125 whose output names the test. It must be green at the new head:
 // exit 0, its output naming the test, as proof the test ran.
 //
+// A finding is read as the machines engine reads it: a list item under a
+// severity heading whose first word is an id (`M2`, `**B1**:`), or a line
+// that names its severity and number (`Major 2: ...`) anywhere but under
+// another heading. Its id's letter is its severity: `B` and `M` block, `m`
+// is a Minor. Its text runs to the next finding or heading.
+//
 // Exit 0: PASS, or SKIP when the last findings name no repeat. Exit 1: FAIL,
 // the test evidence is wrong. Exit 2: ERROR, the check itself could not run
 // (git failed, an install failed, the runner could not start at the head, the
@@ -25,7 +31,9 @@
 // the newest request's round (at least one more than the last findings'),
 // whose Head line is the head the next review sees and so the next check's
 // base. The worktrees live under <unit dir>/repeat-check/, which every run
-// clears first, so a killed run leaves nothing past the next one.
+// clears first, so a killed run leaves nothing past the next one. It prints
+// its verdict and record, then the repeats it checked (`Repeats: r1 M1`): on a
+// PASS, the engine confirms the findings those keys name.
 import {
   existsSync,
   mkdirSync,
@@ -105,21 +113,53 @@ const headingOf = (line: string): string | undefined => {
   return undefined
 }
 
-/** A heading that opens a blocking section: Blocker, Blockers, Major or Majors, with a count or a colon. */
-const BLOCKING = /^(blockers?|majors?)\s*(\(.*\))?\s*:?$/i
+/** A heading that opens a severity's list; under any other, a severity line starts no finding. */
+const SEVERITY_HEADING = /^(blockers?|majors?|minors?|optional|test strength)\b/i
+/** A line that starts a finding by its severity and number: `Major 2: ...`, `- **Blocker 1.** ...`. */
+const SEVERITY_LINE =
+  /^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:#{1,6}\s+)?(?:\*\*|__)?(blocker|major|minor|optional|test[- ]strength)s?\s+\d+(?:\*\*|__)?\s*[:.)\u2014\u2013-]/i
 const REPEAT_OF = /repeat of (r\d+) (\S+)/gi
+/** A list item at any indentation, and its first word. */
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(\S+)/
+/** A finding's id: its severity's letter (`b`, `o`, `t` read as uppercase; `m` is a Minor), then its number. */
+const FINDING_ID = /^([BMmOTbot])\d+$/
 
-/** The earlier findings a findings file's Blockers and Majors repeat; every heading resets the section. */
+/** The letter of the id a list item's first word is, without the punctuation around it. */
+const idLetterOf = (word: string): string | undefined =>
+  FINDING_ID.exec(word.replace(/^[(`*_[]+|[.,;:)`*_\]]+$/g, ""))?.[1]
+
+/**
+ * Where a line is: before any heading, under a severity heading, or under
+ * another one; and whether it is in a Blocker's or a Major's text.
+ */
+interface Place {
+  readonly section: "start" | "severity" | "other"
+  readonly blocking: boolean
+}
+
+/** The place of `line`, after the line before it was at `place`. */
+const placeOf = (place: Place, line: string): Place => {
+  const named = SEVERITY_LINE.exec(line)
+  if (named !== null && place.section !== "other")
+    return { section: place.section, blocking: /^(blocker|major)$/i.test(named[1] ?? "") }
+  const heading = headingOf(line)
+  if (heading !== undefined) {
+    if (SEVERITY_HEADING.test(heading.trim())) return { section: "severity", blocking: false }
+    return { section: "other", blocking: false }
+  }
+  const letter = idLetterOf(LIST_ITEM.exec(line)?.[1] ?? "")
+  if (place.section === "severity" && letter !== undefined)
+    return { section: place.section, blocking: /^[BbM]$/.test(letter) }
+  return place
+}
+
+/** The earlier findings a findings file's Blockers and Majors repeat. */
 const repeatsIn = (findings: string): ReadonlyArray<string> => {
   const keys: Array<string> = []
-  let blocking = false
-  for (const line of findings.split("\n")) {
-    const heading = headingOf(line)
-    if (heading !== undefined) {
-      blocking = BLOCKING.test(heading.trim())
-      continue
-    }
-    if (!blocking) continue
+  let place: Place = { section: "start", blocking: false }
+  for (const line of findings.split(/\r?\n/)) {
+    place = placeOf(place, line)
+    if (!place.blocking) continue
     for (const match of line.matchAll(REPEAT_OF)) {
       const key = keyOf(match[1] ?? "", match[2] ?? "")
       if (!keys.includes(key)) keys.push(key)
@@ -429,6 +469,7 @@ const finish = (verdict: Verdict) => {
   const record = join(dir, "round-" + summary.round + "-repeat-check.md")
   if (existsSync(dir)) writeFileSync(record, lines.join("\n") + "\n")
   console.log("Repeat-test check " + verdict + ", " + record)
+  console.log("Repeats: " + (summary.repeats.length === 0 ? "none" : summary.repeats.join(", ")))
   for (const line of [...failures, ...errors]) console.log("- " + line)
   process.exit(EXIT_CODES[verdict])
 }

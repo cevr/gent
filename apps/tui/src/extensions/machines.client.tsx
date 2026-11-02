@@ -22,8 +22,10 @@
  * table per role and model to `digest.md`. It writes `roles.jsonl`, each
  * model's measures in each machine role over the runs that moved in the
  * window, from `MachinesRpc.Roles`, and adds their table to `digest.md`.
+ * A `gent ctl review` that a gent tool or machine command runs reads no
+ * roles: it fails (`readRoles`).
  */
-import { DateTime, Effect, Option, Order, Predicate, Schema, Stream } from "effect"
+import { Config, DateTime, Effect, Option, Order, Predicate, Schema, Stream } from "effect"
 import { createEffect, createRoot, For, on, Show } from "solid-js"
 import { omitUndefined, ref } from "@gent/core/extensions/api"
 import { cleanReviewText, type LaneReport } from "@gent/core/protocol"
@@ -399,11 +401,14 @@ const readRounds = <E,>(window: CtlReviewWindow<E>) =>
   })
 
 const rolesRef = ref(MachinesRpc.Roles)
+/** The variable gent sets on every process its tools and machine commands spawn. */
+const GENT_COMMAND_TOKEN = "GENT_COMMAND_TOKEN"
 const encodeRole = Schema.encodeEffect(Schema.fromJsonString(RoleScore))
 
-/** A measure as the roles table prints it: a ratio under its least `n` prints `—` and its `n`. */
+/** A measure as the roles table prints it: a ratio under its least `n` prints `—` and its `n`, a share `of/n`. */
 const measureCell = (measure: RoleScore["measures"][number]) => {
   if (measure._tag === "Count") return `${measure.name} ${measure.n}`
+  if (measure._tag === "Share") return `${measure.name} ${measure.of}/${measure.n}`
   if (Predicate.isUndefined(measure.value)) return `${measure.name} — (n ${measure.n})`
   return `${measure.name} ${Number(measure.value.toFixed(2))} (n ${measure.n})`
 }
@@ -428,6 +433,16 @@ const renderRoles = (scores: ReadonlyArray<RoleScore>) =>
  */
 const readRoles = <E,>(window: CtlReviewWindow<E>) =>
   Effect.gen(function* () {
+    // A model must never read how it is measured: a process gent's tools or
+    // machine commands spawned carries the command token, and reads no roles.
+    // A worker with a full shell can still unset it, or read the data dir.
+    const spawned = yield* Config.option(Config.String(GENT_COMMAND_TOKEN)).pipe(
+      Effect.orElseSucceed(() => Option.none()),
+    )
+    if (Option.isSome(spawned))
+      return yield* window.fail(
+        `the machine roles are the owner's: gent ctl review does not read them under a gent tool or machine command (${GENT_COMMAND_TOKEN} is set)`,
+      )
     const scores = yield* window.ask(rolesRef, { since: window.since })
     yield* Effect.forEach(scores, (score) => Effect.flatMap(encodeRole(score), window.write), {
       discard: true,
