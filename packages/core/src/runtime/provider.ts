@@ -3743,13 +3743,28 @@ const PEER_LABEL_SETTLE_MS = 60_000
  */
 const LANE_SPENT_RETRY_MS = 60_000
 /**
- * How far over its pace a provider's lanes admit: a start that takes the
- * load up to 5% past the supply still goes (owner, 2026-11-01). The
- * orchestrate budget admits Claude agents and Codex turns with the same
- * leeway over the same limit (dotfiles `budget.json` `leeway`), so the two
- * agree on a start. A supply of none stays none.
+ * How far over its pace a provider's lanes admit (owner, 2026-11-01): `high`
+ * while the pace is at or above the even weekly supply (every account's
+ * week spread over a week's open hours), `low` at half of it or below,
+ * linear between. A slow pace fits few runs, so one run may pass it by
+ * more; at 5%, a pace of 20 lanes still admits the 21st. The orchestrate
+ * budget admits Claude agents and Codex turns by the same rule over the same
+ * limit (dotfiles `budget.json` `leeway`, `leewayAt`), so the two agree on
+ * a start.
  */
-const LANE_PACE_LEEWAY = 0.05
+const LANE_PACE_LEEWAY = { high: 0.05, low: 0.1 }
+
+/**
+ * The leeway at `pace` against `evenSupply`, both in fuel per hour: its
+ * place between half the even supply (`low`) and the whole of it (`high`).
+ * No supply to compare against is `high`, as no weekly reading is.
+ */
+const laneLeeway = (pace: number, evenSupply: number): number => {
+  const { high, low } = LANE_PACE_LEEWAY
+  if (evenSupply <= 0) return high
+  const place = Math.min(1, Math.max(0, pace / evenSupply / 0.5 - 1))
+  return low + (high - low) * place
+}
 
 /**
  * Why a run gets no lane now. `pool`: the account's windows are full, which
@@ -6824,18 +6839,37 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         ),
       )
     })
+    // The even weekly supply: every account's whole week, held ones too,
+    // spread over the open hours of the week ahead.
+    const evenSupply =
+      scoped
+        .flatMap((account) =>
+          account.windows.filter(
+            (window) =>
+              isAccountWindow(window, "7d") && Predicate.isNotUndefined(window.fuelPerPct),
+          ),
+        )
+        .reduce((sum, week) => sum + quotaFuel(week, week.fuelPerPct ?? 0).full, 0) /
+      openHours(sabbath, now)(168)
     let sustainable = accountCapacity
-    if (scoped.some((account) => account.windows.some((window) => isAccountWindow(window, "7d"))))
+    // With no weekly reading, the leeway is `high`.
+    let leeway = LANE_PACE_LEEWAY.high
+    if (scoped.some((account) => account.windows.some((window) => isAccountWindow(window, "7d")))) {
       sustainable = rollingCapacity
+      leeway = Option.match(rollingCapacity, {
+        onNone: () => LANE_PACE_LEEWAY.high,
+        onSome: (runs) => laneLeeway(runs * accountRunRate, evenSupply),
+      })
+    }
     // Every account at none, held or at its windows' share: no new run now,
     // whatever an unread rate or a later refill would say.
     if (scoped.length > 0 && scoped.every((account) => account.sustainable === 0))
       sustainable = Option.some(0)
     // The lanes admit up to the leeway over the pace; the band's capacity
-    // counts it, so the band and admission agree.
+    // counts it, so the band and admission agree. None stays none.
     const supply = Option.map(
       Option.filter(sustainable, () => scoped.length > 0),
-      (value) => value * (1 + LANE_PACE_LEEWAY),
+      (value) => value * (1 + leeway),
     )
     const capacity = Option.map(supply, (value) => Math.floor(value + 1e-9))
     return {

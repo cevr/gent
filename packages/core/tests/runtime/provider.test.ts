@@ -6111,6 +6111,72 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  // The leeway over the pace slides with the pace: 5% at or above the even
+  // weekly supply (every account's week over 168 open hours: 7 × 930 M /
+  // 168 = 38.75 M/h), 10% at half of it or below. The orchestrate budget's
+  // `leewayAt` rule, so the two admit the same starts.
+  const evenPool = (weekHours: number, others: number, rejected = 0) =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { read, spend, lanes } = fixture
+      const now = yield* Clock.currentTimeMillis
+      const pool = [
+        a,
+        b,
+        c,
+        ...["d", "e", "f", "g"].map((slot) => CredentialSlot.make(slot)),
+      ] as const
+      const resetAt = now + weekHours * HOUR
+      // 18.6 M fuel / 2 points = 9.3 M fuel per weekly point, as rollingPool.
+      yield* read(a, [
+        { window: "7d", utilization: 0.01, resetAt },
+        { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+      ])
+      yield* spend(a, Option.some(93))
+      yield* read(a, [
+        { window: "7d", utilization: 0.03, resetAt },
+        { window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR },
+      ])
+      // The last `rejected` accounts are spent to the same reset: held.
+      for (const [index, slot] of pool.slice(1).entries())
+        yield* read(slot, [
+          {
+            window: "7d",
+            utilization: Math.max(others, Number(index >= 6 - rejected)),
+            rejected: index >= 6 - rejected,
+            resetAt,
+          },
+          { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+        ])
+      return (yield* lanes(pool)).capacity
+    })
+
+  it.effect("a pace at half the even weekly supply admits 10% over it", () =>
+    Effect.gen(function* () {
+      // 3.49 weeks left of 7 over 168 h: 19.32 M/h, under half the supply.
+      // floor(19.32 / 3.4 × 1.10) = 6; at 5% it would be 5.
+      expect(yield* evenPool(168, 0.58)).toBe(6)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a held account's week counts in the even supply the leeway reads", () =>
+    Effect.gen(function* () {
+      // 3.97 weeks left on four accounts, three spent to the same reset:
+      // 21.98 M/h is 0.57 of the seven-account supply, a 9.3% leeway:
+      // floor(21.98 / 3.4 × 1.093) = 7. Against the four open accounts'
+      // supply alone it would be 5%, and 6.
+      expect(yield* evenPool(168, 0, 3)).toBe(7)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a pace above the even weekly supply admits 5% over it", () =>
+    Effect.gen(function* () {
+      // 6.79 weeks left, every one resetting in 84 h: 75.18 M/h, about
+      // twice the supply. floor(75.18 / 3.4 × 1.05) = 23; at 10% it would be 24.
+      expect(yield* evenPool(84, 0.03)).toBe(23)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("the rolling pool carries a cheap model's runs at their share", () =>
     Effect.gen(function* () {
       const fixture = yield* rollingPool
