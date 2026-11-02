@@ -132,6 +132,7 @@ gent ctl lanes                              # the server's account lanes, no ses
 gent ctl lanes --line                       # lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%
 gent ctl pool                               # this server's own pool facts, no session
 gent ctl pool --follow                      # the same facts as JSON lines until the server stops; stdin lines are the peer's facts
+gent ctl review --since 7d --out /tmp/gent-review   # every workspace's sessions of the last week, for review
 ```
 
 Without `--session`, a call names the newest conversation in `--cwd` (default:
@@ -163,6 +164,24 @@ history. Its `runningMs` is the report's `serverNow` less the runtime's
 `startedAtMs`, both on the server's clock. `lanes --line` reads
 its ages, and whether a clock time is today, against the report's `serverNow`. A server older
 than `serverNow` is read against the local clock.
+
+`review --since <N>d|<ISO date> --out <dir>` exports the sessions of every
+workspace touched in the window for the owner's review, in the shapes of the
+retro skill's miner. The server reads its own store a page at a time
+(`review.window`); the client writes the files into `--out`, which it makes
+when absent and refuses when it is a file. A `--since` that is neither form
+exits 2. `messages.jsonl` holds one line per user message in the window:
+`kind` is `msg` for the owner's (a client sent it and no extension wrote it),
+`peer` for one a child, a parent, a machine or a wake wrote, `interrupt` for
+a turn the owner stopped and `limit` for a usage-limit error. `sessions.jsonl`
+holds one line per session: its parent, its turns, its tokens per model from
+the stored receipts, its handoffs and prunes (gent's compactions), its tool
+calls by tool, the children it started, its interrupts and errors, and its
+limit errors by provider. `digest.md` sums them: the tokens per model, the
+costliest sessions by cache read and the owner's messages repeated in two or
+more sessions. Free text is redacted with the miner's secret patterns and
+clipped to 300 characters. Gent does not record slash commands, so no line
+counts one. It prints `Review` with the file paths and the counts.
 
 `lanes` names no session: the accounts are the server's. It prints `Lanes`,
 the `accounts.lanes` report, with one record per provider gent read a quota

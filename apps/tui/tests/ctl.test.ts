@@ -6,7 +6,14 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
-import { CredentialSlot, decodeRequestReply, PoolFacts, RequestReply } from "@gent/core/protocol"
+import {
+  CredentialSlot,
+  decodeRequestReply,
+  PoolFacts,
+  RequestReply,
+  ReviewMessage,
+  ReviewSession,
+} from "@gent/core/protocol"
 import {
   BunGentPlatformLive,
   makeTempDirectoryScoped,
@@ -917,6 +924,102 @@ describe("gent ctl against a running server", () => {
         // The call started no server: the data directory holds no lock entry.
         const fs = yield* FileSystem.FileSystem
         expect(yield* fs.exists(`${home}/.gent/server.lock`)).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    ),
+  )
+
+  it.live(
+    "review writes the window's owner messages, sessions and digest into --out and nowhere else",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { home } = yield* serveScratchHome
+          const fs = yield* FileSystem.FileSystem
+          const ended = yield* ctlIn(home).as("TurnEnded", [
+            "send",
+            "--new",
+            "--model",
+            TEST_MODEL_ID,
+            "--wait",
+            "review the build output, my token=abc123secret",
+          ])
+          const before = (yield* fs.readDirectory(home)).toSorted()
+          const out = `${home}/review`
+
+          const week = yield* Effect.flatMap(
+            runCtl(home, ["review", "--since", "7d", "--out", out]),
+            resultAs("Review"),
+          )
+          expect(week.sessions).toBe(1)
+          expect(week.messages).toBe(1)
+          expect(week.files).toEqual([
+            `${out}/messages.jsonl`,
+            `${out}/sessions.jsonl`,
+            `${out}/digest.md`,
+          ])
+          // Nothing outside --out: the home holds what it held, and the directory.
+          expect((yield* fs.readDirectory(home)).toSorted()).toEqual(
+            [...before, "review"].toSorted(),
+          )
+          expect((yield* fs.readDirectory(out)).toSorted()).toEqual(
+            ["digest.md", "messages.jsonl", "sessions.jsonl"].toSorted(),
+          )
+          const lines = (name: string) =>
+            Effect.map(fs.readFileString(`${out}/${name}`), (text) => text.trimEnd().split("\n"))
+          const [message] = yield* lines("messages.jsonl")
+          expect(
+            yield* Schema.decodeEffect(Schema.fromJsonString(ReviewMessage))(message ?? ""),
+          ).toEqual({
+            src: "gent",
+            project: home,
+            session: ended.sessionId,
+            ts: expect.any(String),
+            kind: "msg",
+            text: "review the build output, my [REDACTED]",
+          })
+          const [session] = yield* lines("sessions.jsonl")
+          const line = yield* Schema.decodeEffect(Schema.fromJsonString(ReviewSession))(
+            session ?? "",
+          )
+          expect(line).toMatchObject({ session: ended.sessionId, turns: 1, owner: 1, peer: 0 })
+          expect(line.models.map((usage) => usage.model)).toEqual([TEST_MODEL_ID])
+          const digest = yield* fs.readFileString(`${out}/digest.md`)
+          expect(digest).toStartWith("# Gent session digest")
+          expect(digest).toContain(`| ${TEST_MODEL_ID} | 1 |`)
+
+          // An ISO date reads the same window; a run again overwrites the files.
+          const dated = yield* Effect.flatMap(
+            runCtl(home, ["review", "--since", "2020-01-01", "--out", out]),
+            resultAs("Review"),
+          )
+          expect({ sessions: dated.sessions, messages: dated.messages }).toEqual({
+            sessions: 1,
+            messages: 1,
+          })
+          expect(yield* lines("messages.jsonl")).toHaveLength(1)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live("review refuses a junk --since and a file --out with exit 2, and writes nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("gent-ctl-review-")
+        const fs = yield* FileSystem.FileSystem
+        const out = `${home}/out`
+        for (const since of ["junk", "7", "2020-13"]) {
+          const run = yield* runCtl(home, ["review", "--since", since, "--out", out])
+          expect(run.code).toBe(CTL_EXIT.usage)
+          expect((yield* errorOf(run))._tag).toBe("CtlUsage")
+          expect(yield* messageOf(run)).toBe(`--since: expected <days>d or a date, got ${since}`)
+        }
+        expect(yield* fs.exists(out)).toBe(false)
+        yield* fs.writeFileString(out, "kept")
+        const onFile = yield* runCtl(home, ["review", "--since", "7d", "--out", out])
+        expect(onFile.code).toBe(CTL_EXIT.usage)
+        expect(yield* messageOf(onFile)).toBe(`--out: ${out} is not a directory`)
+        expect(yield* fs.readFileString(out)).toBe("kept")
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     ),
   )

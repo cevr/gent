@@ -2,7 +2,9 @@ import { test } from "bun:test"
 import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import {
   Cause,
+  Clock,
   Context,
+  DateTime,
   Deferred,
   Effect,
   Fiber,
@@ -22,6 +24,7 @@ import {
   buildExtensionHealthSnapshot,
   buildServerRoutes,
   getSessionSnapshot,
+  makeInProcessClient,
   SessionMutationsLive,
   RpcHandlersLive,
 } from "../../src/server/server"
@@ -38,10 +41,12 @@ import {
   MessageId,
   ProcessGenerationId,
   SessionId,
+  ToolCallId,
   WorkspaceId,
 } from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
 import { StorageError } from "../../src/domain/errors.js"
+import { omitUndefined } from "../../src/domain/guards"
 import {
   createE2ELayer,
   createRpcClient,
@@ -67,6 +72,7 @@ import {
 import { e2ePreset } from "../helpers/test-preset"
 import {
   BranchStorage,
+  EventStorage,
   MessageStorage,
   SessionStorage,
   SqliteStorage,
@@ -102,10 +108,16 @@ import {
   ModelId,
 } from "../../src/domain/agent"
 import {
+  type AgentEvent,
+  ErrorOccurred,
   type EventEnvelope,
   EventStore,
   SessionStarted,
   EventStoreError,
+  StreamEnded,
+  StreamStarted,
+  ToolCallStarted,
+  TurnCompleted,
 } from "../../src/domain/event"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import { HttpRouter, HttpServer } from "effect/http"
@@ -121,7 +133,11 @@ import {
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { SessionRuntimeStateSchema } from "../../src/domain/agent-loop"
 import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc"
-import { WORKSPACE_ID_HEADER, workspaceIdForCwd } from "../../src/server/workspace-rpc"
+import {
+  WORKSPACE_ID_HEADER,
+  workspaceHeadersForCwd,
+  workspaceIdForCwd,
+} from "../../src/server/workspace-rpc"
 import { decodeRequestReply, request, RequestReply } from "../../src/domain/capability"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -3812,5 +3828,220 @@ describe("request replies on the wire", () => {
         }
       }).pipe(Effect.timeout("8 seconds")),
     ),
+  )
+})
+
+// ── review window ───────────────────────────────────────────────────────────
+
+describe("review.window", () => {
+  const DAY = 86_400_000
+
+  it.live(
+    "every workspace's sessions touched in the window, with owner lines, peer lines and totals",
+    () =>
+      Effect.gen(function* () {
+        const context = yield* Layer.build(
+          Layer.provideMerge(
+            RpcHandlersLive,
+            createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+          ),
+        )
+        const { cwd } = Context.get(context, RuntimeEnvironment)
+        const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(cwd))
+        const sessions = Context.get(context, SessionStorage)
+        const branches = Context.get(context, BranchStorage)
+        const messages = Context.get(context, MessageStorage)
+        const events = Context.get(context, EventStorage)
+        const now = yield* Clock.currentTimeMillis
+        const since = now - DAY
+
+        const alpha = workspaceIdForCwd("/nonexistent/review-alpha")
+        const beta = workspaceIdForCwd("/nonexistent/review-beta")
+        const seed = (input: {
+          readonly workspace: WorkspaceId
+          readonly id: string
+          readonly cwd: string
+          readonly at: number
+          readonly parent?: SessionId
+        }) =>
+          Effect.gen(function* () {
+            const sessionId = SessionId.make(input.id)
+            const branchId = BranchId.make(`${input.id}-branch`)
+            const at = dateFromMillis(input.at)
+            yield* sessions.createSession(
+              new Session({
+                id: sessionId,
+                cwd: input.cwd,
+                createdAt: at,
+                updatedAt: at,
+                ...omitUndefined({ parentSessionId: input.parent }),
+              }),
+            )
+            yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: at }))
+            return { sessionId, branchId }
+          }).pipe(Effect.provideService(CurrentWorkspaceId, input.workspace))
+        const say = (
+          workspace: WorkspaceId,
+          at: { readonly sessionId: SessionId; readonly branchId: BranchId },
+          id: string,
+          millis: number,
+          text: string,
+          metadata: Message["metadata"],
+        ) =>
+          messages
+            .createMessage(
+              Message.cases.regular.make({
+                id: MessageId.make(id),
+                sessionId: at.sessionId,
+                branchId: at.branchId,
+                role: "user",
+                parts: [Prompt.textPart({ text })],
+                createdAt: dateFromMillis(millis),
+                ...omitUndefined({ metadata }),
+              }),
+            )
+            .pipe(Effect.provideService(CurrentWorkspaceId, workspace))
+        const emit = (workspace: WorkspaceId, list: ReadonlyArray<AgentEvent>) =>
+          Effect.forEach(list, (event) => events.appendEvent(event), { discard: true }).pipe(
+            Effect.provideService(CurrentWorkspaceId, workspace),
+          )
+
+        const main = yield* seed({
+          workspace: alpha,
+          id: "review-main",
+          cwd: "/work/alpha",
+          at: now - 2 * DAY,
+        })
+        yield* say(alpha, main, "review-old", now - 10 * DAY, "an old message outside the window", {
+          fromClient: true,
+        })
+        yield* say(
+          alpha,
+          main,
+          "review-owner",
+          now - 60_000,
+          "fix the build\n  token=hunter2value",
+          {
+            fromClient: true,
+          },
+        )
+        yield* say(alpha, main, "review-peer", now - 50_000, "a machine asks for a review", {
+          fromClient: true,
+          extensionId: "@gent/machines",
+        })
+        yield* say(alpha, main, "review-handoff", now - 40_000, "handoff summary", {
+          customType: "context-window",
+        })
+        const step = {
+          sessionId: main.sessionId,
+          branchId: main.branchId,
+          messageId: MessageId.make("review-owner"),
+        }
+        yield* emit(alpha, [
+          StreamStarted.make({ ...step, step: 1, model: ModelId.make("anthropic/claude-test") }),
+          StreamEnded.make({
+            ...step,
+            step: 1,
+            model: ModelId.make("anthropic/claude-test"),
+            usage: {
+              inputTokens: 100,
+              outputTokens: 10,
+              cacheReadTokens: 1000,
+              cacheWriteTokens: 5,
+            },
+          }),
+          ToolCallStarted.make({ ...main, toolCallId: ToolCallId.make("c1"), toolName: "read" }),
+          ToolCallStarted.make({ ...main, toolCallId: ToolCallId.make("c2"), toolName: "read" }),
+          ToolCallStarted.make({ ...main, toolCallId: ToolCallId.make("c3"), toolName: "bash" }),
+          StreamStarted.make({ ...step, step: 2, model: ModelId.make("anthropic/claude-test") }),
+          StreamEnded.make({
+            ...step,
+            step: 2,
+            usage: { inputTokens: 50, outputTokens: 5, cacheReadTokens: 2000 },
+          }),
+          TurnCompleted.make({ ...main, durationMs: 10, interrupted: true, streamFailed: false }),
+          StreamStarted.make({ ...step, step: 1, model: ModelId.make("openai/gpt-test") }),
+          ErrorOccurred.make({ ...main, error: "usage limit reached", retryCause: "limit" }),
+          ErrorOccurred.make({ ...main, error: "compaction fell back", notice: true }),
+          TurnCompleted.make({ ...main, durationMs: 10, streamFailed: false }),
+        ])
+        yield* seed({
+          workspace: alpha,
+          id: "review-child",
+          cwd: "/work/alpha",
+          at: now - 30_000,
+          parent: main.sessionId,
+        })
+        yield* seed({ workspace: alpha, id: "review-idle", cwd: "/work/alpha", at: now - 5 * DAY })
+        const other = yield* seed({
+          workspace: beta,
+          id: "review-other",
+          cwd: "/work/beta",
+          at: now - 20_000,
+        })
+        yield* emit(beta, [
+          ErrorOccurred.make({ ...other, error: "limit with no stream", retryCause: "limit" }),
+        ])
+
+        const records = yield* client.review.window({ since }).pipe(Stream.runCollect)
+        const lines = Array.from(records, (record) => record.line)
+        const sessionLines = new Map(
+          Array.from(records).flatMap((record) => {
+            if (record._tag !== "Session") return []
+            return [[record.line.session, record.line] as const]
+          }),
+        )
+        const messageLines = Array.from(records).flatMap((record) => {
+          if (record._tag !== "Message") return []
+          return [record.line]
+        })
+
+        // The idle session is outside the window; both workspaces are in it.
+        expect([...sessionLines.keys()].map(String).toSorted()).toEqual(
+          ["review-child", "review-main", "review-other"].toSorted(),
+        )
+        expect(lines.every((line) => line.src === "gent")).toBe(true)
+        expect(
+          messageLines
+            .filter((line) => line.session === main.sessionId)
+            .map((line) => [line.kind, line.text]),
+        ).toEqual([
+          ["msg", "fix the build [REDACTED]"],
+          ["peer", "a machine asks for a review"],
+          ["interrupt", "interrupted"],
+          ["limit", "usage limit reached"],
+        ])
+        expect(messageLines.filter((line) => line.session === other.sessionId)).toEqual([
+          expect.objectContaining({ kind: "limit", project: "/work/beta" }),
+        ])
+        expect(sessionLines.get(main.sessionId)).toEqual({
+          src: "gent",
+          project: "/work/alpha",
+          session: main.sessionId,
+          started: DateTime.formatIso(DateTime.makeUnsafe(now - 2 * DAY)),
+          ended: DateTime.formatIso(DateTime.makeUnsafe(now - 40_000)),
+          turns: 2,
+          owner: 1,
+          peer: 1,
+          models: [
+            {
+              model: "anthropic/claude-test",
+              input: 150,
+              output: 15,
+              cacheRead: 3000,
+              cacheWrite: 5,
+            },
+          ],
+          handoffs: 1,
+          prunes: 0,
+          tools: { read: 2, bash: 1 },
+          children: 1,
+          interrupts: 1,
+          errors: 1,
+          limits: { openai: 1 },
+        })
+        expect(sessionLines.get(SessionId.make("review-child"))?.parent).toBe(main.sessionId)
+        expect(sessionLines.get(other.sessionId)?.limits).toEqual({ unknown: 1 })
+      }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
   )
 })

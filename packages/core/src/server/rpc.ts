@@ -729,6 +729,112 @@ class AccountsRpcs extends RpcGroup.make(
   }),
 ).prefix("accounts.") {}
 
+// ── review rpcs ─────────────────────────────────────────────────────────────
+
+// The secret patterns of the owner's retro miner
+// (`~/.claude/skills/retro/scripts/mine-sessions.ts`, `SECRET`), copied so a
+// gent review redacts what a Claude Code or Codex one redacts.
+const REVIEW_SECRET = new RegExp(
+  [
+    String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`,
+    String.raw`\b(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}`,
+    String.raw`\bgh[pousr]_[A-Za-z0-9]{12,}`,
+    String.raw`\bgithub_pat_[A-Za-z0-9_]{20,}`,
+    String.raw`\bxox[abprs]-[A-Za-z0-9-]{10,}`,
+    String.raw`\bAKIA[0-9A-Z]{12,}`,
+    String.raw`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?`,
+    String.raw`\bBearer\s+\S+`,
+    String.raw`\b[A-Za-z0-9_]*(?:api[_-]?key|token|secret|passw(?:or)?d)[A-Za-z0-9_]*\s*[=:]\s*\S+`,
+    // Long mixed-case-and-digit runs: keys with no known prefix (git hashes are lowercase hex, kept).
+    String.raw`\b(?=[A-Za-z0-9_+-]*[A-Z])(?=[A-Za-z0-9_+-]*[a-z])(?=[A-Za-z0-9_+-]*\d)[A-Za-z0-9_+-]{32,}={0,2}`,
+  ].join("|"),
+  "gi",
+)
+
+/**
+ * Free text as a review file keeps it, as the miner clips it: secrets
+ * redacted, whitespace collapsed, at most 300 characters. The server cleans
+ * what it sends; a client cleans any free text it adds.
+ */
+export const cleanReviewText = (text: string): string =>
+  text.replace(REVIEW_SECRET, "[REDACTED]").replace(/\s+/g, " ").trim().slice(0, 300)
+
+/**
+ * The kind of a `messages.jsonl` line, as the miner names it: `msg` the
+ * owner wrote, `peer` another agent, a child or a machine wrote, `interrupt`
+ * a turn the owner stopped, `limit` a usage-limit error. Gent records no
+ * slash command, so there is no `slash`.
+ */
+const ReviewMessageKind = Schema.Literals(["msg", "peer", "interrupt", "limit"])
+
+/** One `messages.jsonl` line: the miner's `{src, project, session, ts, kind, text}`. */
+export const ReviewMessage = Schema.Struct({
+  src: Schema.Literal("gent"),
+  /** The session's working directory. */
+  project: Schema.String,
+  session: SessionId,
+  /** ISO time the message or event was written. */
+  ts: Schema.String,
+  kind: ReviewMessageKind,
+  text: Schema.String,
+})
+export type ReviewMessage = typeof ReviewMessage.Type
+
+/** One model's tokens in a session's window, from its `StreamEnded` receipts. */
+export const ReviewModelUsage = Schema.Struct({
+  model: Schema.String,
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cacheRead: Schema.Finite,
+  cacheWrite: Schema.Finite,
+})
+export type ReviewModelUsage = typeof ReviewModelUsage.Type
+
+/** One `sessions.jsonl` line: what one session did in the window. */
+export const ReviewSession = Schema.Struct({
+  src: Schema.Literal("gent"),
+  project: Schema.String,
+  session: SessionId,
+  /** The session that spawned this one. */
+  parent: Schema.optionalKey(SessionId),
+  started: Schema.String,
+  ended: Schema.String,
+  turns: Schema.Int,
+  owner: Schema.Int,
+  peer: Schema.Int,
+  models: Schema.Array(ReviewModelUsage),
+  /** Context-window handoffs and pruned tool results: gent's compactions. */
+  handoffs: Schema.Int,
+  prunes: Schema.Int,
+  /** Tool calls by tool name. */
+  tools: Schema.Record(Schema.String, Schema.Int),
+  /** Sessions it spawned in the window. */
+  children: Schema.Int,
+  interrupts: Schema.Int,
+  errors: Schema.Int,
+  /** Usage-limit errors by provider: of the model the last stream before each ran on, else `unknown`. */
+  limits: Schema.Record(Schema.String, Schema.Int),
+})
+export type ReviewSession = typeof ReviewSession.Type
+
+/** What `review.window` streams: each message line of a session, then its session line. */
+export const ReviewRecord = Schema.TaggedUnion({
+  Message: { line: ReviewMessage },
+  Session: { line: ReviewSession },
+})
+export type ReviewRecord = typeof ReviewRecord.Type
+
+/** The owner's review of every workspace: no session names it. */
+class ReviewRpcs extends RpcGroup.make(
+  // Every session touched at or after `since` (epoch ms), read a page at a time.
+  Rpc.make("window", {
+    payload: { since: Schema.Finite },
+    success: ReviewRecord,
+    stream: true,
+    error: GentRpcError,
+  }),
+).prefix("review.") {}
+
 // ── extension, driver and model rpcs ────────────────────────────────────────
 
 class ExtensionRpcs extends RpcGroup.make(
@@ -776,7 +882,7 @@ class ExtensionRpcs extends RpcGroup.make(
 // ── rpc group ───────────────────────────────────────────────────────────────
 
 export class GentRpcs extends RpcGroup.make()
-  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, AccountsRpcs)
+  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, AccountsRpcs, ReviewRpcs)
   .middleware(WorkspaceRpcMiddleware) {}
 
 // ── rpc client types ────────────────────────────────────────────────────────

@@ -4661,6 +4661,7 @@ describe("session profile lookup", () => {
       "accounts.notePeer":
         "it writes the peer server's facts on the server's accounts, which no session owns",
       "extension.serverRequest": "a server request answers the server, with no session",
+      "review.window": "it reads every workspace's sessions in a time window",
       // Owner question: a required `sessionId` here is a wire change that is not additive.
       "message.list": "it reads a branch by its id; owner question",
     }

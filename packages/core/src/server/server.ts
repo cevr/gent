@@ -1,5 +1,6 @@
 import { Permits } from "../runtime/permits.js"
 import {
+  Array as Arr,
   type Context,
   DateTime,
   Duration,
@@ -7,10 +8,13 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Match,
   Option,
   Path,
   type PlatformError,
   Predicate,
+  Ref,
+  Schema,
   Scope,
   Stream,
 } from "effect"
@@ -26,7 +30,10 @@ import {
   type BranchTreeNode,
   DEFAULT_SESSION_NAME,
   headChars,
+  type Message,
+  messagePartsText,
   projectMessagesWithToolInteractions,
+  RuntimeUserMessageType,
   Session,
   type SessionAdmission,
   toolCallReceipts,
@@ -74,6 +81,7 @@ import {
   ExtensionHealthSnapshot,
   ExtensionProtocolError,
   type ExtensionRpcRequestInput,
+  cleanReviewText,
   type ExtensionServerRequestInput,
   ExtensionStatusScope,
   type ForkBranchInput,
@@ -85,6 +93,8 @@ import {
   type QueueDrainInput,
   type QueueTarget,
   type RespondInteractionInput,
+  ReviewRecord,
+  type ReviewModelUsage,
   type SendMessageInput,
   SessionSnapshot,
   SessionView,
@@ -108,7 +118,7 @@ import {
   type EventEnvelope,
   EventId,
   EventStore,
-  type EventStoreError,
+  EventStoreError,
   InteractionResolved,
   SessionNameUpdated,
   SessionSettingsUpdated,
@@ -187,6 +197,7 @@ import {
   isReasoningEffort,
   noModelError,
   noRunBound,
+  parseModelId,
   type PathScope,
   resolveAgentRoster,
   RunPathRefusedError,
@@ -219,6 +230,8 @@ import {
 } from "effect/http"
 import { ToolRunner } from "../runtime/tools.js"
 import {
+  CONTEXT_PRUNE_MESSAGE_TYPE,
+  CONTEXT_WINDOW_MESSAGE_TYPE,
   copyMessagesToBranch,
   messagesInCurrentWindow,
   settledMessages,
@@ -1454,6 +1467,295 @@ const rpc = <A, E, R>(
     withWideEvent(WideEventBoundary.rpc(method, { requestId: options.requestId })),
   )
 
+// ── review ──────────────────────────────────────────────────────────────────
+
+/** The rows one review read takes at once: a window is read a page at a time, never whole. */
+const REVIEW_PAGE = { sessions: 50, messages: 200, events: 500 } as const
+
+/** The events a session line folds. */
+const REVIEW_EVENT_TAGS = [
+  "StreamStarted",
+  "StreamEnded",
+  "TurnCompleted",
+  "ToolCallStarted",
+  "ErrorOccurred",
+] as const satisfies ReadonlyArray<AgentEvent["_tag"]>
+type ReviewEvent = Extract<AgentEvent, { readonly _tag: (typeof REVIEW_EVENT_TAGS)[number] }>
+const isReviewEvent = (event: AgentEvent): event is ReviewEvent =>
+  REVIEW_EVENT_TAGS.some((tag) => tag === event._tag)
+
+const isRuntimeUserMessage = Schema.is(RuntimeUserMessageType)
+
+/** What a session did in the window so far: its line, less the session's own fields. */
+interface ReviewTally {
+  readonly turns: number
+  readonly owner: number
+  readonly peer: number
+  readonly handoffs: number
+  readonly prunes: number
+  readonly interrupts: number
+  readonly errors: number
+  readonly models: Readonly<Record<string, Omit<ReviewModelUsage, "model">>>
+  readonly tools: Readonly<Record<string, number>>
+  readonly limits: Readonly<Record<string, number>>
+  /** The model of the last stream that started: a limit error's provider. */
+  readonly lastModel: Option.Option<string>
+}
+
+const emptyReviewTally: ReviewTally = {
+  turns: 0,
+  owner: 0,
+  peer: 0,
+  handoffs: 0,
+  prunes: 0,
+  interrupts: 0,
+  errors: 0,
+  models: {},
+  tools: {},
+  limits: {},
+  lastModel: Option.none(),
+}
+
+const bumpCount = (counts: Readonly<Record<string, number>>, key: string) => ({
+  ...counts,
+  [key]: (counts[key] ?? 0) + 1,
+})
+
+const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
+
+/** The project a review line names: the session's working directory. */
+const reviewProject = (session: Session) => session.cwd ?? ""
+
+/**
+ * One user message of the window: a handoff or a prune marker counts, another
+ * runtime line is skipped, and the rest is a line. The owner wrote a message
+ * a client sent and no extension authored; any other is `peer`: a child's
+ * task, a parent's or a machine's message, a wake.
+ */
+const reviewMessageStep = (
+  session: Session,
+  tally: ReviewTally,
+  message: Message,
+): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => {
+  const metadata = message.metadata ?? {}
+  if (metadata.customType === CONTEXT_WINDOW_MESSAGE_TYPE) {
+    return [[], { ...tally, handoffs: tally.handoffs + 1 }]
+  }
+  if (metadata.customType === CONTEXT_PRUNE_MESSAGE_TYPE) {
+    return [[], { ...tally, prunes: tally.prunes + 1 }]
+  }
+  if (isRuntimeUserMessage(metadata.customType)) return [[], tally]
+  const owner = metadata.fromClient === true && Predicate.isUndefined(metadata.extensionId)
+  const text = cleanReviewText(messagePartsText(message.parts))
+  const lineOf = (kind: "msg" | "peer"): ReadonlyArray<ReviewRecord> => {
+    if (text.length === 0) return []
+    return [
+      ReviewRecord.cases.Message.make({
+        line: {
+          src: "gent",
+          project: reviewProject(session),
+          session: session.id,
+          ts: isoOf(message.createdAt.getTime()),
+          kind,
+          text,
+        },
+      }),
+    ]
+  }
+  if (owner) return [lineOf("msg"), { ...tally, owner: tally.owner + 1 }]
+  return [lineOf("peer"), { ...tally, peer: tally.peer + 1 }]
+}
+
+/** One event of the window: tokens per model, turns, tools, interrupts and errors. */
+const reviewEventStep = (
+  session: Session,
+  tally: ReviewTally,
+  envelope: EventEnvelope,
+): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => {
+  const event = envelope.event
+  if (!isReviewEvent(event)) return [[], tally]
+  const lineOf = (kind: "interrupt" | "limit", text: string) =>
+    ReviewRecord.cases.Message.make({
+      line: {
+        src: "gent",
+        project: reviewProject(session),
+        session: session.id,
+        ts: isoOf(envelope.createdAt),
+        kind,
+        text,
+      },
+    })
+  return Match.type<ReviewEvent>().pipe(
+    Match.tagsExhaustive({
+      StreamStarted: (started): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => [
+        [],
+        { ...tally, lastModel: Option.some(started.model) },
+      ],
+      StreamEnded: (ended): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => {
+        if (Predicate.isUndefined(ended.usage)) return [[], tally]
+        const model = Option.getOrElse(
+          Option.orElse(Option.fromUndefinedOr(ended.model), () => tally.lastModel),
+          () => "unknown",
+        )
+        const before = tally.models[model] ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+        const usage = {
+          input: before.input + ended.usage.inputTokens,
+          output: before.output + ended.usage.outputTokens,
+          cacheRead: before.cacheRead + (ended.usage.cacheReadTokens ?? 0),
+          cacheWrite: before.cacheWrite + (ended.usage.cacheWriteTokens ?? 0),
+        }
+        return [[], { ...tally, models: { ...tally.models, [model]: usage } }]
+      },
+      TurnCompleted: (completed): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => {
+        const turns = tally.turns + 1
+        if (completed.interrupted !== true) return [[], { ...tally, turns }]
+        return [
+          [lineOf("interrupt", "interrupted")],
+          { ...tally, turns, interrupts: tally.interrupts + 1 },
+        ]
+      },
+      ToolCallStarted: (call): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => [
+        [],
+        { ...tally, tools: bumpCount(tally.tools, call.toolName) },
+      ],
+      ErrorOccurred: (error): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => {
+        if (error.notice === true) return [[], tally]
+        const errors = tally.errors + 1
+        if (error.retryCause !== "limit") return [[], { ...tally, errors }]
+        const provider = Option.getOrElse(
+          Option.map(Option.flatMap(tally.lastModel, parseModelId), ([id]) => String(id)),
+          () => "unknown",
+        )
+        return [
+          [lineOf("limit", cleanReviewText(error.error))],
+          { ...tally, errors, limits: bumpCount(tally.limits, provider) },
+        ]
+      },
+    }),
+  )(event)
+}
+
+/** Every row of a paged read: each page starts after the last row of the one before. */
+const pagedRows = <A, E, R>(
+  limit: number,
+  page: (after: Option.Option<A>) => Effect.Effect<ReadonlyArray<A>, E, R>,
+): Stream.Stream<A, E, R> =>
+  Stream.paginate(
+    Option.none<A>(),
+    (after): Effect.Effect<readonly [ReadonlyArray<A>, Option.Option<Option.Option<A>>], E, R> =>
+      Effect.map(page(after), (rows) => {
+        const last = Arr.last(rows)
+        if (rows.length < limit || Option.isNone(last)) return [rows, Option.none()]
+        return [rows, Option.some(last)]
+      }),
+  )
+
+/**
+ * One session's review: its message lines and its interrupt and limit lines
+ * as each page is read, then its session line. The tally is the only state
+ * the read keeps.
+ */
+const reviewSession = (session: Session, since: number) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const branchStorage = yield* BranchStorage
+      const messageStorage = yield* MessageStorage
+      const eventStorage = yield* EventStorage
+      const sessionStorage = yield* SessionStorage
+      const tally = yield* Ref.make(emptyReviewTally)
+      const branches = yield* branchStorage.listBranches(session.id)
+      const messages = Stream.fromIterable(branches).pipe(
+        Stream.flatMap((branch) =>
+          pagedRows(REVIEW_PAGE.messages, (after: Option.Option<Message>) =>
+            messageStorage.listMessagesSince({
+              branchId: branch.id,
+              role: "user",
+              since,
+              after,
+              limit: REVIEW_PAGE.messages,
+            }),
+          ),
+        ),
+        Stream.mapEffect((message) =>
+          Ref.modify(tally, (current) => reviewMessageStep(session, current, message)),
+        ),
+      )
+      const events = pagedRows(REVIEW_PAGE.events, (after: Option.Option<EventEnvelope>) =>
+        eventStorage
+          .listSessionEventsSince({
+            sessionId: session.id,
+            tags: REVIEW_EVENT_TAGS,
+            since,
+            afterId: Option.getOrElse(
+              Option.map(after, (envelope) => envelope.id),
+              () => 0,
+            ),
+            limit: REVIEW_PAGE.events,
+          })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new EventStoreError({ message: "Failed to read review events", cause: error }),
+            ),
+          ),
+      ).pipe(
+        Stream.mapEffect((envelope) =>
+          Ref.modify(tally, (current) => reviewEventStep(session, current, envelope)),
+        ),
+      )
+      const line = Effect.gen(function* () {
+        const done = yield* Ref.get(tally)
+        const children = yield* sessionStorage.countChildrenSince(session.id, since)
+        const { lastModel: _lastModel, models, ...counts } = done
+        return [
+          ReviewRecord.cases.Session.make({
+            line: {
+              src: "gent",
+              project: reviewProject(session),
+              session: session.id,
+              ...omitUndefined({ parent: session.parentSessionId }),
+              started: isoOf(session.createdAt.getTime()),
+              ended: isoOf(session.updatedAt.getTime()),
+              ...counts,
+              models: Object.entries(models).map(([model, usage]) => ({ model, ...usage })),
+              children,
+            },
+          }),
+        ]
+      })
+      return Stream.concat(messages, events).pipe(
+        Stream.concat(Stream.fromEffect(line)),
+        Stream.flattenIterable,
+      )
+    }),
+  )
+
+/**
+ * Every session of every workspace touched at or after `since` (epoch ms),
+ * one workspace at a time, each paged on `idx_sessions_workspace`.
+ */
+const reviewWindow = (since: number) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const sessionStorage = yield* SessionStorage
+      const workspaces = yield* sessionStorage.listWorkspaces
+      return Stream.fromIterable(workspaces).pipe(
+        Stream.flatMap((workspaceId) =>
+          pagedRows(REVIEW_PAGE.sessions, (after: Option.Option<Session>) =>
+            sessionStorage.listSessionsTouchedSince({
+              since,
+              after,
+              limit: REVIEW_PAGE.sessions,
+            }),
+          ).pipe(
+            Stream.flatMap((session) => reviewSession(session, since)),
+            Stream.provideService(CurrentWorkspaceId, workspaceId),
+          ),
+        ),
+      )
+    }),
+  )
+
 // ── rpc handlers layer ──────────────────────────────────────────────────────
 
 /** A login no callback finishes lets its profile go after this. */
@@ -1510,6 +1812,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const relationshipStorage = yield* RelationshipStorage
     const branchStorage = yield* BranchStorage
     const messageStorage = yield* MessageStorage
+    const eventStorage = yield* EventStorage
     // Touching these Tags at layer-build keeps their requirements visible on the
     // RpcHandlers layer. RpcGroup.toLayer erases handler-residual R, so Tags only
     // yielded inside returned handler Effects would otherwise become deferred
@@ -1911,6 +2214,16 @@ const RpcHandlers = GentRpcs.toLayer(
 
       // Own state alone: a server on another machine reads it to share the pool.
       "accounts.pool": () => placement.pool,
+
+      // Every workspace's sessions touched in the window, a page at a time:
+      // what `gent ctl review` writes for a reader to mine.
+      "review.window": ({ since }) =>
+        reviewWindow(since).pipe(
+          Stream.provideService(SessionStorage, sessionStorage),
+          Stream.provideService(BranchStorage, branchStorage),
+          Stream.provideService(MessageStorage, messageStorage),
+          Stream.provideService(EventStorage, eventStorage),
+        ),
 
       // A link the peer server runs sends its facts in here (`gent ctl pool
       // --follow` on its stdin): counted as this server's own link counts them.

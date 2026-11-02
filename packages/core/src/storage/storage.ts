@@ -161,6 +161,23 @@ export interface SessionStorageService {
   // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
   readonly listSessions: Effect.Effect<ReadonlyArray<Session>, StorageError>
+  /** Every workspace that holds a session: the data directory's, not the current one's. */
+  readonly listWorkspaces: Effect.Effect<ReadonlyArray<WorkspaceId>, StorageError>
+  /**
+   * One page of the current workspace's sessions touched at or after `since`
+   * (epoch ms), oldest touch first, after the `after` session of the page
+   * before; at most `limit`. It reads `idx_sessions_workspace`.
+   */
+  readonly listSessionsTouchedSince: (params: {
+    readonly since: number
+    readonly after: Option.Option<Session>
+    readonly limit: number
+  }) => Effect.Effect<ReadonlyArray<Session>, StorageError>
+  /** How many sessions `parent` spawned at or after `since` (epoch ms). */
+  readonly countChildrenSince: (
+    parent: SessionId,
+    since: number,
+  ) => Effect.Effect<number, StorageError>
   /**
    * Each write sets only the columns it names, so two writers that touch
    * different fields of one session (a rename and a `/model` switch) never
@@ -345,6 +362,50 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             return yield* Effect.forEach(rows, sessionFromRow)
           }),
         ).pipe(Effect.mapError(storageError("Failed to list sessions"))),
+
+        listWorkspaces: Effect.suspend(
+          Effect.fn("SessionStorage.listWorkspaces")(function* () {
+            const rows = yield* sql<{
+              readonly workspace_id: string
+            }>`SELECT DISTINCT workspace_id FROM sessions ORDER BY workspace_id`
+            return yield* Effect.forEach(rows, (row) =>
+              Schema.decodeEffect(WorkspaceId)(row.workspace_id),
+            )
+          }),
+        ).pipe(Effect.mapError(storageError("Failed to list workspaces"))),
+
+        listSessionsTouchedSince: Effect.fn("SessionStorage.listSessionsTouchedSince")(
+          function* ({ since, after, limit }) {
+            const workspaceId = yield* CurrentWorkspaceId
+            const afterRow = Option.match(after, {
+              onNone: () => sql.literal(""),
+              onSome: (session) =>
+                sql`AND (updated_at > ${session.updatedAt.getTime()} OR (updated_at = ${session.updatedAt.getTime()} AND id > ${session.id}))`,
+            })
+            const rows = yield* sql<SessionRow>`SELECT ${sql.literal(SESSION_COLUMNS)} FROM sessions
+              WHERE workspace_id = ${workspaceId} AND updated_at >= ${since} ${afterRow}
+              ORDER BY updated_at ASC, id ASC
+              LIMIT ${limit}`
+            return yield* Effect.forEach(rows, sessionFromRow)
+          },
+          Effect.mapError(storageError("Failed to list touched sessions")),
+        ),
+
+        countChildrenSince: Effect.fn("SessionStorage.countChildrenSince")(
+          function* (parent, since) {
+            const workspaceId = yield* CurrentWorkspaceId
+            const rows = yield* sql<{ readonly count: number }>`SELECT COUNT(*) AS count
+              FROM sessions
+              WHERE parent_session_id = ${parent}
+                AND workspace_id = ${workspaceId}
+                AND created_at >= ${since}`
+            return Option.getOrElse(
+              Option.map(Arr.head(rows), (row) => row.count),
+              () => 0,
+            )
+          },
+          Effect.mapError(storageError("Failed to count children")),
+        ),
 
         renameSession: Effect.fn("SessionStorage.renameSession")(
           function* (id, name, updatedAt) {
@@ -535,6 +596,18 @@ interface MessageStorageService {
   // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getMessage: (id: MessageId) => Effect.Effect<Message | undefined, StorageError>
   readonly listMessages: (branchId: BranchId) => Effect.Effect<ReadonlyArray<Message>, StorageError>
+  /**
+   * One page of the branch's `role` messages created at or after `since`
+   * (epoch ms), oldest first, after the `after` message of the page before;
+   * at most `limit`. It reads `idx_messages_branch_created`.
+   */
+  readonly listMessagesSince: (params: {
+    readonly branchId: BranchId
+    readonly role: Message["role"]
+    readonly since: number
+    readonly after: Option.Option<Message>
+    readonly limit: number
+  }) => Effect.Effect<ReadonlyArray<Message>, StorageError>
   readonly updateMessageTurnDuration: (
     messageId: MessageId,
     durationMs: number,
@@ -663,6 +736,30 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
             Effect.mapError(storageError("Failed to list messages")),
           ),
 
+          listMessagesSince: Effect.fn("MessageStorage.listMessagesSince")(
+            function* ({ branchId, role, since, after, limit }) {
+              const workspaceId = yield* CurrentWorkspaceId
+              const afterRow = Option.match(after, {
+                onNone: () => sql.literal(""),
+                onSome: (message) =>
+                  sql`AND (created_at > ${message.createdAt.getTime()} OR (created_at = ${message.createdAt.getTime()} AND id > ${message.id}))`,
+              })
+              const rawRows = yield* sql`${sql.literal(MESSAGE_CHUNK_SELECT)}
+            WHERE m.id IN (
+              SELECT id FROM messages
+              WHERE branch_id = ${branchId} AND role = ${role} AND created_at >= ${since} ${afterRow}
+              ORDER BY created_at ASC, id ASC
+              LIMIT ${limit}
+            ) AND s.workspace_id = ${workspaceId}
+            ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+              const rows = yield* Effect.forEach(rawRows, (row) => decodeMessageChunkRow(row))
+              return yield* Effect.forEach(groupMessageChunkRows(rows), ({ row, partJsons }) =>
+                decodeStoredMessage(row, partJsons),
+              )
+            },
+            Effect.mapError(storageError("Failed to list messages since")),
+          ),
+
           // Every workspace's messages count: the blob store is the data directory's.
           toolImageReferenced: Effect.fn("MessageStorage.toolImageReferenced")(
             function* (sha256) {
@@ -706,7 +803,12 @@ export class EventDecodeError extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("EventDecodeError", {
   eventId: EventId,
-  operation: Schema.Literals(["listEvents", "listBranchEvents", "listToolResultWindow"]),
+  operation: Schema.Literals([
+    "listEvents",
+    "listBranchEvents",
+    "listSessionEventsSince",
+    "listToolResultWindow",
+  ]),
   error: Schema.String,
 }) {}
 
@@ -789,6 +891,18 @@ interface EventStorageService {
   readonly listBranchEvents: (params: {
     branches: ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>
     tags: ReadonlyArray<AgentEvent["_tag"]>
+  }) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStorageError>
+  /**
+   * One page of the session's events of `tags` written at or after `since`
+   * (epoch ms), on any branch or none, in log order after the event
+   * `afterId`; at most `limit`. It reads `idx_events_session_tag`.
+   */
+  readonly listSessionEventsSince: (params: {
+    readonly sessionId: SessionId
+    readonly tags: ReadonlyArray<AgentEvent["_tag"]>
+    readonly since: number
+    readonly afterId: number
+    readonly limit: number
   }) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStorageError>
   readonly getLatestEventId: (params: {
     sessionId: SessionId
@@ -902,6 +1016,25 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
             return yield* rowsToEnvelopes(rawRows, "listBranchEvents")
           },
           Effect.mapError(mapEventStorageError("Failed to list branch events")),
+        ),
+
+        listSessionEventsSince: Effect.fn("EventStorage.listSessionEventsSince")(
+          function* ({ sessionId, tags, since, afterId, limit }) {
+            if (tags.length === 0) return []
+            const workspaceId = yield* CurrentWorkspaceId
+            const rawRows = yield* sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
+              FROM events e
+              JOIN sessions s ON s.id = e.session_id
+              WHERE e.session_id = ${sessionId}
+                AND s.workspace_id = ${workspaceId}
+                AND e.event_tag IN ${sqlInList(sql, tags)}
+                AND e.id > ${afterId}
+                AND e.created_at >= ${since}
+              ORDER BY e.id ASC
+              LIMIT ${limit}`
+            return yield* rowsToEnvelopes(rawRows, "listSessionEventsSince")
+          },
+          Effect.mapError(mapEventStorageError("Failed to list session events since")),
         ),
 
         getLatestEventId: Effect.fn("EventStorage.getLatestEventId")(

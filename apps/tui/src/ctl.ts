@@ -32,6 +32,9 @@ import {
   PoolFacts,
   type ProjectedMessage,
   RequestReply,
+  ReviewMessage,
+  ReviewRecord,
+  ReviewSession,
   SessionId,
   SessionSnapshot,
   userMessageIdForRequest,
@@ -47,8 +50,10 @@ import {
   Effect,
   Exit,
   Filter,
-  type FileSystem,
+  FileSystem,
   Option,
+  Path,
+  type PlatformError,
   Predicate,
   Ref,
   Runtime,
@@ -424,6 +429,18 @@ export const CtlResult = Schema.TaggedUnion({
    * weekly reset. No session names them.
    */
   Pool: { server: Schema.String, ...PoolFacts.fields },
+  /**
+   * `review`: the files it wrote into `out` and what they hold: the
+   * sessions touched at or after `since` and their message lines.
+   */
+  Review: {
+    server: Schema.String,
+    out: Schema.String,
+    since: Schema.String,
+    sessions: Schema.Int,
+    messages: Schema.Int,
+    files: Schema.Array(Schema.String),
+  },
 })
 export type CtlResult = typeof CtlResult.Type
 
@@ -999,6 +1016,231 @@ const readView = Effect.fn("Ctl.view")(function* (
   })
 })
 
+// ── review ──────────────────────────────────────────────────────────────────
+
+const DAY_MILLIS = 86_400_000
+const SINCE_DAYS = /^(\d+)d$/
+const SINCE_DATE = /^\d{4}-\d{2}-\d{2}(?:T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/
+
+/** `--since`: `<N>d` back from now, or an ISO date; anything else is a usage error. */
+const parseSince = Effect.fn("Ctl.review.since")(function* (text: string) {
+  const days = Option.flatMap(Option.fromNullishOr(SINCE_DAYS.exec(text)), (match) =>
+    Option.fromUndefinedOr(match[1]),
+  )
+  if (Option.isSome(days)) return (yield* Clock.currentTimeMillis) - Number(days.value) * DAY_MILLIS
+  const date = Option.flatMap(
+    Option.liftPredicate(text, (value) => SINCE_DATE.test(value)),
+    (iso) => DateTime.make(iso),
+  )
+  if (Option.isSome(date)) return DateTime.toEpochMillis(date.value)
+  return yield* new CtlUsage({ message: `--since: expected <days>d or a date, got ${text}` })
+})
+
+/** `--out` names a directory, or nothing yet: a file there is a usage error. */
+const refuseFileOut = Effect.fn("Ctl.review.out")(function* (out: string) {
+  const fs = yield* FileSystem.FileSystem
+  const failed = (error: PlatformError.PlatformError) =>
+    new CtlFailed({ message: `--out: ${error.message}` })
+  if (!(yield* fs.exists(out).pipe(Effect.mapError(failed)))) return
+  const info = yield* fs.stat(out).pipe(Effect.mapError(failed))
+  if (info.type !== "Directory") {
+    return yield* new CtlUsage({ message: `--out: ${out} is not a directory` })
+  }
+})
+
+const REVIEW_FILES = {
+  messages: "messages.jsonl",
+  sessions: "sessions.jsonl",
+  digest: "digest.md",
+} as const
+
+const encodeReviewMessage = Schema.encodeEffect(Schema.fromJsonString(ReviewMessage))
+const encodeReviewSession = Schema.encodeEffect(Schema.fromJsonString(ReviewSession))
+
+/** The miner's group key for a repeated message (`retro/scripts/mine-sessions.ts`). */
+const repeatKey = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[`'"*_]/g, "")
+    .replace(/\d+/g, "#")
+    .replace(/\s+/g, " ")
+    .slice(0, 80)
+
+interface ModelTotal {
+  sessions: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+/**
+ * What `digest.md` sums while the lines stream past: per model its tokens,
+ * every session's line (the costliest are its top 15 by cache read), and the
+ * owner's messages grouped as the miner groups them.
+ */
+interface ReviewDigest {
+  readonly since: number
+  readonly models: Map<string, ModelTotal>
+  readonly sessions: Array<ReviewSession>
+  readonly repeated: Map<
+    string,
+    { readonly text: string; count: number; readonly sessions: Set<string> }
+  >
+  messages: number
+}
+
+const sessionCacheRead = (session: ReviewSession) =>
+  session.models.reduce((sum, model) => sum + model.cacheRead, 0)
+
+const foldReviewMessage = (digest: ReviewDigest, line: ReviewMessage) => {
+  digest.messages += 1
+  // The miner's rule: an owner message of 12 or more characters. Its
+  // broadcast rule is not needed: gent records who wrote each message.
+  if (line.kind !== "msg" || line.text.length < 12) return
+  const key = repeatKey(line.text)
+  const group = digest.repeated.get(key) ?? { text: line.text, count: 0, sessions: new Set() }
+  group.count += 1
+  group.sessions.add(line.session)
+  digest.repeated.set(key, group)
+}
+
+const foldReviewSession = (digest: ReviewDigest, line: ReviewSession) => {
+  digest.sessions.push(line)
+  for (const usage of line.models) {
+    const total = digest.models.get(usage.model) ?? {
+      sessions: 0,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    }
+    total.sessions += 1
+    total.input += usage.input
+    total.output += usage.output
+    total.cacheRead += usage.cacheRead
+    total.cacheWrite += usage.cacheWrite
+    digest.models.set(usage.model, total)
+  }
+}
+
+const millions = (tokens: number) => `${(tokens / 1e6).toFixed(1)}M`
+const sum = (values: ReadonlyArray<number>) => values.reduce((total, value) => total + value, 0)
+const cell = (text: string) => text.replace(/\|/g, "\\|")
+
+/** `digest.md`: kilobytes for the dream to read, not the history. */
+const renderReviewDigest = (digest: ReviewDigest): string => {
+  const sessions = digest.sessions
+  const limits = sum(sessions.map((session) => sum(Object.values(session.limits))))
+  const costly = sessions
+    .toSorted((left, right) => sessionCacheRead(right) - sessionCacheRead(left))
+    .slice(0, 15)
+  const repeated = [...digest.repeated.values()]
+    .filter((group) => group.sessions.size >= 2)
+    .toSorted((left, right) => right.sessions.size - left.sessions.size || right.count - left.count)
+    .slice(0, 60)
+  return [
+    "# Gent session digest",
+    "",
+    `Since ${DateTime.formatIso(DateTime.makeUnsafe(digest.since)).slice(0, 10)}. Secrets redacted. Files: ${REVIEW_FILES.messages}, ${REVIEW_FILES.sessions}. Gent does not record slash commands.`,
+    "",
+    "## Totals",
+    "",
+    "| Sessions | Children | Owner msgs | Peer msgs | Handoffs | Prunes | Interrupts | Errors | Limit errors |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    `| ${sessions.length} | ${sessions.filter((session) => Predicate.isNotUndefined(session.parent)).length} | ${sum(sessions.map((session) => session.owner))} | ${sum(sessions.map((session) => session.peer))} | ${sum(sessions.map((session) => session.handoffs))} | ${sum(sessions.map((session) => session.prunes))} | ${sum(sessions.map((session) => session.interrupts))} | ${sum(sessions.map((session) => session.errors))} | ${limits} |`,
+    "",
+    "## Tokens per model",
+    "",
+    "| Model | Sessions | Input | Output | Cache-read | Cache-write |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...[...digest.models]
+      .toSorted(([, left], [, right]) => right.cacheRead - left.cacheRead)
+      .map(
+        ([model, total]) =>
+          `| ${cell(model)} | ${total.sessions} | ${millions(total.input)} | ${millions(total.output)} | ${millions(total.cacheRead)} | ${millions(total.cacheWrite)} |`,
+      ),
+    "",
+    "## Costliest sessions",
+    "",
+    "| Project | Session | Parent | Turns | Cache-read | Handoffs | Children |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    ...costly.map(
+      (session) =>
+        `| ${cell(session.project)} | ${session.session} | ${session.parent ?? ""} | ${session.turns} | ${millions(sessionCacheRead(session))} | ${session.handoffs} | ${session.children} |`,
+    ),
+    "",
+    "## Repeated owner messages (2+ sessions)",
+    "",
+    ...repeated.map(
+      (group) => `- ${group.sessions.size} sessions, ${group.count}x: ${group.text.slice(0, 160)}`,
+    ),
+    "",
+  ].join("\n")
+}
+
+/**
+ * `review`: the server streams each session of the window, a page at a time;
+ * each line goes to its file as it arrives, and `digest.md` follows from the
+ * sums. Every file is inside `out`.
+ */
+const writeReview = Effect.fn("Ctl.review")(function* (
+  connection: CtlConnection,
+  options: { readonly since: number; readonly out: string },
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const failed = (error: PlatformError.PlatformError) =>
+    new CtlFailed({ message: `--out: ${error.message}` })
+  yield* fs.makeDirectory(options.out, { recursive: true }).pipe(Effect.mapError(failed))
+  const fileOf = (name: string) => path.join(options.out, name)
+  const open = (name: string) => fs.open(fileOf(name), { flag: "w" }).pipe(Effect.mapError(failed))
+  const messagesFile = yield* open(REVIEW_FILES.messages)
+  const sessionsFile = yield* open(REVIEW_FILES.sessions)
+  const encoder = new TextEncoder()
+  const writeLine = (file: FileSystem.File, line: string) =>
+    file.writeAll(encoder.encode(`${line}\n`)).pipe(Effect.mapError(failed))
+  const encodeFailed = (error: Schema.SchemaError) =>
+    new CtlFailed({ message: `output encode: ${error.message}` })
+  const digest: ReviewDigest = {
+    since: options.since,
+    models: new Map(),
+    sessions: [],
+    repeated: new Map(),
+    messages: 0,
+  }
+  yield* connection.client.review.window({ since: options.since }).pipe(
+    Stream.mapError(rpcFailure),
+    Stream.runForEach((record) =>
+      ReviewRecord.match(record, {
+        Message: ({ line }) =>
+          encodeReviewMessage(line).pipe(
+            Effect.mapError(encodeFailed),
+            Effect.flatMap((text) => writeLine(messagesFile, text)),
+            Effect.tap(() => Effect.sync(() => foldReviewMessage(digest, line))),
+          ),
+        Session: ({ line }) =>
+          encodeReviewSession(line).pipe(
+            Effect.mapError(encodeFailed),
+            Effect.flatMap((text) => writeLine(sessionsFile, text)),
+            Effect.tap(() => Effect.sync(() => foldReviewSession(digest, line))),
+          ),
+      }),
+    ),
+  )
+  yield* fs
+    .writeFileString(fileOf(REVIEW_FILES.digest), renderReviewDigest(digest))
+    .pipe(Effect.mapError(failed))
+  return CtlResult.cases.Review.make({
+    server: connection.server,
+    out: options.out,
+    since: DateTime.formatIso(DateTime.makeUnsafe(options.since)),
+    sessions: digest.sessions.length,
+    messages: digest.messages,
+    files: Object.values(REVIEW_FILES).map(fileOf),
+  })
+})
+
 // ── commands ────────────────────────────────────────────────────────────────
 
 const sessionFlags = {
@@ -1501,19 +1743,52 @@ const pool = Command.make(
   ]),
 )
 
+const review = Command.make(
+  "review",
+  {
+    connect: connectFlag,
+    since: Flag.String("since").pipe(
+      Flag.withDescription("The window's start: <days>d back from now (7d), or an ISO date"),
+    ),
+    out: Flag.String("out").pipe(
+      Flag.withDescription("The directory the files go into; made when absent, never a file"),
+    ),
+  },
+  (input) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const since = yield* parseSince(input.since)
+        yield* refuseFileOut(input.out)
+        yield* ctlCall({ connect: input.connect, cwd: Option.none() }, (connection) =>
+          writeReview(connection, { since, out: input.out }),
+        )
+      }),
+    ),
+).pipe(
+  Command.withDescription(
+    "Write every workspace's sessions touched since a time into a directory for review: messages.jsonl, sessions.jsonl and digest.md",
+  ),
+  Command.withExamples([
+    {
+      command: "gent ctl review --since 7d --out /tmp/gent-review",
+      description: "The last week's owner messages, sessions and digest",
+    },
+  ]),
+)
+
 /** `gent ctl`: the control CLI over a running server. */
 export const ctl = Command.make("ctl", {}, () =>
   Effect.gen(function* () {
     const stdio = yield* Stdio.Stdio
     yield* Stream.make(
-      "Usage: gent ctl <send|events|wait|snapshot|status|request|lanes|pool> --help\n",
+      "Usage: gent ctl <send|events|wait|snapshot|status|request|lanes|pool|review> --help\n",
     ).pipe(Stream.run(stdio.stderr()))
   }),
 ).pipe(
   Command.withDescription(
     "Drive a running gent server: one JSON value per call; exit 3 no server, 4 not found, 124 wait timed out",
   ),
-  Command.withSubcommands([send, events, wait, snapshot, status, request, lanes, pool]),
+  Command.withSubcommands([send, events, wait, snapshot, status, request, lanes, pool, review]),
 )
 
 // ── the process boundary ────────────────────────────────────────────────────
