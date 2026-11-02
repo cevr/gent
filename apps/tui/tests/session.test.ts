@@ -2566,13 +2566,20 @@ describe("useSessionFeed", () => {
   // A resumed feed replays the started receipts behind the snapshot cursor
   // without applying them: the snapshot holds the running calls, so the
   // live line's label comes from it, as a live feed's comes from the events.
+  // Only the newest answer's running calls count: an older answer's stale
+  // running call and a settled call beside the running ones stay off the
+  // line. Live receipts after the cursor then apply on top: a repeated start
+  // adds nothing, a result ends its call.
   it.live("a resumed feed names the running call the snapshot holds, an op inside its cell", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-feed-resumed-running")
       const branchId = BranchId.make("branch-feed-resumed-running")
+      const staleId = ToolCallId.make("tool-call-resumed-stale")
+      const settledId = ToolCallId.make("tool-call-resumed-settled")
       const shellId = ToolCallId.make("tool-call-resumed-shell")
       const cellId = ToolCallId.make("tool-call-resumed-cell")
       const opId = ToolCallId.make("tool-call-resumed-op")
+      const listId = ToolCallId.make("tool-call-resumed-list")
       const running = {
         status: "running",
         summary: absent,
@@ -2584,11 +2591,42 @@ describe("useSessionFeed", () => {
         messages: [
           projectMessage(
             Message.cases.regular.make({
+              id: MessageId.make("resumed-older-assistant"),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: [
+                Prompt.toolCallPart({
+                  id: staleId,
+                  name: "bash",
+                  params: {},
+                  providerExecuted: false,
+                }),
+              ],
+              createdAt: dateFromMillis(0),
+            }),
+            [
+              new ToolInteraction({
+                id: staleId,
+                toolName: "bash",
+                input: { command: "sleep 99" },
+                ...running,
+              }),
+            ],
+          ),
+          projectMessage(
+            Message.cases.regular.make({
               id: MessageId.make("resumed-running-assistant"),
               sessionId,
               branchId,
               role: "assistant",
               parts: [
+                Prompt.toolCallPart({
+                  id: settledId,
+                  name: "bash",
+                  params: {},
+                  providerExecuted: false,
+                }),
                 Prompt.toolCallPart({
                   id: shellId,
                   name: "bash",
@@ -2605,6 +2643,15 @@ describe("useSessionFeed", () => {
               createdAt: dateFromMillis(0),
             }),
             [
+              new ToolInteraction({
+                id: settledId,
+                toolName: "bash",
+                input: { command: "echo done" },
+                status: "completed",
+                summary: "done",
+                output: "done",
+                durationMs: 5,
+              }),
               new ToolInteraction({
                 id: shellId,
                 toolName: "bash",
@@ -2641,26 +2688,51 @@ describe("useSessionFeed", () => {
             ...(toolCallId === opId && { parentToolCallId: cellId }),
           }),
         )
+      const label = () => Option.getOrElse(activeTool(), () => "")
+      const shellEnds = yield* Deferred.make<void>()
       const { activeTool, dispose } = openFeed({
         snapshot,
-        // Every receipt sits at or behind the snapshot cursor: a replay.
-        events: [
-          started(1, shellId, "bash", { command: "sleep 20" }),
-          started(2, cellId, "cell", { code: "await tools.read({path: 'a.txt'})" }),
-          started(3, opId, "read", { path: "/work/proj/a.txt" }),
-        ],
-      })
-      yield* waitUntil(() => Option.isSome(activeTool())).pipe(
-        Effect.andThen(
-          Effect.sync(() =>
-            // The cell waits on its op, so the op names it.
-            expect(Option.getOrElse(activeTool(), () => "")).toBe(
-              "Running sleep 20 · Reading a.txt",
+        session: {
+          events: () =>
+            Stream.concat(
+              Stream.make(
+                // Every receipt up to 4 sits at or behind the snapshot cursor: a replay.
+                started(1, shellId, "bash", { command: "sleep 20" }),
+                started(2, cellId, "cell", { code: "await tools.read({path: 'a.txt'})" }),
+                started(3, opId, "read", { path: "/work/proj/a.txt" }),
+                // Live: the op's start again, then a new call.
+                started(5, opId, "read", { path: "/work/proj/a.txt" }),
+                started(6, listId, "bash", { command: "ls" }),
+              ),
+              Stream.fromEffect(Deferred.await(shellEnds)).pipe(
+                Stream.flatMap(() =>
+                  Stream.make(
+                    makeEnvelope(
+                      7,
+                      AgentEvent.cases.ToolCallSucceeded.make({
+                        sessionId,
+                        branchId,
+                        toolCallId: shellId,
+                        toolName: "bash",
+                        summary: "slept",
+                        output: "",
+                      }),
+                    ),
+                  ),
+                ),
+                Stream.concat(Stream.never),
+              ),
             ),
-          ),
-        ),
-        Effect.ensuring(Effect.sync(dispose)),
-      )
+        },
+      })
+      yield* Effect.gen(function* () {
+        yield* waitUntil(() => label().includes("Running ls"))
+        // The cell waits on its op, so the op names it, once.
+        expect(label()).toBe("Running sleep 20 · Reading a.txt · Running ls")
+        yield* Deferred.succeed(shellEnds, void 0)
+        yield* waitUntil(() => !label().includes("sleep 20"))
+        expect(label()).toBe("Reading a.txt · Running ls")
+      }).pipe(Effect.ensuring(Effect.sync(dispose)))
     }).pipe(Effect.timeout("4 seconds")),
   )
 
