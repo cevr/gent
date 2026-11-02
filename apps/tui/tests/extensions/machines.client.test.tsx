@@ -444,6 +444,35 @@ describe("the lanes band rows", () => {
     ])
   })
 
+  test("a run whose PR waits for a person names the PR; one still pushing does not", () => {
+    const merging = (pr: { readonly pr?: number }) =>
+      run({
+        state: "merge",
+        visits: { merge: 1 },
+        createdAt: NOW - HOUR,
+        // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form the request's decoder reads
+        pending: {
+          _tag: "Integrate",
+          state: "merge",
+          visit: 1,
+          requestId: "machine:run-0000000000000001:merge:1",
+          via: "pr",
+          ...pr,
+        },
+      })
+    expect(texts({ lanes: Option.none(), runs: [merging({ pr: 12 })] }, 120).at(-1)).toBe(
+      "◷ track merge r1 1h · pr #12",
+    )
+    expect(texts({ lanes: Option.none(), runs: [merging({})] }, 120).at(-1)).toBe(
+      "▸ track merge r1 1h",
+    )
+    // Each `.at(-1)` reads the run row; the "lanes unknown" row comes before it.
+    // Narrow: the row drops the PR before the head.
+    expect(texts({ lanes: Option.none(), runs: [merging({ pr: 12 })] }, 20).at(-1)).toBe(
+      "◷ track merge r1 1h",
+    )
+  })
+
   test("the peer row comes last: its host, its runs and its last line's age; a narrow row drops the host, then the age", () => {
     expect(laneRows(withPeer(linked), NOW, 120, utc)).toEqual([
       ...laneRows(measured, NOW, 120, utc),

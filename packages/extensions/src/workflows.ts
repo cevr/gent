@@ -307,11 +307,20 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       on: { pass: "merge", fail: "resume" },
     },
     // A push main moved past rebases onto it and runs the gate again, with no
-    // round; a rebase that conflicts goes to the implementor.
+    // round; a rebase that conflicts goes to the implementor. input.via "pr"
+    // merges through a PR a person approves: a declined one goes to decide,
+    // with the reviews in its note.
     merge: {
       kind: "integrate",
       ref: "main",
-      on: { green: "merged", red: "resume", restack: "gate", conflict: "resume" },
+      via: "{{input.via}}",
+      on: {
+        green: "merged",
+        red: "resume",
+        restack: "gate",
+        conflict: "resume",
+        declined: "decide",
+      },
     },
     merged: { kind: "final", say: "Unit {{input.unit}} merged." },
     rewrite: {
@@ -366,7 +375,7 @@ const orchestrateRecipe = (input: string, recordPath: string, machines: Readonly
   return [
     `Orchestrate: ${input}`,
     `You coordinate and write no product code. Keep the run's record in ${recordPath}: the units, their order, and each unit's workspace, dir, run and outcome. Read it first; it may hold an earlier run.`,
-    "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from the remote main after a fetch: a merge pushes to the remote main and does not move a local main, so a unit starts only after the units it depends on merged; a new worktree has no installed packages, so install them there before the first gate) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate, mergeGate, domain }, domain the area of the code the unit changes in a word or two (tui, core runtime, docs), the same name for every unit of that area. The first unit runs alone through decide before others start, so a flaw in the gate or the spec costs one edit. Start units at once only when their files do not overlap. A mechanical unit (an established pattern carried to more files, a rename, a version bump: no new behavior) starts the orchestrate-light machine instead: write its spec.md in the unit dir first, in the planner's sections, with Path: light. A bulk mechanical unit (the same edit across many files) starts with a codemod: its spec's first step is a script that makes the edit everywhere, never hand-edited slices.",
+    "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from the remote main after a fetch: a merge pushes to the remote main and does not move a local main, so a unit starts only after the units it depends on merged; a new worktree has no installed packages, so install them there before the first gate) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate, mergeGate, domain }, domain the area of the code the unit changes in a word or two (tui, core runtime, docs), the same name for every unit of that area, and via \"pr\" when the repository's changes need a person's approval (the merge opens a PR on main and waits for an approval and green checks; a declined PR comes back to decide with the reviews in its note; absent, the merge pushes). The first unit runs alone through decide before others start, so a flaw in the gate or the spec costs one edit. Start units at once only when their files do not overlap. A mechanical unit (an established pattern carried to more files, a rename, a version bump: no new behavior) starts the orchestrate-light machine instead: write its spec.md in the unit dir first, in the planner's sections, with Path: light. A bulk mechanical unit (the same edit across many files) starts with a codemod: its spec's first step is a script that makes the edit everywhere, never hand-edited slices.",
     "gate is the round gate, which every round runs: each of its legs finishes in under a minute. A slower leg (end-to-end, a property sweep, a lab) goes in mergeGate, one command that runs once at merge after gate; making it fast is its own unit. The merge gate fails after 20 minutes.",
     "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the review is accepted and the verify pass, or the review is proven and the acceptance check, which you rerun at the head, is green, or (orchestrate-light) a fix followed and its fix report answers every finding of the last review or verify with the acceptance check green when you rerun it at the head; and the request's claims hold; a red acceptance check is fix, a failed round, and at the fix cap decide again: replan or rewrite; after stuck, replan or rewrite; at a cap or after stuck, first write diagnosis.md in the unit dir, with ## Premise (the one claim the spec or the implementation relied on that failed) and ## Counterexample (a concrete input, state or file:line that shows it false): the machine refuses changes, replan and rewrite until it holds both, changed since the ask; after a check error (the ask's Check error note: the repeat-test check could not run), repair what stopped it and recheck, or fix when the request is at fault; after a size stop (the ask's Size stop note: two of the model's windows of a round's own work left its context), the unit is too big: replan it into smaller units, each a new run on a new branch from base (answer rewrite; the oversized branch is evidence, not a base), never fix; a size stop on a positive verdict (ready, accepted, pass) may still merge when the review accepted and the acceptance check, which you rerun at the head, is green, with a follow-up note in the record that the unit was oversized. Add each Test strength finding to the record as its own follow-up unit. On rewrite, start a new run on a new branch from base with a new spec, in a new unit dir that holds a copy of the old dir's diagnosis.md when it has one, which its planner reads first; a rewrite that ends at decide again goes to the user.",
     ...machines,

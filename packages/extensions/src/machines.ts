@@ -261,17 +261,26 @@ type RunState = typeof RunState.Type
  * past rebases the checkout onto the fetched ref and moves by `restack`, so
  * the new head is checked again; a rebase that conflicts is aborted and
  * moves by `conflict` (default `red`).
+ *
+ * `via` (a template, so the run's input can choose; rendered `push`, `pr` or
+ * empty, which is `push`): `pr` pushes the head to the run's own branch and
+ * opens a pull request on `ref` instead, and the run waits for a person's
+ * review (`PrWait`). An approved PR with green checks merges and moves by
+ * `green`; changes requested, or a closed PR, moves by `declined` (default
+ * `red`) with the reviews as the note.
  */
 const IntegrateState = Schema.Struct({
   kind: Schema.Literal("integrate"),
   ref: Schema.String,
   /** Default origin. */
   remote: Schema.optionalKey(Schema.String),
+  via: Schema.optionalKey(Schema.String),
   on: Schema.Struct({
     green: StateName,
     red: StateName,
     restack: Schema.optionalKey(StateName),
     conflict: Schema.optionalKey(StateName),
+    declined: Schema.optionalKey(StateName),
   }),
   ...VisitCap,
 })
@@ -443,12 +452,17 @@ const PendingAction = Schema.TaggedUnion({
    * `notBefore` (epoch ms): the gate was not clear, the push is tried again then.
    * `head`: the commit the visit pushes, read as it was entered; absent when
    * it could not be read, and the push takes the cwd's `HEAD`.
+   * `via: "pr"`: the visit opens a pull request (`IntegrateState.via`);
+   * `pr` is its number once opened, and `repo` and `sha` the repository and
+   * the pushed head. The run then waits for a person, polling the PR.
    */
   Integrate: {
     state: StateName,
     visit: PositiveInt,
     requestId: Schema.String,
     head: Schema.optionalKey(Schema.String),
+    via: Schema.optionalKey(Schema.Literal("pr")),
+    pr: Schema.optionalKey(PositiveInt),
     repairOf: Schema.optionalKey(PositiveInt),
     repo: Schema.optionalKey(Schema.String),
     generation: Schema.optionalKey(PositiveInt),
@@ -543,12 +557,13 @@ const MachineStep = Schema.TaggedUnion({
    * run of it (`lane`, spent at its admission), its worker died at a usage
    * limit (`quota`), or the owner's Sabbath holds every run until its end
    * (`sabbath`). A pending integrate waits for a gate that is not clear
-   * (`integration`). No visit is spent.
+   * (`integration`), or for a person's review of its pull request (`pr`,
+   * once, as the PR opens: each later poll leaves no step). No visit is spent.
    */
   Waiting: {
     state: StateName,
     until: Schema.Finite,
-    reason: Schema.Literals(["lane", "quota", "sabbath", "integration"]),
+    reason: Schema.Literals(["lane", "quota", "sabbath", "integration", "pr"]),
   },
   /**
    * The pending round waited `PATIENCE` in the lane queue of `model`: it
@@ -663,7 +678,7 @@ const templatesOf = (state: MachineState): ReadonlyArray<string> => {
     case "run":
       return [state.run]
     case "integrate":
-      return []
+      return Option.toArray(Option.fromUndefinedOr(state.via))
     case "ask":
       return [state.ask, ...Option.toArray(Option.fromUndefinedOr(state.requires?.file))]
     case "final":
@@ -694,6 +709,7 @@ const targetsOf = (state: MachineState): ReadonlyArray<StateName> => {
         state.on.red,
         ...Option.toArray(Option.fromUndefinedOr(state.on.restack)),
         ...Option.toArray(Option.fromUndefinedOr(state.on.conflict)),
+        ...Option.toArray(Option.fromUndefinedOr(state.on.declined)),
         ...Option.toArray(Option.fromUndefinedOr(state.exhausted)),
       ]
     case "ask":
@@ -730,6 +746,7 @@ const MOVE_KINDS: ReadonlySet<string> = new Set([
   "red",
   "restack",
   "conflict",
+  "declined",
   "answer",
 ])
 
@@ -737,6 +754,19 @@ const MOVE_KINDS: ReadonlySet<string> = new Set([
 const threadVerdictsOf = (state: MachineState): ReadonlyArray<string> => {
   if (state.kind !== "thread") return []
   return Object.keys(state.on ?? {})
+}
+
+/** An integrate state's conflict edge and its `via`, when it names no slot. */
+const integrateProblems = (name: string, state: IntegrateState): ReadonlyArray<string> => {
+  const problems: Array<string> = []
+  if (Predicate.isNotUndefined(state.on.conflict) && Predicate.isUndefined(state.on.restack)) {
+    problems.push(`${name}: on.conflict needs on.restack`)
+  }
+  const via = state.via ?? ""
+  if (slotsOf(via).length === 0 && Option.isNone(integrateVia(via))) {
+    problems.push(`${name}: via is push or pr, not ${via}`)
+  }
+  return problems
 }
 
 /** The edges, roles, caps and reserved keys of one state. */
@@ -762,13 +792,7 @@ const stateProblems = (
       problems.push(`${name}: exhausted needs maxVisits`)
     }
   }
-  if (
-    state.kind === "integrate" &&
-    Predicate.isNotUndefined(state.on.conflict) &&
-    Predicate.isUndefined(state.on.restack)
-  ) {
-    problems.push(`${name}: on.conflict needs on.restack`)
-  }
+  if (state.kind === "integrate") problems.push(...integrateProblems(name, state))
   if (state.kind === "thread" || state.kind === "ask") {
     const reserved = Object.keys(state.on ?? {}).filter((key) => RESERVED_KEYS.has(key))
     problems.push(...reserved.map((key) => `${name}: ${key} is a reserved choice`))
@@ -1894,11 +1918,13 @@ const waitsUntil = (pending: Option.Option<PendingAction>, now: number) =>
     return Option.liftPredicate(action.notBefore, (until) => until > now)
   })
 
-/** A pushed integrate: the run waits for CI on the gate, holding nothing. */
+/** A pushed integrate: the run waits for CI on the gate, or for a person on its PR, holding nothing. */
 const watchesGate = (pending: Option.Option<PendingAction>) =>
   Option.exists(
     pending,
-    (action) => action._tag === "Integrate" && Predicate.isNotUndefined(action.generation),
+    (action) =>
+      action._tag === "Integrate" &&
+      (Predicate.isNotUndefined(action.generation) || Predicate.isNotUndefined(action.pr)),
   )
 
 /** A running run that takes a step now: not one that waits for its account or for CI. */
@@ -2585,13 +2611,17 @@ const releaseGate = (action: IntegrateAction) =>
     yield* integration.value.releaseRequest(action.requestId)
   })
 
-/** Moves the run out of its integrate state by `by`, the gate's outcome saved as the state's value. */
+/**
+ * Moves the run out of its integrate state by `by`, the gate's outcome saved
+ * as the state's value; `note` is the move's, for the target's `{{visit.note}}`.
+ */
 const leaveIntegrate = (
   run: Run,
   action: IntegrateAction,
   to: StateName,
   by: string,
   value: Schema.Json,
+  note: Option.Option<string> = Option.none(),
 ) =>
   commitMove(
     run,
@@ -2602,18 +2632,162 @@ const leaveIntegrate = (
     },
     [
       MachineStep.cases.Saved.make({ state: action.state, value }),
-      MachineStep.cases.Moved.make({ from: action.state, to, by }),
+      MachineStep.cases.Moved.make({
+        from: action.state,
+        to,
+        by,
+        ...omitUndefined({ note: Option.getOrUndefined(note) }),
+      }),
     ],
   )
 
 /**
- * The move a pending integrate asks for. Before the gate admitted it: push,
- * as the caller that polls its own gate (`poller: "caller"`), since a wake
- * record fires for the extension that armed it. A gate that is not clear, or
- * gh that is not ready, waits `GATE_RETRY_WAIT` under the run's own record; a
- * refused push, or one a crash cut off before it landed, takes `red`. After: the verdict for its generation or a later
- * one moves the run; until then the driver polls the gate when its record
- * names the next poll due, and sleeps under the run's own record between.
+ * The pending integrate is tried again after `GATE_RETRY_WAIT`, under the
+ * run's own record: a gate that is not clear, gh or a remote out of reach.
+ */
+const retryIntegrate = Effect.fn("Machines.retryIntegrate")(function* (
+  run: Run,
+  action: IntegrateAction,
+  reason: string,
+) {
+  const until = (yield* Clock.currentTimeMillis) + Duration.toMillis(GATE_RETRY_WAIT)
+  yield* Effect.logInfo("machines.integrate.waiting").pipe(
+    Effect.annotateLogs({ run: run.run, state: action.state, error: reason }),
+  )
+  yield* commitMove(
+    run,
+    {
+      ...run,
+      pending: Option.some(PendingAction.cases.Integrate.make({ ...action, notBefore: until })),
+    },
+    [MachineStep.cases.Waiting.make({ state: action.state, until, reason: "integration" })],
+  )
+})
+
+/**
+ * Leaves the integrate visit by a restack's end: `Restacked` takes `to` (the
+ * state's `on.restack`), `Conflict` takes `on.conflict` (default `on.red`).
+ * `Unreachable` and `UpToDate` are the caller's.
+ */
+const leaveByRestack = <A, E, R, A2, E2, R2>(
+  run: Run,
+  action: IntegrateAction,
+  state: IntegrateState,
+  to: StateName,
+  restacked: Restack,
+  otherwise: {
+    readonly unreachable: (message: string) => Effect.Effect<A, E, R>
+    readonly upToDate: () => Effect.Effect<A2, E2, R2>
+  },
+) =>
+  Match.value(restacked).pipe(
+    Match.tagsExhaustive({
+      Restacked: (end) =>
+        leaveIntegrate(
+          run,
+          action,
+          to,
+          "restack",
+          GateOutcome.cases.restacked.make({ from: end.from, to: end.to, onto: end.onto }),
+        ),
+      Conflict: (end) =>
+        leaveIntegrate(
+          run,
+          action,
+          state.on.conflict ?? state.on.red,
+          "conflict",
+          GateOutcome.cases.conflict.make({
+            onto: end.onto,
+            files: end.files,
+            message: end.message,
+          }),
+        ),
+      Unreachable: (end) => otherwise.unreachable(end.message),
+      UpToDate: () => otherwise.upToDate(),
+    }),
+  )
+
+/**
+ * Pushes the pending integrate's head through the gate. A gate that is not
+ * clear, or gh that is not ready, waits `GATE_RETRY_WAIT`; a refused push
+ * restacks when the state has `on.restack`, else takes `red`, as does one a
+ * crash cut off before it landed.
+ */
+const pushIntegrate = Effect.fn("Machines.pushIntegrate")(function* (
+  run: Run,
+  action: IntegrateAction,
+  state: IntegrateState,
+) {
+  const integration = yield* integrationOf
+  const pushed = yield* integration
+    .push({
+      cwd: run.cwd,
+      ref: state.ref,
+      requestId: action.requestId,
+      poller: "caller",
+      notify: false,
+      ...omitUndefined({ remote: state.remote, repairOf: action.repairOf, sha: action.head }),
+    })
+    .pipe(Effect.result)
+  if (pushed._tag === "Success") {
+    const { notBefore: _notBefore, ...ready } = action
+    const recorded = PendingAction.cases.Integrate.make({
+      ...ready,
+      repo: pushed.success.repo,
+      generation: pushed.success.generation,
+      sha: pushed.success.sha,
+    })
+    yield* commitMove(run, { ...run, pending: Option.some(recorded) }, [
+      MachineStep.cases.Recorded.make({ action: recorded }),
+    ])
+    return
+  }
+  const error = pushed.failure
+  switch (error._tag) {
+    case "IntegrationBlocked":
+    case "GhUnavailable":
+      yield* retryIntegrate(run, action, error.message)
+      return
+    case "PushRefused": {
+      const refused = leaveIntegrate(
+        run,
+        action,
+        state.on.red,
+        "red",
+        GateOutcome.cases.refused.make({ message: error.message }),
+      )
+      if (Predicate.isUndefined(state.on.restack)) return yield* refused
+      const restacked = yield* restack(run.cwd, state, Option.fromUndefinedOr(action.head))
+      return yield* leaveByRestack(run, action, state, state.on.restack, restacked, {
+        unreachable: (message) => retryIntegrate(run, action, message),
+        upToDate: () => refused,
+      })
+    }
+    // The push never landed, and its request id never pushes again.
+    case "PushInterrupted":
+      yield* leaveIntegrate(
+        run,
+        action,
+        state.on.red,
+        "red",
+        GateOutcome.cases.interrupted.make({ message: error.message }),
+      )
+      return
+    case "IntegrationError":
+      return yield* new MachineFault({ message: error.message })
+    default:
+      return yield* error
+  }
+})
+
+/**
+ * The move a pending integrate asks for. A PR (`via: "pr"`) is
+ * `advancePr`'s. Before the gate admitted it: push (`pushIntegrate`), as the
+ * caller that polls its own gate (`poller: "caller"`), since a wake record
+ * fires for the extension that armed it. After: the verdict for its
+ * generation or a later one moves the run; until then the driver polls the
+ * gate when its record names the next poll due, and sleeps under the run's
+ * own record between.
  */
 const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
   run: Run,
@@ -2623,118 +2797,12 @@ const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
   const now = yield* Clock.currentTimeMillis
   const waits = waitsUntil(Option.some(action), now)
   if (Option.isSome(waits)) return yield* waitOut(run, waits.value, signals)
-  const integration = yield* integrationOf
   const state = yield* integrateStateOf(run, action.state)
+  if (action.via === "pr") return yield* advancePr(run, action, state, signals)
   if (Predicate.isUndefined(action.repo) || Predicate.isUndefined(action.generation)) {
-    const pushed = yield* integration
-      .push({
-        cwd: run.cwd,
-        ref: state.ref,
-        requestId: action.requestId,
-        poller: "caller",
-        notify: false,
-        ...omitUndefined({ remote: state.remote, repairOf: action.repairOf, sha: action.head }),
-      })
-      .pipe(Effect.result)
-    if (pushed._tag === "Success") {
-      const { notBefore: _notBefore, ...ready } = action
-      const recorded = PendingAction.cases.Integrate.make({
-        ...ready,
-        repo: pushed.success.repo,
-        generation: pushed.success.generation,
-        sha: pushed.success.sha,
-      })
-      yield* commitMove(run, { ...run, pending: Option.some(recorded) }, [
-        MachineStep.cases.Recorded.make({ action: recorded }),
-      ])
-      return
-    }
-    const error = pushed.failure
-    const retryLater = (reason: string) =>
-      Effect.gen(function* () {
-        const until = now + Duration.toMillis(GATE_RETRY_WAIT)
-        yield* Effect.logInfo("machines.integrate.waiting").pipe(
-          Effect.annotateLogs({ run: run.run, state: action.state, error: reason }),
-        )
-        yield* commitMove(
-          run,
-          {
-            ...run,
-            pending: Option.some(
-              PendingAction.cases.Integrate.make({ ...action, notBefore: until }),
-            ),
-          },
-          [MachineStep.cases.Waiting.make({ state: action.state, until, reason: "integration" })],
-        )
-      })
-    switch (error._tag) {
-      case "IntegrationBlocked":
-      case "GhUnavailable":
-        yield* retryLater(error.message)
-        return
-      case "PushRefused": {
-        const restackTo = Option.fromUndefinedOr(state.on.restack)
-        if (Option.isSome(restackTo)) {
-          const restacked = yield* restack(run.cwd, state, Option.fromUndefinedOr(action.head))
-          switch (restacked._tag) {
-            case "Restacked":
-              yield* leaveIntegrate(
-                run,
-                action,
-                restackTo.value,
-                "restack",
-                GateOutcome.cases.restacked.make({
-                  from: restacked.from,
-                  to: restacked.to,
-                  onto: restacked.onto,
-                }),
-              )
-              return
-            case "Conflict":
-              yield* leaveIntegrate(
-                run,
-                action,
-                state.on.conflict ?? state.on.red,
-                "conflict",
-                GateOutcome.cases.conflict.make({
-                  onto: restacked.onto,
-                  files: restacked.files,
-                  message: restacked.message,
-                }),
-              )
-              return
-            case "Unreachable":
-              yield* retryLater(restacked.message)
-              return
-            case "UpToDate":
-              break
-          }
-        }
-        yield* leaveIntegrate(
-          run,
-          action,
-          state.on.red,
-          "red",
-          GateOutcome.cases.refused.make({ message: error.message }),
-        )
-        return
-      }
-      // The push never landed, and its request id never pushes again.
-      case "PushInterrupted":
-        yield* leaveIntegrate(
-          run,
-          action,
-          state.on.red,
-          "red",
-          GateOutcome.cases.interrupted.make({ message: error.message }),
-        )
-        return
-      case "IntegrationError":
-        return yield* new MachineFault({ message: error.message })
-      default:
-        return yield* error
-    }
+    return yield* pushIntegrate(run, action, state)
   }
+  const integration = yield* integrationOf
   const key: GateKey = { repo: action.repo, ref: state.ref }
   const found = yield* integration.read(key)
   if (Option.isNone(found)) {
@@ -2762,6 +2830,10 @@ const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
  * `interrupted` (a push a crash cut off, which never landed), which take
  * `on.red`; `restacked` (the head `from` rebased onto the ref's `onto`, now
  * `to`) and `conflict` (that rebase conflicted in `files` and was aborted).
+ * A pull request (`IntegrateState.via`): `merged` (by `method`, absent
+ * when a person merged it), `checks` (its checks named in `failing`
+ * failed), `declined` (changes requested, closed, or a head the run did not
+ * push; `note` quotes the reviews).
  */
 const GateOutcome = Schema.Union([
   Schema.Struct({
@@ -2788,6 +2860,24 @@ const GateOutcome = Schema.Union([
     onto: Schema.String,
     files: Schema.Array(Schema.String),
     message: Schema.String,
+  }),
+  Schema.Struct({
+    outcome: Schema.tag("merged"),
+    pr: PositiveInt,
+    sha: Schema.String,
+    method: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    outcome: Schema.tag("checks"),
+    pr: PositiveInt,
+    sha: Schema.String,
+    failing: Schema.Array(Schema.String),
+  }),
+  Schema.Struct({
+    outcome: Schema.tag("declined"),
+    pr: PositiveInt,
+    reason: Schema.Literals(["changes", "closed", "moved"]),
+    note: Schema.String,
   }),
 ]).pipe(Schema.toTaggedUnion("outcome"))
 type GateOutcome = typeof GateOutcome.Type
@@ -2844,6 +2934,7 @@ const Restack = Schema.TaggedUnion({
   Conflict: { onto: Schema.String, files: Schema.Array(Schema.String), message: Schema.String },
   Unreachable: { message: Schema.String },
 })
+type Restack = typeof Restack.Type
 
 /** A git command of the restack, its exit read by the caller. No editor or prompt waits. */
 const restackGit = (cwd: string, args: ReadonlyArray<string>) =>
@@ -2933,6 +3024,500 @@ const restack = Effect.fn("Machines.restack")(
   Effect.mapError((error) => new MachineFault({ message: `restack: ${error.message}` })),
 )
 
+// ── pull requests ───────────────────────────────────────────────────────────
+
+/**
+ * How often a PR that waits for a person is read. A review takes minutes to
+ * days, so two minutes adds little to it, and 30 reads an hour per run stay
+ * far under GitHub's 5,000 requests an hour.
+ */
+const PR_POLL_WAIT = Duration.minutes(2)
+/** One `gh` or `git` call of a PR. */
+const PR_TIMEOUT = Duration.minutes(1)
+/** The most of the reviews a declined PR's note quotes. */
+const PR_NOTE_MAX = 2_000
+
+/** How the head reaches the ref, as `IntegrateState.via` renders: empty is `push`. */
+const integrateVia = (rendered: string): Option.Option<"push" | "pr"> => {
+  const via = rendered.trim()
+  if (via === "" || via === "push") return Option.some("push")
+  if (via === "pr") return Option.some("pr")
+  return Option.none()
+}
+
+const isPrVia = (via: "push" | "pr"): via is "pr" => via === "pr"
+
+/** The run's own branch, which its PR merges from: no person's branch is ever pushed. */
+const prBranch = (run: RunId) => `gent/${run}`
+
+/**
+ * Each integrate state's `via` renders `push` or `pr` for the run's input:
+ * a run fails at its start, not at its merge after every round.
+ */
+const checkVia = (definition: MachineDefinition, input: Schema.Json) =>
+  Effect.forEach(
+    Object.entries(definition.states),
+    ([name, state]) => {
+      if (state.kind !== "integrate" || Predicate.isUndefined(state.via)) return Effect.void
+      const rendered = render(state.via, {
+        input,
+        context: { last: {}, all: {} },
+        visit: 0,
+        note: Option.none(),
+        files: {},
+        bun: Option.none(),
+      })
+      if (Option.isSome(integrateVia(rendered))) return Effect.void
+      return Effect.fail(
+        new MachineError({ message: `${name}: via renders ${rendered}; it takes push or pr` }),
+      )
+    },
+    { discard: true },
+  )
+
+/** A `gh` call of a PR, its exit read by the caller; a gh that cannot start exits -1. */
+const ghPr = (args: ReadonlyArray<string>) =>
+  runProcess("gh", args, {
+    env: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GIT_TERMINAL_PROMPT: "0" },
+    extendEnv: true,
+    timeout: PR_TIMEOUT,
+  }).pipe(
+    Effect.catch((error) => Effect.succeed({ exitCode: -1, stdout: "", stderr: error.message })),
+  )
+
+/** What `gh` said, for a log or a note. */
+const saidBy = (command: string, result: { readonly exitCode: number; readonly stderr: string }) =>
+  `${command} exited ${result.exitCode}: ${result.stderr.trim()}`
+
+const PrNumbers = Schema.fromJsonString(Schema.Array(Schema.Struct({ number: PositiveInt })))
+const decodePrNumbers = Schema.decodeUnknownOption(PrNumbers)
+
+/** `Opened`: the PR the run's branch merges from. `Unreachable`: git or gh failed, tried again later. */
+const PrOpen = Schema.TaggedUnion({
+  Opened: { repo: Schema.String, pr: PositiveInt, sha: Schema.String },
+  Unreachable: { message: Schema.String },
+})
+
+/**
+ * Pushes the visit's head to the run's branch (a forced push: the branch is
+ * the run's alone) and finds its open PR on the ref, or opens one titled by
+ * the head's subject. A retry after a crash finds the PR it opened.
+ */
+const openPr = Effect.fn("Machines.openPr")(
+  function* (run: Run, action: IntegrateAction, state: IntegrateState) {
+    const integration = yield* integrationOf
+    const remote = state.remote ?? "origin"
+    const repo = yield* integration.repoOf({ cwd: run.cwd, remote })
+    const head = yield* Option.match(Option.fromUndefinedOr(action.head), {
+      onNone: () => receiptGit(run.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]),
+      onSome: Effect.succeed,
+    })
+    const branch = prBranch(run.run)
+    const pushed = yield* restackGit(run.cwd, ["push", remote, `+${head}:refs/heads/${branch}`])
+    if (pushed.exitCode !== 0) {
+      return PrOpen.cases.Unreachable.make({ message: saidBy(`git push ${remote}`, pushed) })
+    }
+    const listed = yield* ghPr([
+      "pr",
+      "list",
+      "--repo",
+      repo,
+      "--head",
+      branch,
+      "--base",
+      state.ref,
+      "--state",
+      "open",
+      "--json",
+      "number",
+      "--limit",
+      "1",
+    ])
+    if (listed.exitCode !== 0) {
+      return PrOpen.cases.Unreachable.make({ message: saidBy("gh pr list", listed) })
+    }
+    const open = Option.flatMap(decodePrNumbers(listed.stdout), (found) =>
+      Option.fromUndefinedOr(found[0]),
+    )
+    if (Option.isSome(open)) {
+      return PrOpen.cases.Opened.make({ repo, pr: open.value.number, sha: head })
+    }
+    const subject = yield* receiptGit(run.cwd, ["log", "-1", "--format=%s", head])
+    const created = yield* ghPr([
+      "pr",
+      "create",
+      "--repo",
+      repo,
+      "--base",
+      state.ref,
+      "--head",
+      branch,
+      "--title",
+      subject,
+      "--body",
+      `Opened by the gent machine run ${run.run} (${run.machine}): it merges once a person approves and the checks pass.`,
+    ])
+    if (created.exitCode !== 0) {
+      return PrOpen.cases.Unreachable.make({ message: saidBy("gh pr create", created) })
+    }
+    const number = /\/pull\/(\d+)/.exec(created.stdout)
+    if (Predicate.isNull(number)) {
+      return PrOpen.cases.Unreachable.make({
+        message: `gh pr create answered no PR: ${created.stdout.trim()}`,
+      })
+    }
+    return PrOpen.cases.Opened.make({ repo, pr: Number(number[1]), sha: head })
+  },
+  Effect.mapError((error) => new MachineFault({ message: `pr: ${error.message}` })),
+)
+
+/** GitHub's words for a PR, as `gh pr view --json` prints them. */
+const PrCheck = Schema.Struct({
+  name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  context: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  status: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  conclusion: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  state: Schema.optionalKey(Schema.NullOr(Schema.String)),
+})
+type PrCheck = typeof PrCheck.Type
+const PrReview = Schema.Struct({
+  author: Schema.optionalKey(Schema.NullOr(Schema.Struct({ login: Schema.String }))),
+  state: Schema.String,
+  body: Schema.optionalKey(Schema.NullOr(Schema.String)),
+})
+type PrReview = typeof PrReview.Type
+const PrView = Schema.Struct({
+  state: Schema.String,
+  headRefOid: Schema.String,
+  url: Schema.optionalKey(Schema.String),
+  reviewDecision: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  mergeable: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  mergeStateStatus: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  statusCheckRollup: Schema.optionalKey(Schema.NullOr(Schema.Array(PrCheck))),
+  reviews: Schema.optionalKey(Schema.NullOr(Schema.Array(PrReview))),
+})
+type PrView = typeof PrView.Type
+const decodePrView = Schema.decodeUnknownOption(Schema.fromJsonString(PrView))
+const PR_VIEW_FIELDS =
+  "state,headRefOid,url,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,reviews"
+
+/** A check's end: `ok` (success, neutral, skipped), `failed`, or `pending`. */
+const checkEnd = (check: PrCheck): "ok" | "failed" | "pending" => {
+  const status = (check.status ?? "").toUpperCase()
+  const state = (check.state ?? "").toUpperCase()
+  if (state.length > 0) {
+    if (state === "SUCCESS") return "ok"
+    if (state === "FAILURE" || state === "ERROR") return "failed"
+    return "pending"
+  }
+  if (status.length > 0 && status !== "COMPLETED") return "pending"
+  const conclusion = (check.conclusion ?? "").toUpperCase()
+  if (conclusion === "SUCCESS" || conclusion === "NEUTRAL" || conclusion === "SKIPPED") return "ok"
+  if (conclusion.length === 0) return "pending"
+  return "failed"
+}
+
+/** Each reviewer's last approval or change request: a comment decides nothing. */
+const lastReviews = (reviews: ReadonlyArray<PrReview>): ReadonlyArray<PrReview> => {
+  const last = new Map<string, PrReview>()
+  for (const review of reviews) {
+    if (review.state !== "APPROVED" && review.state !== "CHANGES_REQUESTED") continue
+    last.set(review.author?.login ?? "", review)
+  }
+  return [...last.values()]
+}
+
+/** The reviews that asked for changes, quoted for the note. */
+const quoteReviews = (reviews: ReadonlyArray<PrReview>) =>
+  lastReviews(reviews)
+    .filter((review) => review.state === "CHANGES_REQUESTED")
+    .map((review) => {
+      const body = (review.body ?? "").trim()
+      const who = `@${review.author?.login ?? "a reviewer"}`
+      if (body.length === 0) return `${who} requested changes.`
+      return `${who} requested changes: "${body}"`
+    })
+
+/**
+ * What a read PR asks for. `Merged`: a person merged it. `Declined`: changes
+ * requested, closed, or a head the run did not push. `Failing`: a check
+ * failed. `Restack`: it conflicts with the ref, or (approved, its checks
+ * green) the ref moved past it. `Ready`: approved, green, mergeable.
+ * `Waiting`: none of these yet.
+ */
+const PrDecision = Schema.TaggedUnion({
+  Merged: {},
+  Declined: { reason: Schema.Literals(["changes", "closed", "moved"]), note: Schema.String },
+  Failing: { failing: Schema.Array(Schema.String) },
+  Restack: { conflicting: Schema.Boolean },
+  Ready: {},
+  Waiting: {},
+})
+type PrDecision = typeof PrDecision.Type
+
+/** Whether the reviews say `state`: GitHub's decision, or each reviewer's last when it has none. */
+const reviewsSay = (view: PrView, state: "APPROVED" | "CHANGES_REQUESTED") => {
+  const decision = view.reviewDecision ?? ""
+  if (decision.length > 0) return decision === state
+  return lastReviews(view.reviews ?? []).some((review) => review.state === state)
+}
+
+/** The PR's end no check decides: merged, closed, a head the run did not push, changes requested. */
+const prReviewed = (view: PrView, pr: number, sha: string): Option.Option<PrDecision> => {
+  let name = `PR #${pr}`
+  if (Predicate.isNotUndefined(view.url)) name = `${name} (${view.url})`
+  const quoted = (said: string) =>
+    [said, ...quoteReviews(view.reviews ?? [])].join("\n").slice(0, PR_NOTE_MAX)
+  if (view.state === "MERGED") return Option.some(PrDecision.cases.Merged.make({}))
+  if (view.state === "CLOSED") {
+    return Option.some(
+      PrDecision.cases.Declined.make({
+        reason: "closed",
+        note: quoted(`${name} was closed without a merge.`),
+      }),
+    )
+  }
+  if (view.headRefOid !== sha) {
+    return Option.some(
+      PrDecision.cases.Declined.make({
+        reason: "moved",
+        note: `${name} is at ${view.headRefOid}, not the ${sha} the run pushed: a push the run did not make.`,
+      }),
+    )
+  }
+  if (reviewsSay(view, "CHANGES_REQUESTED")) {
+    return Option.some(
+      PrDecision.cases.Declined.make({
+        reason: "changes",
+        note: quoted(`${name}: changes requested.`),
+      }),
+    )
+  }
+  return Option.none()
+}
+
+/** An open PR at the run's head, with no change requested: its checks and mergeability decide. */
+const prMergeable = (view: PrView): PrDecision => {
+  const checks = view.statusCheckRollup ?? []
+  const failing = checks
+    .filter((check) => checkEnd(check) === "failed")
+    .map((check) => check.name ?? check.context ?? "a check")
+  if (failing.length > 0) return PrDecision.cases.Failing.make({ failing })
+  const mergeState = view.mergeStateStatus ?? ""
+  if (view.mergeable === "CONFLICTING" || mergeState === "DIRTY") {
+    return PrDecision.cases.Restack.make({ conflicting: true })
+  }
+  const pending = checks.some((check) => checkEnd(check) === "pending")
+  if (!reviewsSay(view, "APPROVED") || pending) return PrDecision.cases.Waiting.make({})
+  if (mergeState === "BEHIND") return PrDecision.cases.Restack.make({ conflicting: false })
+  if (view.mergeable === "MERGEABLE") return PrDecision.cases.Ready.make({})
+  return PrDecision.cases.Waiting.make({})
+}
+
+const prDecision = (view: PrView, pr: number, sha: string): PrDecision =>
+  Option.getOrElse(prReviewed(view, pr, sha), () => prMergeable(view))
+
+const RepoMergeMethods = Schema.fromJsonString(
+  Schema.Struct({
+    allow_squash_merge: Schema.optionalKey(Schema.Boolean),
+    allow_rebase_merge: Schema.optionalKey(Schema.Boolean),
+    allow_merge_commit: Schema.optionalKey(Schema.Boolean),
+  }),
+)
+const decodeRepoMergeMethods = Schema.decodeUnknownOption(RepoMergeMethods)
+
+/**
+ * The repository's merge method: squash first, so a unit lands as one commit
+ * on the ref, as a push to main lands it; then rebase, then a merge commit.
+ */
+const mergeMethodOf = Effect.fn("Machines.mergeMethodOf")(function* (repo: string) {
+  const read = yield* ghPr(["api", `repos/${repo}`])
+  if (read.exitCode !== 0) return Option.none<string>()
+  return Option.flatMap(decodeRepoMergeMethods(read.stdout), (allowed) => {
+    if (allowed.allow_squash_merge === true) return Option.some("squash")
+    if (allowed.allow_rebase_merge === true) return Option.some("rebase")
+    if (allowed.allow_merge_commit === true) return Option.some("merge")
+    return Option.none()
+  })
+})
+
+/** Merges the PR at the head the run pushed, by the repository's method; none when it did not. */
+const mergePr = Effect.fn("Machines.mergePr")(function* (repo: string, pr: number, sha: string) {
+  const method = yield* mergeMethodOf(repo)
+  if (Option.isNone(method)) {
+    yield* Effect.logWarning("machines.pr.merge").pipe(
+      Effect.annotateLogs({ repo, pr, error: "no merge method the repository allows was read" }),
+    )
+    return method
+  }
+  const merged = yield* ghPr([
+    "pr",
+    "merge",
+    String(pr),
+    "--repo",
+    repo,
+    `--${method.value}`,
+    "--match-head-commit",
+    sha,
+  ])
+  if (merged.exitCode === 0) return method
+  yield* Effect.logWarning("machines.pr.merge").pipe(
+    Effect.annotateLogs({ repo, pr, error: saidBy("gh pr merge", merged) }),
+  )
+  return Option.none<string>()
+})
+
+/** An open PR's visit: the run, its pending integrate, and the PR it waits on. */
+interface PrVisit {
+  readonly run: Run
+  readonly action: IntegrateAction
+  readonly state: IntegrateState
+  readonly repo: string
+  readonly pr: number
+  readonly sha: string
+  readonly nextPoll: number
+  readonly signals: Signals
+}
+
+/** The PR is read again at `nextPoll`, under the run's own record, with no step. */
+const waitForPerson = (visit: PrVisit, reason: string) =>
+  Effect.logInfo("machines.pr.waiting").pipe(
+    Effect.annotateLogs({ run: visit.run.run, state: visit.action.state, pr: visit.pr, reason }),
+    Effect.andThen(waitOut(visit.run, visit.nextPoll, visit.signals)),
+  )
+
+/**
+ * Pushes the run's branch and opens its PR, then waits `PR_POLL_WAIT` (one
+ * `Waiting` step, reason `pr`). Git or gh out of reach tries again after
+ * `GATE_RETRY_WAIT`.
+ */
+const openPrVisit = Effect.fn("Machines.openPrVisit")(function* (
+  run: Run,
+  action: IntegrateAction,
+  state: IntegrateState,
+  nextPoll: number,
+) {
+  const opened = yield* openPr(run, action, state)
+  if (opened._tag === "Unreachable") return yield* retryIntegrate(run, action, opened.message)
+  const { notBefore: _notBefore, ...ready } = action
+  const recorded = PendingAction.cases.Integrate.make({
+    ...ready,
+    repo: opened.repo,
+    pr: opened.pr,
+    sha: opened.sha,
+    notBefore: nextPoll,
+  })
+  yield* commitMove(run, { ...run, pending: Option.some(recorded) }, [
+    MachineStep.cases.Recorded.make({ action: recorded }),
+    MachineStep.cases.Waiting.make({ state: action.state, until: nextPoll, reason: "pr" }),
+  ])
+})
+
+/**
+ * A PR GitHub cannot merge as it is. With `on.restack`: rebase the checkout
+ * onto the ref and take `restack`, so the gate checks the new head. Without:
+ * a conflict takes `on.conflict` (default `on.red`), and a PR behind the ref
+ * waits for a person to update it.
+ */
+const restackPr = Effect.fn("Machines.restackPr")(function* (visit: PrVisit, conflicting: boolean) {
+  const { run, action, state } = visit
+  if (Predicate.isNotUndefined(state.on.restack)) {
+    const restacked = yield* restack(run.cwd, state, Option.some(visit.sha))
+    return yield* leaveByRestack(run, action, state, state.on.restack, restacked, {
+      unreachable: (message) => waitForPerson(visit, message),
+      upToDate: () =>
+        waitForPerson(visit, "the head already holds the ref; GitHub has not caught up"),
+    })
+  }
+  if (!conflicting) return yield* waitForPerson(visit, "the ref moved past the PR")
+  yield* leaveIntegrate(
+    run,
+    action,
+    state.on.conflict ?? state.on.red,
+    "conflict",
+    GateOutcome.cases.conflict.make({
+      onto: state.ref,
+      files: [],
+      message: `GitHub reports PR #${visit.pr} conflicts with ${state.ref}`,
+    }),
+  )
+})
+
+/** Merges a ready PR and takes `green`; a merge that did not land is read again later. */
+const mergePrVisit = Effect.fn("Machines.mergePrVisit")(function* (visit: PrVisit) {
+  const method = yield* mergePr(visit.repo, visit.pr, visit.sha)
+  if (Option.isNone(method)) return yield* waitForPerson(visit, "the merge did not land")
+  yield* leaveIntegrate(
+    visit.run,
+    visit.action,
+    visit.state.on.green,
+    "green",
+    GateOutcome.cases.merged.make({ pr: visit.pr, sha: visit.sha, method: method.value }),
+  )
+})
+
+/** The move a read PR's decision asks for. */
+const decidePr = (visit: PrVisit, decision: PrDecision) => {
+  const { run, action, state, pr, sha } = visit
+  return Match.value(decision).pipe(
+    Match.tagsExhaustive({
+      Merged: () =>
+        leaveIntegrate(
+          run,
+          action,
+          state.on.green,
+          "green",
+          GateOutcome.cases.merged.make({ pr, sha }),
+        ),
+      Declined: (declined) =>
+        leaveIntegrate(
+          run,
+          action,
+          state.on.declined ?? state.on.red,
+          "declined",
+          GateOutcome.cases.declined.make({ pr, reason: declined.reason, note: declined.note }),
+          Option.some(declined.note),
+        ),
+      Failing: (failing) =>
+        leaveIntegrate(
+          run,
+          action,
+          state.on.red,
+          "red",
+          GateOutcome.cases.checks.make({ pr, sha, failing: failing.failing }),
+        ),
+      Restack: (restacking) => restackPr(visit, restacking.conflicting),
+      Ready: () => mergePrVisit(visit),
+      Waiting: () => waitForPerson(visit, "no decision yet"),
+    }),
+  )
+}
+
+/**
+ * The move a pending PR asks for. Before it is open: `openPrVisit`. After:
+ * read it every `PR_POLL_WAIT` under the run's own record, with no step and
+ * no model turn, until a person's review, its checks or GitHub's
+ * mergeability decide (`prDecision`, `decidePr`).
+ */
+const advancePr = Effect.fn("Machines.advancePr")(function* (
+  run: Run,
+  action: IntegrateAction,
+  state: IntegrateState,
+  signals: Signals,
+) {
+  const nextPoll = (yield* Clock.currentTimeMillis) + Duration.toMillis(PR_POLL_WAIT)
+  const { repo, pr, sha } = action
+  if (Predicate.isUndefined(pr) || Predicate.isUndefined(repo) || Predicate.isUndefined(sha)) {
+    return yield* openPrVisit(run, action, state, nextPoll)
+  }
+  const visit: PrVisit = { run, action, state, repo, pr, sha, nextPoll, signals }
+  const viewed = yield* ghPr(["pr", "view", String(pr), "--repo", repo, "--json", PR_VIEW_FIELDS])
+  if (viewed.exitCode !== 0) return yield* waitForPerson(visit, saidBy("gh pr view", viewed))
+  const view = decodePrView(viewed.stdout)
+  if (Option.isNone(view)) return yield* waitForPerson(visit, "gh pr view answered no PR")
+  return yield* decidePr(visit, prDecision(view.value, pr, sha))
+})
+
 /** Removes the run's core record once its end is settled. */
 const withdrawWake = Effect.fn("Machines.withdrawWake")(function* (run: Run) {
   const ctx = yield* ExtensionContext
@@ -3006,6 +3591,13 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
     case "integrate": {
       // The push itself is the next move: the driver reads the action first.
       const head = yield* headOf(run.cwd)
+      const rendered = render(state.via ?? "", templateScope(run, visit))
+      const via = integrateVia(rendered)
+      if (Option.isNone(via)) {
+        return yield* new MachineFault({
+          message: `${name}: via renders ${rendered}; it takes push or pr`,
+        })
+      }
       const action = PendingAction.cases.Integrate.make({
         state: name,
         visit,
@@ -3013,6 +3605,7 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
         ...omitUndefined({
           repairOf: Option.getOrUndefined(repairOf(run.context, name)),
           head: Option.getOrUndefined(head),
+          via: Option.getOrUndefined(Option.filter(via, isPrVia)),
         }),
       })
       yield* commitMove(run, { ...run, pending: Option.some(action) }, [
@@ -5257,6 +5850,7 @@ const MachineStartTool = tool({
     yield* checkRoles(definition, cwd)
     const host = { sessionId: ctx.sessionId, branchId: ctx.branchId }
     const input = params.input ?? {}
+    yield* checkVia(definition, input)
     const run: RunRecord = {
       run: runId,
       machine: definition.name,

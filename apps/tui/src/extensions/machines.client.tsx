@@ -81,14 +81,28 @@ const BAND_MAX_RUNS = 4
 const isActive = (run: MachineRunView): boolean =>
   run.status === "running" || run.status === "asking"
 
-/** The time a run's round waits until, while it is still ahead. */
-const waitsUntil = (run: MachineRunView, now: number): Option.Option<number> => {
+/**
+ * What a run waits on, as its row says it: `wait 17:05` while its round
+ * waits for its account, `pr #12` while its PR waits for a person.
+ */
+const waitsOn = (
+  run: MachineRunView,
+  now: number,
+  zone: DateTime.TimeZone,
+): Option.Option<string> => {
   const pending = run.pending
-  if (Predicate.isUndefined(pending) || pending._tag !== "Round") return Option.none()
-  return Option.filter(Option.fromUndefinedOr(pending.notBefore), (until) => until > now)
+  if (Predicate.isUndefined(pending)) return Option.none()
+  if (pending._tag === "Integrate") {
+    return Option.map(Option.fromUndefinedOr(pending.pr), (pr) => `pr #${pr}`)
+  }
+  if (pending._tag !== "Round") return Option.none()
+  return Option.fromUndefinedOr(pending.notBefore).pipe(
+    Option.filter((until) => until > now),
+    Option.map((until) => `wait ${formatClock(until, now, zone)}`),
+  )
 }
 
-/** `track implement r2 4m`, then `· wait 17:05` while its round waits for its account. */
+/** `track implement r2 4m`, then `· wait 17:05` or `· pr #12` while it waits. */
 const runRow = (
   run: MachineRunView,
   now: number,
@@ -96,14 +110,14 @@ const runRow = (
   zone: DateTime.TimeZone,
 ): BandRow => {
   const head = `${run.machine} ${run.state} r${run.visits[run.state] ?? 0} ${formatAge(now - run.createdAt)}`
-  return Option.match(waitsUntil(run, now), {
+  return Option.match(waitsOn(run, now, zone), {
     onNone: () => {
       if (run.status === "asking")
         return { glyph: ASK_GLYPH, tone: "asking", text: truncate(head, width) }
       return { glyph: RUN_GLYPH, tone: "running", text: truncate(head, width) }
     },
-    onSome: (until) => {
-      const full = `${head} · wait ${formatClock(until, now, zone)}`
+    onSome: (waiting) => {
+      const full = `${head} · ${waiting}`
       if (textWidth(full) <= width) return { glyph: WAIT_GLYPH, tone: "waiting", text: full }
       return { glyph: WAIT_GLYPH, tone: "waiting", text: truncate(head, width) }
     },

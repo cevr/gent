@@ -100,7 +100,7 @@ import {
   toolCalls,
 } from "./helpers/routed-session"
 import { e2ePreset } from "./helpers/test-preset"
-import { CANDIDATE, fakeGitHub, REPO } from "./helpers/fake-github"
+import { CANDIDATE, fakeGitHub, OUTSIDE, type Pr, REPO, SUBJECT } from "./helpers/fake-github"
 import { scopedEnv } from "./helpers/process-env"
 
 // ── the routed models ───────────────────────────────────────────────────────
@@ -7752,6 +7752,384 @@ describe("an integrate state's restack", () => {
         })
         expect(yield* runsCounted(count)).toBe(2)
         expect(github.remote.pushes).toEqual([rebased])
+      }).pipe(Effect.scoped, Effect.timeout("50 seconds")),
+    55_000,
+  )
+})
+
+// ── pull requests ───────────────────────────────────────────────────────────
+
+/**
+ * merge (integrate main through a PR when `input.via` says `pr`) → done on
+ * green, broken on red, declined on a person's no.
+ */
+const PR_SHIP = {
+  name: "pr-ship",
+  threads: {},
+  start: "merge",
+  states: {
+    merge: {
+      kind: "integrate",
+      ref: "main",
+      via: "{{input.via}}",
+      on: { green: "done", red: "broken", declined: "declined" },
+    },
+    done: { kind: "final" },
+    broken: { kind: "final" },
+    declined: { kind: "final" },
+  },
+}
+
+const prServer = (home: Effect.Success<typeof restartableHome>, github: FakeGitHub) =>
+  Effect.map(makeModels(trackWorker), (models) =>
+    home.layerFor(machineModels(models), { extensionInputs: [githubBoundary(github.layer)] }),
+  )
+
+/** Whether the run's pending integrate recorded PR `pr`. */
+const recordsPr = (pr: number) => (row: Option.Option<typeof RunRowView.Type>) =>
+  Option.exists(row, (found) => (found.pending_json ?? "").includes(`"pr":${pr}`))
+
+/** A server starts the PR run and stops once the run recorded its open PR. */
+const openPrRun = (home: Effect.Success<typeof restartableHome>, github: FakeGitHub) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { client } = yield* createRpcClient(yield* prServer(home, github))
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, PR_SHIP, "pr-ship", { via: "pr" })
+      yield* waitFor(home.sql(runRow(run)), recordsPr(1), 15_000, "the run opened its PR")
+      return { owner, run }
+    }),
+  )
+
+/** A person's time passes while no server runs; the next server reads the PR at once. */
+const readPrAfterRestart = (
+  home: Effect.Success<typeof restartableHome>,
+  github: FakeGitHub,
+  run: string,
+) =>
+  Effect.gen(function* () {
+    yield* home.sql(retryDueNow(run))
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* createRpcClient(yield* prServer(home, github))
+        // No client call: the run's own record activates its host, which reads the PR.
+        yield* waitFor(
+          home.sql(runRow(run)),
+          (row) => Option.exists(row, (found) => found.status === "final"),
+          15_000,
+          "the PR's decision moved the run",
+        )
+      }),
+    )
+  })
+
+const APPROVED: Partial<Pr> = {
+  reviewDecision: "APPROVED",
+  reviews: [{ author: { login: "cevr" }, state: "APPROVED", body: "" }],
+  checks: [{ name: "test", status: "COMPLETED", conclusion: "SUCCESS" }],
+  mergeable: "MERGEABLE",
+  mergeStateStatus: "CLEAN",
+}
+
+/** What a person or GitHub did to the open PR, and the run's end it leads to. */
+interface PrCase {
+  readonly why: string
+  readonly pr: Partial<Pr>
+  readonly methods?: { squash: boolean; rebase: boolean; merge: boolean }
+  readonly to: string
+  readonly saved: Readonly<Record<string, Schema.Json>>
+  /** Text the move's note holds. */
+  readonly note?: string
+  readonly merges: ReadonlyArray<{
+    readonly pr: number
+    readonly method: string
+    readonly sha: string
+  }>
+}
+
+describe("an integrate state through a pull request", () => {
+  it.live(
+    "pushes the run's own branch, opens one PR on the ref, and waits for a person with one step",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const github = yield* fakeGitHub()
+        const { run } = yield* openPrRun(home, github)
+        // main is untouched: the head went to the run's branch alone.
+        expect(github.remote.pushes).toEqual([])
+        expect([...github.remote.branches]).toEqual([[`gent/${run}`, CANDIDATE]])
+        expect(github.remote.prs).toMatchObject([
+          { number: 1, head: `gent/${run}`, base: "main", title: SUBJECT, headRefOid: CANDIDATE },
+        ])
+        const row = Option.getOrThrow(yield* home.sql(runRow(run)))
+        expect(row).toMatchObject({ state: "merge", status: "running" })
+        const steps = yield* home.sql(stepsOf(run))
+        expect(steps.filter((step) => step._tag === "Waiting")).toMatchObject([{ reason: "pr" }])
+        expect(moves(steps)).toEqual([])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  for (const decided of [
+    {
+      why: "approved with green checks merges by squash at the pushed head",
+      pr: APPROVED,
+      to: "done",
+      saved: { outcome: "merged", pr: 1, sha: CANDIDATE, method: "squash" },
+      merges: [{ pr: 1, method: "squash", sha: CANDIDATE }],
+    },
+    {
+      why: "approved in a repository without squash merges by rebase",
+      pr: APPROVED,
+      methods: { squash: false, rebase: true, merge: true },
+      to: "done",
+      saved: { outcome: "merged", pr: 1, sha: CANDIDATE, method: "rebase" },
+      merges: [{ pr: 1, method: "rebase", sha: CANDIDATE }],
+    },
+    {
+      why: "a person merged takes green with no merge of its own",
+      pr: { state: "MERGED" },
+      to: "done",
+      saved: { outcome: "merged", pr: 1, sha: CANDIDATE },
+      merges: [],
+    },
+    {
+      why: "changes requested takes declined, quoting the review",
+      pr: {
+        reviewDecision: "CHANGES_REQUESTED",
+        reviews: [
+          { author: { login: "cevr" }, state: "CHANGES_REQUESTED", body: "Rename the flag." },
+        ],
+      },
+      to: "declined",
+      saved: { outcome: "declined", pr: 1, reason: "changes" },
+      note: '@cevr requested changes: "Rename the flag."',
+      merges: [],
+    },
+    {
+      why: "a closed PR takes declined",
+      pr: { state: "CLOSED" },
+      to: "declined",
+      saved: { outcome: "declined", pr: 1, reason: "closed" },
+      note: "was closed without a merge",
+      merges: [],
+    },
+    {
+      why: "a head the run did not push takes declined",
+      pr: { ...APPROVED, headRefOid: OUTSIDE },
+      to: "declined",
+      saved: { outcome: "declined", pr: 1, reason: "moved" },
+      note: `is at ${OUTSIDE}, not the ${CANDIDATE} the run pushed`,
+      merges: [],
+    },
+    {
+      why: "a failed check takes red, naming it",
+      pr: { checks: [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }] },
+      to: "broken",
+      saved: { outcome: "checks", pr: 1, sha: CANDIDATE, failing: ["test"] },
+      merges: [],
+    },
+    {
+      why: "a conflict with no restack edge takes red as conflict",
+      pr: { ...APPROVED, mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
+      to: "broken",
+      saved: { outcome: "conflict", onto: "main", files: [] },
+      merges: [],
+    },
+  ] satisfies ReadonlyArray<PrCase>) {
+    it.live(
+      `a PR ${decided.why}`,
+      () =>
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const github = yield* fakeGitHub()
+          const methods: PrCase["methods"] = decided.methods
+          if (Predicate.isNotUndefined(methods)) github.remote.mergeMethods = { ...methods }
+          const { run } = yield* openPrRun(home, github)
+          Object.assign(github.remote.prs[0] ?? {}, decided.pr)
+          yield* readPrAfterRestart(home, github, run)
+          expect(Option.map(yield* home.sql(runRow(run)), (row) => row.state)).toEqual(
+            Option.some(decided.to),
+          )
+          expect(yield* home.sql(savedValue(run, "merge"))).toMatchObject(decided.saved)
+          expect(github.remote.merges).toEqual([...decided.merges])
+          const moved = (yield* home.sql(stepsOf(run))).filter((step) => step._tag === "Moved")
+          expect(moved).toMatchObject([{ from: "merge", to: decided.to }])
+          const note: PrCase["note"] = decided.note
+          if (Predicate.isNotUndefined(note)) expect(moved[0]?.note ?? "").toContain(note)
+          // main moved only by GitHub's merge, never by a push.
+          expect(github.remote.pushes).toEqual([])
+        }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+      45_000,
+    )
+  }
+
+  it.live("a PR no person approved yet is read again later, with no step and no move", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub()
+      const { run } = yield* openPrRun(home, github)
+      const before = yield* home.sql(stepsOf(run))
+      yield* home.sql(retryDueNow(run))
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* createRpcClient(yield* prServer(home, github))
+          // The read found no decision: the run's record is armed for the next read.
+          yield* waitFor(
+            home.sql(runRecords(run)),
+            (records) => records.some((at) => Option.exists(at, (time) => time > 0)),
+            15_000,
+            "the run waits for the next read",
+          )
+        }),
+      )
+      expect(yield* home.sql(stepsOf(run))).toEqual(before)
+      expect(Option.getOrThrow(yield* home.sql(runRow(run)))).toMatchObject({
+        state: "merge",
+        status: "running",
+      })
+      expect(github.remote.merges).toEqual([])
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a crash before the open PR was recorded finds that PR again, opening no second", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub()
+      const { run } = yield* openPrRun(home, github)
+      // As the record stands when the server died after gh opened the PR.
+      yield* home.sql(
+        Effect.flatMap(
+          SqlClient.SqlClient,
+          (sql) => sql`UPDATE machine_runs
+            SET pending_json = json_remove(pending_json, '$.pr', '$.repo', '$.sha') WHERE run = ${run}`,
+        ),
+      )
+      yield* home.sql(retryDueNow(run))
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* createRpcClient(yield* prServer(home, github))
+          yield* waitFor(home.sql(runRow(run)), recordsPr(1), 15_000, "the run found its PR")
+        }),
+      )
+      expect(github.remote.prs.map((pr) => pr.number)).toEqual([1])
+      expect(github.remote.pushes).toEqual([])
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a via that is not push or pr is refused at define and at start", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub()
+      const { client } = yield* createRpcClient(yield* prServer(home, github))
+      const owner = ownerOf(yield* client.session.create({}))
+      const [refused] = yield* call(client, owner, [
+        [
+          "machine.define",
+          "define-merge-via",
+          {
+            definition: {
+              ...PR_SHIP,
+              name: "merge-via",
+              states: { ...PR_SHIP.states, merge: { ...PR_SHIP.states.merge, via: "merge" } },
+            },
+          },
+        ],
+      ])
+      expect(refused?.failed).toBe(true)
+      expect(encodeJson(refused?.result)).toContain("merge: via is push or pr, not merge")
+      const [defined] = yield* call(client, owner, [
+        ["machine.define", "define-pr-ship", { definition: PR_SHIP }],
+      ])
+      expect(defined?.failed).toBe(false)
+      const [started] = yield* call(client, owner, [
+        ["machine.start", "start-pr-ship", { machine: "pr-ship", input: { via: "maybe" } }],
+      ])
+      expect(started?.failed).toBe(true)
+      expect(encodeJson(started?.result)).toContain("merge: via renders maybe; it takes push or pr")
+      const runs = yield* home.sql(
+        Effect.flatMap(SqlClient.SqlClient, (sql) => sql`SELECT run FROM machine_runs`),
+      )
+      expect(runs).toEqual([])
+      expect(github.remote.prs).toEqual([])
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live(
+    "a PR that conflicts with a moved ref restacks, checks the new head, and pushes it to the same PR",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const count = `${home.home}/count`
+        const { other } = yield* restackRepos(home)
+        const { unit, moved } = yield* divergeFiles(home, other, {
+          unit: { "unit.txt": "unit\n" },
+          main: { "other.txt": "other\n" },
+        })
+        const github = yield* fakeGitHub({ head: moved })
+        const definition = {
+          ...RESTACK,
+          name: "pr-restack",
+          states: {
+            ...RESTACK.states,
+            merge: { ...RESTACK.states.merge, via: "pr" },
+          },
+        }
+        const run = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client, owner } = yield* restackClient(home, github)
+            const run = yield* startRun(client, owner, definition, "pr-restack", { count })
+            yield* waitFor(home.sql(runRow(run)), recordsPr(1), 15_000, "the run opened its PR")
+            return run
+          }),
+        )
+        expect(github.remote.prs).toMatchObject([{ headRefOid: unit }])
+        Object.assign(github.remote.prs[0] ?? {}, {
+          ...APPROVED,
+          mergeable: "CONFLICTING",
+          mergeStateStatus: "DIRTY",
+        })
+        yield* home.sql(retryDueNow(run))
+        const rebased = yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* createRpcClient(yield* restackLayer(home, github))
+            // No client call: the run's own record activates its host, which reads the PR.
+            yield* waitFor(
+              home.sql(stepsOf(run)),
+              (steps) => moves(steps).length === 3,
+              15_000,
+              "the run restacked and came back to merge",
+            )
+            const rebased = yield* unitGit(home.cwd, ["rev-parse", "HEAD"])
+            yield* waitFor(
+              Effect.sync(() => github.remote.prs[0]?.headRefOid),
+              (head) => head === rebased,
+              15_000,
+              "the rebased head reached the PR",
+            )
+            return rebased
+          }),
+        )
+        expect(rebased).not.toBe(unit)
+        yield* unitGit(home.cwd, ["merge-base", "--is-ancestor", moved, rebased])
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          "gate→merge",
+          "merge→gate",
+          "gate→merge",
+        ])
+        expect(yield* home.sql(savedValue(run, "merge"))).toEqual({
+          outcome: "restacked",
+          from: unit,
+          to: rebased,
+          onto: moved,
+        })
+        expect(yield* runsCounted(count)).toBe(2)
+        // One PR, its branch force-pushed to the rebased head; main took no push.
+        expect(github.remote.prs.map((pr) => pr.number)).toEqual([1])
+        expect(yield* unitGit(other, ["ls-remote", "origin", `refs/heads/gent/${run}`])).toContain(
+          rebased,
+        )
+        expect(github.remote.pushes).toEqual([])
       }).pipe(Effect.scoped, Effect.timeout("50 seconds")),
     55_000,
   )

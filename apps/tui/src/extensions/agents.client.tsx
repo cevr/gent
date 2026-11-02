@@ -1474,17 +1474,22 @@ interface RunMark {
 /** What a run's glyph reads: a listed run's and a run page's alike. */
 type RunState = Pick<MachineRunView, "status" | "pending">
 
-/** Whether a run's round waits for its account until a time still ahead. */
+/**
+ * Whether a run waits: its round for its account until a time still ahead,
+ * or its PR for a person.
+ */
 const runWaits = (run: RunState, now: number): boolean => {
   const pending = run.pending
-  if (Predicate.isUndefined(pending) || pending._tag !== "Round") return false
+  if (Predicate.isUndefined(pending)) return false
+  if (pending._tag === "Integrate") return Predicate.isNotUndefined(pending.pr)
+  if (pending._tag !== "Round") return false
   return Predicate.isNotUndefined(pending.notBefore) && pending.notBefore > now
 }
 
 /**
  * A run's glyph, in the pane's own shapes: the pulse while it works, `●`
- * while it asks the reader, `◷` while its round waits for its account, `✓`
- * once final, `✕` failed, `■` stopped.
+ * while it asks the reader, `◷` while its round waits for its account or
+ * its PR for a person, `✓` once final, `✕` failed, `■` stopped.
  */
 const runMark = (run: RunState, now: number, frame: string): RunMark => {
   if (run.status === "asking") return { glyph: "●", tone: "needs" }
@@ -1513,13 +1518,14 @@ const runToneColor = (
 
 /**
  * The outcomes that failed their visit: a check's `fail`, a gate's `red`, a
- * restack's `conflict`, a state out of rounds, a round too big for its
- * thread, a run that failed in it.
+ * restack's `conflict`, a PR a person `declined`, a state out of rounds, a
+ * round too big for its thread, a run that failed in it.
  */
 const FAILED_OUTCOMES: ReadonlySet<string> = new Set([
   "fail",
   "red",
   "conflict",
+  "declined",
   "exhausted",
   "oversize",
   "failed",

@@ -1387,6 +1387,8 @@ describe("agents pane machine runs", () => {
     { why: "stopped on size", state: "review", outcome: "oversize", to: "decide" },
     // The push's rebase onto the moved main conflicted: the run went back to the implementor.
     { why: "conflicted on restack", state: "merge", outcome: "conflict", to: "resume" },
+    // A person asked for changes on the run's PR: the run went to decide.
+    { why: "a person declined", state: "merge", outcome: "declined", to: "decide" },
   ]) {
     it.scopedLive(`a visit that ${failed.why} draws the failed mark`, () =>
       Effect.gen(function* () {
@@ -1411,6 +1413,39 @@ describe("agents pane machine runs", () => {
         expect(lines.find((line) => line.includes("implement #1")) ?? "").toContain(
           "✓ implement #1",
         )
+      }),
+    )
+  }
+
+  for (const waiting of [
+    { why: "waits for a person on its PR", pr: { pr: 3, repo: "cevr/gent", sha: "b".repeat(40) } },
+    { why: "pushes", pr: {} },
+  ]) {
+    it.scopedLive(`an open merge visit that ${waiting.why} draws its mark`, () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const track = trackRun(now, "running")
+        const page = yield* Schema.decodeUnknownEffect(MachineRunPage)({
+          ...track,
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form the page's decoder reads
+          pending: {
+            _tag: "Integrate",
+            state: "merge",
+            visit: 1,
+            requestId: "machine:run-00000000000000a1:merge:1",
+            via: "pr",
+            ...waiting.pr,
+          },
+          trail: [track.trail[0], track.trail[1], { ...track.trail[2], state: "merge", visit: 1 }],
+        })
+        const { setup } = yield* pageOpen(page, { width: 80, height: 24 })
+        yield* waitForFrame(setup, (frame) => frame.includes("merge #1"), "run page")
+        const visit = renderFrame(setup)
+          .split("\n")
+          .find((line) => line.includes("merge #1"))
+        // A PR open for review waits, its glyph the clock; a visit still pushing works.
+        if ("pr" in waiting.pr) expect(visit).toContain("◷ merge #1")
+        else expect(visit).not.toContain("◷")
       }),
     )
   }

@@ -3,7 +3,9 @@
  * `gh auth status`, the `gh api` reads the gate makes, and the `git` verbs
  * it runs. Every run is returned for any commit, so the gate must filter
  * by `head_sha`. A list answers in pages of `pageSize`: page 1 alone, or,
- * with `--paginate --slurp`, one array of every page.
+ * with `--paginate --slurp`, one array of every page. Pull requests:
+ * `gh pr list`, `create`, `view` and `merge`, and `gh api repos/<repo>`
+ * for the merge methods the repository allows.
  */
 import {
   Deferred,
@@ -44,6 +46,27 @@ export interface Run {
   readonly appId?: number
 }
 
+/** A pull request as `gh pr view --json` reads it; a test sets what a person did. */
+export interface Pr {
+  readonly number: number
+  /** The branch it merges from, and the ref it merges into. */
+  readonly head: string
+  readonly base: string
+  readonly title: string
+  state: "OPEN" | "CLOSED" | "MERGED"
+  headRefOid: string
+  /** GitHub's review decision; empty when the repository requires no review. */
+  reviewDecision: string
+  reviews: Array<{
+    readonly author: { readonly login: string }
+    readonly state: string
+    readonly body: string
+  }>
+  checks: Array<{ readonly name: string; readonly status: string; readonly conclusion: string }>
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN"
+  mergeStateStatus: string
+}
+
 /** A commit status: it names no app. */
 interface Status {
   readonly context: string
@@ -74,6 +97,15 @@ export interface Remote {
   pushStarted: Option.Option<Deferred.Deferred<void>>
   /** Runs as the gate asks whether the commit fast-forwards: after admission read the record. */
   onAncestry: Option.Option<Effect.Effect<void>>
+  /** Branches other than main, by name, at the sha last pushed to them. */
+  branches: Map<string, string>
+  prs: Array<Pr>
+  /** Each `gh pr merge` that landed. */
+  merges: Array<{ readonly pr: number; readonly method: string; readonly sha: string }>
+  /** The merge methods the repository allows, as `gh api repos/<repo>` reads them. */
+  mergeMethods: { squash: boolean; rebase: boolean; merge: boolean }
+  /** `gh pr` answers this error while set. */
+  prFails: Option.Option<string>
 }
 
 // ── the wire ────────────────────────────────────────────────────────────────
@@ -122,6 +154,22 @@ const answer = (
 const unexpected = (command: string, args: ReadonlyArray<string>) =>
   Effect.die(`unexpected command ${command} ${args.join(" ")}`)
 
+/** A push refspec's sha and the branch it names: `[+]<sha>:refs/heads/<branch>`. */
+const refspecOf = (refspec: string) => {
+  const [sha = "", target = ""] = refspec.replace(/^\+/, "").split(":")
+  return { sha, branch: target.replace(/^refs\/heads\//, "") }
+}
+
+/** The value after `flag` in a command's arguments. */
+const flagOf = (args: ReadonlyArray<string>, flag: string) => {
+  const at = args.indexOf(flag)
+  if (at < 0) return ""
+  return args[at + 1] ?? ""
+}
+
+/** The subject `git log -1 --format=%s` answers for every commit. */
+export const SUBJECT = "feat: the unit's change"
+
 /** The git verbs the fake answers; over a real spawner, any other git runs for real. */
 const FAKE_GIT_VERBS = new Set(["remote get-url", "rev-parse --verify", "merge-base --is-ancestor"])
 const fakeOwnsGit = (args: ReadonlyArray<string>) =>
@@ -146,6 +194,11 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
       pushGate: Option.none(),
       pushStarted: Option.none(),
       onAncestry: Option.none(),
+      branches: new Map(),
+      prs: [],
+      merges: [],
+      mergeMethods: { squash: true, rebase: true, merge: true },
+      prFails: Option.none(),
       ...initial,
     }
     let nextId = 1
@@ -188,6 +241,16 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
         })
       }
       if (path === `repos/${REPO}/rules/branches/main`) return answer(0, "[]")
+      if (path === `repos/${REPO}`) {
+        return answer(
+          0,
+          encodeJson({
+            allow_squash_merge: remote.mergeMethods.squash,
+            allow_rebase_merge: remote.mergeMethods.rebase,
+            allow_merge_commit: remote.mergeMethods.merge,
+          }),
+        )
+      }
       if (/^repos\/cevr\/gent\/commits\/[0-9a-f]{40}\/check-runs/.test(path)) {
         const runs = remote.runs.map((run) => ({
           id: run.id,
@@ -213,6 +276,83 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
       }
       return answer(1, "", `HTTP 404: ${path}`)
     }
+    const prOf = (args: ReadonlyArray<string>) =>
+      Option.fromUndefinedOr(remote.prs.find((pr) => String(pr.number) === (args[2] ?? "")))
+    /** `gh pr`: list, create, view, merge. */
+    const ghPr = (args: ReadonlyArray<string>) => {
+      if (Option.isSome(remote.prFails)) return answer(1, "", remote.prFails.value)
+      if (flagOf(args, "--repo") !== REPO)
+        return answer(1, "", "GraphQL: Could not resolve to a Repository")
+      switch (args[1]) {
+        case "list": {
+          const open = remote.prs.filter(
+            (pr) =>
+              pr.state === "OPEN" &&
+              pr.head === flagOf(args, "--head") &&
+              pr.base === flagOf(args, "--base"),
+          )
+          return answer(0, encodeJson(open.slice(0, 1).map((pr) => ({ number: pr.number }))))
+        }
+        case "create": {
+          const head = flagOf(args, "--head")
+          const sha = remote.branches.get(head)
+          if (Predicate.isUndefined(sha))
+            return answer(1, "", `pull request create failed: no branch ${head}`)
+          const number = remote.prs.length + 1
+          remote.prs.push({
+            number,
+            head,
+            base: flagOf(args, "--base"),
+            title: flagOf(args, "--title"),
+            state: "OPEN",
+            headRefOid: sha,
+            reviewDecision: "REVIEW_REQUIRED",
+            reviews: [],
+            checks: [],
+            mergeable: "MERGEABLE",
+            mergeStateStatus: "BLOCKED",
+          })
+          return answer(0, `https://github.com/${REPO}/pull/${number}\n`)
+        }
+        case "view":
+          return Option.match(prOf(args), {
+            onNone: () => answer(1, "", "GraphQL: Could not resolve to a PullRequest"),
+            onSome: (pr) =>
+              answer(
+                0,
+                encodeJson({
+                  state: pr.state,
+                  headRefOid: pr.headRefOid,
+                  url: `https://github.com/${REPO}/pull/${pr.number}`,
+                  reviewDecision: pr.reviewDecision,
+                  mergeable: pr.mergeable,
+                  mergeStateStatus: pr.mergeStateStatus,
+                  statusCheckRollup: pr.checks.map((check) => ({
+                    __typename: "CheckRun",
+                    ...check,
+                  })),
+                  reviews: pr.reviews,
+                }),
+              ),
+          })
+        case "merge":
+          return Option.match(prOf(args), {
+            onNone: () => answer(1, "", "GraphQL: Could not resolve to a PullRequest"),
+            onSome: (pr) => {
+              const method = ["squash", "rebase", "merge"].find((name) =>
+                args.includes(`--${name}`),
+              )
+              if (Predicate.isUndefined(method)) return answer(1, "", "no merge method")
+              const sha = flagOf(args, "--match-head-commit")
+              if (sha !== pr.headRefOid) return answer(1, "", "Head branch was modified")
+              remote.merges.push({ pr: pr.number, method, sha })
+              pr.state = "MERGED"
+              return answer(0)
+            },
+          })
+      }
+      return unexpected("gh", args)
+    }
     const gh = (args: ReadonlyArray<string>) => {
       if (remote.gh === "missing") {
         return Effect.fail(
@@ -220,11 +360,28 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
           PlatformError.systemError({ _tag: "NotFound", module: "ChildProcess", method: "spawn" }),
         )
       }
+      if (args[0] === "pr") return ghPr(args)
       if (args[0] !== "auth") {
         return api(args[1] ?? "", args.includes("--paginate") && args.includes("--slurp"))
       }
       if (remote.gh === "ready") return answer(0, "Logged in to github.com")
       return answer(1, "", "You are not logged into any GitHub hosts")
+    }
+    /**
+     * A push that landed: main moves the head; another branch moves only
+     * itself, and an open PR from it, as GitHub would.
+     */
+    const land = (refspec: string) => {
+      const { sha, branch } = refspecOf(refspec)
+      if (branch === "main") {
+        remote.pushes.push(sha)
+        remote.head = sha
+        return
+      }
+      remote.branches.set(branch, sha)
+      for (const pr of remote.prs) {
+        if (pr.head === branch && pr.state === "OPEN") pr.headRefOid = sha
+      }
     }
     const push = (args: ReadonlyArray<string>) =>
       Effect.gen(function* () {
@@ -236,9 +393,7 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
           onNone: () => Effect.void,
           onSome: Deferred.await,
         })
-        const sha = (args[2] ?? "").split(":")[0] ?? ""
-        remote.pushes.push(sha)
-        remote.head = sha
+        land(args[2] ?? "")
         return yield* answer(0)
       })
     const git = (args: ReadonlyArray<string>) => {
@@ -254,6 +409,8 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
           if (spec === "HEAD") return answer(0, `${CANDIDATE}\n`)
           return answer(0, `${spec}\n`)
         }
+        case "log -1":
+          return answer(0, `${SUBJECT}\n`)
         case "merge-base --is-ancestor": {
           const hook = Option.getOrElse(remote.onAncestry, () => Effect.void)
           if (remote.diverged.has(args[3] ?? "")) return Effect.andThen(hook, answer(1))
@@ -276,9 +433,7 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
         exitCode: Effect.tap(handle.exitCode, (code) =>
           Effect.sync(() => {
             if (code !== 0) return
-            const sha = (args[2] ?? "").split(":")[0] ?? ""
-            remote.pushes.push(sha)
-            remote.head = sha
+            land(args[2] ?? "")
           }),
         ),
       })

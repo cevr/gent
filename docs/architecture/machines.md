@@ -193,6 +193,33 @@
     an unreachable remote does. `on.conflict` without `on.restack` is
     refused. The orchestrate machines send a conflict to `resume`, where
     the implementor rebases and resolves.
+  - An integrate state's `via` (a template; empty or `push` pushes) set to
+    `pr` merges through a pull request a person approves, for a repository
+    whose ref takes no push. The visit force-pushes its pinned head to the
+    run's own branch `gent/<run>` (never a person's branch), finds the open
+    PR from it on the ref or opens one titled by the head's subject, and
+    records the PR in `PendingAction.Integrate.pr` with one `Waiting` step,
+    reason `pr`. A crash between the open and the record finds the same PR.
+    Then it reads the PR (`gh pr view`) every 2 minutes under the run's own
+    record, with no step, no permit and no model turn: a review takes
+    minutes to days, so 2 minutes adds little, and 30 reads an hour stay
+    far under GitHub's 5,000 requests an hour. A merged PR (by a person or
+    by the run) moves by `green` (`GateOutcome.merged`); changes requested,
+    a closed PR or a head the run did not push move by `declined` to
+    `on.declined` (default `on.red`), the move's note quoting the reviews;
+    a failed check moves by `red` (`GateOutcome.checks`). Approved, green
+    and mergeable, the run merges by the repository's method (squash, then
+    rebase, then merge) with `--match-head-commit`, so a head pushed after
+    the read never lands. A conflicting PR restacks with `on.restack`
+    (then the next visit force-pushes the new head to the same PR) and takes
+    `on.conflict` (default `on.red`) without it; a PR only behind its ref
+    restacks with `on.restack` and waits for a person without it. The run's
+    status stays `running` while it waits: the open PR on the pending action
+    is the wait, since a new run status would change the `machine_runs`
+    table's check, and a schema version change drops every run. A literal
+    `via` other than `push` or `pr` is refused at define, and a rendered one
+    at start. The orchestrate machines take `via` from `input.via` and send
+    `declined` to `decide`. The run deletes no branch after a merge.
   - A definition can ship files (`files`, a name to its text, each at most
     64,000 characters), so a check travels with the definition, not with a
     project. A `run` state names one as `{{files.<name>}}`: each command
