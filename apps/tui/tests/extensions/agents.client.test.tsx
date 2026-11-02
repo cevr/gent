@@ -1382,6 +1382,30 @@ describe("agents pane machine runs", () => {
     }),
   )
 
+  it.scopedLive("a visit that stopped on size draws the failed mark", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const track = trackRun(now, "running")
+      // The review round was too big for its thread: the size stop moved the run to decide.
+      const page = yield* Schema.decodeUnknownEffect(MachineRunPage)({
+        ...track,
+        trail: [
+          track.trail[0],
+          { ...track.trail[1], outcome: "oversize", to: "decide" },
+          track.trail[2],
+        ],
+      })
+      const { setup } = yield* pageOpen(page, { width: 80, height: 24 })
+      yield* waitForFrame(setup, (frame) => frame.includes("review #1"), "run page")
+      const lines = renderFrame(setup).split("\n")
+      const review = lines.find((line) => line.includes("review #1")) ?? ""
+      expect(review).toContain("✕ review #1")
+      expect(review).toContain("oversize → decide")
+      // The visit that moved on its verdict keeps the done mark.
+      expect(lines.find((line) => line.includes("implement #1")) ?? "").toContain("✓ implement #1")
+    }),
+  )
+
   it.scopedLive("Enter on a visit opens its round's thread by the thread's listed row", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
@@ -2576,6 +2600,7 @@ describe("agents pane command center", () => {
             model: "anthropic/claude-sonnet-5-5",
             rounds: 4,
             dead: 1,
+            oversize: 1,
             priced: 2,
             costUsd: 0.06,
             verdicts: { approve: 1, revise: 2 },
@@ -2588,6 +2613,7 @@ describe("agents pane command center", () => {
             model: "openai/gpt-5.5-mini",
             rounds: 1,
             dead: 0,
+            oversize: 0,
             priced: 0,
             costUsd: 0,
             verdicts: {},
@@ -2602,7 +2628,9 @@ describe("agents pane command center", () => {
           return line.slice(line.lastIndexOf("│") + 1).trim()
         }
         // The catalog names the model; a mean of 2.5 rounds keeps its decimal.
-        expect(column("4 rounds")).toBe("Claude Sonnet 5.5 · 4 rounds · 1 dead · $0.03/round")
+        // A size stop counts against the model beside its dead rounds; the cost wraps under them.
+        expect(column("4 rounds")).toBe("Claude Sonnet 5.5 · 4 rounds · 1 dead · 1 oversize")
+        expect(column("/round")).toBe("$0.03/round")
         expect(column("pass 1/3")).toBe("pass 1/3 · green 1/1 · 2.5 rounds to accept")
         expect(column("approve 1")).toBe("approve 1 · revise 2")
         // A model with only rounds says only that: one line, no zero counts.
@@ -2621,7 +2649,7 @@ describe("agents pane command center", () => {
           return line.slice(line.lastIndexOf("│") + 1).trim()
         }
         expect(narrowColumn("4 rounds")).toBe("Claude Sonnet 5.5 · 4 rounds · 1 dead")
-        expect(narrowColumn("/round")).toBe("$0.03/round")
+        expect(narrowColumn("/round")).toBe("1 oversize · $0.03/round")
         expect(narrowColumn("pass 1/3")).toBe("pass 1/3 · green 1/1")
         expect(narrowColumn("to accept")).toBe("2.5 rounds to accept")
         expect(narrow.lines.filter((line) => line.includes("…") && line.includes("round"))).toEqual(
@@ -3176,6 +3204,7 @@ describe("agents pane quality read", () => {
     model: "anthropic/claude-sonnet-5-5",
     rounds: 2,
     dead: 0,
+    oversize: 0,
     priced: 2,
     costUsd: 0.08,
     verdicts: {},

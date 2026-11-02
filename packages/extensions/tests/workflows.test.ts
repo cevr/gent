@@ -271,14 +271,14 @@ describe("WorkflowsExtension via RPC", () => {
           "with the project's packages installed there first",
         )
         expect(decodeJson(yield* fs.readFileString(lightFile))).toEqual(ORCHESTRATE_LIGHT_MACHINE)
-        // Every round of both machines stops on size at two handoffs and goes to decide.
+        // Every round of both machines stops on size at two of the model's windows and goes to decide.
         for (const machine of [ORCHESTRATE_MACHINE, ORCHESTRATE_LIGHT_MACHINE]) {
           const sizes = Object.values(machine.states).flatMap((state) => {
             if (state.kind !== "thread") return []
             return [state.oversize]
           })
           expect(sizes.length).toBeGreaterThan(3)
-          for (const size of sizes) expect(size).toEqual({ handoffs: 2, to: "decide" })
+          for (const size of sizes) expect(size).toEqual({ windows: 2, to: "decide" })
         }
         expect(ORCHESTRATE_MACHINE.threads?.["planner"]?.instructions).toContain(
           "A bulk mechanical unit (the same edit across many files) starts with a codemod",
@@ -303,9 +303,16 @@ describe("WorkflowsExtension via RPC", () => {
         expect(shipped).toContain(
           "a new worktree has no installed packages, so install them there before the first gate",
         )
-        // A size stop is a replan, and a bulk mechanical unit starts with a codemod.
+        // A size stop is a replan into smaller runs from base, and a bulk mechanical unit starts with a codemod.
         expect(shipped).toContain("after a size stop")
-        expect(shipped).toContain("replan it smaller")
+        expect(shipped).toContain(
+          "replan it into smaller units, each a new run on a new branch from base",
+        )
+        expect(shipped).toContain("the oversized branch is evidence, not a base")
+        // A positive verdict that was too big may still merge on an accepted review and a green check.
+        expect(shipped).toContain(
+          "a size stop on a positive verdict (ready, accepted, pass) may still merge when the review accepted",
+        )
         expect(shipped).toContain("starts with a codemod")
         expect(shipped).toContain(`The orchestrate machine is ${machineFile}.`)
         expect(shipped).toContain(`The orchestrate-light machine is ${lightFile}.`)

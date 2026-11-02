@@ -1223,7 +1223,7 @@ const packParts = (
 /**
  * How one model fared in the row's machine state, across the machine's
  * runs, in lines of the details column's `width`: `Haiku · 3 rounds ·
- * 1 dead · $0.04/round`, then `pass 2/3 · green 1/1 · 2.5 rounds to
+ * 1 dead · 1 oversize · $0.04/round`, then `pass 2/3 · green 1/1 · 2.5 rounds to
  * accept`, then its verdicts, each wrapped between its parts. A count with
  * nothing in it is left out, and so is a line left with nothing.
  */
@@ -1234,6 +1234,7 @@ const qualityLines = (
 ): ReadonlyArray<string> => {
   const head = [modelIdName(row.model, models), formatRounds(row.rounds)]
   if (row.dead > 0) head.push(`${row.dead} dead`)
+  if (row.oversize > 0) head.push(`${row.oversize} oversize`)
   if (row.priced > 0) head.push(`${formatCost(row.costUsd / row.priced)}/round`)
   const checks = row.checks.pass + row.checks.fail
   const gates = row.gates.green + row.gates.red
@@ -1512,9 +1513,15 @@ const runToneColor = (
 
 /**
  * The outcomes that failed their visit: a check's `fail`, a gate's `red`,
- * a state out of rounds, a run that failed in it.
+ * a state out of rounds, a round too big for its thread, a run that failed in it.
  */
-const FAILED_OUTCOMES: ReadonlySet<string> = new Set(["fail", "red", "exhausted", "failed"])
+const FAILED_OUTCOMES: ReadonlySet<string> = new Set([
+  "fail",
+  "red",
+  "exhausted",
+  "oversize",
+  "failed",
+])
 
 type StateVisit = MachineRunPage["trail"][number]
 

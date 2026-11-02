@@ -50,6 +50,7 @@ import {
   type CompactionRequest,
   ContextDirective,
   estimateTokens,
+  handedOffTokens,
   latestUserMessageId,
   maximumModelToolResultChars,
   messagesInCurrentWindow,
@@ -2711,6 +2712,106 @@ const summaryModel: CompactionRequest["summaryModel"] = () =>
 
 /** The context a compactor runs with; the turn provides the branch's own. */
 const leafContext = Layer.succeed(ExtensionContext, testLeafContext(testToolContext()))
+
+describe("tokens handed off", () => {
+  const wide = (id: string, role: "user" | "assistant", chars: number) =>
+    message(id, role, [text(`${id} ${"w".repeat(chars)}`)])
+  const wideResult = (id: string, chars: number) =>
+    message(`t-${id}`, "tool", [
+      Prompt.toolResultPart({
+        id: ToolCallId.make(id),
+        name: "read",
+        isFailure: false,
+        providerExecuted: false,
+        result: { value: "r".repeat(chars) },
+      }),
+    ])
+  const marker = (keepFrom: string) =>
+    windowMarkerMessage({
+      sessionId,
+      branchId,
+      keepFromMessageId: MessageId.make(keepFrom),
+      notice: `older context before ${keepFrom}`,
+      createdAt,
+    })
+  const summaryMarker = (keepFrom: string) =>
+    windowMarkerMessage({
+      sessionId,
+      branchId,
+      keepFromMessageId: MessageId.make(keepFrom),
+      notice: `summary of the context before ${keepFrom}`,
+      summarized: {
+        firstMessageId: MessageId.make("u1"),
+        lastMessageId: MessageId.make("a2"),
+        count: 4,
+      },
+      createdAt,
+    })
+  const pruneLine = (cutoff: string) =>
+    pruneLineMessage({
+      sessionId,
+      branchId,
+      stubResultsBefore: MessageId.make(cutoff),
+      notice: `pruned before ${cutoff}`,
+      createdAt,
+    })
+  const idsOf = (...ids: ReadonlyArray<string>) => {
+    const set = new Set(ids.map((id) => MessageId.make(id)))
+    return (item: Message) => set.has(item.id)
+  }
+  // An earlier round's turn, then the round's own: its prompt, an answer, its next prompt.
+  const earlier = [wide("u1", "user", 4_000), wide("a1", "assistant", 4_000)]
+  const own = [wide("u2", "user", 400), wide("a2", "assistant", 800), wide("u3", "user", 200)]
+  const isOwn = idsOf("u2", "a2", "u3")
+
+  test("a marker hands off the own messages before its anchor, whole; earlier rounds' and later ones stay out", () => {
+    const branch = [...earlier, ...own, marker("u3")]
+    expect(handedOffTokens(branch, isOwn)).toBe(estimateTokens(own.slice(0, 2)))
+    // History of earlier rounds that left at a handoff is not the round's work.
+    expect(handedOffTokens([...earlier, marker("u2"), ...own], isOwn)).toBe(0)
+    // A marker whose anchor is not stored cuts nothing.
+    expect(handedOffTokens([...earlier, ...own, marker("gone")], isOwn)).toBe(0)
+  })
+
+  test("two cuts at one point count the messages they removed once", () => {
+    const one = handedOffTokens([...earlier, ...own, summaryMarker("u3")], isOwn)
+    // A refused overflow writes a summary marker and a bare truncation at the same anchor.
+    const both = [...earlier, ...own, summaryMarker("u3"), marker("u3")]
+    expect(handedOffTokens(both, isOwn)).toBe(one)
+    expect(one).toBe(estimateTokens(own.slice(0, 2)))
+    // A later cut adds only what lay between the two anchors.
+    const later = [...earlier, ...own.slice(0, 2), marker("a2"), own[2], marker("u3")].filter(
+      Predicate.isNotUndefined,
+    )
+    expect(handedOffTokens(later, isOwn)).toBe(one)
+  })
+
+  test("a prune line counts what stubbing took from the own tool results before its cutoff", () => {
+    const work = [
+      wide("u2", "user", 400),
+      message("a2", "assistant", [call("c1")]),
+      wideResult("c1", 8_000),
+      message("a3", "assistant", [call("c2")]),
+      wideResult("c2", 6_000),
+    ]
+    const ownWork = idsOf("u2", "a2", "t-c1", "a3", "t-c2")
+    const branch = [...earlier, ...work, pruneLine("a3")]
+    const before = branch.slice(
+      0,
+      branch.findIndex((item) => item.id === MessageId.make("a3")),
+    )
+    const stubbed = modelVisibleWindow(branch).slice(0, before.length)
+    const taken = estimateTokens(before) - estimateTokens(stubbed)
+    expect(taken).toBeGreaterThan(1_900)
+    // The prompt and the call stay in view: only the stubbed result's size left.
+    expect(Math.abs(handedOffTokens(branch, ownWork) - taken)).toBeLessThanOrEqual(1)
+    // A result of an earlier round that a prune stubbed is not the round's.
+    expect(handedOffTokens(branch, idsOf("a3", "t-c2"))).toBe(0)
+    // A marker past the cutoff takes the pruned messages whole, and counts them once.
+    const cut = [...branch, marker("t-c2")]
+    expect(handedOffTokens(cut, ownWork)).toBe(estimateTokens(work.slice(0, 4)))
+  })
+})
 
 describe("turn window projection", () => {
   it.scopedLive(

@@ -397,7 +397,8 @@ const StepView = Schema.Struct({
   by: Schema.optionalKey(Schema.String),
   note: Schema.optionalKey(Schema.String),
   verdict: Schema.optionalKey(Schema.String),
-  handoffs: Schema.optionalKey(Schema.Finite),
+  handedOffTokens: Schema.optionalKey(Schema.Finite),
+  windowTokens: Schema.optionalKey(Schema.Finite),
   askId: Schema.optionalKey(Schema.String),
   round: Schema.optionalKey(Schema.String),
   model: Schema.optionalKey(Schema.String),
@@ -1711,7 +1712,13 @@ describe("machine failures the owner decides", () => {
 
 // ── a round too big for its thread ──────────────────────────────────────────
 
-/** work (thread, stops on size at two handoffs) → end, or decide (ask) → end. */
+/** The model window every test round runs on: the test catalog names none. */
+const TEST_WINDOW = 128_000
+
+/**
+ * work (thread, stops on size past 0.005 windows: 640 tokens) → end, or
+ * decide (ask) → end. `input.pad` sizes the round's own message.
+ */
 const SIZE = {
   name: "size",
   threads: { worker: {} },
@@ -1720,14 +1727,17 @@ const SIZE = {
     work: {
       kind: "thread",
       thread: "worker",
-      say: "STATE work {{visit}}",
+      say: "STATE work {{visit}}\nPAD {{input.pad}}",
       on: { done: "end" },
-      oversize: { handoffs: 2, to: "decide" },
+      oversize: { windows: 0.005, to: "decide" },
     },
-    decide: { kind: "ask", ask: "SIZE {{visit.note}}", on: { go: "end", drop: "end" } },
+    decide: { kind: "ask", ask: "SIZE {{visit.note}} decides.", on: { go: "end", drop: "end" } },
     end: { kind: "final" },
   },
 }
+
+/** A round's own message of about 1,000 tokens: past SIZE's limit once it leaves the context. */
+const PAD = "x".repeat(4_000)
 
 /**
  * A step the window cut: half a reply, then the stop reason Anthropic sends
@@ -1745,10 +1755,10 @@ const windowFullStep = () =>
   )
 
 /**
- * A worker that plays `script` one worker model call at a step: `cut` is a
- * step the window cut, `reply` answers `done`, `text` ends the turn. The
- * round's own header leaves the window at a handoff, so a counter, not the
- * prompt, picks the step.
+ * A worker that plays `script` one worker model call at a step, across
+ * rounds: `cut` is a step the window cut, `reply` answers `done`, `text`
+ * ends the turn. The round's own header leaves the window at a handoff, so
+ * a counter, not the prompt, picks the step.
  */
 const scriptedWorker = (script: ReadonlyArray<"cut" | "reply" | "text">) =>
   Effect.gen(function* () {
@@ -1782,70 +1792,85 @@ const askText = (messages: ReadonlyArray<SnapshotMessage>) =>
     })
     .join("\n")
 
-const decodeRoundHandoffs = Schema.decodeUnknownSync(
-  Schema.Array(Schema.Struct({ handoffs: Schema.Finite })),
+const decodeRoundSizes = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({
+      handed_off_tokens: Schema.Finite,
+      window_tokens: Schema.NullOr(Schema.Finite),
+    }),
+  ),
 )
-/** Every thread round's handoff count, oldest first. */
-const roundHandoffCounts = Effect.gen(function* () {
+/** Every thread round's tokens handed off and model window, oldest first. */
+const roundSizes = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
-  const rows = yield* sql`SELECT handoffs FROM thread_rounds ORDER BY started_at`
-  return decodeRoundHandoffs(rows).map((row) => row.handoffs)
+  const rows =
+    yield* sql`SELECT handed_off_tokens, window_tokens FROM thread_rounds ORDER BY started_at`
+  return decodeRoundSizes(rows)
 })
 
-describe("a round too big for its thread", () => {
-  it.live("a round that hands its context off twice goes to decide with a size note", () =>
-    Effect.gen(function* () {
-      const home = yield* restartableHome
-      const worker = yield* scriptedWorker(["cut", "reply", "cut", "text"])
-      const models = yield* makeModels(worker)
-      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
-      const owner = ownerOf(yield* client.session.create({}))
-      const run = yield* startRun(client, owner, SIZE, "size")
-      const ask = yield* askDetails(client, owner, 1)
-      expect(ask).toMatchObject({ run, state: "decide", reason: "asked", choices: ["go", "drop"] })
-      const snapshot = yield* client.session.getSnapshot(owner)
-      const text = askText(snapshot.messages)
-      expect(text).toContain("SIZE Size stop: the work round (role worker, visit 1)")
-      expect(text).toContain("handed its context off 2 times")
-      const steps = yield* home.sql(stepsOf(run))
-      // The size stop moves the run, though the round's verdict named `done`.
-      expect(moves(steps)).toEqual(["work→decide"])
-      expect(steps.find((step) => step._tag === "Moved")).toMatchObject({
-        by: "oversize",
-        note: expect.stringContaining("Split its work smaller"),
-      })
-      expect(steps.find((step) => step._tag === "RoundEnded")).toMatchObject({
-        verdict: "done",
-        handoffs: 2,
-      })
-      expect(yield* home.sql(roundHandoffCounts)).toEqual([2])
-    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
-  )
+/** A run's first `RoundEnded` step. */
+const roundEnded = (steps: ReadonlyArray<typeof StepView.Type>) =>
+  steps.find((step) => step._tag === "RoundEnded")
 
-  it.live("a round that hands its context off once moves on its verdict", () =>
+describe("a round too big for its thread", () => {
+  it.live("a round whose own work past the limit left the context goes to decide", () =>
     Effect.gen(function* () {
       const home = yield* restartableHome
       const worker = yield* scriptedWorker(["cut", "reply", "text"])
       const models = yield* makeModels(worker)
       const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
       const owner = ownerOf(yield* client.session.create({}))
-      const run = yield* startRun(client, owner, SIZE, "size")
+      const run = yield* startRun(client, owner, SIZE, "size", { pad: PAD })
+      const ask = yield* askDetails(client, owner, 1)
+      expect(ask).toMatchObject({ run, state: "decide", reason: "asked", choices: ["go", "drop"] })
+      const steps = yield* home.sql(stepsOf(run))
+      // The size stop moves the run, though the round's verdict named `done`.
+      expect(moves(steps)).toEqual(["work→decide"])
+      const ended = roundEnded(steps)
+      expect(ended).toMatchObject({ verdict: "done", windowTokens: TEST_WINDOW })
+      const tokens = ended?.handedOffTokens ?? 0
+      // The padded header left the context whole: about 1,000 tokens, past 640.
+      expect(tokens).toBeGreaterThanOrEqual(1_000)
+      expect(yield* home.sql(roundSizes)).toEqual([
+        { handed_off_tokens: tokens, window_tokens: TEST_WINDOW },
+      ])
+      const note = steps.find((step) => step._tag === "Moved")
+      expect(note).toMatchObject({ by: "oversize" })
+      const text = askText((yield* client.session.getSnapshot(owner)).messages)
+      expect(text).toContain(
+        "SIZE Size stop: the work round (role worker, visit 1) replied done, but",
+      )
+      expect(text).toContain("tokens of its own work left the context")
+      expect(text).toContain("the limit is 0.005 windows of 128k: too big for one round")
+      expect(text).toContain("Replan its work into smaller units")
+      expect(text).toContain("oversized. decides.")
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a round whose own work under the limit left the context moves on its verdict", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const worker = yield* scriptedWorker(["cut", "reply", "text"])
+      const models = yield* makeModels(worker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, SIZE, "size", { pad: "short" })
       yield* waitForEnd(client, owner)
       const steps = yield* home.sql(stepsOf(run))
       expect(moves(steps)).toEqual(["work→end"])
       expect(steps.find((step) => step._tag === "Moved")?.by).toBe("verdict")
-      expect(steps.find((step) => step._tag === "RoundEnded")).toMatchObject({
-        verdict: "done",
-        handoffs: 1,
-      })
-      expect(yield* home.sql(roundHandoffCounts)).toEqual([1])
+      const ended = roundEnded(steps)
+      expect(ended).toMatchObject({ verdict: "done", windowTokens: TEST_WINDOW })
+      // The cut handed off the short header and the half reply: some tokens, under 640.
+      expect(ended?.handedOffTokens ?? 0).toBeGreaterThan(0)
+      expect(ended?.handedOffTokens ?? 0).toBeLessThan(640)
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
 
   it.live("a definition with no size limit loads, and its round moves on its verdict", () =>
     Effect.gen(function* () {
       const home = yield* restartableHome
-      const worker = yield* scriptedWorker(["cut", "reply", "cut", "text"])
+      const worker = yield* scriptedWorker(["cut", "reply", "text"])
       const models = yield* makeModels(worker)
       const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
       const owner = ownerOf(yield* client.session.create({}))
@@ -1853,15 +1878,105 @@ describe("a round too big for its thread", () => {
       const { oversize: _limit, ...work } = SIZE.states.work
       const unlimited = {
         ...SIZE,
-        states: { ...SIZE.states, work: { ...work, on: { done: "end", split: "decide" } } },
+        states: { ...SIZE.states, work: { ...work, on: { done: "decide" } } },
       }
-      const run = yield* startRun(client, owner, unlimited, "size")
+      const run = yield* startRun(client, owner, unlimited, "size", { pad: PAD })
+      yield* askDetails(client, owner, 1)
+      const steps = yield* home.sql(stepsOf(run))
+      expect(moves(steps)).toEqual(["work→decide"])
+      expect(steps.find((step) => step._tag === "Moved")?.by).toBe("verdict")
+      // The round still measures its size; only a limit stops on it.
+      expect(roundEnded(steps)?.handedOffTokens ?? 0).toBeGreaterThanOrEqual(1_000)
+      // A move by verdict has no note: the slot renders empty, with one space.
+      const text = askText((yield* client.session.getSnapshot(owner)).messages)
+      expect(text).toContain("SIZE decides.")
+      expect(text).not.toContain("SIZE  decides.")
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a round on a continued thread counts only its own work, not earlier rounds'", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      // first: reply, end. second: a cut at its first step, reply, end.
+      const worker = yield* scriptedWorker(["reply", "text", "cut", "reply", "text"])
+      const models = yield* makeModels(worker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const continued = {
+        name: "size",
+        threads: { worker: {} },
+        start: "first",
+        states: {
+          first: {
+            kind: "thread",
+            thread: "worker",
+            say: "STATE first {{visit}}\nPAD {{input.pad}}",
+            next: "second",
+          },
+          second: {
+            kind: "thread",
+            thread: "worker",
+            say: "STATE second {{visit}}",
+            on: { done: "end" },
+            oversize: { windows: 0.005, to: "decide" },
+          },
+          decide: { kind: "ask", ask: "SIZE {{visit.note}}", on: { go: "end" } },
+          end: { kind: "final" },
+        },
+      }
+      const run = yield* startRun(client, owner, continued, "size", { pad: PAD })
       yield* waitForEnd(client, owner)
       const steps = yield* home.sql(stepsOf(run))
-      expect(moves(steps)).toEqual(["work→end"])
-      // The round still counts its handoffs; only a limit stops on them.
-      expect(steps.find((step) => step._tag === "RoundEnded")?.handoffs).toBe(2)
+      // The cut kept the second round's header and handed off the first
+      // round's padded work, which is not the second round's: the second
+      // moves on its verdict, its own size 0.
+      expect(moves(steps)).toEqual(["first→second", "second→end"])
+      expect(yield* home.sql(roundSizes)).toEqual([
+        { handed_off_tokens: 0, window_tokens: TEST_WINDOW },
+        { handed_off_tokens: 0, window_tokens: TEST_WINDOW },
+      ])
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a size stop with no verdict goes to decide before any retry or no-verdict ask", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const worker = yield* scriptedWorker(["cut", "text", "text", "text"])
+      const models = yield* makeModels(worker)
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, SIZE, "size", { pad: PAD })
+      const ask = yield* askDetails(client, owner, 1)
+      expect(ask).toMatchObject({ run, state: "decide", reason: "asked" })
+      const steps = yield* home.sql(stepsOf(run))
+      expect(moves(steps)).toEqual(["work→decide"])
+      expect(steps.find((step) => step._tag === "Moved")?.by).toBe("oversize")
+      // One round: a no-verdict round would run once more on a new thread first.
+      expect(yield* home.sql(roundSizes)).toHaveLength(1)
+      const text = askText((yield* client.session.getSnapshot(owner)).messages)
+      expect(text).toContain("the work round (role worker, visit 1) gave no verdict, but")
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a definition whose template names a visit field other than note is refused", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(() => Effect.succeed(billed("unused")))
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const definition = {
+        ...SIZE,
+        states: {
+          ...SIZE.states,
+          decide: { kind: "ask", ask: "SIZE {{visit.foo}}", on: { go: "end" } },
+        },
+      }
+      const [refused] = yield* call(client, owner, [
+        ["machine.define", "define-visit-field", { definition }],
+      ])
+      expect(refused?.failed).toBe(true)
+      expect(encodeJson(refused?.result)).toContain("decide: {{visit.foo}} names no state")
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 })
 
@@ -4498,7 +4613,7 @@ describe("a role that names no model", () => {
 
 describe("a model's quality in a machine's state", () => {
   it.live(
-    "counts each model's rounds, cost, verdicts, the checks and gates after them, and the rounds a finished run took",
+    "counts each model's rounds, cost, verdicts, size stops, the checks and gates after them, and the rounds a finished run took",
     () =>
       Effect.gen(function* () {
         const home = yield* restartableHome
@@ -4541,6 +4656,8 @@ describe("a model's quality in a machine's state", () => {
               model: HAIKU,
               verdict: "constructor",
             }),
+            // That round was too big for its thread: a size stop counts against Haiku's review.
+            SeededMove.make({ from: "review", to: "work", by: "oversize" }),
             SeededMove.make({ from: "check", to: "work", by: "fail" }),
             SeededRound.make({ state: "work", round: "w2", dead: true, model: SONNET }),
             SeededRound.make({
@@ -4568,6 +4685,7 @@ describe("a model's quality in a machine's state", () => {
             model: HAIKU,
             rounds: 2,
             dead: 0,
+            oversize: 1,
             priced: 1,
             verdicts: { revise: 1, constructor: 1 },
             // The failed check judged its rounds; the passing one, only Sonnet's after it.
@@ -4581,6 +4699,7 @@ describe("a model's quality in a machine's state", () => {
             model: OPUS,
             rounds: 3,
             dead: 0,
+            oversize: 0,
             priced: 3,
             ...none,
             accepted: { runs: 1, rounds: 3 },
@@ -4590,6 +4709,7 @@ describe("a model's quality in a machine's state", () => {
             model: SONNET,
             rounds: 3,
             dead: 1,
+            oversize: 0,
             priced: 2,
             verdicts: {},
             checks: { pass: 1, fail: 1 },

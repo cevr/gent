@@ -73,6 +73,7 @@ import {
   type ExtensionServiceError,
   FollowUpQueueFull,
   headChars,
+  handedOffTokens,
   headTailChars,
   initialSessionMetrics,
   LaneUnavailable,
@@ -84,7 +85,6 @@ import {
   ReasoningEffort,
   RequestId,
   RetryCause,
-  rewritesWindow,
   SessionAccount,
   sessionAccount,
   type SessionReachError,
@@ -370,8 +370,10 @@ const ToolNotify = Schema.Literals(["user", "starter"]).annotate({
  * `turn_message_id` is the turn it runs now, the first until a usage limit
  * makes the round wait, and the lane, the stop and the turn's end are keyed
  * by it. `waits` counts those waits. A round waits while it is open, not
- * stopped, and `retry_at` is set (`isWaiting`). `handoffs` counts the
- * window's handoffs inside the round (`roundHandoffs`), set when it ends.
+ * stopped, and `retry_at` is set (`isWaiting`). `handed_off_tokens` is the
+ * round's size: the tokens of its own messages that left the model's context
+ * (`roundSize`), and `window_tokens` the model's window it ran in, NULL when
+ * no step was projected; both set when it ends.
  */
 const RoundRow = Schema.Struct({
   round: Schema.String,
@@ -404,7 +406,8 @@ const RoundRow = Schema.Struct({
   retry_at: Schema.NullOr(Schema.Finite),
   retry_cause: Schema.NullOr(RetryCause),
   waits: Schema.Finite,
-  handoffs: Schema.Finite,
+  handed_off_tokens: Schema.Finite,
+  window_tokens: Schema.NullOr(Schema.Finite),
 })
 type RoundRow = typeof RoundRow.Type
 
@@ -432,6 +435,13 @@ interface Place {
   readonly branchId: BranchId
 }
 
+/** How much of a round's own work left the model's context, and the window it ran in (`roundSize`). */
+interface RoundSize {
+  readonly handedOffTokens: number
+  /** The model's window of the round's latest projected step; none when no step was projected. */
+  readonly windowTokens: Option.Option<number>
+}
+
 /** What a round's end records. */
 interface RoundEnd {
   readonly text: string
@@ -442,8 +452,8 @@ interface RoundEnd {
   /** When the round may run again, and why it may not before (`TurnRetry`). */
   readonly retry: Option.Option<TurnRetry>
   readonly usage: Option.Option<typeof ChildUsage.Type>
-  /** The window's handoffs inside the round (`roundHandoffs`). */
-  readonly handoffs: number
+  /** The round's size (`roundSize`). */
+  readonly size: RoundSize
   readonly endedAt: number
 }
 
@@ -698,7 +708,8 @@ const createThreadRounds = Effect.gen(function* () {
         retry_at INTEGER,
         retry_cause TEXT,
         waits INTEGER NOT NULL DEFAULT 0,
-        handoffs INTEGER NOT NULL DEFAULT 0
+        handed_off_tokens INTEGER NOT NULL DEFAULT 0,
+        window_tokens INTEGER
       )`,
       `CREATE INDEX thread_rounds_by_thread ON thread_rounds (thread, ended_at)`,
       `CREATE INDEX thread_rounds_open_at ON thread_rounds (session_id, branch_id) WHERE ended_at IS NULL`,
@@ -713,7 +724,7 @@ const createThreadRounds = Effect.gen(function* () {
 
 const ensureThreadRounds = ensureExtensionTables({
   owner: "@gent/threads",
-  version: 4,
+  version: 5,
   tables: ["thread_rounds"],
   create: createThreadRounds,
 }).pipe(Effect.mapError(storageError("Thread table setup failed")))
@@ -851,7 +862,8 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
                   retry_at = ${Option.getOrNull(Option.map(end.retry, (retry) => retry.at))},
                   retry_cause = ${Option.getOrNull(Option.map(end.retry, (retry) => retry.cause))},
                   usage_json = ${Option.getOrNull(usage)},
-                  handoffs = ${end.handoffs},
+                  handed_off_tokens = ${end.size.handedOffTokens},
+                  window_tokens = ${Option.getOrNull(end.size.windowTokens)},
                   stopped_at = CASE
                     WHEN ${completed} = 1 AND stop_notice_at IS NOT NULL THEN NULL
                     ELSE stopped_at
@@ -1492,12 +1504,40 @@ const roundMessages = <M extends Parameters<typeof startTurnMessages>[0][number]
 }
 
 /**
- * The window's handoffs inside a round: each window marker or prune line the
- * runtime wrote among the round's messages (`rewritesWindow`). The runtime
- * persists a marker once per id, so two handoffs at one anchor are one.
+ * A round's size: the tokens of its own messages (`own`, at or after its
+ * first message) that left the model's context through the branch's
+ * handoffs of any kind (`handedOffTokens`), and the model's window the
+ * branch's latest step ran in. History an earlier round left on a continued
+ * thread is not the round's, so a handoff of it at the round's first step
+ * adds nothing. The window is the one the turn's overflow budget used (the
+ * agent's `contextLength`, else the model catalog's), as its
+ * `ModelContextProjected` names it, never the role's lower window.
  */
-const roundHandoffs = (messages: ReadonlyArray<Parameters<typeof rewritesWindow>[0]>): number =>
-  messages.filter((message) => rewritesWindow(message)).length
+const roundSize = Effect.fn("Threads.roundSize")(function* (
+  round: RoundRow,
+  branch: ReadonlyArray<Parameters<typeof handedOffTokens>[0][number]>,
+  own: ReadonlyArray<{ readonly id: MessageId }>,
+) {
+  const ctx = yield* ExtensionContext
+  const ids = new Set(own.map((message) => message.id))
+  const windowTokens = yield* ctx.Session.events({
+    sessionId: SessionId.make(round.session_id),
+    branchId: BranchId.make(round.branch_id),
+  }).pipe(
+    Stream.takeUntil((event) => event._tag === "StreamSynchronized"),
+    Stream.runFold(
+      () => Option.none<number>(),
+      (window, event) => {
+        if (event._tag !== "ModelContextProjected") return window
+        return Option.some(event.contextLimitTokens)
+      },
+    ),
+  )
+  return {
+    handedOffTokens: handedOffTokens(branch, (message) => ids.has(message.id)),
+    windowTokens,
+  } satisfies RoundSize
+})
 
 /** The place a round's end wakes, once one was saved. */
 const wakeTargetOf = (round: RoundRow) =>
@@ -1697,13 +1737,14 @@ const endRound = Effect.fn("Threads.endRound")(function* (round: RoundRow, outco
   const rounds = yield* ThreadRounds
   // A closed round holds no lane and waits in no queue.
   yield* cancelLane(MessageId.make(round.turn_message_id))
-  const messages = roundMessages(yield* branchMessages(round), round)
+  const branch = yield* branchMessages(round)
+  const messages = roundMessages(branch, round)
   const text = latestAssistantText(messages)
   const failed = outcome.interrupted || outcome.streamFailed || outcome.unanswered
   yield* rounds.endRound(round.round, {
     ...outcome,
     text,
-    handoffs: roundHandoffs(messages),
+    size: yield* roundSize(round, branch, messages),
     error: Option.map(
       Option.filter(outcome.error, () => failed),
       (error) => oneLine(error, maximumErrorChars),
@@ -3248,8 +3289,13 @@ const RoundView = Schema.Struct({
   unanswered: Schema.Boolean,
   /** A thread.stop, or the starter's interrupt, closed the round. */
   stopped: Schema.Boolean,
-  /** The window's handoffs inside the round, counted when it ended; 0 while it is open. */
-  handoffs: Schema.Finite,
+  /**
+   * The round's size: the tokens of its own messages that left the model's
+   * context (`roundSize`), measured when it ended; 0 while it is open.
+   */
+  size: Schema.Finite,
+  /** The model's window in tokens the round's latest step ran in; absent when no step was projected. */
+  window: Schema.optionalKey(Schema.Finite),
   error: Schema.optionalKey(Schema.String),
   /**
    * When a round that could not run may run again, in epoch milliseconds: a
@@ -3281,8 +3327,9 @@ const roundView = (round: RoundRow): RoundView => ({
   streamFailed: round.stream_failed === 1,
   unanswered: round.unanswered === 1,
   stopped: Predicate.isNotNull(round.stopped_at),
-  handoffs: round.handoffs,
+  size: round.handed_off_tokens,
   ...omitUndefined({
+    window: Option.getOrUndefined(Option.fromNullishOr(round.window_tokens)),
     error: Option.getOrUndefined(Option.fromNullishOr(round.error)),
     retryAt: Option.getOrUndefined(Option.fromNullishOr(round.retry_at)),
     sabbath: Option.getOrUndefined(

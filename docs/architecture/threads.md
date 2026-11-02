@@ -127,9 +127,17 @@
     session and branch it ran on, the sender and the sender's thread key,
     the reply it asked for, `notify`, and once it ends the text, the last
     `thread.reply` value, the turn's flags, its error, its usage and cost,
-    its `handoffs` (the window markers and prune lines the runtime wrote
-    among the round's messages, each one handoff of the window; a machine's
-    size stop reads it), and when its end was delivered. The thread's `turnAfter` hook matches the
+    its size (`handed_off_tokens`: the estimated tokens of the round's own
+    messages, at or after its first, that left the model's context through
+    any window marker or prune line on the branch, with two cuts at one
+    point counted once and an earlier round's history left out; and
+    `window_tokens`: the window the turn's overflow budget used, the
+    agent's `contextLength` else the model catalog's, as the branch's
+    latest `ModelContextProjected` names it, never a role's lower window;
+    the size estimates tokens as the projection's budgets do
+    (`estimateTokens`), since a step's measured input covers only its own
+    window; a machine's size
+    stop reads both), and when its end was delivered. The thread's `turnAfter` hook matches the
     open round's message id (or a message joined into the turn), records the
     end (the first writer wins), then delivers it: `notify: "user"` (the
     default) tells nobody, the user reads the thread; `"starter"` steers a

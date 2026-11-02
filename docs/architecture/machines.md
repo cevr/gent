@@ -34,15 +34,20 @@
     the next state. A dead worker or no verdict runs the round once more on
     a new thread, then asks `no-verdict`; a round stopped from outside asks
     `interrupted`. A round too big for its thread stops on size: a thread
-    state's optional `oversize` (`{ handoffs, to }`) moves the run to `to`
-    once the round handed its window off `handoffs` times. The count is
-    `thread_rounds.handoffs` (threads.md), kept on `RoundEnded.handoffs`; the
-    check runs before the account wait, the dead-worker retry and the
-    no-verdict ask, and `RoundEnded.verdict` keeps the model's own word. The
-    move is `Moved { by: "oversize", note }`, and the next state reads the
-    note as `{{visit.note}}` (empty after any other move). A definition with
-    no `oversize` never stops on size, and an older shipped definition that
-    lacks it still loads. A round with no free lane is queued by its send and the
+    state's optional `oversize` (`{ windows, to }`) moves the run to `to`
+    once the tokens of the round's own work that left its context reach
+    `windows` times the model's window. The size is
+    `thread_rounds.handed_off_tokens` against `window_tokens` (threads.md),
+    kept on `RoundEnded.handedOffTokens` and `windowTokens`; an unknown
+    window never stops. The check runs before the account wait, the
+    dead-worker retry and the no-verdict ask, and `RoundEnded.verdict`
+    keeps the model's own word. The move is `Moved { by: "oversize", note }`;
+    the note names the verdict, the size against the limit and the fix
+    (replan the work into smaller units). The next state reads it as
+    `{{visit.note}}` (empty after any other move; an empty slot between two
+    spaces leaves one), and `{{visit.<other>}}` fails the definition. A
+    definition with no `oversize` never stops on size. A size stop counts
+    as a failed visit and in its model's quality (`oversize`). A round with no free lane is queued by its send and the
     driver waits for its end as for any open round (a role pick: below). A
     round the account
     refuses as spent (`LaneUnavailable`, at start or send) or whose worker

@@ -1126,11 +1126,8 @@ export const copyMessagesToBranch = (
   return copies
 }
 
-/**
- * Whether `message` rewrites the window's prefix: a window marker or a prune
- * line. Each is one handoff of the window, as the runtime wrote it.
- */
-export const rewritesWindow = (message: Message): boolean =>
+/** Whether `message` rewrites the window's prefix: a window marker or a prune line. */
+const rewritesWindow = (message: Message): boolean =>
   Option.isSome(contextWindowOf(message)) || Option.isSome(pruneCutoffOf(message))
 
 /** Each part's stub, by the part object, so the stub is built once. */
@@ -1313,6 +1310,52 @@ export const estimateTokens = (
 ): number => {
   let chars = 0
   for (const msg of messages) for (const part of msg.parts) chars += partChars(part, imageCost)
+  return tokensForChars(chars)
+}
+
+/**
+ * The tokens of the `own` messages that left the model's context through the
+ * handoffs stored among `messages` (a branch, in stored order). A message
+ * before a window marker's anchor left whole; one before a prune line's
+ * cutoff kept everything but its tool results, which left all but their
+ * stubs. What left is a set, so two handoffs at one point count it once, and
+ * a marker whose anchor is not among `messages` cuts nothing. Counted as every
+ * budget in the projection counts (`estimateTokens`), each tool image at the
+ * highest known cost. A hidden message never reached the model, and a marker or a
+ * prune line is the runtime's line, not the work, so neither counts.
+ */
+export const handedOffTokens = (
+  messages: ReadonlyArray<Message>,
+  own: (message: Message) => boolean,
+): number => {
+  const indexOf = new Map(messages.map((message, index) => [message.id, index]))
+  // Every message before `cut` left whole; every tool result before `stubbed` left.
+  let cut = 0
+  let stubbed = 0
+  for (const message of messages) {
+    for (const window of Option.toArray(contextWindowOf(message))) {
+      cut = Math.max(cut, indexOf.get(window.keepFromMessageId) ?? 0)
+    }
+    for (const cutoff of Option.toArray(pruneCutoffOf(message))) {
+      stubbed = Math.max(stubbed, indexOf.get(cutoff) ?? 0)
+    }
+  }
+  let chars = 0
+  for (const [index, message] of messages.slice(0, Math.max(cut, stubbed)).entries()) {
+    if (!own(message) || !isAiVisibleMessage(message) || rewritesWindow(message)) continue
+    for (const part of message.parts) {
+      if (index < cut) {
+        chars += partChars(part, Option.none())
+        continue
+      }
+      if (part.type !== "tool-result") continue
+      // A stub longer than a short result took nothing away.
+      chars += Math.max(
+        0,
+        partChars(part, Option.none()) - partChars(stubToolResult(part), Option.none()),
+      )
+    }
+  }
   return tokensForChars(chars)
 }
 

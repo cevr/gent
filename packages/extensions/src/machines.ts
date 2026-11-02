@@ -177,13 +177,17 @@ const RoleSwitch = Schema.Struct({
 })
 
 /**
- * A round too big for one thread round: one whose thread handed its window
- * off `handoffs` times or more (the round's `handoffs`, threads.md) ends as a
- * size stop, whatever it replied. The run moves to `to`, and the move's note
- * (`{{visit.note}}` in `to`'s template) names the count, the state and the
- * role. A state without it never stops on size.
+ * A round too big for one thread round: one whose own work handed off (the
+ * round's `handedOffTokens`, threads.md) reaches `windows` times the model's
+ * window it ran in ends as a size stop, whatever it replied. The run moves to
+ * `to`, and the move's note (`{{visit.note}}` in `to`'s template) names the
+ * state, the role, the verdict and the size against the limit. A state
+ * without it never stops on size.
  */
-const Oversize = Schema.Struct({ handoffs: PositiveInt, to: StateName })
+const Oversize = Schema.Struct({
+  windows: Schema.Finite.check(Schema.isGreaterThan(0)),
+  to: StateName,
+})
 
 const ThreadState = Schema.Struct({
   kind: Schema.Literal("thread"),
@@ -415,7 +419,9 @@ const MachineStep = Schema.TaggedUnion({
   /**
    * `role`, `model`, `costUsd` and `tokens`: the role whose thread ran the
    * round, the thread's model, and its turn's priced cost and tokens, when
-   * known. `handoffs`: the window's handoffs inside the round; absent for none.
+   * known. `handedOffTokens`: the round's size, the tokens of its own work
+   * that left the model's context, absent for none; `windowTokens` the
+   * model's window it ran in, when a step was projected (threads.md).
    */
   RoundEnded: {
     state: StateName,
@@ -428,7 +434,8 @@ const MachineStep = Schema.TaggedUnion({
     model: Schema.optionalKey(ModelId),
     costUsd: Schema.optionalKey(Schema.Finite),
     tokens: Schema.optionalKey(RoundTokens),
-    handoffs: Schema.optionalKey(PositiveInt),
+    handedOffTokens: Schema.optionalKey(PositiveInt),
+    windowTokens: Schema.optionalKey(PositiveInt),
   },
   CommandEnded: {
     state: StateName,
@@ -626,6 +633,8 @@ const stateProblems = (
 const slotResolves = (names: ReadonlySet<string>, slot: ReadonlyArray<string>) => {
   const [head = "", next = ""] = slot
   if (head === "all") return names.has(next)
+  // `visit` renders the visit number and `visit.note` the move's note (`visitSlot`), nothing more.
+  if (head === "visit") return slot.length === 1 || (slot.length === 2 && next === "note")
   return TEMPLATE_HEADS.has(head) || names.has(head)
 }
 
@@ -854,11 +863,21 @@ const slotValue = (scope: TemplateScope, slot: ReadonlyArray<string>): Option.Op
   return Option.flatMap(last, (value) => Option.map(pathInto(value, rest), jsonText))
 }
 
-/** Fills each `{{ref}}`; a missing path is empty text. */
+/** A `{{ref}}` with the space before it, when there is one. */
+const SPACED_SLOT = /( ?)\{\{\s*([^{}\s]+)\s*\}\}/g
+
+/**
+ * Fills each `{{ref}}`; a missing path is empty text. An empty slot between
+ * two spaces leaves one, so `decides. {{visit.note}} Latest` with no note
+ * reads `decides. Latest`.
+ */
 const render = (template: string, scope: TemplateScope): string =>
-  template.replace(TEMPLATE_SLOT, (_whole, ref: string) =>
-    Option.getOrElse(slotValue(scope, ref.split(".")), () => "").slice(-SLOT_CHARS),
-  )
+  template.replace(SPACED_SLOT, (whole: string, before: string, ref: string, at: number) => {
+    const value = Option.getOrElse(slotValue(scope, ref.split(".")), () => "").slice(-SLOT_CHARS)
+    const spacedAfter = template.charAt(at + whole.length) === " "
+    if (value.length === 0 && before.length > 0 && spacedAfter) return ""
+    return `${before}${value}`
+  })
 
 const saved = (context: RunContext, state: StateName, value: Schema.Json): RunContext => ({
   last: { ...context.last, [state]: value },
@@ -3200,14 +3219,18 @@ const rolePick = Effect.fn("Machines.rolePick")(function* (
 
 /**
  * The round's role, its model, its turn's priced cost and tokens, and its
- * window's handoffs, as its `RoundEnded` step keeps them. A zero cost over
+ * size, as its `RoundEnded` step keeps them. A zero cost over
  * spent tokens is a catalog with no price (a subscription view): unknown,
  * never free, as placement reads fuel.
  */
 const roundEndFields = (
   action: RoundAction,
   role: RoleName,
-  view: { readonly usage?: typeof ChildUsage.Type; readonly handoffs: number },
+  view: {
+    readonly usage?: typeof ChildUsage.Type
+    readonly size: number
+    readonly window?: number
+  },
 ) => {
   const usage = Option.fromUndefinedOr(view.usage)
   const tokens = Option.map(usage, (spent) => ({
@@ -3230,9 +3253,25 @@ const roundEndFields = (
     model: action.model,
     costUsd: Option.getOrUndefined(costUsd),
     tokens: Option.getOrUndefined(tokens),
-    handoffs: Option.getOrUndefined(Option.liftPredicate(view.handoffs, (count) => count > 0)),
+    handedOffTokens: Option.getOrUndefined(Option.liftPredicate(view.size, (tokens) => tokens > 0)),
+    windowTokens: view.window,
   })
 }
+
+/** A token count as a note reads it: `1.6M`, `128k`, `900`. */
+const tokensText = (tokens: number): string => {
+  const scaled = (value: number, unit: string) => `${Number(value.toFixed(1))}${unit}`
+  if (tokens >= 1_000_000) return scaled(tokens / 1_000_000, "M")
+  if (tokens >= 1_000) return scaled(tokens / 1_000, "k")
+  return String(tokens)
+}
+
+/** What a round's verdict was, as a size stop's note names it. */
+const verdictText = (verdict: Option.Option<Verdict>): string =>
+  Option.match(verdict, {
+    onNone: () => "gave no verdict",
+    onSome: (next) => `replied ${next}`,
+  })
 
 /**
  * The size stop a state's `oversize` makes of an ended round: the state the
@@ -3242,17 +3281,25 @@ const sizeStopOf = (
   name: StateName,
   state: ThreadState,
   action: RoundAction,
-  handoffs: number,
+  view: { readonly size: number; readonly window?: number },
+  verdict: Option.Option<Verdict>,
 ): Option.Option<{ readonly to: StateName; readonly note: string }> =>
-  Option.map(
-    Option.filter(
-      Option.fromUndefinedOr(state.oversize),
-      (oversize) => handoffs >= oversize.handoffs,
-    ),
-    (oversize) => ({
-      to: oversize.to,
-      note: `Size stop: the ${name} round (role ${state.thread}, visit ${action.visit}) handed its context off ${handoffs} times, too big for one round. Split its work smaller; a round of the same size hands off again.`,
+  Option.flatMap(
+    Option.all({
+      oversize: Option.fromUndefinedOr(state.oversize),
+      window: Option.fromUndefinedOr(view.window),
     }),
+    ({ oversize, window }) =>
+      Option.map(
+        Option.liftPredicate(
+          view.size,
+          (tokens) => tokens > 0 && tokens >= oversize.windows * window,
+        ),
+        (tokens) => ({
+          to: oversize.to,
+          note: `Size stop: the ${name} round (role ${state.thread}, visit ${action.visit}) ${verdictText(verdict)}, but ${tokensText(tokens)} tokens of its own work left the context, and the limit is ${oversize.windows} windows of ${tokensText(window)}: too big for one round. Replan its work into smaller units; a round of the same size hands off again. A positive verdict may still be taken when the rest of the work checks out, with a note that the unit was oversized.`,
+        }),
+      ),
   )
 
 /** How long a round waits in a lane queue before it moves to another maker. */
@@ -3458,7 +3505,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
   const value: Schema.Json = { text: view.text, reply: view.reply }
   // A round too big for one round stops on size before a retry, a rerun or
   // its verdict: a round of the same size would hand off again.
-  const sizeStop = sizeStopOf(name, state, action, view.handoffs)
+  const sizeStop = sizeStopOf(name, state, action, view, Option.flatten(verdict))
   if (Option.isSome(sizeStop)) {
     const { to, note } = sizeStop.value
     return yield* settleRound(run, state, action, action.thread, to, [
@@ -4394,6 +4441,8 @@ export const ModelQuality = Schema.Struct({
   rounds: Count,
   /** Rounds that ended with no verdict. */
   dead: Count,
+  /** Rounds that stopped on size (`oversize`), whatever they replied. */
+  oversize: Count,
   /** Rounds whose turn was priced, and their summed cost. */
   priced: Count,
   costUsd: Schema.Finite,
@@ -4410,6 +4459,7 @@ interface QualityTally {
   readonly model: ModelId
   rounds: number
   dead: number
+  oversize: number
   priced: number
   costUsd: number
   // A verdict is the model's own word: a Map, so `constructor` counts as itself.
@@ -4419,9 +4469,13 @@ interface QualityTally {
   readonly accepted: { runs: number; rounds: number }
 }
 
-/** What one run's log has counted so far: each row's rounds in it, and the rows a check or a gate has yet to judge. */
+/**
+ * What one run's log has counted so far: each row's rounds in it, the row of
+ * its latest round, and the rows a check or a gate has yet to judge.
+ */
 interface RunTally {
   readonly rounds: Map<QualityTally, number>
+  latest: Option.Option<QualityTally>
   readonly sinceCheck: Set<QualityTally>
   readonly sinceGate: Set<QualityTally>
 }
@@ -4441,11 +4495,14 @@ const tallyRound = (row: QualityTally, step: RoundEnded, run: RunTally): void =>
     row.verdicts.set(step.verdict, (row.verdicts.get(step.verdict) ?? 0) + 1)
   }
   run.rounds.set(row, (run.rounds.get(row) ?? 0) + 1)
+  run.latest = Option.some(row)
   run.sinceCheck.add(row)
   run.sinceGate.add(row)
 }
 
 const tallyMove = (by: string, run: RunTally): void => {
+  // A size stop moves off the round that ended just before it.
+  if (by === "oversize") for (const row of Option.toArray(run.latest)) row.oversize += 1
   if (isCheckMove(by)) {
     for (const row of run.sinceCheck) row.checks[by] += 1
     run.sinceCheck.clear()
@@ -4468,7 +4525,12 @@ const tallyRun = (
   steps: ReadonlyArray<MachineStep>,
   tallyOf: (state: StateName, model: ModelId) => QualityTally,
 ): void => {
-  const run: RunTally = { rounds: new Map(), sinceCheck: new Set(), sinceGate: new Set() }
+  const run: RunTally = {
+    rounds: new Map(),
+    latest: Option.none(),
+    sinceCheck: new Set(),
+    sinceGate: new Set(),
+  }
   for (const step of steps) {
     if (step._tag === "RoundEnded" && Predicate.isNotUndefined(step.model)) {
       tallyRound(tallyOf(step.state, step.model), step, run)
@@ -4490,6 +4552,7 @@ const qualityOf = (outcomes: ReadonlyArray<RunOutcome>): ReadonlyArray<ModelQual
       model,
       rounds: 0,
       dead: 0,
+      oversize: 0,
       priced: 0,
       costUsd: 0,
       verdicts: new Map(),
