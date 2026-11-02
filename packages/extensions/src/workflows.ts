@@ -82,6 +82,245 @@ const BLOCKED_RULE =
  */
 const OVERSIZE = { windows: 2, to: "decide" }
 
+/**
+ * The repeat-test check the orchestrate machines ship as a file and run
+ * between an implementor round and the next review: Bun TypeScript with no
+ * dependency, run from a temp directory in the unit's checkout.
+ */
+const REPEAT_TESTS_SCRIPT = String.raw`// The repeat-test check, run by a machine's run state between a fix round and its review.
+// A Blocker or Major of the last findings that says "repeat of rN <id>" needs a test in the
+// newest request: a line "Repeat test: rN <id> <test file>... -- <command>". The command must
+// fail at the head the last review saw, with the test files taken from the new head, and pass
+// at the new head, each in a clean detached worktree under the unit dir.
+// Usage: bun repeat-tests.ts <unit dir>, in the unit's checkout. Exit 0: pass, or skip (no
+// repeat). Exit 1: fail. Each run writes round-N-repeat-check.md, N the newest request's round
+// (at least one more than the last findings'), whose Head line is the head the next review sees.
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+
+const dir = process.argv[2] ?? ""
+const cwd = process.cwd()
+
+const read = (name: string): string => {
+  const path = join(dir, name)
+  if (!existsSync(path)) return ""
+  return readFileSync(path, "utf8")
+}
+
+/** The highest N of a round-N-<kind>.md in the unit dir; 0 when there is none. */
+const newest = (kind: string): number => {
+  let found = 0
+  if (!existsSync(dir)) return found
+  for (const name of readdirSync(dir)) {
+    const match = /^round-(\d+)-([a-z-]+)\.md$/.exec(name)
+    if (match !== null && match[2] === kind) found = Math.max(found, Number(match[1]))
+  }
+  return found
+}
+
+const run = (command: ReadonlyArray<string>, at: string) => {
+  const result = Bun.spawnSync([...command], { cwd: at, stdout: "pipe", stderr: "pipe" })
+  return { code: result.exitCode, out: result.stdout.toString() + result.stderr.toString() }
+}
+
+const git = (args: ReadonlyArray<string>, at: string) => run(["git", ...args], at)
+
+/** A finding key, "r1 M2": the round and the id, without the punctuation around them. */
+const keyOf = (round: string, id: string) =>
+  round.toLowerCase() + " " + id.replace(/^[(\x60*_[]+|[.,;:)\x60*_\]]+$/g, "")
+
+const HEADING =
+  /^\s*(#{1,6}\s*)?(\*\*|__)?\s*(blockers?|majors?|minor|optional|test strength)\b\s*(\*\*|__)?\s*(:|$|\()/i
+const REPEAT_OF = /repeat of (r\d+) (\S+)/gi
+
+/** The earlier findings that a findings file's Blockers and Majors repeat. */
+const repeatsIn = (findings: string): ReadonlyArray<string> => {
+  const keys: Array<string> = []
+  let blocking = false
+  for (const line of findings.split("\n")) {
+    const heading = HEADING.exec(line)
+    if (heading !== null) {
+      const marked = heading[1] !== undefined || heading[2] !== undefined || heading[5] !== ""
+      if (marked) blocking = /^(blocker|major)/i.test(heading[3] ?? "")
+    }
+    if (!blocking) continue
+    for (const match of line.matchAll(REPEAT_OF)) {
+      const key = keyOf(match[1] ?? "", match[2] ?? "")
+      if (!keys.includes(key)) keys.push(key)
+    }
+  }
+  return keys
+}
+
+interface RepeatTest {
+  readonly key: string
+  readonly files: ReadonlyArray<string>
+  readonly command: string
+}
+
+const TEST_LINE = /^repeat test:\s*(r\d+)\s+(\S+)\s+(.+?)\s+--\s+(.+)$/i
+
+/** The request's "Repeat test:" lines. */
+const testsIn = (request: string): ReadonlyArray<RepeatTest> => {
+  const tests: Array<RepeatTest> = []
+  for (const raw of request.split("\n")) {
+    const line = raw.trim().replace(/^[-*>\s]+/, "").replace(/^\x60+|\x60+$/g, "")
+    const match = TEST_LINE.exec(line)
+    if (match === null) continue
+    tests.push({
+      key: keyOf(match[1] ?? "", match[2] ?? ""),
+      files: (match[3] ?? "").split(/\s+/).filter((file) => file.length > 0),
+      command: match[4] ?? "",
+    })
+  }
+  return tests
+}
+
+/** The commit a "Head: <sha>" line names. */
+const headLine = (text: string): string => {
+  const match = /^Head:\s*([0-9a-f]{7,40})\b/m.exec(text)
+  if (match === null) return ""
+  return match[1] ?? ""
+}
+
+const INSTALLS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+  ["bun.lock", ["bun", "install", "--frozen-lockfile"]],
+  ["bun.lockb", ["bun", "install", "--frozen-lockfile"]],
+  ["pnpm-lock.yaml", ["pnpm", "install", "--frozen-lockfile"]],
+  ["yarn.lock", ["yarn", "install", "--frozen-lockfile"]],
+  ["package-lock.json", ["npm", "ci"]],
+]
+
+const removeWorktree = (path: string) => {
+  git(["worktree", "remove", "--force", path], cwd)
+  if (existsSync(path)) rmSync(path, { recursive: true, force: true })
+  git(["worktree", "prune"], cwd)
+}
+
+const findingsRound = newest("findings")
+const requestRound = newest("request")
+const round = Math.max(requestRound, findingsRound + 1)
+const record = "round-" + round + "-repeat-check.md"
+const evidence = join(dir, "repeat-check-" + round + "-evidence")
+const repeats = repeatsIn(read("round-" + findingsRound + "-findings.md"))
+const headRun = git(["rev-parse", "--verify", "HEAD"], cwd)
+const head = headRun.code === 0 ? headRun.out.trim() : ""
+const failures: Array<string> = []
+const results: Array<string> = []
+let reviewed = ""
+
+const finish = (verdict: string) => {
+  const lines = [
+    "Verdict: " + verdict,
+    "Head: " + (head === "" ? "none" : head),
+    "Findings: " + (findingsRound === 0 ? "none" : "round-" + findingsRound + "-findings.md"),
+    "Repeats: " + (repeats.length === 0 ? "none" : repeats.join(", ")),
+  ]
+  if (reviewed !== "") lines.push("Reviewed head: " + reviewed)
+  if (results.length > 0) lines.push("", "Tests:", ...results)
+  if (failures.length > 0) lines.push("", "Failures:", ...failures.map((failure) => "- " + failure))
+  if (existsSync(dir)) writeFileSync(join(dir, record), lines.join("\n") + "\n")
+  console.log("Repeat-test check " + verdict + ", " + join(dir, record))
+  for (const failure of failures) console.log("- " + failure)
+  process.exit(verdict === "FAIL" ? 1 : 0)
+}
+
+if (repeats.length === 0) finish("SKIP")
+if (head === "") failures.push("the checkout " + cwd + " has no HEAD commit")
+if (requestRound <= findingsRound) {
+  failures.push(
+    "round-" + findingsRound + "-findings.md names repeats, and no newer round-N-request.md answers them",
+  )
+}
+const reviewedHead = headLine(read("round-" + findingsRound + "-repeat-check.md"))
+const reviewedRun = git(["rev-parse", "--verify", reviewedHead + "^{commit}"], cwd)
+if (reviewedHead !== "" && reviewedRun.code === 0) reviewed = reviewedRun.out.trim()
+if (reviewed === "") {
+  failures.push(
+    "round-" + findingsRound + "-repeat-check.md names no head commit of this checkout: the head review " +
+      findingsRound + " saw is unknown",
+  )
+}
+const request = "round-" + requestRound + "-request.md"
+const tests = testsIn(read(request)).filter((test) => repeats.includes(test.key))
+for (const key of repeats) {
+  if (requestRound > findingsRound && !tests.some((test) => test.key === key)) {
+    failures.push(
+      key + " is a repeat in round-" + findingsRound + "-findings.md, and " + request +
+        " names no test for it: add the line Repeat test: " + key + " <test file> -- <command>",
+    )
+  }
+}
+if (failures.length > 0) finish("FAIL")
+
+mkdirSync(evidence, { recursive: true })
+const logged = (name: string, out: string) => {
+  const path = join(evidence, name)
+  writeFileSync(path, out)
+  return path
+}
+
+/** A clean checkout of a commit with its packages installed, or the reason it is not one. */
+const checkout = (side: string, commit: string, files: ReadonlyArray<string>): string => {
+  const path = join(dir, "repeat-check-" + round + "-" + side)
+  removeWorktree(path)
+  const added = git(["worktree", "add", "--detach", path, commit], cwd)
+  if (added.code !== 0) return "git worktree add at the " + side + " failed: " + added.out.trim()
+  if (files.length > 0) {
+    const taken = git(["checkout", head, "--", ...files], path)
+    if (taken.code !== 0) {
+      return "the test files are not all at the head " + head + ": " + taken.out.trim()
+    }
+  }
+  for (const [lock, install] of INSTALLS) {
+    if (!existsSync(join(path, lock))) continue
+    const installed = run(install, path)
+    const log = logged("install-" + side + ".log", installed.out)
+    if (installed.code !== 0) {
+      return install.join(" ") + " at the " + side + " failed with exit " + installed.code + ", see " + log
+    }
+    break
+  }
+  return ""
+}
+
+const files = [...new Set(tests.flatMap((test) => test.files))]
+const basePath = join(dir, "repeat-check-" + round + "-base")
+const headPath = join(dir, "repeat-check-" + round + "-head")
+try {
+  const baseProblem = checkout("base", reviewed, files)
+  const headProblem = checkout("head", head, [])
+  if (baseProblem !== "") failures.push(baseProblem)
+  if (headProblem !== "") failures.push(headProblem)
+  tests.forEach((test, index) => {
+    const shown = test.key + " (" + test.command + ")"
+    if (baseProblem === "") {
+      const atBase = run(["bash", "-c", test.command], basePath)
+      const log = logged(index + 1 + "-base.log", atBase.out)
+      results.push("- " + shown + ": base exit " + atBase.code + ", log " + log)
+      if (atBase.code === 0) {
+        failures.push(
+          shown + " passes at the base " + reviewed + ", the head review " + findingsRound +
+            " saw: the test must fail on the unfixed code",
+        )
+      }
+    }
+    if (headProblem === "") {
+      const atHead = run(["bash", "-c", test.command], headPath)
+      const log = logged(index + 1 + "-head.log", atHead.out)
+      results.push("- " + shown + ": head exit " + atHead.code + ", log " + log)
+      if (atHead.code !== 0) {
+        failures.push(shown + " fails at the head " + head + " with exit " + atHead.code + ", see " + log)
+      }
+    }
+  })
+} finally {
+  removeWorktree(basePath)
+  removeWorktree(headPath)
+}
+finish(failures.length > 0 ? "FAIL" : "PASS")
+`
+
 /** An implementor round entered as `name`: the three differ only in how they count and whether the thread is new. */
 const implementorRound = (
   name: string,
@@ -92,15 +331,30 @@ const implementorRound = (
   say: [
     `Unit {{input.unit}}, ${name}, visit {{visit}}.`,
     "Spec: {{input.dir}}/spec.md. Gate: {{input.gate}}",
-    "Before any edit, read the spec, state.md, and every round-*-findings.md, round-*-verify.md, blocked.md and merge-gate-*.log in the unit dir that is newer than your last request.",
+    "Before any edit, read the spec, state.md, and every round-*-findings.md, round-*-verify.md, round-*-repeat-check.md, blocked.md and merge-gate-*.log in the unit dir that is newer than your last request.",
     "The orchestrator's latest notes: {{blocked.note}} {{decide.note}}",
     "The last merge gate: exit {{gate.exitCode}}, timed out {{gate.timedOut}}, log merge-gate-N.log in the unit dir.",
     "The last push through the integration gate: {{merge}}",
     "Write round-N-request.md, N one more than the last request in the unit dir.",
   ].join("\n"),
-  on: { ready: "review", blocked: "blocked" },
+  on: { ready: "repeats", blocked: "blocked" },
   oversize: OVERSIZE,
   ...entry,
+})
+
+/**
+ * The repeat-test check after an implementor round, with no model turn: a
+ * pass moves to `pass`, a fail is a failed round (`fix`, which counts).
+ */
+const repeatCheck = (pass: string) => ({
+  kind: "run" as const,
+  run: 'bun "{{files.repeat-tests.ts}}" "{{input.dir}}"',
+  // Two clean checkouts, each with its packages installed.
+  timeoutSeconds: 1200,
+  on: { pass, fail: "fix" },
+  // One visit before each review, and one per failed check.
+  maxVisits: 20,
+  exhausted: "decide",
 })
 
 /** The orchestrator's decide ask: `latest` names what it decides on. */
@@ -156,7 +410,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       instructions: [
         WORKER_RULES,
         BLOCKED_RULE,
-        "You are the implementor, the sole writer. Work in your cwd on its branch, and change only the files the spec gives the unit. Commit in Conventional Commits form, one logical unit each, staged by exact path. When the spec leaves a choice open, take the simpler, reversible option and record it in state.md. Before each request, run the gate the round message names into gate-N.log in the unit dir and read its exit line. Write round-N-request.md: the spec path, the base and head commits, what changed by file, how to run it, the gate log and its exit line, the acceptance check's result, known gaps; from round 2, a fix report that names every finding of the last round as fixed <hash> or rejected: <reason>. When a finding is a repeat of an earlier round's (repeat of rN <id>), the round's first commit is a generated property or model test that owns that class, red on the unfixed code for every earlier instance, before any case fix. Work outside the spec goes under Follow-ups in state.md. Verdict: ready or blocked.",
+        "You are the implementor, the sole writer. Work in your cwd on its branch, and change only the files the spec gives the unit. Commit in Conventional Commits form, one logical unit each, staged by exact path. When the spec leaves a choice open, take the simpler, reversible option and record it in state.md. Before each request, run the gate the round message names into gate-N.log in the unit dir and read its exit line. Write round-N-request.md: the spec path, the base and head commits, what changed by file, how to run it, the gate log and its exit line, the acceptance check's result, known gaps; from round 2, a fix report that names every finding of the last round as fixed <hash> or rejected: <reason>. When a finding is a repeat of an earlier round's (repeat of rN <id>), the round's first commit is a generated property or model test that owns that class, red on the unfixed code for every earlier instance, before any case fix. The request names that test on a line of its own for each repeated Blocker or Major: Repeat test: rN <id> <test file>... -- <command>, with the rN <id> the finding names, the test files by path from the repository root, and a command run at the root. Before review, the machine runs the command in clean checkouts with packages installed: it must fail at the head the last review saw, with your test files, and pass at your head. A missing line or a wrong result is a failed round, with its reasons in round-N-repeat-check.md. Work outside the spec goes under Follow-ups in state.md. Verdict: ready or blocked.",
       ].join("\n"),
     },
     reviewer: {
@@ -198,6 +452,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
     implement: implementorRound("implement", { fresh: true }),
     fix: implementorRound("fix", { maxVisits: 2, exhausted: "decide" }),
     resume: implementorRound("resume", {}),
+    repeats: repeatCheck("review"),
     blocked: {
       kind: "ask",
       ask: "Unit {{input.unit}}: the implementor is blocked, see {{input.dir}}/blocked.md. Answer in the note: resume sends it to the implementor, replan to the planner.",
@@ -271,6 +526,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
     },
     dropped: { kind: "final", say: "Unit {{input.unit}} dropped.", accepts: false },
   },
+  files: { "repeat-tests.ts": REPEAT_TESTS_SCRIPT },
 }
 
 /**
@@ -292,8 +548,9 @@ export const ORCHESTRATE_LIGHT_MACHINE: MachineDefinitionJson = {
     ...ORCHESTRATE_MACHINE.states,
     fix: {
       ...implementorRound("fix", { maxVisits: 2, exhausted: "decide" }),
-      on: { ready: "decide", blocked: "blocked" },
+      on: { ready: "fix-repeats", blocked: "blocked" },
     },
+    "fix-repeats": repeatCheck("decide"),
     decide: decideAsk(
       "review {{review.reply.next}} {{review.reply.file}}, verify {{verify.reply.next}} {{verify.reply.file}}, fix {{fix.reply.next}} {{fix.reply.file}}. No second review follows a fix: merge after one only when its fix report answers every finding of the last review or verify, and the acceptance check, which you rerun at the head, is green.",
     ),

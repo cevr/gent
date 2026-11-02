@@ -47,6 +47,7 @@ import {
   reportProviderQuota,
   reportProviderStopReason,
   request,
+  runProcess,
   tool,
   WakeNext,
 } from "@gent/core/extensions/api"
@@ -5813,17 +5814,29 @@ const UNIT_VERDICTS = new Map([
   ["verify", "pass"],
 ])
 
-/** Each round replies the verdict `verdicts` names for its `state:visit`, else its state's happy one, with a file of its own. */
+/** What a unit round does in the unit's checkout before it replies: commits, unit dir files. */
+type UnitAct = (cwd: string, dir: string) => Effect.Effect<void>
+
+/**
+ * Each round replies the verdict `verdicts` names for its `state:visit`, else
+ * its state's happy one, with a file of its own, after the act `acts` names
+ * for it, once.
+ */
 const unitWorker =
   (
     verdicts: Readonly<Record<string, string>>,
     extras: Readonly<Record<string, Readonly<Record<string, Schema.Json>>>> = {},
+    acts: Readonly<Record<string, UnitAct>> = {},
+    cwd = "",
   ) =>
   (round: RoundCall): Effect.Effect<WorkerStream> => {
     const at = `${round.state}:${round.visit}`
     const next = verdicts[at] ?? UNIT_VERDICTS.get(round.state) ?? "unknown"
     const file = `${round.state}-${round.visit}.md`
-    return Effect.succeed(replyWith(round, { ...extras[at], next, file }))
+    const reply = replyWith(round, { ...extras[at], next, file })
+    const act = acts[at]
+    if (Predicate.isUndefined(act) || acted(round.prompt)) return Effect.succeed(reply)
+    return Effect.as(act(cwd, `${cwd}/unit`), reply)
   }
 
 /**
@@ -5871,6 +5884,8 @@ const unitRun = (
     readonly definition?: MachineDefinitionJson
     /** Reply fields beside the verdict, by `state:visit`. */
     readonly extras?: Readonly<Record<string, Readonly<Record<string, Schema.Json>>>>
+    /** What a round does before it replies, by `state:visit`. */
+    readonly acts?: Readonly<Record<string, UnitAct>>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -5879,7 +5894,7 @@ const unitRun = (
     yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(dir)).pipe(
       Effect.provide(BunServices.layer),
     )
-    const models = yield* makeModels(unitWorker(verdicts, options.extras))
+    const models = yield* makeModels(unitWorker(verdicts, options.extras, options.acts, home.cwd))
     // The merge pushes, so machine.start checks its remote; the unit's gate spawns for real.
     const github = yield* fakeGitHub()
     const processes = Layer.provide(github.layerOverReal, BunServices.layer)
@@ -5920,7 +5935,8 @@ describe("the shipped orchestrate machine", () => {
         expect(moves(steps)).toEqual([
           "plan→approve",
           "approve→implement",
-          "implement→review",
+          "implement→repeats",
+          "repeats→review",
           "review→verify",
           "verify→decide",
           "decide→dropped",
@@ -5958,9 +5974,11 @@ describe("the shipped orchestrate machine", () => {
         expect(moves(steps)).toEqual([
           "plan→approve",
           "approve→implement",
-          "implement→review",
+          "implement→repeats",
+          "repeats→review",
           "review→fix",
-          "fix→review",
+          "fix→repeats",
+          "repeats→review",
           "review→verify",
           "verify→decide",
           "decide→dropped",
@@ -6006,7 +6024,8 @@ describe("the shipped orchestrate machine", () => {
         expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
           "plan→approve",
           "approve→implement",
-          "implement→review",
+          "implement→repeats",
+          "repeats→review",
           "review→decide",
           "decide→dropped",
         ])
@@ -6028,9 +6047,11 @@ describe("the shipped orchestrate machine", () => {
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         const steps = yield* home.sql(stepsOf(run))
         expect(moves(steps)).toEqual([
-          "implement→review",
+          "implement→repeats",
+          "repeats→review",
           "review→fix",
-          "fix→decide",
+          "fix→fix-repeats",
+          "fix-repeats→decide",
           "decide→dropped",
         ])
         expect(yield* Ref.get(models.calls)).toEqual(["implement:1", "review:1", "fix:1"])
@@ -6062,12 +6083,15 @@ describe("the shipped orchestrate machine", () => {
           "approve→implement",
           "implement→blocked",
           "blocked→resume",
-          "resume→review",
+          "resume→repeats",
+          "repeats→review",
           "review→fix",
-          "fix→review",
+          "fix→repeats",
+          "repeats→review",
           "review→verify",
           "verify→fix",
-          "fix→review",
+          "fix→repeats",
+          "repeats→review",
           "review→fix",
           "fix→decide",
           "decide→dropped",
@@ -6111,12 +6135,15 @@ describe("the shipped orchestrate machine", () => {
         expect(moves(steps)).toEqual([
           "plan→approve",
           "approve→implement",
-          "implement→review",
+          "implement→repeats",
+          "repeats→review",
           "review→decide",
           "decide→implement",
-          "implement→review",
+          "implement→repeats",
+          "repeats→review",
           "review→fix",
-          "fix→review",
+          "fix→repeats",
+          "repeats→review",
           "review→verify",
           "verify→decide",
           "decide→dropped",
@@ -6147,7 +6174,8 @@ describe("the shipped orchestrate machine", () => {
         expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
           "plan→approve",
           "approve→implement",
-          "implement→review",
+          "implement→repeats",
+          "repeats→review",
           "review→verify",
           "verify→decide",
           "decide→gate",
@@ -6256,16 +6284,258 @@ describe("the shipped orchestrate machine", () => {
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         // The second fix from decide is the third failed round: the cap sends it back with no call.
         expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
-          "implement→review",
+          "implement→repeats",
+          "repeats→review",
           "review→fix",
-          "fix→decide",
+          "fix→fix-repeats",
+          "fix-repeats→decide",
           "decide→fix",
-          "fix→decide",
+          "fix→fix-repeats",
+          "fix-repeats→decide",
           "decide→fix",
           "fix→decide",
           "decide→dropped",
         ])
         expect(yield* Ref.get(models.calls)).toEqual(["implement:1", "review:1", "fix:1", "fix:2"])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+})
+
+// ── the repeat-test check ───────────────────────────────────────────────────
+
+/** git in the unit's checkout, with a fixed identity and no hooks; a failure fails the test. */
+const unitGit = (cwd: string, args: ReadonlyArray<string>) =>
+  runProcess("git", [
+    "-C",
+    cwd,
+    "-c",
+    "user.name=test",
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    ...args,
+  ]).pipe(
+    Effect.flatMap((result) => {
+      if (result.exitCode === 0) return Effect.succeed(result.stdout.trim())
+      return Effect.die(`git ${args.join(" ")}: ${result.stderr}`)
+    }),
+    Effect.provide(BunServices.layer),
+    Effect.orDie,
+  )
+
+/** Writes `files`, by path from `root`. */
+const writeFiles = (root: string, files: Readonly<Record<string, string>>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    for (const [name, content] of Object.entries(files)) {
+      yield* fs.writeFileString(`${root}/${name}`, content)
+    }
+  }).pipe(Effect.provide(BunServices.layer), Effect.orDie)
+
+/** Writes `files` in the checkout and commits them. */
+const commitFiles = (cwd: string, files: Readonly<Record<string, string>>, message: string) =>
+  Effect.gen(function* () {
+    yield* writeFiles(cwd, files)
+    yield* unitGit(cwd, ["add", "--", ...Object.keys(files)])
+    yield* unitGit(cwd, ["commit", "-q", "-m", message])
+  })
+
+const readUnitFile = (file: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(file)).pipe(
+    Effect.provide(BunServices.layer),
+  )
+
+/** The test the fix round names for the repeat: green only on the full fix. */
+const REPEAT_CHECK = { "check.sh": 'grep -q "keeps every line" parser.txt\n' }
+const FULL_FIX = { "parser.txt": "keeps every line\n" }
+const REPEAT_LINE = "Repeat test: r1 M1 check.sh -- bash check.sh"
+
+/**
+ * A unit whose second review finds a repeat of the first review's Major
+ * (or, with `secondFindings`, other findings), and whose second fix does
+ * `fix2`. Round 1 implements a case fix, round 2 fixes one more case.
+ */
+const repeatUnit = (fix2: UnitAct, secondFindings?: string) =>
+  unitRun(
+    { "review:1": "changes", "review:2": "changes" },
+    {
+      acts: {
+        "plan:1": (cwd) =>
+          Effect.gen(function* () {
+            yield* unitGit(cwd, ["init", "-q", "-b", "main"])
+            yield* commitFiles(
+              cwd,
+              { ".gitignore": "unit/\n", "parser.txt": "drops the last line\n" },
+              "base",
+            )
+          }),
+        "implement:1": (_cwd, dir) => writeFiles(dir, { "round-1-request.md": "Round 1\n" }),
+        "review:1": (_cwd, dir) =>
+          writeFiles(dir, {
+            "round-1-findings.md":
+              "Verdict: CHANGES REQUIRED\n\n## Major\n\n- M1 parser.txt:1 the parser drops the last line.\n",
+          }),
+        "fix:1": (cwd, dir) =>
+          Effect.gen(function* () {
+            yield* commitFiles(cwd, { "parser.txt": "keeps the last line once\n" }, "fix: M1")
+            yield* writeFiles(dir, { "round-2-request.md": "Round 2\nM1 fixed\n" })
+          }),
+        "review:2": (_cwd, dir) =>
+          writeFiles(dir, {
+            "round-2-findings.md":
+              secondFindings ??
+              "Verdict: CHANGES REQUIRED\n\n## Major\n\n- M2 parser.txt:1 the parser drops the last line after a blank line, repeat of r1 M1.\n\n## Minor\n\n- n1 a nit.\n",
+          }),
+        "fix:2": fix2,
+      },
+    },
+  )
+
+/** The moves of a repeat unit through its second fix. */
+const REPEAT_UNIT_MOVES = [
+  "plan→approve",
+  "approve→implement",
+  "implement→repeats",
+  "repeats→review",
+  "review→fix",
+  "fix→repeats",
+  "repeats→review",
+  "review→fix",
+  "fix→repeats",
+]
+
+/** A second fix whose check fails goes back to fix: the third failed round, so on to decide. */
+const failedCheck = (fix2: UnitAct, reason: string) =>
+  Effect.gen(function* () {
+    const { home, models, client, owner, run, dir } = yield* repeatUnit(fix2)
+    yield* answerAsk(client, owner, 1, "go")
+    const decide = yield* answerAsk(client, owner, 2, "drop")
+    expect(decide.state).toBe("decide")
+    yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+    expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+      ...REPEAT_UNIT_MOVES,
+      "repeats→fix",
+      "fix→decide",
+      "decide→dropped",
+    ])
+    expect(yield* Ref.get(models.calls)).not.toContain("review:3")
+    const record = yield* readUnitFile(`${dir}/round-3-repeat-check.md`)
+    expect(record).toStartWith("Verdict: FAIL\n")
+    expect(record).toContain(reason)
+    // The implementor reads the check's record before its next edit.
+    expect(new Map(yield* Ref.get(models.texts)).get("fix:2")).toContain("round-*-repeat-check.md")
+    // The clean checkouts are gone, from the disk and from git.
+    expect(yield* fileExists(`${dir}/repeat-check-3-base`)).toBe(false)
+    expect(yield* fileExists(`${dir}/repeat-check-3-head`)).toBe(false)
+    expect((yield* unitGit(home.cwd, ["worktree", "list"])).split("\n")).toHaveLength(1)
+  })
+
+describe("the repeat-test check of the orchestrate machine", () => {
+  it.live(
+    "a repeat whose test fails at the reviewed head and passes at the new head goes on to review",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run, dir } = yield* repeatUnit((cwd, unitDir) =>
+          Effect.gen(function* () {
+            yield* commitFiles(cwd, REPEAT_CHECK, "test: the repeat of M1")
+            yield* commitFiles(cwd, FULL_FIX, "fix: every line")
+            yield* writeFiles(unitDir, { "round-3-request.md": `Round 3\n- ${REPEAT_LINE}\n` })
+          }),
+        )
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "drop")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          ...REPEAT_UNIT_MOVES,
+          "repeats→review",
+          "review→verify",
+          "verify→decide",
+          "decide→dropped",
+        ])
+        const record = yield* readUnitFile(`${dir}/round-3-repeat-check.md`)
+        expect(record).toStartWith("Verdict: PASS\n")
+        // The base is the head review 2 saw: the second check's own Head line.
+        const reviewed = yield* readUnitFile(`${dir}/round-2-repeat-check.md`)
+        const head = /^Head: (\S+)$/m.exec(reviewed)?.[1] ?? "none"
+        expect(record).toContain(`Reviewed head: ${head}`)
+        expect(yield* readUnitFile(`${dir}/repeat-check-3-evidence/1-base.log`)).toBe("")
+        expect((yield* unitGit(home.cwd, ["worktree", "list"])).split("\n")).toHaveLength(1)
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a test that passes at the reviewed head goes back to fix, its record naming the base",
+    () =>
+      failedCheck(
+        (cwd, dir) =>
+          Effect.gen(function* () {
+            yield* commitFiles(cwd, { "check.sh": "test -f parser.txt\n" }, "test: weak")
+            yield* commitFiles(cwd, FULL_FIX, "fix: every line")
+            yield* writeFiles(dir, { "round-3-request.md": `Round 3\n${REPEAT_LINE}\n` })
+          }),
+        "r1 M1 (bash check.sh) passes at the base",
+      ).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a test that fails at the new head goes back to fix, its record naming the head",
+    () =>
+      failedCheck(
+        (cwd, dir) =>
+          Effect.gen(function* () {
+            yield* commitFiles(cwd, REPEAT_CHECK, "test: the repeat of M1")
+            yield* writeFiles(dir, { "round-3-request.md": `Round 3\n${REPEAT_LINE}\n` })
+          }),
+        "r1 M1 (bash check.sh) fails at the head",
+      ).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a repeat the request names no test for goes back to fix",
+    () =>
+      failedCheck(
+        (cwd, dir) =>
+          Effect.gen(function* () {
+            yield* commitFiles(cwd, { ...REPEAT_CHECK, ...FULL_FIX }, "fix: every line")
+            yield* writeFiles(dir, { "round-3-request.md": "Round 3\nM2 fixed\n" })
+          }),
+        "r1 M1 is a repeat in round-2-findings.md, and round-3-request.md names no test for it",
+      ).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "findings with no repeated Blocker or Major skip the check",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run, dir } = yield* repeatUnit(
+          (cwd, unitDir) =>
+            Effect.gen(function* () {
+              yield* commitFiles(cwd, FULL_FIX, "fix: every line")
+              yield* writeFiles(unitDir, { "round-3-request.md": "Round 3\nM2 fixed\n" })
+            }),
+          "Verdict: CHANGES REQUIRED\n\n## Major\n\n- M2 parser.txt:1 a new defect.\n\n## Minor\n\n- n1 a nit, repeat of r1 n1.\n",
+        )
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "drop")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          ...REPEAT_UNIT_MOVES,
+          "repeats→review",
+          "review→verify",
+          "verify→decide",
+          "decide→dropped",
+        ])
+        const record = yield* readUnitFile(`${dir}/round-3-repeat-check.md`)
+        expect(record).toStartWith("Verdict: SKIP\n")
+        expect(yield* fileExists(`${dir}/repeat-check-3-evidence`)).toBe(false)
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )
