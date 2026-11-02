@@ -7,6 +7,7 @@ bin/
 *.js.map
 *.d.ts
 !packages/extensions/src/skills/markdown.d.ts
+!packages/extensions/src/repeat-tests-source.d.ts
 *.d.ts.map
 .gent/data.db
 .gent/results/

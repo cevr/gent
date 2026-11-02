@@ -1325,13 +1325,15 @@ export const findClientWallClockReads = (file: string, text: string): ReadonlyAr
  * fails on a hosted root all the same, so it is reported too; a type name
  * such as `Bun.OnLoadResult` reads nothing. The test utilities are a Bun test
  * host, and the cell worker (`gent-cell`) is a Bun binary of its own that no
- * extension imports. The bundle check in
+ * extension imports. The repeat-test check (`repeat-tests.ts`) is a Bun
+ * script the orchestrate machine ships as text and runs on gent's own
+ * runtime: a module imports its source, never loads it. The bundle check in
  * `packages/tooling/tests/portable-graph.test.ts` follows the same graph
  * through the dependencies, which a file scan cannot read.
  */
 const PORTABLE_SOURCE = /^packages\/(?:core|extensions)\/src\//
 const BUN_HOST_SOURCE =
-  /^packages\/(?:core\/src\/(?:host-bun\.ts|runtime\/gent-platform-bun\.ts|test-utils\/.*)|extensions\/src\/cell-worker-boundary\.ts)$/
+  /^packages\/(?:core\/src\/(?:host-bun\.ts|runtime\/gent-platform-bun\.ts|test-utils\/.*)|extensions\/src\/(?:cell-worker-boundary|repeat-tests)\.ts)$/
 
 /**
  * The reads of the global `Bun` that portable source keeps, by file, each

@@ -358,6 +358,51 @@
       }
     },
     {
+      // The repeat-test check is a process entry: a plain Bun script the
+      // orchestrate machine ships as a file and runs on gent's own runtime
+      // (`{{bun}}`), with no Effect runtime and no package to import. It
+      // drives git and the test command synchronously, reads the unit dir
+      // through Node, prints its verdict and exits with its code.
+      "files": ["packages/extensions/src/repeat-tests.ts"],
+      "rules": {
+        // The script reaches the host through `process`, `Bun.spawnSync` and
+        // `console`; these members are the bans it keeps, and noGlobals is
+        // their one owner.
+        "effect/noGlobals": [
+          "error",
+          {
+            "builtins": false,
+            "members": {
+              "Bun": {
+                "properties": ["Glob", "randomUUIDv7", "spawn"],
+                "use": "Bun.spawnSync and readdirSync, as the rest of the script does"
+              },
+              "fetch": {
+                "use": "nothing: the check makes no network call"
+              },
+              "setTimeout": {
+                "use": "nothing: the check runs each step to its end"
+              },
+              "setInterval": {
+                "use": "nothing: the check runs each step to its end"
+              },
+              "Math": {
+                "properties": ["random"],
+                "use": "a name from the round and the commit"
+              },
+              "Date": {
+                "use": "nothing: the record carries no time"
+              }
+            }
+          }
+        ],
+        "effect/noNodeBuiltinImport": "off",
+        "effect/noNullish": "off",
+        "effect/noTernary": "off",
+        "effect/noTryCatch": "off"
+      }
+    },
+    {
       // The efficiency capture preload replaces the global fetch before gent
       // loads, so it is plain Bun, not an Effect program: it reads its
       // environment, the operator's script JSON and each request body, and

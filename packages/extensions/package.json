@@ -7,7 +7,11 @@
     "#unbound/ai-anthropic": "@effect/ai-anthropic",
     "#unbound/ai-openai": "@effect/ai-openai",
     "#unbound/ai-openai-compat": "@effect/ai-openai-compat",
-    "#unbound/ai-typesafe": "@effect/ai-typesafe"
+    "#unbound/ai-typesafe": "@effect/ai-typesafe",
+    "#repeat-tests-source": {
+      "types": "./src/repeat-tests-source.d.ts",
+      "default": "./src/repeat-tests.ts"
+    }
   },
   "exports": {
     ".": "./src/index.ts",

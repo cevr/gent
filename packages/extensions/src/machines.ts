@@ -70,6 +70,7 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
+  GentPlatform,
   type LaneUnavailable,
   ModelId,
   omitUndefined,
@@ -213,13 +214,21 @@ type ThreadState = typeof ThreadState.Type
 /** A server-global named permit; an omitted limit means one. */
 const Permit = Schema.Struct({ name: Slug, limit: Schema.optionalKey(PositiveInt) })
 
+/**
+ * A command moves by its end: exit 0 takes `pass`. Without `error`, any other
+ * end takes `fail`. With it, only exit 1 takes `fail`, and any other end (an
+ * exit of 2 or more, a timeout, a command that did not start) is a check that
+ * gave no verdict: it takes `error` with a note that names the end
+ * (`{{visit.note}}` in the target's template), so a check that cannot run is
+ * not read as a failed one.
+ */
 const RunState = Schema.Struct({
   kind: Schema.Literal("run"),
   run: Template,
   permit: Schema.optionalKey(Permit),
-  /** Default 3600. A timeout takes `fail`. */
+  /** Default 3600. A timeout takes `fail`, or `error` when the state has one. */
   timeoutSeconds: Schema.optionalKey(PositiveInt),
-  on: Schema.Struct({ pass: StateName, fail: StateName }),
+  on: Schema.Struct({ pass: StateName, fail: StateName, error: Schema.optionalKey(StateName) }),
   ...VisitCap,
 })
 type RunState = typeof RunState.Type
@@ -478,7 +487,10 @@ const MachineStep = Schema.TaggedUnion({
   Saved: { state: StateName, value: Schema.Json },
   /** A `retry` answer to an `exhausted` ask granted the state one visit past its cap. */
   Granted: { state: StateName },
-  /** `note`: why the run moved, for `to`'s template (`{{visit.note}}`): a size stop's (`Oversize`). */
+  /**
+   * `note`: why the run moved, for `to`'s template (`{{visit.note}}`): a size
+   * stop's (`Oversize`), a check error's (`RunState`).
+   */
   Moved: {
     from: StateName,
     to: StateName,
@@ -547,7 +559,7 @@ const storageError = (message: string) => (cause: unknown) =>
 const DEFAULT_MAX_VISITS = 10
 
 const RESERVED_KEYS: ReadonlySet<string> = new Set(["retry", "stop", "continue"])
-const TEMPLATE_HEADS: ReadonlySet<string> = new Set(["input", "all", "visit", "files"])
+const TEMPLATE_HEADS: ReadonlySet<string> = new Set(["input", "all", "visit", "files", "bun"])
 
 /** `{{ref}}`: the one template form. */
 const TEMPLATE_SLOT = /\{\{\s*([^{}\s]+)\s*\}\}/g
@@ -584,6 +596,7 @@ const targetsOf = (state: MachineState): ReadonlyArray<StateName> => {
       return [
         state.on.pass,
         state.on.fail,
+        ...Option.toArray(Option.fromUndefinedOr(state.on.error)),
         ...Option.toArray(Option.fromUndefinedOr(state.exhausted)),
       ]
     case "integrate":
@@ -646,9 +659,26 @@ const slotResolves = (names: ReadonlySet<string>, slot: ReadonlyArray<string>) =
   if (head === "all") return names.has(next)
   // `visit` renders the visit number and `visit.note` the move's note (`visitSlot`), nothing more.
   if (head === "visit") return slot.length === 1 || (slot.length === 2 && next === "note")
-  // `files` resolves only in a run state's command (`templateProblems`).
-  if (head === "files") return false
+  // `files` and `bun` resolve only in a run state's command (`templateProblems`).
+  if (head === "files" || head === "bun") return false
   return TEMPLATE_HEADS.has(head) || names.has(head)
+}
+
+/** A `files` or `bun` slot: only a run state's command has them. */
+const commandSlotProblems = (
+  definition: MachineDefinition,
+  state: MachineState,
+  slot: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const [head = "", ...rest] = slot
+  if (head === "bun") {
+    if (rest.length > 0) return ["names no runtime: the slot is {{bun}}"]
+    if (state.kind !== "run") return ["names the runtime, and only a run state runs it"]
+    return []
+  }
+  if (state.kind !== "run") return ["names a file, and only a run state has files"]
+  if (Object.hasOwn(definition.files ?? {}, rest.join("."))) return []
+  return ["names no shipped file"]
 }
 
 const templateProblems = (
@@ -656,22 +686,18 @@ const templateProblems = (
   names: ReadonlySet<string>,
   name: string,
   state: MachineState,
-): ReadonlyArray<string> => {
-  const files = new Set(Object.keys(definition.files ?? {}))
-  return templatesOf(state)
+): ReadonlyArray<string> =>
+  templatesOf(state)
     .flatMap(slotsOf)
     .flatMap((slot) => {
-      const [head = "", ...rest] = slot
+      const [head = ""] = slot
       const shown = `${name}: {{${slot.join(".")}}}`
-      if (head !== "files") {
-        if (slotResolves(names, slot)) return []
-        return [`${shown} names no state`]
+      if (head === "files" || head === "bun") {
+        return commandSlotProblems(definition, state, slot).map((problem) => `${shown} ${problem}`)
       }
-      if (state.kind !== "run") return [`${shown} names a file, and only a run state has files`]
-      if (files.has(rest.join("."))) return []
-      return [`${shown} names no shipped file`]
+      if (slotResolves(names, slot)) return []
+      return [`${shown} names no state`]
     })
-}
 
 /** Every state an edge from `start` reaches. */
 const reachedFrom = (definition: MachineDefinition, start: string): ReadonlySet<string> => {
@@ -868,6 +894,8 @@ interface TemplateScope {
   readonly note: Option.Option<string>
   /** A shipped file's path by name: a run state's command has them, no other template. */
   readonly files: Readonly<Record<string, string>>
+  /** `{{bun}}`: the shell words that run Bun, in a run state's command only (`bunCommand`). */
+  readonly bun: Option.Option<string>
 }
 
 /** `{{visit}}` is the visit's number, `{{visit.note}}` the note of the move into it. */
@@ -881,6 +909,7 @@ const slotValue = (scope: TemplateScope, slot: ReadonlyArray<string>): Option.Op
   const [head = "", ...rest] = slot
   if (head === "visit") return visitSlot(scope, rest)
   if (head === "input") return Option.map(pathInto(scope.input, rest), jsonText)
+  if (head === "bun") return Option.filter(scope.bun, () => rest.length === 0)
   if (head === "files") {
     const file = rest.join(".")
     return Option.liftPredicate(scope.files, (files) => Object.hasOwn(files, file)).pipe(
@@ -1631,6 +1660,7 @@ type DriverServices =
   | Path.Path
   | Crypto.Crypto
   | ChildProcessSpawner
+  | GentPlatform
 
 /** The pending action runs a command, which holds a command permit. */
 const runsCommand = (pending: Option.Option<PendingAction>) =>
@@ -1808,9 +1838,15 @@ const choicesOf = (
       if (Predicate.isNotUndefined(state.on))
         return [...keys(state.on), ...control(["retry", "stop"])]
       return control(["continue", "retry", "stop"])
-    case "run":
-      if (reason === "interrupted" && mayStillRun) return control(["pass", "fail", "stop"])
-      return control(["pass", "fail", "retry", "stop"])
+    case "run": {
+      const ends = [
+        "pass",
+        "fail",
+        ...Option.toArray(Option.as(Option.fromUndefinedOr(state.on.error), "error")),
+      ]
+      if (reason === "interrupted" && mayStillRun) return control([...ends, "stop"])
+      return control([...ends, "retry", "stop"])
+    }
     case "integrate":
       return control(["green", "red", "retry", "stop"])
     case "final":
@@ -2593,7 +2629,17 @@ const templateScope = (run: Run, visit: number): TemplateScope => ({
   visit,
   note: run.moveNote,
   files: {},
+  bun: Option.none(),
 })
+
+/**
+ * The shell words a run state's `{{bun}}` renders: the server's own
+ * executable, quoted, run as the Bun CLI. A compiled gent is a Bun
+ * executable, which runs as Bun when `BUN_BE_BUN` is set, so a check runs
+ * with no Bun on the PATH; a source run's executable is Bun itself, which
+ * ignores the variable.
+ */
+const bunCommand = (execPath: string) => `env BUN_BE_BUN=1 '${execPath.replaceAll("'", `'\\''`)}'`
 
 const threadStateOf = Effect.fn("Machines.threadStateOf")(function* (run: Run, name: StateName) {
   const state = yield* stateIn(yield* definitionOf(run), name)
@@ -3671,6 +3717,49 @@ const whileCommandPending = (
     }
   })
 
+/** How a command ended, as a run state reads it. */
+interface CommandEnd {
+  readonly exitCode: Option.Option<number>
+  readonly timedOut: boolean
+  readonly output: string
+}
+
+/** The characters of a command's output an `error` move's note keeps: its last ones. */
+const ERROR_NOTE_OUTPUT_CHARS = 1_000
+
+/** A command's move: its target, the edge it took, and the note it carries. */
+interface CommandMove {
+  readonly to: StateName
+  readonly by: string
+  readonly note: Option.Option<string>
+}
+
+/**
+ * Where a command's end moves the run (`RunState`): exit 0 `pass`; with an
+ * `error` edge exit 1 `fail` and any other end `error`, with a note; without
+ * one any other end `fail`.
+ */
+const commandMove = (name: StateName, state: RunState, end: CommandEnd): CommandMove => {
+  if (Option.contains(end.exitCode, 0))
+    return { to: state.on.pass, by: "pass", note: Option.none() }
+  const error = Option.fromUndefinedOr(state.on.error)
+  if (Option.isNone(error) || Option.contains(end.exitCode, 1)) {
+    return { to: state.on.fail, by: "fail", note: Option.none() }
+  }
+  let how = "did not start"
+  if (end.timedOut)
+    how = `timed out after ${state.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS} seconds`
+  if (Option.isSome(end.exitCode)) how = `exited ${end.exitCode.value}`
+  const tail = end.output.trimEnd().slice(-ERROR_NOTE_OUTPUT_CHARS)
+  return {
+    to: error.value,
+    by: "error",
+    note: Option.some(
+      `Check error: the ${name} command ${how}, so it gave no verdict. Its output ends:\n${tail}`,
+    ),
+  }
+}
+
 /**
  * Runs the pending command in the branch scope: under its named permit, for
  * at most its timeout, with its process committed as soon as the spawn
@@ -3692,6 +3781,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
   >()
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  const bun = bunCommand(yield* (yield* GentPlatform).execPath)
   // The definition's files, in a temp directory the command's scope removes.
   const writtenFiles = Effect.gen(function* () {
     const entries = Object.entries(shipped)
@@ -3714,19 +3804,9 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
         steps: [MachineStep.cases.Recorded.make({ action: recorded })],
       }
     }).pipe(Effect.orDie, Effect.provideContext(services))
-  const ended = (result: {
-    readonly exitCode: Option.Option<number>
-    readonly timedOut: boolean
-    readonly output: string
-  }) =>
+  const ended = (result: CommandEnd) =>
     whileCommandPending(run.run, action, (current) => {
-      const passed = Option.contains(result.exitCode, 0)
-      let to = state.on.fail
-      let by = "fail"
-      if (passed) {
-        to = state.on.pass
-        by = "pass"
-      }
+      const { to, by, note } = commandMove(action.state, state, result)
       const outputTail = result.output.slice(-OUTPUT_TAIL_CHARS)
       const value: Schema.Json = {
         exitCode: Option.getOrNull(result.exitCode),
@@ -3751,13 +3831,15 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
             from: action.state,
             to,
             by,
+            ...omitUndefined({ note: Option.getOrUndefined(note) }),
           }),
         ],
       }
     })
   const commandResult = Effect.gen(function* () {
     const files = yield* writtenFiles
-    const command = render(state.run, { ...templateScope(run, action.visit), files })
+    const scope = { ...templateScope(run, action.visit), files, bun: Option.some(bun) }
+    const command = render(state.run, scope)
     return yield* runBashCommand(
       command,
       Option.some(run.cwd),
@@ -4098,6 +4180,7 @@ const moveFor = (state: MachineState, action: AskAction, choice: Verdict) => {
   }
   if (state.kind === "run") {
     if (choice === "pass") return { stop: false, to: state.on.pass }
+    if (choice === "error") return { stop: false, to: state.on.error ?? state.on.fail }
     return { stop: false, to: state.on.fail }
   }
   if (state.kind === "integrate") {

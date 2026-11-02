@@ -144,10 +144,41 @@
     project. A `run` state names one as `{{files.<name>}}`: each command
     writes the definition's files to its own scoped temp directory, renders
     the slot as that file's path, and removes the directory when the command
-    ends; a failed write fails the command. `machine.define` refuses the slot
-    outside a `run` state and a name the definition does not ship, and
-    `files` is a reserved state name (the other heads are `input`, `visit`
-    and `all`).
+    ends; a failed write fails the command. `{{bun}}` renders gent's own
+    executable as Bun (`env BUN_BE_BUN=1 '<GentPlatform.execPath>'`), so a
+    shipped TypeScript file runs on the runtime that runs the server, with
+    no Bun on the PATH. `machine.define` refuses both slots outside a `run`
+    state, a file name the definition does not ship and a `{{bun.<x>}}`,
+    and `files` and `bun` are reserved state names (the other heads are
+    `input`, `visit` and `all`).
+  - A `run` state moves by its command's end: exit 0 takes `on.pass`.
+    Without `on.error`, any other end takes `on.fail`. With it, exit 1
+    takes `on.fail` and any other end (exit 2 or more, a timeout, a command
+    that did not start) takes `on.error`, with a `Moved` note for the
+    target's `{{visit.note}}`: `Check error: the <state> command exited
+    <n>|timed out after <s> seconds|did not start, so it gave no verdict`
+    and the output's last 1,000 characters. An error move is not a check
+    move: the quality tally counts it as neither `pass` nor `fail`.
+  - The orchestrate machines' `repeats` state (`fix-repeats` in the light
+    one) runs the shipped `repeat-tests.ts` (`packages/extensions/src`,
+    embedded by a Bun text import) as `{{bun}} "{{files.repeat-tests.ts}}"
+    "{{input.dir}}"`. Each Blocker or Major of the last findings that says
+    `repeat of rN <id>` needs a line in the newest request:
+    `Repeat test: rN <id> <test file>... -- <command> :: <test name>`.
+    Every heading resets the section; only `Blocker(s)` and `Major(s)` block.
+    In clean worktrees under `<unit dir>/repeat-check/`, which each check
+    clears first (a killed check's too), with the lock file's packages
+    installed, the command must exit 1 to 125 at the head the last review
+    saw (its `Head` line in that round's record), with the test files from
+    the new head, and exit 0 at the new head, its output naming the test
+    both times. Verdicts: PASS or SKIP (no repeat) exit 0 to `review`;
+    FAIL exits 1 to `fix`, a counted round; ERROR (git, an install, a
+    runner that could not start, an unknown reviewed head, a crash) exits 2
+    to `decide`, which counts nothing and offers `recheck`. Each check
+    writes `round-N-repeat-check.md` and its logs under
+    `repeat-check-N-evidence/`. The children's environment drops
+    `BUN_BE_BUN`, and `CLAUDECODE`, `AGENT` and `REPL_ID`, under which
+    `bun test` hides the names of passing tests.
   - A client reads runs as a session of the owner's thread:
     `MachinesRpc.Status` (`run-status`, `gent ctl status --run`, what
     `machine.status` gives), `MachinesRpc.Runs` (`run-list`) and
