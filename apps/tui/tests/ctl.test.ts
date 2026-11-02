@@ -955,6 +955,7 @@ describe("gent ctl against a running server", () => {
           expect(week.files).toEqual([
             `${out}/messages.jsonl`,
             `${out}/sessions.jsonl`,
+            `${out}/rounds.jsonl`,
             `${out}/digest.md`,
           ])
           // Nothing outside --out: the home holds what it held, and the directory.
@@ -962,7 +963,7 @@ describe("gent ctl against a running server", () => {
             [...before, "review"].toSorted(),
           )
           expect((yield* fs.readDirectory(out)).toSorted()).toEqual(
-            ["digest.md", "messages.jsonl", "sessions.jsonl"].toSorted(),
+            ["digest.md", "messages.jsonl", "rounds.jsonl", "sessions.jsonl"].toSorted(),
           )
           const lines = (name: string) =>
             Effect.map(fs.readFileString(`${out}/${name}`), (text) => text.trimEnd().split("\n"))
@@ -986,6 +987,9 @@ describe("gent ctl against a running server", () => {
           const digest = yield* fs.readFileString(`${out}/digest.md`)
           expect(digest).toStartWith("# Gent session digest")
           expect(digest).toContain(`| ${TEST_MODEL_ID} | 1 |`)
+          // The machines extension's file: no machine ran, so no round, and its empty table.
+          expect(yield* fs.readFileString(`${out}/rounds.jsonl`)).toBe("")
+          expect(digest).toContain("## Machine rounds per role and model")
 
           // An ISO date reads the same window; a run again overwrites the files.
           const dated = yield* Effect.flatMap(

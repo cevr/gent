@@ -12,16 +12,21 @@
  * `gent ctl status --run <run>` reads one machine run (its state, status,
  * pending action and last steps) as a session of the owner's thread,
  * through `MachinesRpc.Status`, the view `machine.status` gives the model.
+ *
+ * `gent ctl review` writes `rounds.jsonl`, every round that ended in its
+ * window, from `MachinesRpc.Review` (a server request), and adds the rounds
+ * table per role and model to `digest.md`.
  */
-import { DateTime, Effect, Option, Predicate } from "effect"
+import { DateTime, Effect, Option, Order, Predicate, Schema, Stream } from "effect"
 import { createEffect, createRoot, For, on, Show } from "solid-js"
-import { ref } from "@gent/core/extensions/api"
-import type { LaneReport } from "@gent/core/protocol"
-import { type MachineRunView, MachinesRpc } from "@gent/extensions/client"
+import { omitUndefined, ref } from "@gent/core/extensions/api"
+import { cleanReviewText, type LaneReport } from "@gent/core/protocol"
+import { type MachineRunView, MachinesRpc, ReviewRound } from "@gent/extensions/client"
 import {
   ClientContext,
   clientContributions,
   ctlProjection,
+  type CtlReviewWindow,
   defineClientExtension,
   formatAge,
   formatClock,
@@ -188,6 +193,123 @@ export function LanesBand(props: { readonly data: () => BandData; readonly now: 
   )
 }
 
+// ── review ──────────────────────────────────────────────────────────────────
+
+const reviewRef = ref(MachinesRpc.Review)
+const encodeRound = Schema.encodeEffect(Schema.fromJsonString(ReviewRound))
+
+/** One role and model's rounds in `digest.md`, summed as the lines pass. */
+interface RoundsTotal {
+  readonly role: string
+  readonly model: string
+  rounds: number
+  dead: number
+  readonly minutes: Array<number>
+  input: number
+  cacheRead: number
+  output: number
+  costUsd: number
+  unpriced: number
+  readonly outcomes: Map<string, number>
+}
+
+const median = (values: ReadonlyArray<number>) =>
+  Option.getOrElse(
+    Option.fromUndefinedOr(
+      values.toSorted((left, right) => left - right)[Math.floor(values.length / 2)],
+    ),
+    () => 0,
+  )
+
+const foldRound = (totals: Map<string, RoundsTotal>, round: typeof ReviewRound.Type) => {
+  const role = round.role ?? "-"
+  const model = `${round.model ?? "unknown"}${Option.getOrElse(
+    Option.map(Option.fromUndefinedOr(round.effort), (effort) => `@${effort}`),
+    () => "",
+  )}`
+  const key = `${role}\t${model}`
+  const total: RoundsTotal = totals.get(key) ?? {
+    role,
+    model,
+    rounds: 0,
+    dead: 0,
+    minutes: [],
+    input: 0,
+    cacheRead: 0,
+    output: 0,
+    costUsd: 0,
+    unpriced: 0,
+    outcomes: new Map(),
+  }
+  total.rounds += 1
+  if (round.dead === true) total.dead += 1
+  total.minutes.push(round.minutes)
+  total.input += round.tokens?.input ?? 0
+  total.cacheRead += round.tokens?.cacheRead ?? 0
+  total.output += round.tokens?.output ?? 0
+  if (Predicate.isUndefined(round.costUsd)) total.unpriced += 1
+  total.costUsd += round.costUsd ?? 0
+  total.outcomes.set(round.outcome, (total.outcomes.get(round.outcome) ?? 0) + 1)
+  totals.set(key, total)
+}
+
+/** The rounds table per role and model, as the orchestrate skill's `models.ts` groups its agents. */
+const renderRounds = (totals: Map<string, RoundsTotal>) =>
+  [
+    "## Machine rounds per role and model",
+    "",
+    "| Role | Model | Rounds | Dead | Outcomes | Median min | Input | Cache-read | Output | Cost |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...[...totals]
+      .toSorted(([left], [right]) => Order.String(left, right))
+      .map(([, total]) => {
+        const outcomes = [...total.outcomes]
+          .map(([outcome, count]) => `${outcome} ${count}`)
+          .join(", ")
+        // A group with an unpriced round has no total cost, as `models.ts` prints `?`.
+        let cost = `$${total.costUsd.toFixed(2)}`
+        if (total.unpriced > 0) cost = "?"
+        return `| ${total.role} | ${total.model} | ${total.rounds} | ${total.dead} | ${outcomes} | ${median(total.minutes).toFixed(1)} | ${(total.input / 1e6).toFixed(1)}M | ${(total.cacheRead / 1e6).toFixed(1)}M | ${(total.output / 1e3).toFixed(1)}k | ${cost} |`
+      }),
+    "",
+  ].join("\n")
+
+/**
+ * `rounds.jsonl`: every machine round that ended in the window, read a page
+ * of runs at a time through `MachinesRpc.Review` (a server request). The
+ * run's unit is the owner's free text, cleaned as the server cleans its own.
+ */
+const readRounds = <E,>(window: CtlReviewWindow<E>) =>
+  Effect.gen(function* () {
+    const totals = new Map<string, RoundsTotal>()
+    yield* Stream.paginate(Option.none<string>(), (after) =>
+      Effect.map(
+        window.ask(reviewRef, {
+          since: window.since,
+          ...omitUndefined({ after: Option.getOrUndefined(after) }),
+        }),
+        (page) =>
+          [page.rounds, Option.map(Option.fromUndefinedOr(page.after), Option.some)] as const,
+      ),
+    ).pipe(
+      Stream.runForEach((found) => {
+        const round = {
+          ...found,
+          ...omitUndefined({
+            unit: Option.getOrUndefined(
+              Option.map(Option.fromUndefinedOr(found.unit), cleanReviewText),
+            ),
+          }),
+        }
+        return encodeRound(round).pipe(
+          Effect.flatMap(window.write),
+          Effect.tap(() => Effect.sync(() => foldRound(totals, round))),
+        )
+      }),
+    )
+    return { digest: renderRounds(totals) }
+  })
+
 // ── extension ───────────────────────────────────────────────────────────────
 
 const statusRef = ref(MachinesRpc.Status)
@@ -266,4 +388,5 @@ export default defineClientExtension(statusRef.extensionId, {
       input: (run) => ({ run }),
     }),
   ],
+  review: [{ file: "rounds.jsonl", read: readRounds }],
 })

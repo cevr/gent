@@ -75,7 +75,7 @@ import {
   type LaneUnavailable,
   ModelId,
   omitUndefined,
-  type ReasoningEffort,
+  ReasoningEffort,
   request,
   resolveDataDir,
   runProcess,
@@ -409,8 +409,9 @@ const PendingAction = Schema.TaggedUnion({
    * admitted. `notBefore` (epoch ms): the round waits for the account until
    * then, holding nothing. The marker stays after its deadline until the
    * dispatch commits again without it. `fresh`: the round runs on
-   * a new thread, as a usage limit's rerun does. `model`: the model the
-   * thread's session runs, read when it is admitted. `configRole`: the
+   * a new thread, as a usage limit's rerun does. `model` and `effort`: the
+   * model and effort the thread's session runs, read when it is admitted
+   * (no effort: the session names none). `configRole`: the
    * config role the round ran, a state's switch or its thread role's own.
    * `queuedOn` and `queuedAt`: no choice of its pick had a lane, so the
    * round waits in the lane queue of that model since then; past
@@ -428,6 +429,7 @@ const PendingAction = Schema.TaggedUnion({
     thread: Schema.optionalKey(SessionId),
     round: Schema.optionalKey(Schema.String),
     model: Schema.optionalKey(ModelId),
+    effort: Schema.optionalKey(ReasoningEffort),
     configRole: Schema.optionalKey(Schema.String),
     notBefore: Schema.optionalKey(Schema.Finite),
     fresh: Schema.optionalKey(Schema.Boolean),
@@ -1248,6 +1250,17 @@ const decodeStepRows = Schema.decodeUnknownEffect(Schema.Array(StepRow))
 const decodeOutcomeRows = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ run: RunId, ...StepRow.fields })),
 )
+const decodeReviewRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ run: RunId, machine: MachineName, ...StepRow.fields })),
+)
+
+/** A step of a run in the review window, with its machine and its time. */
+interface ReviewStep {
+  readonly run: RunId
+  readonly machine: MachineName
+  readonly at: number
+  readonly step: MachineStep
+}
 
 const stateOfStep = (step: MachineStep, fallback: StateName): StateName => {
   switch (step._tag) {
@@ -1478,6 +1491,17 @@ interface MachineStoreService {
   readonly outcomesOf: (
     machine: MachineName,
   ) => Effect.Effect<ReadonlyArray<RunOutcome>, MachineStorageError>
+  /**
+   * One page of the review window: the first `limit` runs past `after`, by
+   * run id, that moved at or after `since` (epoch ms), with the steps a
+   * round's review reads (the run's start, each round's record and end, and
+   * the move, interruption or wait after the end), by run, oldest first.
+   */
+  readonly reviewPage: (
+    since: number,
+    after: Option.Option<RunId>,
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<ReviewStep>, MachineStorageError>
   /** The run and state of the newest round recorded on `thread`. */
   readonly roundOn: (
     thread: SessionId,
@@ -1758,6 +1782,31 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
             return decoded.map((row) => ({ run: row.run, step: row.step_json }))
           },
           Effect.mapError(storageError("Failed to read a machine's outcomes")),
+        ),
+        reviewPage: Effect.fn("MachineStore.reviewPage")(
+          function* (since, after, limit) {
+            const afterRun = Option.match(after, {
+              onNone: () => sql.literal(""),
+              onSome: (run) => sql`AND run > ${run}`,
+            })
+            const rows = yield* sql`SELECT r.machine, s.run, s.seq, s.at, s.step_json FROM (
+                SELECT run, machine FROM machine_runs
+                WHERE updated_at >= ${since} ${afterRun}
+                ORDER BY run ASC LIMIT ${limit}
+              ) r
+              JOIN machine_steps s ON s.run = r.run
+              WHERE json_extract(s.step_json, '$._tag')
+                IN ('Started', 'Dispatched', 'Recorded', 'RoundEnded', 'Moved', 'Interrupted', 'Waiting', 'Failed')
+              ORDER BY r.run ASC, s.seq ASC`
+            const decoded = yield* decodeReviewRows(rows)
+            return decoded.map((row) => ({
+              run: row.run,
+              machine: row.machine,
+              at: row.at,
+              step: row.step_json,
+            }))
+          },
+          Effect.mapError(storageError("Failed to read the review window")),
         ),
         roundOn: Effect.fn("MachineStore.roundOn")(
           function* (thread) {
@@ -3988,7 +4037,10 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
     },
   })
   // Read back: a start again under its key finds the thread the first start made.
-  const ran = yield* threads.model(thread).pipe(Effect.mapError(threadFault))
+  const ran = yield* Effect.all({
+    model: threads.model(thread),
+    effort: threads.effort(thread),
+  }).pipe(Effect.mapError(threadFault))
   const round = yield* threads.sendRound(action.key)
   // No choice had a lane: the round waits in its model's queue from now.
   const queuedOn = Option.map(
@@ -4001,7 +4053,8 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
     thread,
     round,
     ...omitUndefined({
-      model: Option.getOrUndefined(ran),
+      model: Option.getOrUndefined(ran.model),
+      effort: Option.getOrUndefined(ran.effort),
       configRole: role.role,
       queuedOn: Option.getOrUndefined(queuedOn),
       queuedAt: Option.getOrUndefined(queuedAt),
@@ -6781,11 +6834,197 @@ const ownedRuns = Effect.fn("Machines.ownedRuns")(function* () {
   return runs.map(runView)
 })
 
+// ── review ──────────────────────────────────────────────────────────────────
+
+/** The runs one review page reads: a window of many runs loads page by page. */
+const REVIEW_RUNS = 20
+
+/**
+ * One round that ended in the review window, as `gent ctl review` writes it
+ * to `rounds.jsonl`. `unit`: the run input's `unit`, else its `name`.
+ * `model` and `effort`: the round's record's. `minutes`: from the round's
+ * record to its end. `dead`: the round ended with no verdict. `outcome`: the
+ * move the round made (`Moved.by`: `verdict`, `exhausted`, `oversize`), else
+ * the ask it raised (`no-verdict`, `exhausted`, `asked`), `interrupted`, the
+ * wait it began (`quota`, `sabbath`), `error` (the run failed), or `dead`
+ * (run again).
+ */
+export const ReviewRound = Schema.Struct({
+  machine: MachineName,
+  run: RunId,
+  unit: Schema.optionalKey(Schema.String),
+  state: StateName,
+  visit: PositiveInt,
+  attempt: PositiveInt,
+  role: Schema.optionalKey(RoleName),
+  configRole: Schema.optionalKey(Schema.String),
+  model: Schema.optionalKey(ModelId),
+  effort: Schema.optionalKey(ReasoningEffort),
+  tokens: Schema.optionalKey(RoundTokens),
+  costUsd: Schema.optionalKey(Schema.Finite),
+  minutes: Schema.Finite,
+  dead: Schema.optionalKey(Schema.Boolean),
+  outcome: Schema.String,
+  verdict: Schema.optionalKey(Verdict),
+  endedAt: Schema.Finite,
+})
+type ReviewRound = typeof ReviewRound.Type
+
+const ReviewRoundsParams = Schema.Struct({ since: Schema.Finite, after: Schema.optionalKey(RunId) })
+
+/** One review page: its rounds, and the run the next page reads past (none: the last page). */
+const ReviewRoundsPage = Schema.Struct({
+  rounds: Schema.Array(ReviewRound),
+  after: Schema.optionalKey(RunId),
+})
+
+/** The unit a run's input names: its `unit`, else its `name`. */
+const unitOf = (input: Schema.Json): Option.Option<string> =>
+  Option.orElse(
+    Option.map(
+      Schema.decodeUnknownOption(Schema.Struct({ unit: Schema.String }))(input),
+      (named) => named.unit,
+    ),
+    () =>
+      Option.map(
+        Schema.decodeUnknownOption(Schema.Struct({ name: Schema.String }))(input),
+        (named) => named.name,
+      ),
+  )
+
+/**
+ * What a step after a round's end says the round led to: the move it made,
+ * the ask it raised (`no-verdict`, `exhausted`, `asked`), its interrupt,
+ * the wait it began or the run's failure. Any other step: nothing.
+ */
+const outcomeOf = (step: MachineStep): Option.Option<Partial<ReviewRound>> => {
+  switch (step._tag) {
+    case "Moved":
+      return Option.some({ outcome: step.by, ...omitUndefined({ verdict: step.verdict }) })
+    case "Dispatched":
+      return Option.map(
+        Option.liftPredicate(step.action, (action) => action._tag === "Ask"),
+        (action) => ({ outcome: action.reason }),
+      )
+    case "Interrupted":
+      return Option.some({ outcome: "interrupted" })
+    case "Waiting":
+      return Option.some({ outcome: step.reason })
+    case "Failed":
+      return Option.some({ outcome: "error" })
+    default:
+      return Option.none()
+  }
+}
+
+/**
+ * The rounds of a page's steps that ended at or after `since`. Each takes
+ * its record (the `Recorded` step of its round id) and its outcome from
+ * the steps after its end, up to the next record or end.
+ */
+const reviewRounds = (
+  steps: ReadonlyArray<ReviewStep>,
+  since: number,
+): ReadonlyArray<ReviewRound> => {
+  const rounds: Array<ReviewRound> = []
+  const records = new Map<string, { readonly action: RoundAction; readonly at: number }>()
+  let unit = Option.none<string>()
+  let run = Option.none<RunId>()
+  let open = Option.none<ReviewRound>()
+  const close = (outcome: Option.Option<Partial<ReviewRound>>) => {
+    if (Option.isSome(open)) {
+      rounds.push({ ...open.value, ...Option.getOrElse(outcome, () => ({})) })
+    }
+    open = Option.none()
+  }
+  for (const { step, at, ...row } of steps) {
+    if (!Option.contains(run, row.run)) {
+      close(Option.none())
+      records.clear()
+      unit = Option.none()
+      run = Option.some(row.run)
+    }
+    switch (step._tag) {
+      case "Started":
+        unit = unitOf(step.input)
+        break
+      case "Recorded":
+        close(Option.none())
+        if (step.action._tag === "Round" && Predicate.isNotUndefined(step.action.round))
+          records.set(step.action.round, { action: step.action, at })
+        break
+      case "RoundEnded": {
+        close(Option.none())
+        const record = Option.fromUndefinedOr(records.get(step.round))
+        if (at < since || Option.isNone(record)) break
+        const { action } = record.value
+        let outcome = "ended"
+        if (step.dead) outcome = "dead"
+        open = Option.some({
+          ...omitUndefined({
+            dead: Option.getOrUndefined(Option.liftPredicate(step.dead, Boolean)),
+          }),
+          machine: row.machine,
+          run: row.run,
+          state: step.state,
+          visit: action.visit,
+          attempt: action.attempt,
+          minutes: (at - record.value.at) / 60_000,
+          outcome,
+          endedAt: at,
+          ...omitUndefined({
+            unit: Option.getOrUndefined(unit),
+            role: step.role,
+            configRole: step.configRole ?? action.configRole,
+            model: step.model ?? action.model,
+            effort: action.effort,
+            tokens: step.tokens,
+            costUsd: step.costUsd,
+            verdict: step.verdict,
+          }),
+        })
+        break
+      }
+      default:
+        close(outcomeOf(step))
+    }
+  }
+  close(Option.none())
+  return rounds
+}
+
+/**
+ * One page of the rounds that ended at or after `since`, over every run:
+ * `REVIEW_RUNS` runs past `after`, by run id. A full page names its last
+ * run as the next page's `after`.
+ */
+const reviewRoundsPage = Effect.fn("Machines.reviewRoundsPage")(function* (
+  params: typeof ReviewRoundsParams.Type,
+) {
+  const store = yield* MachineStore
+  const steps = yield* store.reviewPage(
+    params.since,
+    Option.fromUndefinedOr(params.after),
+    REVIEW_RUNS,
+  )
+  const runs = new Set(steps.map((step) => step.run))
+  const after = Option.filter(
+    Option.fromUndefinedOr(steps.at(-1)?.run),
+    () => runs.size >= REVIEW_RUNS,
+  )
+  return {
+    rounds: reviewRounds(steps, params.since),
+    ...omitUndefined({ after: Option.getOrUndefined(after) }),
+  }
+})
+
 /**
  * What a client outside any turn reads of runs and does to them (`gent ctl
  * request`, the TUI's band and run page), asked as a session of the owner's
  * thread: the views `machine.status` and `machine.list` give, the run
- * page's visits, and the stop `machine.stop` makes.
+ * page's visits, and the stop `machine.stop` makes. `Review` answers the
+ * server, with no session: `gent ctl review` reads the rounds of every run
+ * through it.
  */
 export const MachinesRpc = defineRequests(MACHINES_EXTENSION_ID, {
   Status: request({
@@ -6836,6 +7075,16 @@ export const MachinesRpc = defineRequests(MACHINES_EXTENSION_ID, {
     output: Schema.Array(ModelQuality),
     resources: [MachineStoreResource],
     execute: threadQuality,
+  }),
+  Review: request({
+    scope: "server",
+    id: "review-rounds",
+    description:
+      "Read one page of the rounds that ended since a time, over every run: machine, run, unit, state, role, model, effort, tokens, minutes and outcome",
+    input: ReviewRoundsParams,
+    output: ReviewRoundsPage,
+    resources: [MachineStoreResource],
+    execute: reviewRoundsPage,
   }),
 })
 
@@ -6926,6 +7175,7 @@ export const MachinesExtension = defineExtension({
       MachinesRpc.Stop,
       MachinesRpc.Runs,
       MachinesRpc.Quality,
+      MachinesRpc.Review,
     )
     yield* host.on("wakeDue", (input) => runDue(input))
     yield* host.on("loopOpen", () => repairHost().pipe(logFailure("machines.repair.failed")))

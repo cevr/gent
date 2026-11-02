@@ -14,7 +14,9 @@
  *
  * An extension adds a view to a command through its client module's `ctl`
  * projections (`CtlProjection`): `status --run <run>` is the machines
- * extension's. This file names no extension.
+ * extension's. Its `review` projections (`CtlReview`) add files to
+ * `review`: `rounds.jsonl` is the machines extension's. This file names no
+ * extension.
  */
 import {
   AgentEvent,
@@ -64,7 +66,7 @@ import {
 } from "effect"
 import { Argument, CliError, Command, Flag } from "effect/cli"
 import { builtinClientModules } from "./extensions/builtins"
-import type { CtlProjection } from "./extensions/client-facets"
+import type { CtlProjection, CtlReview } from "./extensions/client-facets"
 import { connectFlag, readHome } from "./ops"
 import { isConversation, laneRows, randomId } from "./utils"
 
@@ -1048,6 +1050,11 @@ const refuseFileOut = Effect.fn("Ctl.review.out")(function* (out: string) {
   }
 })
 
+/** Every `gent ctl review` file the builtin client extensions own. */
+const ctlReviews: ReadonlyArray<CtlReview> = builtinClientModules.flatMap((module) =>
+  Option.getOrElse(Option.fromUndefinedOr(module.review), () => []),
+)
+
 const REVIEW_FILES = {
   messages: "messages.jsonl",
   sessions: "sessions.jsonl",
@@ -1129,7 +1136,10 @@ const sum = (values: ReadonlyArray<number>) => values.reduce((total, value) => t
 const cell = (text: string) => text.replace(/\|/g, "\\|")
 
 /** `digest.md`: kilobytes for the dream to read, not the history. */
-const renderReviewDigest = (digest: ReviewDigest): string => {
+const renderReviewDigest = (
+  digest: ReviewDigest,
+  extensions: ReadonlyArray<{ readonly file: string; readonly digest: string }>,
+): string => {
   const sessions = digest.sessions
   const limits = sum(sessions.map((session) => sum(Object.values(session.limits))))
   const costly = sessions
@@ -1142,7 +1152,7 @@ const renderReviewDigest = (digest: ReviewDigest): string => {
   return [
     "# Gent session digest",
     "",
-    `Since ${DateTime.formatIso(DateTime.makeUnsafe(digest.since)).slice(0, 10)}. Secrets redacted. Files: ${REVIEW_FILES.messages}, ${REVIEW_FILES.sessions}. Gent does not record slash commands.`,
+    `Since ${DateTime.formatIso(DateTime.makeUnsafe(digest.since)).slice(0, 10)}. Secrets redacted. Files: ${[REVIEW_FILES.messages, REVIEW_FILES.sessions, ...extensions.map((read) => read.file)].join(", ")}. Gent does not record slash commands.`,
     "",
     "## Totals",
     "",
@@ -1176,6 +1186,7 @@ const renderReviewDigest = (digest: ReviewDigest): string => {
       (group) => `- ${group.sessions.size} sessions, ${group.count}x: ${group.text.slice(0, 160)}`,
     ),
     "",
+    ...extensions.map((read) => read.digest),
   ].join("\n")
 }
 
@@ -1228,8 +1239,40 @@ const writeReview = Effect.fn("Ctl.review")(function* (
       }),
     ),
   )
+  // Each extension's review file: its own server requests, its own lines.
+  const extensions: Array<{ readonly file: string; readonly digest: string }> = []
+  for (const review of ctlReviews) {
+    const file = yield* open(review.file)
+    const read = yield* review
+      .read<CtlError>({
+        since: options.since,
+        ask: (request, input) =>
+          connection.client.extension
+            .serverRequest({
+              extensionId: request.extensionId,
+              capabilityId: request.capabilityId,
+              input,
+            })
+            .pipe(
+              Effect.mapError(extensionFailure),
+              Effect.flatMap((reply) =>
+                decodeRequestReply(request.output)(reply).pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new CtlFailed({
+                        message: `${request.extensionId} ${request.capabilityId}: ${error.message}`,
+                      }),
+                  ),
+                ),
+              ),
+            ),
+        write: (line) => writeLine(file, line),
+      })
+      .pipe(Effect.catchTag("SchemaError", (error) => Effect.fail(encodeFailed(error))))
+    extensions.push({ file: review.file, digest: read.digest })
+  }
   yield* fs
-    .writeFileString(fileOf(REVIEW_FILES.digest), renderReviewDigest(digest))
+    .writeFileString(fileOf(REVIEW_FILES.digest), renderReviewDigest(digest, extensions))
     .pipe(Effect.mapError(failed))
   return CtlResult.cases.Review.make({
     server: connection.server,
@@ -1237,7 +1280,12 @@ const writeReview = Effect.fn("Ctl.review")(function* (
     since: DateTime.formatIso(DateTime.makeUnsafe(options.since)),
     sessions: digest.sessions.length,
     messages: digest.messages,
-    files: Object.values(REVIEW_FILES).map(fileOf),
+    files: [
+      REVIEW_FILES.messages,
+      REVIEW_FILES.sessions,
+      ...extensions.map((read) => read.file),
+      REVIEW_FILES.digest,
+    ].map(fileOf),
   })
 })
 

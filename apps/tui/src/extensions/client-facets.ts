@@ -1252,6 +1252,38 @@ export const ctlProjection = <Input, Output>(spec: {
   readonly input: (value: string) => Schema.Json
 }): CtlProjection => spec
 
+/**
+ * A `gent ctl review` file an extension owns, the review kind of ctl
+ * projection: `read` reads the window from `since` through the extension's
+ * own server requests (`ask`), writes each record as one line of `file`,
+ * and returns its section of `digest.md`. The ctl host names no extension.
+ */
+export interface CtlReview {
+  /** The JSONL file in `--out` the records go to, such as `rounds.jsonl`. */
+  readonly file: string
+  readonly read: <E>(
+    window: CtlReviewWindow<E>,
+  ) => Effect.Effect<CtlReviewRead, E | Schema.SchemaError>
+}
+
+/** What `gent ctl review` gives a review projection's `read`. */
+export interface CtlReviewWindow<E> {
+  /** The window's start, epoch ms. */
+  readonly since: number
+  /** Sends `request` through `extension.serverRequest`: its reply as its output schema decodes it. */
+  readonly ask: <Input, Output>(
+    request: CapabilityRef<Input, Output>,
+    input: Schema.Json,
+  ) => Effect.Effect<Output, E>
+  /** Writes one line of the projection's file. */
+  readonly write: (line: string) => Effect.Effect<void, E>
+}
+
+/** A review projection's section of `digest.md`. */
+interface CtlReviewRead {
+  readonly digest: string
+}
+
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files.
  *
  * `R` defaults to `ClientDeps` (FileSystem | Path | ChildProcessSpawner). An
@@ -1263,6 +1295,8 @@ export interface ExtensionClientModule<R extends ClientRuntimeServices = ClientD
   readonly setup: ExtensionClientSetup<R>
   /** The `gent ctl` views the extension owns; none by default. */
   readonly ctl?: ReadonlyArray<CtlProjection>
+  /** The `gent ctl review` files the extension owns; none by default. */
+  readonly review?: ReadonlyArray<CtlReview>
 }
 
 export type AnyExtensionClientModule = ExtensionClientModule<ClientRuntimeServices>
@@ -1279,6 +1313,7 @@ export function defineClientExtension<R extends ClientRuntimeServices = ClientDe
   spec: {
     readonly setup: ExtensionClientSetup<R>
     readonly ctl?: ReadonlyArray<CtlProjection>
+    readonly review?: ReadonlyArray<CtlReview>
   },
 ): ExtensionClientModule<R> {
   return { id, ...spec }

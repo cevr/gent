@@ -100,7 +100,7 @@ export {
   modelInputCeilingTokens,
 } from "./runtime/model-context.js"
 export { GentRpcError } from "./server/rpc.js"
-export { ReviewMessage, ReviewRecord, ReviewSession } from "./server/rpc.js"
+export { cleanReviewText, ReviewMessage, ReviewRecord, ReviewSession } from "./server/rpc.js"
 export {
   type GentClientRpcError,
   type GentNamespacedClient,

@@ -692,6 +692,120 @@ describe("a machine run", () => {
   )
 
   it.live(
+    "the review reads each ended round of a run with no session, role, model and outcome",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) => {
+          if (round.mode === "silent") return Effect.succeed(billed("no reply"))
+          if (round.state === "review")
+            return Effect.succeed(replyWith(round, { next: "accepted" }))
+          return Effect.succeed(billed(`${round.state} ${round.visit} done`))
+        })
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer: machineModels(models),
+          storagePath: `${home.home}/gent.db`,
+          cwd: home.cwd,
+          home: home.home,
+        })
+        const owner = { sessionId, branchId }
+        const definition = {
+          name: "reviewed",
+          threads: { impl: { effort: "low" }, rev: {} },
+          start: "implement",
+          states: {
+            implement: {
+              kind: "thread",
+              thread: "impl",
+              say: "STATE implement {{visit}}",
+              next: "review",
+            },
+            review: {
+              kind: "thread",
+              thread: "rev",
+              say: "STATE review {{visit}}",
+              on: { accepted: "done" },
+            },
+            done: { kind: "final", say: "reviewed" },
+          },
+        }
+        const run = yield* startRun(client, owner, definition, "reviewed", { unit: "U7" })
+        yield* waitForEnd(client, owner)
+        const reviewRef = ref(MachinesRpc.Review)
+        const page = (input: Schema.Json) =>
+          client.extension
+            .serverRequest({
+              extensionId: reviewRef.extensionId,
+              capabilityId: reviewRef.capabilityId,
+              input,
+            })
+            .pipe(Effect.flatMap(decodeRequestReply(reviewRef.output)))
+        const read = yield* page({ since: 0 })
+        // One run: the last page, so it names no run to read past.
+        expect(read.after).toBeUndefined()
+        // Plain objects: the expected rows name their brands as strings.
+        const rounds: ReadonlyArray<object> = read.rounds
+        expect(rounds).toEqual([
+          {
+            machine: "reviewed",
+            run,
+            unit: "U7",
+            state: "implement",
+            visit: 1,
+            attempt: 1,
+            role: "impl",
+            model: expect.any(String),
+            effort: "low",
+            tokens: expect.objectContaining({ cacheRead: expect.any(Number) }),
+            minutes: expect.any(Number),
+            outcome: "verdict",
+            endedAt: expect.any(Number),
+          },
+          {
+            machine: "reviewed",
+            run,
+            unit: "U7",
+            state: "review",
+            visit: 1,
+            attempt: 1,
+            role: "rev",
+            model: expect.any(String),
+            tokens: expect.objectContaining({ cacheRead: expect.any(Number) }),
+            minutes: expect.any(Number),
+            outcome: "verdict",
+            verdict: "accepted",
+            endedAt: expect.any(Number),
+          },
+        ])
+        // A window that starts at the second round's end holds only the second.
+        const [first, second] = read.rounds.map((round) => round.endedAt)
+        expect(second).toBeGreaterThan(first ?? Infinity)
+        const later = yield* page({ since: second ?? 0 })
+        expect(later.rounds.map((round) => String(round.state))).toEqual(["review"])
+        // A page past the run reads nothing; a session route refuses the server request.
+        expect((yield* page({ since: 0, after: run })).rounds).toEqual([])
+        // A round with no verdict is dead: run again, then the ask it raised.
+        const silent = yield* startRun(client, owner, JUDGE, "judge", { mode: "silent" }, "silent")
+        expect(yield* askDetails(client, owner, 1)).toMatchObject({ reason: "no-verdict" })
+        const dead = (yield* page({ since: 0 })).rounds.filter((round) => round.run === silent)
+        expect(dead.map((round) => [round.dead, round.outcome])).toEqual([
+          [true, "dead"],
+          [true, "no-verdict"],
+        ])
+        const refused = yield* client.extension
+          .request({
+            ...owner,
+            extensionId: reviewRef.extensionId,
+            capabilityId: reviewRef.capabilityId,
+            input: { since: 0 },
+          })
+          .pipe(Effect.flip)
+        expect(refused.message).toContain("a server request does not answer a session call")
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live(
     "the run page reads every state visit, then only the open one, and stops the run through the client requests",
     () =>
       Effect.gen(function* () {

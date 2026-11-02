@@ -133,7 +133,11 @@
     machine's runs, the rounds, dead ones, priced cost, verdicts, the
     check (`pass`/`fail`) and gate (`green`/`red`) moves after each round,
     and the rounds a run its final state accepted took. A verdict is the model's own word,
-    counted as itself (`constructor` included). The owner is woken only by an ask (`machine-ask`), a final
+    counted as itself (`constructor` included). A round's `Recorded` step
+    keeps the model and effort its session runs. `MachinesRpc.Review`, a
+    server request (no session), reads every run that changed since a time,
+    20 runs a page by run id, and folds each round that ended in the window
+    with its outcome: `gent ctl review` writes them to `rounds.jsonl`. The owner is woken only by an ask (`machine-ask`), a final
     state or a failure (`machine-end`), each a queued message under a
     source id the queue drops a repeat of, at a delivery place saved first.
   - Answers check in one order: an answered ask is decided by its answer

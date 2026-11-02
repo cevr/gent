@@ -57,6 +57,7 @@ export {
   stoppableContribution,
   widgetContribution,
   ctlProjection,
+  type CtlReviewWindow,
 } from "./extensions/client-facets.js"
 
 // ── rendering kit ──

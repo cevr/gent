@@ -12,7 +12,7 @@ import {
 } from "@gent/core/protocol"
 import { BranchId, ref, SessionId } from "@gent/core/extensions/api"
 import { EventId } from "@gent/core/test-utils"
-import { type MachineRunView, MachinesRpc } from "@gent/extensions/client"
+import { type MachineRunView, MachinesRpc, ReviewRound } from "@gent/extensions/client"
 import machinesExtension, {
   type BandData,
   bandRows,
@@ -812,4 +812,108 @@ describe("the lanes band reads", () => {
         }).pipe(Effect.timeout("4 seconds")),
     )
   }
+})
+
+// ── review ──────────────────────────────────────────────────────────────────
+
+describe("the review rounds file", () => {
+  it.effect(
+    "pages every round, writes each as a line with its unit cleaned, and sums them per role and model",
+    () =>
+      Effect.gen(function* () {
+        const review = Option.getOrThrow(Option.fromUndefinedOr(machinesExtension.review?.[0]))
+        expect(review.file).toBe("rounds.jsonl")
+        const tokens = (input: number, cacheRead: number, output: number) => ({
+          input,
+          cacheRead,
+          output,
+          cacheWrite: 0,
+        })
+        const round = {
+          machine: "track",
+          run: "run-00000000000000a1",
+          unit: "fix the token=abc123secret leak",
+          visit: 1,
+          attempt: 1,
+        }
+        const pages: ReadonlyArray<Schema.Json> = [
+          {
+            rounds: [
+              {
+                ...round,
+                state: "implement",
+                role: "impl",
+                model: "claude-x",
+                effort: "low",
+                tokens: tokens(2_000_000, 5_000_000, 3_000),
+                costUsd: 1.5,
+                minutes: 4,
+                outcome: "verdict",
+                endedAt: 1_000,
+              },
+              {
+                ...round,
+                state: "review",
+                role: "rev",
+                model: "gpt-y",
+                tokens: tokens(500_000, 0, 1_000),
+                costUsd: 0.5,
+                minutes: 2,
+                outcome: "verdict",
+                verdict: "accepted",
+                endedAt: 2_000,
+              },
+            ],
+            after: "run-00000000000000a1",
+          },
+          {
+            rounds: [
+              {
+                machine: "track",
+                run: "run-00000000000000a2",
+                state: "implement",
+                visit: 1,
+                attempt: 1,
+                role: "impl",
+                model: "claude-x",
+                effort: "low",
+                tokens: tokens(1_000_000, 1_000_000, 1_000),
+                minutes: 10,
+                dead: true,
+                outcome: "exhausted",
+                endedAt: 3_000,
+              },
+            ],
+          },
+        ]
+        const asked: Array<Schema.Json> = []
+        const lines: Array<string> = []
+        const read = yield* review.read<never>({
+          since: 500,
+          ask: (request, input) => {
+            asked.push(input)
+            return Schema.decodeEffect(request.output)(pages[asked.length - 1]).pipe(Effect.orDie)
+          },
+          write: (line) => Effect.sync(() => void lines.push(line)),
+        })
+        // The second page reads past the run the first named; the last names none.
+        expect(asked).toEqual([{ since: 500 }, { since: 500, after: "run-00000000000000a1" }])
+        const written: ReadonlyArray<object> = yield* Effect.forEach(lines, (line) =>
+          Schema.decodeEffect(Schema.fromJsonString(ReviewRound))(line),
+        )
+        expect(written.map((line) => ({ ...line }))).toMatchObject([
+          { state: "implement", unit: "fix the [REDACTED] leak", effort: "low" },
+          { state: "review", unit: "fix the [REDACTED] leak", verdict: "accepted" },
+          { run: "run-00000000000000a2", dead: true, outcome: "exhausted" },
+        ])
+        expect(lines.join("\n")).not.toContain("abc123secret")
+        // One row per role and model@effort: a dead round counts by its flag, whatever it led to; a group with an unpriced round costs `?`.
+        expect(read.digest).toContain(
+          "| impl | claude-x@low | 2 | 1 | verdict 1, exhausted 1 | 10.0 | 3.0M | 6.0M | 4.0k | ? |",
+        )
+        expect(read.digest).toContain(
+          "| rev | gpt-y | 1 | 0 | verdict 1 | 2.0 | 0.5M | 0.0M | 1.0k | $0.50 |",
+        )
+      }),
+  )
 })

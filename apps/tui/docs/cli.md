@@ -177,9 +177,14 @@ a turn the owner stopped and `limit` for a usage-limit error. `sessions.jsonl`
 holds one line per session: its parent, its turns, its tokens per model from
 the stored receipts, its handoffs and prunes (gent's compactions), its tool
 calls by tool, the children it started, its interrupts and errors, and its
-limit errors by provider. `digest.md` sums them: the tokens per model, the
-costliest sessions by cache read and the owner's messages repeated in two or
-more sessions. Free text is redacted with the miner's secret patterns and
+limit errors by provider. `rounds.jsonl` is the machines extension's (a
+client `review` projection over its server request `MachinesRpc.Review`): one
+line per machine round that ended in the window, with its machine, run, unit,
+state, visit, role, model, effort, tokens, cost, minutes and outcome (the
+verdict move, the ask, the wait or the error it led to). `digest.md` sums
+them: the tokens per model, the costliest sessions by cache read, the owner's
+messages repeated in two or more sessions, and the rounds per role and
+`model@effort`. Free text is redacted with the miner's secret patterns and
 clipped to 300 characters. Gent does not record slash commands, so no line
 counts one. It prints `Review` with the file paths and the counts.
 
