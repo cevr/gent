@@ -117,7 +117,8 @@
   - Answers check in one order: an answered ask is decided by its answer
     (the same choice and note again is admitted, any other conflicts), an
     ask never answered and no longer current is stale, a choice not offered
-    is invalid. At most four commands run at once in one server
+    is invalid, and a choice whose required file is missing or incomplete
+    is unmet (below). At most four commands run at once in one server
     (`MAX_ACTIVE_MACHINE_COMMANDS`): a `run` state takes a permit before its
     `Dispatched` commit (and before a named permit's wait) and gives it back
     at the driver's next read after the exit, the stop or the ask commits. A
@@ -137,6 +138,28 @@
     record names a future quota reset. Settlement removes both records. A
     waiting driver rereads the committed run after arming its timer, before
     sleeping, so a stale arm cannot hide a committed stop.
+  - An `ask` state's optional `requires` (`{ choices, after, file, headings }`)
+    makes some answers wait for a file. It applies on a visit the run
+    entered by one of `after`: the move's verdict (`Moved.verdict`, kept on a
+    round's verdict move and on an answer that chose a thread state's
+    verdict), else its `by` (`exhausted` for a cap). On such a visit the ask
+    names the file and its headings, and an answer in `choices` is refused
+    (`unmet`, the run stays at the ask) until `file` (a template, resolved
+    from the run's cwd) has an mtime at or after the ask's `Dispatched`
+    step and non-blank text under each heading (a markdown heading of any
+    level, case-insensitive, up to the next heading). The refusal names the
+    file and each gap: `no file`, `written before the ask`, `no heading X`,
+    `nothing under X`. `machine.define` refuses a `choices` entry that is
+    not a key of `on` and checks `file`'s slots. The run's memo keeps its
+    last `Moved` step (`lastMove`), which also gives `{{visit.note}}`. The
+    orchestrate machines' decide requires `{{input.dir}}/diagnosis.md`, with
+    Premise and Counterexample, before `changes`, `replan` or `rewrite` after
+    the fix cap (`exhausted`) or a `stuck` verdict: each starts a new
+    direction, which could rest on the premise that failed. A size stop
+    (its note is the diagnosis), a check error and an ordinary decide need
+    none, nor do `fix`, `merge`, `drop` and `recheck`. The planner reads
+    diagnosis.md first when the unit dir holds one, and a rewrite's new unit
+    dir gets a copy (the orchestrator recipe).
   - An `integrate` state pushes the run's head through the integration gate
     and moves by `on.green` or `on.red` (Integration gate in `shipped-extensions.md`).
   - A definition can ship files (`files`, a name to its text, each at most

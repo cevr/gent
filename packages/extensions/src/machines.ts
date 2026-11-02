@@ -257,11 +257,32 @@ const IntegrateState = Schema.Struct({
 })
 type IntegrateState = typeof IntegrateState.Type
 
+/** A markdown heading's text, as `## Premise` names it: one line with no `#`. */
+const HeadingText = Schema.String.check(Schema.isPattern(/^[^#\r\n]*[^#\s][^#\r\n]*$/)).check(
+  Schema.isMaxLength(80),
+)
+
+/**
+ * A file some answers need. On a visit the run entered by one of `after` (the
+ * move's edge: `exhausted` for a cap, a round's verdict for a verdict move),
+ * each of `choices` is refused until `file` (a template, from the run's cwd)
+ * was written after the ask and holds text under each of `headings`. A visit
+ * entered any other way needs no file.
+ */
+const AnswerRequirement = Schema.Struct({
+  choices: Schema.NonEmptyArray(Verdict),
+  after: Schema.NonEmptyArray(Verdict),
+  file: Template,
+  headings: Schema.NonEmptyArray(HeadingText),
+})
+type AnswerRequirement = typeof AnswerRequirement.Type
+
 const AskState = Schema.Struct({
   kind: Schema.Literal("ask"),
   ask: Template,
   /** The allowed answers, each with its next state. */
   on: Schema.Record(Verdict, StateName),
+  requires: Schema.optionalKey(AnswerRequirement),
 })
 
 const FinalState = Schema.Struct({
@@ -505,6 +526,11 @@ const MachineStep = Schema.TaggedUnion({
     note: Schema.optionalKey(Schema.String),
     /** A command's move: its state's `judges`, when it names one; false, its `pass` or `fail` judged no round. */
     judged: Schema.optionalKey(Schema.Boolean),
+    /**
+     * The verdict that moved the run: a round's (`by: "verdict"`), or an
+     * answer to a thread state's ask that chose one of its verdicts.
+     */
+    verdict: Schema.optionalKey(Verdict),
   },
   /** `accepted`: the final state's `accepts`; a step without it accepted. */
   Finished: { state: StateName, accepted: Schema.optionalKey(Schema.Boolean) },
@@ -517,6 +543,7 @@ const MachineStep = Schema.TaggedUnion({
 })
 type MachineStep = typeof MachineStep.Type
 type RoundEnded = Extract<MachineStep, { readonly _tag: "RoundEnded" }>
+type MovedStep = Extract<MachineStep, { readonly _tag: "Moved" }>
 
 /** One step of a run's log, as a model's quality is read from it. */
 interface RunOutcome {
@@ -534,14 +561,15 @@ class MachineError extends Schema.TaggedError<MachineError, { readonly brand: un
 /**
  * An answer the run refuses. `conflict`: the ask was answered with another
  * choice. `stale`: the ask was never answered and is no longer the current
- * one. `invalid`: the current ask does not offer the choice.
+ * one. `invalid`: the current ask does not offer the choice. `unmet`: the
+ * choice needs a file (the state's `requires`) the run's cwd does not hold yet.
  */
 class MachineAnswerRefused extends Schema.TaggedError<
   MachineAnswerRefused,
   { readonly brand: unique symbol }
 >()("MachineAnswerRefused", {
   message: Schema.String,
-  reason: Schema.Literals(["stale", "conflict", "invalid"]),
+  reason: Schema.Literals(["stale", "conflict", "invalid", "unmet"]),
   ask: Schema.optionalKey(Schema.Struct({ askId: AskId, choices: Schema.Array(Verdict) })),
 }) {}
 
@@ -585,7 +613,7 @@ const templatesOf = (state: MachineState): ReadonlyArray<string> => {
     case "integrate":
       return []
     case "ask":
-      return [state.ask]
+      return [state.ask, ...Option.toArray(Option.fromUndefinedOr(state.requires?.file))]
     case "final":
       return Option.toArray(Option.fromUndefinedOr(state.say))
   }
@@ -658,6 +686,11 @@ const stateProblems = (
   if (state.kind === "thread" || state.kind === "ask") {
     const reserved = Object.keys(state.on ?? {}).filter((key) => RESERVED_KEYS.has(key))
     problems.push(...reserved.map((key) => `${name}: ${key} is a reserved choice`))
+  }
+  if (state.kind === "ask") {
+    const guarded = state.requires?.choices ?? []
+    const unknown = guarded.filter((choice) => !Object.hasOwn(state.on, choice))
+    problems.push(...unknown.map((choice) => `${name}: requires names no choice ${choice}`))
   }
   return problems
 }
@@ -986,8 +1019,8 @@ interface RunRecord {
 interface RunMemo {
   readonly visits: Visits
   readonly context: RunContext
-  /** The note of the run's last move (`Moved.note`): none when it carried none. */
-  readonly moveNote: Option.Option<string>
+  /** The run's last move: how its current visit was entered, and that move's note. */
+  readonly lastMove: Option.Option<MovedStep>
 }
 
 type Run = RunRecord & RunMemo
@@ -1405,7 +1438,7 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
               if (updated.length === 0) return Option.none<Run>()
               yield* insertSteps(before.run, before.seq, steps)
               const memo = foldSteps(
-                { visits: before.visits, context: before.context, moveNote: before.moveNote },
+                { visits: before.visits, context: before.context, lastMove: before.lastMove },
                 steps,
               )
               return Option.some<Run>({ ...after, ...memo, seq })
@@ -1775,7 +1808,7 @@ const visited = (visits: Visits, state: StateName): Visits => ({
 const EMPTY_MEMO: RunMemo = {
   visits: { counts: {}, grants: {} },
   context: { last: {}, all: {} },
-  moveNote: Option.none(),
+  lastMove: Option.none(),
 }
 
 /**
@@ -1803,7 +1836,7 @@ const foldStep = (memo: RunMemo, step: MachineStep): RunMemo => {
     case "Saved":
       return { ...memo, context: saved(memo.context, step.state, step.value) }
     case "Moved":
-      return { ...memo, moveNote: Option.fromUndefinedOr(step.note) }
+      return { ...memo, lastMove: Option.some(step) }
     default:
       return memo
   }
@@ -1871,6 +1904,8 @@ const isFresh = (state: ThreadState, visit: number) => {
 }
 
 const askIdOf = (run: RunId, seq: number) => AskId.make(`${run}:${seq}`)
+/** The seq of the ask's `Dispatched` step: `askIdOf`'s second part. */
+const askSeqOf = (askId: AskId) => Number(askId.slice(askId.lastIndexOf(":") + 1))
 
 /** The pending ask, its steps with its `Dispatched` step last, committed as one move. */
 const askingRun = (
@@ -2636,7 +2671,7 @@ const templateScope = (run: Run, visit: number): TemplateScope => ({
   input: run.input,
   context: run.context,
   visit,
-  note: run.moveNote,
+  note: Option.flatMap(run.lastMove, (move) => Option.fromUndefinedOr(move.note)),
   files: {},
   bun: Option.none(),
 })
@@ -3657,7 +3692,12 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
   yield* settleRound(run, state, action, action.thread, to, [
     ended,
     MachineStep.cases.Saved.make({ state: name, value }),
-    MachineStep.cases.Moved.make({ from: name, to, by: "verdict" }),
+    MachineStep.cases.Moved.make({
+      from: name,
+      to,
+      by: "verdict",
+      ...omitUndefined({ verdict: Option.getOrUndefined(Option.flatten(verdict)) }),
+    }),
   ])
 })
 
@@ -4084,10 +4124,16 @@ const reasonLine = (action: AskAction, state: MachineState, scope: TemplateScope
 const deliverAsk = Effect.fn("Machines.deliverAsk")(function* (run: Run, action: AskAction) {
   const definition = yield* definitionOf(run)
   const state = yield* stateIn(definition, action.state)
-  const line = reasonLine(action, state, templateScope(run, action.visit))
+  const scope = templateScope(run, action.visit)
+  const line = reasonLine(action, state, scope)
+  const path = yield* Path.Path
+  const required = Option.map(requirementOf(run, state), (requires) =>
+    requirementLine(requires, path.resolve(run.cwd, render(requires.file, scope))),
+  )
   const content = [
     `Machine ${run.machine} (${run.run}) asks at ${action.state} (${action.reason}).`,
     line,
+    ...Option.toArray(required),
     `Choices: ${action.choices.join(" | ")}`,
     `Answer with machine.answer({ run: "${run.run}", askId: "${action.askId}", choice }).`,
   ].join("\n")
@@ -4202,6 +4248,78 @@ const moveFor = (state: MachineState, action: AskAction, choice: Verdict) => {
   return { stop: true, to: action.state }
 }
 
+/**
+ * The ask state's requirement, when the run entered this visit by one of its
+ * `after` edges: a verdict move by its verdict, any other move by its `by`.
+ */
+const requirementOf = (run: Run, state: MachineState): Option.Option<AnswerRequirement> => {
+  if (state.kind !== "ask") return Option.none()
+  const entry = Option.map(
+    Option.filter(run.lastMove, (move) => move.to === run.state),
+    (move) => move.verdict ?? move.by,
+  )
+  return Option.filter(Option.fromUndefinedOr(state.requires), (requires) =>
+    Option.exists(entry, (edge) => requires.after.some((after) => after === edge)),
+  )
+}
+
+/** The text under each markdown heading of `content`, by its lowercased heading. */
+const sectionsOf = (content: string): ReadonlyMap<string, string> => {
+  const sections = new Map<string, string>()
+  let current = Option.none<string>()
+  for (const line of content.split(/\r?\n/)) {
+    const heading = Option.fromNullishOr(/^#{1,6}\s+(.*?)\s*#*\s*$/.exec(line))
+    if (Option.isSome(heading)) {
+      const name = (heading.value[1] ?? "").toLowerCase()
+      current = Option.some(name)
+      sections.set(name, sections.get(name) ?? "")
+      continue
+    }
+    for (const name of Option.toArray(current)) {
+      sections.set(name, `${sections.get(name) ?? ""}${line}\n`)
+    }
+  }
+  return sections
+}
+
+/**
+ * What the requirement's file lacks for this ask: none when it was written at
+ * or after the ask and holds text under each heading.
+ */
+const requirementGaps = Effect.fn("Machines.requirementGaps")(function* (
+  run: Run,
+  action: AskAction,
+  requires: AnswerRequirement,
+) {
+  const store = yield* MachineStore
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const file = path.resolve(run.cwd, render(requires.file, templateScope(run, action.visit)))
+  const info = yield* fs.stat(file).pipe(Effect.option)
+  if (Option.isNone(info)) return { file, gaps: ["no file"] }
+  const seq = askSeqOf(action.askId)
+  const [asked] = yield* store.visitSteps(run.run, { since: seq, through: seq })
+  const askedAt = asked?.at ?? 0
+  const written = Option.getOrElse(
+    Option.map(info.value.mtime, (date) => date.getTime()),
+    () => 0,
+  )
+  if (written < askedAt) return { file, gaps: ["written before the ask"] }
+  const content = yield* fs.readFileString(file).pipe(Effect.option)
+  const sections = sectionsOf(Option.getOrElse(content, () => ""))
+  const gaps = requires.headings.flatMap((heading) => {
+    const text = sections.get(heading.toLowerCase())
+    if (Predicate.isUndefined(text)) return [`no heading ${heading}`]
+    if (text.trim().length === 0) return [`nothing under ${heading}`]
+    return []
+  })
+  return { file, gaps }
+})
+
+/** The ask's line on a requirement: which choices need which file. */
+const requirementLine = (requires: AnswerRequirement, file: string) =>
+  `Before ${requires.choices.join(", ")}: write ${file} with text under the headings ${requires.headings.join(", ")}; the run refuses those choices until it holds them, written after this ask.`
+
 /** `machine.answer`'s input; exported, with the tool, for a test that runs two answers at once. */
 export const AnswerParams = Schema.Struct({
   run: RunId.annotate({ description: "The run, from machine.start or machine.list." }),
@@ -4218,7 +4336,8 @@ type AnswerParams = typeof AnswerParams.Type
  * holds decides: an ask that was answered is decided by that answer (the
  * same choice and note are admitted again, any other conflicts); an ask that
  * was never answered and is no longer current is stale; a choice the current
- * ask does not offer is invalid. The answer commits, then kicks the host; a
+ * ask does not offer is invalid; a choice whose required file is missing or
+ * incomplete is unmet, and the run stays at the ask. The answer commits, then kicks the host; a
  * commit another writer beat starts again from the top.
  */
 const answer = Effect.fn("Machines.answer")(function* (params: AnswerParams) {
@@ -4266,7 +4385,25 @@ const answer = Effect.fn("Machines.answer")(function* (params: AnswerParams) {
     const state = yield* stateIn(definition, action.state).pipe(
       Effect.mapError((fault) => new MachineError({ message: fault.message })),
     )
+    const required = Option.filter(requirementOf(run, state), (requires) =>
+      requires.choices.includes(params.choice),
+    )
+    if (Option.isSome(required)) {
+      const { file, gaps } = yield* requirementGaps(run, action, required.value)
+      if (gaps.length > 0) {
+        return yield* new MachineAnswerRefused({
+          message: `Answer refused (unmet): ${params.choice} needs ${file} with text under ${required.value.headings.join(", ")}, written after this ask: ${gaps.join("; ")}`,
+          reason: "unmet",
+          ask: { askId: action.askId, choices: action.choices },
+        })
+      }
+    }
     const move = moveFor(state, action, params.choice)
+    // An answer that chose a thread state's verdict moves the run as that verdict would.
+    const verdict = Option.liftPredicate(
+      params.choice,
+      (choice) => state.kind === "thread" && Object.hasOwn(state.on ?? {}, choice),
+    )
     const answered = MachineStep.cases.Answered.make({
       askId: action.askId,
       choice: params.choice,
@@ -4283,7 +4420,12 @@ const answer = Effect.fn("Machines.answer")(function* (params: AnswerParams) {
       answered,
       MachineStep.cases.Saved.make({ state: action.state, value }),
       ...Option.toArray(granted),
-      MachineStep.cases.Moved.make({ from: action.state, to: move.to, by: "answer" }),
+      MachineStep.cases.Moved.make({
+        from: action.state,
+        to: move.to,
+        by: "answer",
+        ...omitUndefined({ verdict: Option.getOrUndefined(verdict) }),
+      }),
     ]
     if (move.stop) {
       after = { ...run, status: "stopped", pending: Option.none() }
@@ -4648,7 +4790,7 @@ const tallyRound = (row: QualityTally, step: RoundEnded, run: RunTally): void =>
   run.sinceGate.add(row)
 }
 
-const tallyMove = (step: Extract<MachineStep, { readonly _tag: "Moved" }>, run: RunTally): void => {
+const tallyMove = (step: MovedStep, run: RunTally): void => {
   const by = step.by
   // A size stop moves off the round that ended just before it.
   if (by === "oversize") for (const row of Option.toArray(run.latest)) row.oversize += 1
@@ -4900,12 +5042,7 @@ const foldRoundEnded = (fold: VisitFold, step: RoundEnded): void => {
  * off a state out of rounds has no open visit: it refuses the visit past
  * the state's count.
  */
-const foldMoved = (
-  fold: VisitFold,
-  seq: number,
-  at: number,
-  step: Extract<MachineStep, { readonly _tag: "Moved" }>,
-): void => {
+const foldMoved = (fold: VisitFold, seq: number, at: number, step: MovedStep): void => {
   const entry = Option.filter(fold.open, (value) => value.state === step.from)
   if (Option.isSome(entry)) {
     entry.value.to = Option.some(step.to)

@@ -2119,6 +2119,37 @@ describe("a round too big for its thread", () => {
       expect(encodeJson(refused?.result)).toContain("decide: {{visit.foo}} names no state")
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
+
+  it.live(
+    "a definition whose ask requires a file for a choice it lacks, or by a slot no run holds, is refused",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels(() => Effect.succeed(billed("unused")))
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        const owner = ownerOf(yield* client.session.create({}))
+        const requires = {
+          choices: ["go", "redo"],
+          after: ["exhausted"],
+          file: "{{nowhere.dir}}/why.md",
+          headings: ["Why"],
+        }
+        const definition = {
+          ...SIZE,
+          states: {
+            ...SIZE.states,
+            decide: { kind: "ask", ask: "SIZE", on: { go: "end" }, requires },
+          },
+        }
+        const [refused] = yield* call(client, owner, [
+          ["machine.define", "define-requires", { definition }],
+        ])
+        expect(refused?.failed).toBe(true)
+        const text = encodeJson(refused?.result)
+        expect(text).toContain("decide: requires names no choice redo")
+        expect(text).toContain("decide: {{nowhere.dir}} names no state")
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
 })
 
 // ── waits for the account ───────────────────────────────────────────────────
@@ -5982,6 +6013,44 @@ const fileExists = (file: string) =>
     Effect.provide(BunServices.layer),
   )
 
+/** A diagnosis with text under both headings the decide ask requires. */
+const DIAGNOSIS = [
+  "# Diagnosis",
+  "",
+  "## Premise",
+  "",
+  "The parser reads one token per line.",
+  "",
+  "## Counterexample",
+  "",
+  "A line with two tokens: parser.ts:12 drops the second.",
+  "",
+].join("\n")
+
+/** Writes the unit dir's diagnosis.md, its mtime `aged` seconds back when given. */
+const writeDiagnosis = (dir: string, content: string, aged?: number) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const file = `${dir}/diagnosis.md`
+    yield* fs.writeFileString(file, content)
+    if (Predicate.isUndefined(aged)) return
+    const at = (yield* Clock.currentTimeMillis) / 1000 - aged
+    yield* fs.utimes(file, at, at)
+  }).pipe(Effect.provide(BunServices.layer))
+
+/** Answers `ask` with `choice`, and returns the call's result, refused or not. */
+const tryAnswer = (
+  client: Client,
+  owner: SessionKey,
+  ask: typeof AskDetails.Type,
+  choice: string,
+  id: string,
+) =>
+  Effect.map(
+    call(client, owner, [["machine.answer", id, { run: ask.run, askId: ask.askId, choice }]]),
+    ([result]) => result,
+  )
+
 describe("the shipped orchestrate machine", () => {
   it.live(
     "plans, implements, reviews and verifies a unit, each role on its config role, then decides",
@@ -6183,15 +6252,89 @@ describe("the shipped orchestrate machine", () => {
   )
 
   it.live(
-    "a stuck review goes to decide, and changes there start a new implementor that later fixes continue",
+    "at the fix cap, rewrite waits for a diagnosis written for this decide, with text under both headings",
     () =>
       Effect.gen(function* () {
-        const { home, models, client, owner, run } = yield* unitRun({
+        const { home, client, owner, run, dir } = yield* unitRun({
+          "review:1": "changes",
+          "verify:1": "fail",
+          "review:3": "changes",
+        })
+        yield* answerAsk(client, owner, 1, "go")
+        const decide = yield* askDetails(client, owner, 2)
+        expect(decide.state).toBe("decide")
+        // The ask names the file and its headings.
+        const file = `${dir}/diagnosis.md`
+        expect(askText((yield* client.session.getSnapshot(owner)).messages)).toContain(
+          `Before changes, replan, rewrite: write ${file} with text under the headings Premise, Counterexample`,
+        )
+        const refusal = (id: string) =>
+          Effect.map(tryAnswer(client, owner, decide, "rewrite", id), (result) => {
+            expect(result?.failed).toBe(true)
+            return encodeJson(result?.result)
+          })
+        const none = yield* refusal("none")
+        expect(none).toContain(`(unmet): rewrite needs ${file}`)
+        expect(none).toContain("no file")
+        yield* writeDiagnosis(dir, DIAGNOSIS.slice(0, DIAGNOSIS.indexOf("## Counterexample")))
+        expect(yield* refusal("no-counterexample")).toContain("no heading Counterexample")
+        yield* writeDiagnosis(dir, `${DIAGNOSIS.slice(0, DIAGNOSIS.indexOf("A line"))}\n## Notes\n`)
+        expect(yield* refusal("empty-counterexample")).toContain("nothing under Counterexample")
+        // A diagnosis from before this decide visit is a stale one.
+        yield* writeDiagnosis(dir, DIAGNOSIS, 60)
+        expect(yield* refusal("stale")).toContain("written before the ask")
+        // Each refusal kept the run at the same ask.
+        expect(Option.getOrThrow(yield* home.sql(runRow(run)))).toMatchObject({
+          state: "decide",
+          status: "asking",
+        })
+        yield* writeDiagnosis(dir, DIAGNOSIS)
+        yield* answerAsk(client, owner, 2, "rewrite")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run))).slice(-2)).toEqual([
+          "fix→decide",
+          "decide→rewrite",
+        ])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a decide after an accepted review and a passed verify needs no diagnosis",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run, dir } = yield* unitRun({})
+        yield* answerAsk(client, owner, 1, "go")
+        const decide = yield* answerAsk(client, owner, 2, "rewrite")
+        expect(decide.state).toBe("decide")
+        expect(askText((yield* client.session.getSnapshot(owner)).messages)).not.toContain(
+          "Before changes",
+        )
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run))).slice(-2)).toEqual([
+          "verify→decide",
+          "decide→rewrite",
+        ])
+        expect(yield* fileExists(`${dir}/diagnosis.md`)).toBe(false)
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a stuck review goes to decide, and changes there, after a diagnosis, start a new implementor that later fixes continue",
+    () =>
+      Effect.gen(function* () {
+        const { home, models, client, owner, run, dir } = yield* unitRun({
           "review:1": "stuck",
           "review:2": "changes",
           "verify:1": "stuck",
         })
         yield* answerAsk(client, owner, 1, "go")
+        // After stuck, a new direction waits for the diagnosis.
+        const stuck = yield* askDetails(client, owner, 2)
+        const replan = yield* tryAnswer(client, owner, stuck, "replan", "replan-early")
+        expect(encodeJson(replan?.result)).toContain(`(unmet): replan needs ${dir}/diagnosis.md`)
+        yield* writeDiagnosis(dir, DIAGNOSIS)
         const first = yield* answerAsk(client, owner, 2, "changes", "split the parser")
         expect(first.state).toBe("decide")
         const second = yield* answerAsk(client, owner, 3, "drop")
