@@ -1365,9 +1365,10 @@ const createReceiptTables = Effect.gen(function* () {
 })
 
 const ensureMachineTables = Effect.andThen(
+  // Version 3: a pending round and a recorded step may name the round's effort.
   ensureExtensionTables({
     owner: "@gent/machines",
-    version: 2,
+    version: 3,
     tables: ["machine_steps", "machine_runs"],
     create: createMachineTables,
   }),

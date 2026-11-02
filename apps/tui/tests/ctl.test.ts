@@ -6,6 +6,13 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
+import { ReviewRound } from "@gent/extensions/client"
+import {
+  defineExtension,
+  ExtensionHost,
+  type GentExtension,
+  request,
+} from "@gent/core/extensions/api"
 import {
   CredentialSlot,
   decodeRequestReply,
@@ -31,6 +38,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Ref,
   Runtime,
   Schedule,
@@ -169,28 +177,35 @@ const errorOf = (run: CtlRun) =>
 /**
  * A sqlite server on the scripted model, owning the scratch home's data
  * directory. `ledger` is the account ledger (`credential-usage.json`) the
- * server reads as it starts.
+ * server reads as it starts; `config` is the home's `.gent/config.json`;
+ * `extensions` replaces the shipped ones.
  */
 const serveScratchHomeWith = Effect.fn("serveScratchHome")(function* (
-  ledger: Option.Option<Schema.Json> = Option.none(),
+  options: {
+    readonly ledger?: Schema.Json
+    readonly config?: Schema.Json
+    readonly extensions?: ReadonlyArray<GentExtension>
+  } = {},
 ) {
   const home = yield* makeTempDirectoryScoped("gent-ctl-")
-  if (Option.isSome(ledger)) {
-    yield* Effect.gen(function* () {
+  const seed = (name: string, json: Option.Option<Schema.Json>) =>
+    Effect.gen(function* () {
+      if (Option.isNone(json)) return
       const fs = yield* FileSystem.FileSystem
       yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
       yield* fs.writeFileString(
-        `${home}/.gent/credential-usage.json`,
-        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(ledger.value),
+        `${home}/.gent/${name}`,
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(json.value),
       )
     }).pipe(Effect.provide(BunServices.layer))
-  }
+  yield* seed("credential-usage.json", Option.fromUndefinedOr(options.ledger))
+  yield* seed("config.json", Option.fromUndefinedOr(options.config))
   const catalogOrigin = yield* serveModelCatalogFixture
   const server = yield* Gent.server({
     cwd: home,
     state: Gent.state.sqlite({ home }),
     provider: Gent.provider.mock(),
-    extensions: BuiltinExtensions,
+    extensions: options.extensions ?? BuiltinExtensions,
   }).pipe(
     Effect.provide(
       ConfigProvider.layer(
@@ -202,6 +217,62 @@ const serveScratchHomeWith = Effect.fn("serveScratchHome")(function* (
 })
 
 const serveScratchHome = serveScratchHomeWith()
+
+/**
+ * The miner's line types, field for field: `Message` and `Session` in
+ * `~/.claude/skills/retro/scripts/mine-sessions.ts`, the reader a `gent ctl
+ * review` export feeds; its `number` is `Schema.Finite`, as JSON holds no
+ * other. A field the miner does not name is gent's own, and the decode keeps
+ * no check on it.
+ */
+const MinerMessage = Schema.Struct({
+  src: Schema.String,
+  project: Schema.String,
+  session: Schema.String,
+  ts: Schema.optionalKey(Schema.String),
+  kind: Schema.Literals(["msg", "slash", "interrupt", "limit", "peer"]),
+  text: Schema.String,
+})
+const MinerSession = Schema.Struct({
+  src: Schema.String,
+  project: Schema.String,
+  session: Schema.String,
+  sub: Schema.Boolean,
+  bytes: Schema.Finite,
+  first: Schema.optionalKey(Schema.String),
+  last: Schema.optionalKey(Schema.String),
+  human: Schema.Finite,
+  peer: Schema.Finite,
+  interrupts: Schema.Finite,
+  compactions: Schema.Finite,
+  limits: Schema.Finite,
+  cacheRead: Schema.Finite,
+  cacheWrite: Schema.Finite,
+  output: Schema.Finite,
+  skills: Schema.Record(Schema.String, Schema.Finite),
+  slash: Schema.Record(Schema.String, Schema.Finite),
+  agents: Schema.Finite,
+  rereads: Schema.Record(Schema.String, Schema.Finite),
+  skipped: Schema.optionalKey(Schema.Literal(true)),
+})
+
+/** Each line of an export's two miner files, decoded as the miner's type: none fails. */
+const minerLines = (out: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const lines = (name: string) =>
+      Effect.map(fs.readFileString(`${out}/${name}`), (text) =>
+        text.split("\n").filter((line) => line.length > 0),
+      )
+    const messages = yield* Effect.forEach(yield* lines("messages.jsonl"), (line) =>
+      Schema.decodeEffect(Schema.fromJsonString(MinerMessage))(line),
+    )
+    const sessions = yield* Effect.forEach(yield* lines("sessions.jsonl"), (line) =>
+      Schema.decodeEffect(Schema.fromJsonString(MinerSession))(line),
+    )
+    expect(sessions.length).toBeGreaterThan(0)
+    return { messages, sessions }
+  })
 
 /** A call in `home`'s workspace, and the one result it printed as `tag`. */
 const ctlIn = (home: string) => ({
@@ -623,8 +694,8 @@ describe("gent ctl against a running server", () => {
             { count: 2 },
             { count: 1, expiresAt: now - 60_000 },
           ]
-          const seeded = yield* serveScratchHomeWith(
-            Option.some({
+          const seeded = yield* serveScratchHomeWith({
+            ledger: {
               buckets: [],
               readings: [reading],
               segments: [segment(now - 600_000), segment(now - 120_000)],
@@ -642,8 +713,8 @@ describe("gent ctl against a running server", () => {
                   grants: [{ count: 1, expiresAt: now - 1 }],
                 },
               ],
-            }),
-          )
+            },
+          })
           const printed = yield* runCtl(seeded.home, ["lanes"])
           // One JSON value, its providers one record per line.
           expect(printed.stdout.split("\n").filter((row) => row.length > 0)).toHaveLength(3)
@@ -690,8 +761,8 @@ describe("gent ctl against a running server", () => {
           const now = yield* Clock.currentTimeMillis
           const weekEnd = now + 100 * 3_600_000
           const serverScope = yield* Scope.make()
-          const seeded = yield* serveScratchHomeWith(
-            Option.some({
+          const seeded = yield* serveScratchHomeWith({
+            ledger: {
               buckets: [],
               readings: [
                 {
@@ -704,8 +775,8 @@ describe("gent ctl against a running server", () => {
                   rejected: false,
                 },
               ],
-            }),
-          ).pipe(Scope.provide(serverScope))
+            },
+          }).pipe(Scope.provide(serverScope))
           const printed = yield* runCtl(seeded.home, ["pool"])
           // One JSON value, its providers one record per line.
           expect(printed.stdout.split("\n").filter((row) => row.length > 0)).toHaveLength(3)
@@ -774,8 +845,8 @@ describe("gent ctl against a running server", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis
-          const seeded = yield* serveScratchHomeWith(
-            Option.some({
+          const seeded = yield* serveScratchHomeWith({
+            ledger: {
               buckets: [],
               readings: [
                 {
@@ -788,8 +859,8 @@ describe("gent ctl against a running server", () => {
                   rejected: false,
                 },
               ],
-            }),
-          )
+            },
+          })
           // The peer's line, as its server's link writes it: two runs on default.
           const peerLine = yield* encodePoolLine({
             boot: "peer",
@@ -982,7 +1053,9 @@ describe("gent ctl against a running server", () => {
           const line = yield* Schema.decodeEffect(Schema.fromJsonString(ReviewSession))(
             session ?? "",
           )
-          expect(line).toMatchObject({ session: ended.sessionId, turns: 1, owner: 1, peer: 0 })
+          expect(line).toMatchObject({ session: ended.sessionId, turns: 1, human: 1, peer: 0 })
+          // Every line is a line of the miner's own types.
+          yield* minerLines(out)
           expect(line.models.map((usage) => usage.model)).toEqual([TEST_MODEL_ID])
           const digest = yield* fs.readFileString(`${out}/digest.md`)
           expect(digest).toStartWith("# Gent session digest")
@@ -1004,6 +1077,187 @@ describe("gent ctl against a running server", () => {
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
       ),
     30_000,
+  )
+
+  it.live(
+    "review of a server without @gent/machines writes the core files and notes the skipped rounds",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { home } = yield* serveScratchHomeWith({
+            config: { disabledExtensions: ["@gent/machines"] },
+          })
+          const fs = yield* FileSystem.FileSystem
+          yield* ctlIn(home).as("TurnEnded", [
+            "send",
+            "--new",
+            "--model",
+            TEST_MODEL_ID,
+            "--wait",
+            "review a server that runs no machines",
+          ])
+          const out = `${home}/review`
+          const review = yield* Effect.flatMap(
+            runCtl(home, ["review", "--since", "7d", "--out", out]),
+            resultAs("Review"),
+          )
+          expect(review.files).toEqual([
+            `${out}/messages.jsonl`,
+            `${out}/sessions.jsonl`,
+            `${out}/digest.md`,
+          ])
+          expect((yield* fs.readDirectory(out)).toSorted()).toEqual(
+            ["digest.md", "messages.jsonl", "sessions.jsonl"].toSorted(),
+          )
+          const digest = yield* fs.readFileString(`${out}/digest.md`)
+          expect(digest).toContain("rounds: @gent/machines not loaded")
+          expect(digest).not.toContain("## Machine rounds per role and model")
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "review that fails while it overwrites an export leaves the old export whole and no staging",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // A `@gent/machines` whose rounds page no client decodes: the
+          // rounds read fails after the core files were written.
+          const brokenMachines = defineExtension({
+            id: "@gent/machines",
+            setup: Effect.gen(function* () {
+              const host = yield* ExtensionHost
+              yield* host.register(
+                "request",
+                request({
+                  scope: "server",
+                  id: "review-rounds",
+                  input: Schema.Struct({}),
+                  output: Schema.Literal("broken"),
+                  execute: () => Effect.succeed("broken" as const),
+                }),
+              )
+            }),
+          })
+          const { home } = yield* serveScratchHomeWith({
+            extensions: [
+              ...BuiltinExtensions.filter(
+                (extension) => extension.manifest.id !== "@gent/machines",
+              ),
+              brokenMachines,
+            ],
+          })
+          const fs = yield* FileSystem.FileSystem
+          const out = `${home}/review`
+          const old = {
+            "messages.jsonl": "old messages\n",
+            "sessions.jsonl": "old sessions\n",
+            "rounds.jsonl": "old rounds\n",
+            "digest.md": "old digest\n",
+          }
+          yield* fs.makeDirectory(out)
+          for (const [name, text] of Object.entries(old)) {
+            yield* fs.writeFileString(`${out}/${name}`, text)
+          }
+          yield* ctlIn(home).as("TurnEnded", [
+            "send",
+            "--new",
+            "--model",
+            TEST_MODEL_ID,
+            "--wait",
+            "a message the failed review read",
+          ])
+          const before = (yield* fs.readDirectory(home)).toSorted()
+
+          const run = yield* runCtl(home, ["review", "--since", "7d", "--out", out])
+          expect(run.code).toBe(CTL_EXIT.failed)
+          const error = yield* errorOf(run)
+          expect(error._tag).toBe("CtlFailed")
+          expect(error.message).toContain("@gent/machines review-rounds")
+          // The old export, file for file; the home holds no staging directory.
+          expect((yield* fs.readDirectory(out)).toSorted()).toEqual(Object.keys(old).toSorted())
+          for (const [name, text] of Object.entries(old)) {
+            expect(yield* fs.readFileString(`${out}/${name}`)).toBe(text)
+          }
+          expect((yield* fs.readDirectory(home)).toSorted()).toEqual(before)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "review writes a machine run's two rounds with role, effort, tokens and outcome",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { home } = yield* serveScratchHome
+          const fs = yield* FileSystem.FileSystem
+          yield* ctlIn(home).as("TurnEnded", [
+            "send",
+            "--new",
+            "--model",
+            TEST_MODEL_ID,
+            "--wait",
+            "debug rounds",
+          ])
+          const out = `${home}/review`
+          const roundLines = Effect.map(fs.readFileString(`${out}/rounds.jsonl`), (text) =>
+            text.split("\n").filter((line) => line.length > 0),
+          )
+          // The rounds run apart from the turn: read the window until both ended.
+          const reviewed = Effect.flatMap(
+            runCtl(home, ["review", "--since", "7d", "--out", out]),
+            resultAs("Review"),
+          ).pipe(Effect.andThen(roundLines))
+          const lines = yield* reviewed.pipe(
+            Effect.repeat({
+              until: (found) => found.length >= 2,
+              schedule: Schedule.spaced("200 millis"),
+            }),
+          )
+          const rounds = yield* Effect.forEach(lines, (line) =>
+            Schema.decodeEffect(Schema.fromJsonString(ReviewRound))(line),
+          )
+          expect(
+            rounds
+              .map((round) => ({
+                machine: String(round.machine),
+                state: String(round.state),
+                role: String(round.role ?? "-"),
+                model: String(round.model ?? "-"),
+                effort: round.effort ?? "-",
+                outcome: round.outcome,
+              }))
+              .toSorted((left, right) => Order.String(left.state, right.state)),
+          ).toEqual([
+            {
+              machine: "rounds",
+              state: "draft",
+              role: "writer",
+              model: TEST_MODEL_ID,
+              effort: "low",
+              outcome: "verdict",
+            },
+            {
+              machine: "rounds",
+              state: "review",
+              role: "reviewer",
+              model: TEST_MODEL_ID,
+              effort: "-",
+              outcome: "verdict",
+            },
+          ])
+          for (const round of rounds) {
+            expect(round.tokens?.output ?? 0).toBeGreaterThan(0)
+          }
+          const digest = yield* fs.readFileString(`${out}/digest.md`)
+          expect(digest).toContain(`| writer | ${TEST_MODEL_ID}@low | 1 | 0 | verdict 1 |`)
+          expect(digest).toContain(`| reviewer | ${TEST_MODEL_ID} | 1 | 0 | verdict 1 |`)
+          yield* minerLines(out)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("40 seconds")),
+      ),
+    45_000,
   )
 
   it.live("review refuses a junk --since and a file --out with exit 2, and writes nothing", () =>

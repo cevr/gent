@@ -4008,21 +4008,39 @@ describe("review.window", () => {
         ).toEqual([
           ["msg", "fix the build [REDACTED]"],
           ["peer", "a machine asks for a review"],
-          ["interrupt", "interrupted"],
+          ["interrupt", ""],
           ["limit", "usage limit reached"],
         ])
         expect(messageLines.filter((line) => line.session === other.sessionId)).toEqual([
           expect.objectContaining({ kind: "limit", project: "/work/beta" }),
         ])
+        const windowText = [
+          "fix the build\n  token=hunter2value",
+          "a machine asks for a review",
+          "handoff summary",
+        ].join("")
         expect(sessionLines.get(main.sessionId)).toEqual({
           src: "gent",
           project: "/work/alpha",
           session: main.sessionId,
-          started: DateTime.formatIso(DateTime.makeUnsafe(now - 2 * DAY)),
-          ended: DateTime.formatIso(DateTime.makeUnsafe(now - 40_000)),
-          turns: 2,
-          owner: 1,
+          sub: false,
+          bytes: new TextEncoder().encode(windowText).length,
+          first: DateTime.formatIso(DateTime.makeUnsafe(now - 2 * DAY)),
+          last: DateTime.formatIso(DateTime.makeUnsafe(now - 40_000)),
+          human: 1,
           peer: 1,
+          interrupts: 1,
+          compactions: 1,
+          limits: 1,
+          cacheRead: 3000,
+          cacheWrite: 5,
+          output: 15,
+          skills: {},
+          slash: {},
+          agents: 1,
+          rereads: {},
+          turns: 2,
+          input: 150,
           models: [
             {
               model: "anthropic/claude-test",
@@ -4035,13 +4053,186 @@ describe("review.window", () => {
           handoffs: 1,
           prunes: 0,
           tools: { read: 2, bash: 1 },
-          children: 1,
-          interrupts: 1,
           errors: 1,
-          limits: { openai: 1 },
+          limitsByProvider: { openai: 1 },
         })
-        expect(sessionLines.get(SessionId.make("review-child"))?.parent).toBe(main.sessionId)
-        expect(sessionLines.get(other.sessionId)?.limits).toEqual({ unknown: 1 })
+        const child = sessionLines.get(SessionId.make("review-child"))
+        expect(child?.parent).toBe(main.sessionId)
+        expect(child?.sub).toBe(true)
+        expect(sessionLines.get(other.sessionId)?.limitsByProvider).toEqual({ unknown: 1 })
       }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+  )
+
+  it.live("a fork counts only the messages written on it, not the prefix it copied", () =>
+    Effect.gen(function* () {
+      const context = yield* Layer.build(
+        Layer.provideMerge(
+          RpcHandlersLive,
+          createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+        ),
+      )
+      const { cwd } = Context.get(context, RuntimeEnvironment)
+      const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(cwd))
+      const messages = Context.get(context, MessageStorage)
+      const since = (yield* Clock.currentTimeMillis) - DAY
+      const { sessionId, branchId } = yield* client.session.create({ cwd })
+      const settles = (branch: BranchId, prompt: string, label: string) =>
+        waitFor(
+          client.session.getSnapshot({ sessionId, branchId: branch }),
+          (current) =>
+            current.runtime._tag === "Idle" &&
+            current.messages.at(-1)?.role === "assistant" &&
+            current.messages.some((message) => messagePartsText(message.parts) === prompt),
+          5_000,
+          label,
+        )
+      yield* client.message.send({ sessionId, branchId, content: "the prompt before the fork" })
+      yield* settles(branchId, "the prompt before the fork", "first turn settles")
+      // A handoff marker at the fork point: the fork copies it with the prompt.
+      const handoff = MessageId.make("review-fork-handoff")
+      yield* messages
+        .createMessage(
+          Message.cases.regular.make({
+            id: handoff,
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "handoff summary" })],
+            createdAt: yield* DateTime.nowAsDate,
+            metadata: { customType: "context-window" },
+          }),
+        )
+        .pipe(Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(cwd)))
+      const fork = yield* client.branch.fork({
+        sessionId,
+        fromBranchId: branchId,
+        atMessageId: handoff,
+        name: "fork",
+      })
+      yield* client.message.send({
+        sessionId,
+        branchId: fork.branchId,
+        content: "the prompt on the fork",
+      })
+      yield* settles(fork.branchId, "the prompt on the fork", "fork turn settles")
+
+      const records = Array.from(yield* client.review.window({ since }).pipe(Stream.runCollect))
+      expect(
+        records
+          .flatMap((record) => {
+            if (record._tag !== "Message" || record.line.kind !== "msg") return []
+            return [record.line.text]
+          })
+          .toSorted(),
+      ).toEqual(["the prompt before the fork", "the prompt on the fork"])
+      const lines = records.flatMap((record) => {
+        if (record._tag !== "Session") return []
+        return [record.line]
+      })
+      expect(lines.map((line) => line.session)).toEqual([sessionId])
+      expect(lines[0]).toMatchObject({ human: 2, handoffs: 1, compactions: 1 })
+    }).pipe(Effect.scoped, Effect.timeout("15 seconds")),
+  )
+
+  it.live(
+    "a session written while the read runs is read once, and nothing after the start counts",
+    () =>
+      Effect.gen(function* () {
+        const midRead = yield* Ref.make(Option.none<Message>())
+        // The first page the read takes writes a later owner message into the
+        // session it reads: the session moves to the newest `updated_at`.
+        const writeMidRead = Layer.effect(
+          MessageStorage,
+          Effect.gen(function* () {
+            const base = yield* MessageStorage
+            return MessageStorage.of({
+              ...base,
+              listMessagesSince: (params) =>
+                Effect.gen(function* () {
+                  if (Option.isNone(yield* Ref.get(midRead))) {
+                    const at = yield* Clock.currentTimeMillis
+                    const found = yield* base.getMessage(MessageId.make(`${params.branchId}-say`))
+                    if (Predicate.isUndefined(found)) return yield* Effect.die("seed missing")
+                    const later = Message.cases.regular.make({
+                      id: MessageId.make(`${params.branchId}-later`),
+                      sessionId: found.sessionId,
+                      branchId: params.branchId,
+                      role: "user",
+                      parts: [Prompt.textPart({ text: "written while the read runs" })],
+                      createdAt: dateFromMillis(at + 60_000),
+                      metadata: { fromClient: true },
+                    })
+                    yield* base.createMessage(later)
+                    yield* Ref.set(midRead, Option.some(later))
+                  }
+                  return yield* base.listMessagesSince(params)
+                }),
+            })
+          }),
+        )
+        const context = yield* Layer.build(
+          Layer.provideMerge(
+            RpcHandlersLive,
+            Layer.provideMerge(
+              writeMidRead,
+              createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+            ),
+          ),
+        )
+        const { cwd } = Context.get(context, RuntimeEnvironment)
+        const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(cwd))
+        const sessions = Context.get(context, SessionStorage)
+        const branches = Context.get(context, BranchStorage)
+        const messages = Context.get(context, MessageStorage)
+        const now = yield* Clock.currentTimeMillis
+        const workspace = workspaceIdForCwd("/nonexistent/review-snapshot")
+        const ids = ["review-snap-a", "review-snap-b", "review-snap-c"]
+        yield* Effect.forEach(
+          ids,
+          (id, index) =>
+            Effect.gen(function* () {
+              const sessionId = SessionId.make(id)
+              const branchId = BranchId.make(`${id}-branch`)
+              const at = dateFromMillis(now - 60_000 + index * 1_000)
+              yield* sessions.createSession(
+                new Session({ id: sessionId, cwd: "/work/snap", createdAt: at, updatedAt: at }),
+              )
+              yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: at }))
+              yield* messages.createMessage(
+                Message.cases.regular.make({
+                  id: MessageId.make(`${branchId}-say`),
+                  sessionId,
+                  branchId,
+                  role: "user",
+                  parts: [Prompt.textPart({ text: `the owner's message in ${id}` })],
+                  createdAt: at,
+                  metadata: { fromClient: true },
+                }),
+              )
+            }).pipe(Effect.provideService(CurrentWorkspaceId, workspace)),
+          { discard: true },
+        )
+
+        const records = Array.from(
+          yield* client.review.window({ since: now - DAY }).pipe(Stream.runCollect),
+        )
+        const written = yield* Ref.get(midRead)
+        expect(Option.isSome(written)).toBe(true)
+        const lines = records.flatMap((record) => {
+          if (record._tag !== "Session") return []
+          return [record.line]
+        })
+        // Each session once, the one written mid-read too, with its count at the start.
+        expect(lines.map((line) => String(line.session)).toSorted()).toEqual(ids)
+        expect(lines.map((line) => line.human)).toEqual([1, 1, 1])
+        expect(
+          records.some(
+            (record) =>
+              record._tag === "Message" && record.line.text === "written while the read runs",
+          ),
+        ).toBe(false)
+        const later = DateTime.formatIso(DateTime.makeUnsafe(now + 60_000))
+        expect(lines.every((line) => line.last < later)).toBe(true)
+      }).pipe(Effect.scoped, Effect.timeout("15 seconds")),
   )
 })

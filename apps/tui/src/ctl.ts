@@ -24,6 +24,7 @@ import {
   decodeRequestReply,
   type EventEnvelope,
   EventEnvelope as EventEnvelopeSchema,
+  ExtensionHealthSnapshot,
   ExtensionId,
   type GentClientRpcError,
   type GentNamespacedClient,
@@ -1050,10 +1051,42 @@ const refuseFileOut = Effect.fn("Ctl.review.out")(function* (out: string) {
   }
 })
 
-/** Every `gent ctl review` file the builtin client extensions own. */
-const ctlReviews: ReadonlyArray<CtlReview> = builtinClientModules.flatMap((module) =>
-  Option.getOrElse(Option.fromUndefinedOr(module.review), () => []),
-)
+/** Every `gent ctl review` file the builtin client extensions own, with its extension. */
+const ctlReviews: ReadonlyArray<{ readonly extensionId: string; readonly review: CtlReview }> =
+  builtinClientModules.flatMap((module) =>
+    Option.getOrElse(Option.fromUndefinedOr(module.review), () => []).map((review) => ({
+      extensionId: module.id,
+      review,
+    })),
+  )
+
+/**
+ * The extensions the server's launch profile runs, the profile its server
+ * requests answer from: a healthy one, or a degraded one that still runs a
+ * version. A review projection of any other is skipped.
+ */
+const launchExtensions = Effect.fn("Ctl.review.extensions")(function* (connection: CtlConnection) {
+  const snapshot = yield* connection.client.extension
+    .listStatus({
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- `Launch` has no tag default on purpose (`ExtensionStatusScope`), so its value spells the tag
+      scope: { _tag: "Launch" },
+    })
+    .pipe(Effect.mapError(rpcFailure))
+  const running = ExtensionHealthSnapshot.match(snapshot, {
+    Healthy: (healthy) => healthy.extensions,
+    Degraded: (degraded) => [
+      ...degraded.healthyExtensions,
+      ...degraded.degradedExtensions.filter(
+        (extension) =>
+          !extension.issues.some(
+            (issue) =>
+              issue._tag === "ActivationFailed" && Predicate.isUndefined(issue.runningVersion),
+          ),
+      ),
+    ],
+  })
+  return new Set(running.map((extension) => extension.manifest.id))
+})
 
 const REVIEW_FILES = {
   messages: "messages.jsonl",
@@ -1097,9 +1130,6 @@ interface ReviewDigest {
   messages: number
 }
 
-const sessionCacheRead = (session: ReviewSession) =>
-  session.models.reduce((sum, model) => sum + model.cacheRead, 0)
-
 const foldReviewMessage = (digest: ReviewDigest, line: ReviewMessage) => {
   digest.messages += 1
   // The miner's rule: an owner message of 12 or more characters. Its
@@ -1139,12 +1169,10 @@ const cell = (text: string) => text.replace(/\|/g, "\\|")
 const renderReviewDigest = (
   digest: ReviewDigest,
   extensions: ReadonlyArray<{ readonly file: string; readonly digest: string }>,
+  skipped: ReadonlyArray<string>,
 ): string => {
   const sessions = digest.sessions
-  const limits = sum(sessions.map((session) => sum(Object.values(session.limits))))
-  const costly = sessions
-    .toSorted((left, right) => sessionCacheRead(right) - sessionCacheRead(left))
-    .slice(0, 15)
+  const costly = sessions.toSorted((left, right) => right.cacheRead - left.cacheRead).slice(0, 15)
   const repeated = [...digest.repeated.values()]
     .filter((group) => group.sessions.size >= 2)
     .toSorted((left, right) => right.sessions.size - left.sessions.size || right.count - left.count)
@@ -1156,9 +1184,9 @@ const renderReviewDigest = (
     "",
     "## Totals",
     "",
-    "| Sessions | Children | Owner msgs | Peer msgs | Handoffs | Prunes | Interrupts | Errors | Limit errors |",
+    "| Sessions | Spawned | Owner msgs | Peer msgs | Handoffs | Prunes | Interrupts | Errors | Limit errors |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    `| ${sessions.length} | ${sessions.filter((session) => Predicate.isNotUndefined(session.parent)).length} | ${sum(sessions.map((session) => session.owner))} | ${sum(sessions.map((session) => session.peer))} | ${sum(sessions.map((session) => session.handoffs))} | ${sum(sessions.map((session) => session.prunes))} | ${sum(sessions.map((session) => session.interrupts))} | ${sum(sessions.map((session) => session.errors))} | ${limits} |`,
+    `| ${sessions.length} | ${sessions.filter((session) => session.sub).length} | ${sum(sessions.map((session) => session.human))} | ${sum(sessions.map((session) => session.peer))} | ${sum(sessions.map((session) => session.handoffs))} | ${sum(sessions.map((session) => session.prunes))} | ${sum(sessions.map((session) => session.interrupts))} | ${sum(sessions.map((session) => session.errors))} | ${sum(sessions.map((session) => session.limits))} |`,
     "",
     "## Tokens per model",
     "",
@@ -1173,11 +1201,11 @@ const renderReviewDigest = (
     "",
     "## Costliest sessions",
     "",
-    "| Project | Session | Parent | Turns | Cache-read | Handoffs | Children |",
+    "| Project | Session | Parent | Turns | Cache-read | Compactions | Agents |",
     "| --- | --- | --- | --- | --- | --- | --- |",
     ...costly.map(
       (session) =>
-        `| ${cell(session.project)} | ${session.session} | ${session.parent ?? ""} | ${session.turns} | ${millions(sessionCacheRead(session))} | ${session.handoffs} | ${session.children} |`,
+        `| ${cell(session.project)} | ${session.session} | ${session.parent ?? ""} | ${session.turns} | ${millions(session.cacheRead)} | ${session.compactions} | ${session.agents} |`,
     ),
     "",
     "## Repeated owner messages (2+ sessions)",
@@ -1187,13 +1215,16 @@ const renderReviewDigest = (
     ),
     "",
     ...extensions.map((read) => read.digest),
+    ...skipped,
   ].join("\n")
 }
 
 /**
  * `review`: the server streams each session of the window, a page at a time;
  * each line goes to its file as it arrives, and `digest.md` follows from the
- * sums. Every file is inside `out`.
+ * sums. The files go to a staging directory beside `out` first, and replace
+ * the ones in `out` only once every read succeeded, so a failed run leaves
+ * the export before it whole. Every file ends inside `out`.
  */
 const writeReview = Effect.fn("Ctl.review")(function* (
   connection: CtlConnection,
@@ -1203,90 +1234,122 @@ const writeReview = Effect.fn("Ctl.review")(function* (
   const path = yield* Path.Path
   const failed = (error: PlatformError.PlatformError) =>
     new CtlFailed({ message: `--out: ${error.message}` })
-  yield* fs.makeDirectory(options.out, { recursive: true }).pipe(Effect.mapError(failed))
-  const fileOf = (name: string) => path.join(options.out, name)
-  const open = (name: string) => fs.open(fileOf(name), { flag: "w" }).pipe(Effect.mapError(failed))
-  const messagesFile = yield* open(REVIEW_FILES.messages)
-  const sessionsFile = yield* open(REVIEW_FILES.sessions)
-  const encoder = new TextEncoder()
-  const writeLine = (file: FileSystem.File, line: string) =>
-    file.writeAll(encoder.encode(`${line}\n`)).pipe(Effect.mapError(failed))
-  const encodeFailed = (error: Schema.SchemaError) =>
-    new CtlFailed({ message: `output encode: ${error.message}` })
-  const digest: ReviewDigest = {
-    since: options.since,
-    models: new Map(),
-    sessions: [],
-    repeated: new Map(),
-    messages: 0,
-  }
-  yield* connection.client.review.window({ since: options.since }).pipe(
-    Stream.mapError(rpcFailure),
-    Stream.runForEach((record) =>
-      ReviewRecord.match(record, {
-        Message: ({ line }) =>
-          encodeReviewMessage(line).pipe(
-            Effect.mapError(encodeFailed),
-            Effect.flatMap((text) => writeLine(messagesFile, text)),
-            Effect.tap(() => Effect.sync(() => foldReviewMessage(digest, line))),
-          ),
-        Session: ({ line }) =>
-          encodeReviewSession(line).pipe(
-            Effect.mapError(encodeFailed),
-            Effect.flatMap((text) => writeLine(sessionsFile, text)),
-            Effect.tap(() => Effect.sync(() => foldReviewSession(digest, line))),
-          ),
-      }),
-    ),
-  )
-  // Each extension's review file: its own server requests, its own lines.
-  const extensions: Array<{ readonly file: string; readonly digest: string }> = []
-  for (const review of ctlReviews) {
-    const file = yield* open(review.file)
-    const read = yield* review
-      .read<CtlError>({
+  const loaded = yield* launchExtensions(connection)
+  const present = ctlReviews.filter(({ extensionId }) => loaded.has(extensionId))
+  const absent = ctlReviews.filter(({ extensionId }) => !loaded.has(extensionId))
+  const parent = path.dirname(path.resolve(options.out))
+  yield* fs.makeDirectory(parent, { recursive: true }).pipe(Effect.mapError(failed))
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const stage = yield* fs
+        .makeTempDirectoryScoped({ directory: parent, prefix: `.${path.basename(options.out)}-` })
+        .pipe(Effect.mapError(failed))
+      const open = (name: string) =>
+        fs.open(path.join(stage, name), { flag: "w" }).pipe(Effect.mapError(failed))
+      const messagesFile = yield* open(REVIEW_FILES.messages)
+      const sessionsFile = yield* open(REVIEW_FILES.sessions)
+      const encoder = new TextEncoder()
+      const writeLine = (file: FileSystem.File, line: string) =>
+        file.writeAll(encoder.encode(`${line}\n`)).pipe(Effect.mapError(failed))
+      const encodeFailed = (error: Schema.SchemaError) =>
+        new CtlFailed({ message: `output encode: ${error.message}` })
+      const digest: ReviewDigest = {
         since: options.since,
-        ask: (request, input) =>
-          connection.client.extension
-            .serverRequest({
-              extensionId: request.extensionId,
-              capabilityId: request.capabilityId,
-              input,
-            })
-            .pipe(
-              Effect.mapError(extensionFailure),
-              Effect.flatMap((reply) =>
-                decodeRequestReply(request.output)(reply).pipe(
-                  Effect.mapError(
-                    (error) =>
-                      new CtlFailed({
-                        message: `${request.extensionId} ${request.capabilityId}: ${error.message}`,
-                      }),
+        models: new Map(),
+        sessions: [],
+        repeated: new Map(),
+        messages: 0,
+      }
+      yield* connection.client.review.window({ since: options.since }).pipe(
+        Stream.mapError(rpcFailure),
+        Stream.runForEach((record) =>
+          ReviewRecord.match(record, {
+            Message: ({ line }) =>
+              encodeReviewMessage(line).pipe(
+                Effect.mapError(encodeFailed),
+                Effect.flatMap((text) => writeLine(messagesFile, text)),
+                Effect.tap(() => Effect.sync(() => foldReviewMessage(digest, line))),
+              ),
+            Session: ({ line }) =>
+              encodeReviewSession(line).pipe(
+                Effect.mapError(encodeFailed),
+                Effect.flatMap((text) => writeLine(sessionsFile, text)),
+                Effect.tap(() => Effect.sync(() => foldReviewSession(digest, line))),
+              ),
+          }),
+        ),
+      )
+      // Each extension's review file: its own server requests, its own lines.
+      const extensions: Array<{ readonly file: string; readonly digest: string }> = []
+      for (const { review } of present) {
+        const file = yield* open(review.file)
+        const read = yield* review
+          .read<CtlError>({
+            since: options.since,
+            ask: (request, input) =>
+              connection.client.extension
+                .serverRequest({
+                  extensionId: request.extensionId,
+                  capabilityId: request.capabilityId,
+                  input,
+                })
+                .pipe(
+                  Effect.mapError(extensionFailure),
+                  Effect.flatMap((reply) =>
+                    decodeRequestReply(request.output)(reply).pipe(
+                      Effect.mapError(
+                        (error) =>
+                          new CtlFailed({
+                            message: `${request.extensionId} ${request.capabilityId}: ${error.message}`,
+                          }),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-        write: (line) => writeLine(file, line),
+            write: (line) => writeLine(file, line),
+          })
+          .pipe(Effect.catchTag("SchemaError", (error) => Effect.fail(encodeFailed(error))))
+        extensions.push({ file: review.file, digest: read.digest })
+      }
+      const skipped = absent.map(
+        ({ extensionId, review }) =>
+          `${path.basename(review.file, path.extname(review.file))}: ${extensionId} not loaded`,
+      )
+      yield* fs
+        .writeFileString(
+          path.join(stage, REVIEW_FILES.digest),
+          renderReviewDigest(digest, extensions, skipped),
+        )
+        .pipe(Effect.mapError(failed))
+      const files = [
+        REVIEW_FILES.messages,
+        REVIEW_FILES.sessions,
+        ...extensions.map((read) => read.file),
+        REVIEW_FILES.digest,
+      ]
+      // Every read succeeded: the staged files replace the old export, and a
+      // file of a projection that did not run this time goes.
+      yield* fs.makeDirectory(options.out, { recursive: true }).pipe(Effect.mapError(failed))
+      for (const name of files) {
+        yield* fs
+          .rename(path.join(stage, name), path.join(options.out, name))
+          .pipe(Effect.mapError(failed))
+      }
+      for (const { review } of absent) {
+        yield* fs
+          .remove(path.join(options.out, review.file), { force: true })
+          .pipe(Effect.mapError(failed))
+      }
+      return CtlResult.cases.Review.make({
+        server: connection.server,
+        out: options.out,
+        since: DateTime.formatIso(DateTime.makeUnsafe(options.since)),
+        sessions: digest.sessions.length,
+        messages: digest.messages,
+        files: files.map((name) => path.join(options.out, name)),
       })
-      .pipe(Effect.catchTag("SchemaError", (error) => Effect.fail(encodeFailed(error))))
-    extensions.push({ file: review.file, digest: read.digest })
-  }
-  yield* fs
-    .writeFileString(fileOf(REVIEW_FILES.digest), renderReviewDigest(digest, extensions))
-    .pipe(Effect.mapError(failed))
-  return CtlResult.cases.Review.make({
-    server: connection.server,
-    out: options.out,
-    since: DateTime.formatIso(DateTime.makeUnsafe(options.since)),
-    sessions: digest.sessions.length,
-    messages: digest.messages,
-    files: [
-      REVIEW_FILES.messages,
-      REVIEW_FILES.sessions,
-      ...extensions.map((read) => read.file),
-      REVIEW_FILES.digest,
-    ].map(fileOf),
-  })
+    }),
+  )
 })
 
 // ── commands ────────────────────────────────────────────────────────────────

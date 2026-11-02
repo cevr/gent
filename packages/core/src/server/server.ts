@@ -1,6 +1,7 @@
 import { Permits } from "../runtime/permits.js"
 import {
   Array as Arr,
+  Clock,
   type Context,
   DateTime,
   Duration,
@@ -38,6 +39,7 @@ import {
   type SessionAdmission,
   toolCallReceipts,
   clientMetadata,
+  isSpawnedSession,
   sessionThread,
 } from "../domain/message.js"
 import {
@@ -95,6 +97,7 @@ import {
   type RespondInteractionInput,
   ReviewRecord,
   type ReviewModelUsage,
+  type ReviewSession,
   type SendMessageInput,
   SessionSnapshot,
   SessionView,
@@ -1470,7 +1473,7 @@ const rpc = <A, E, R>(
 // ── review ──────────────────────────────────────────────────────────────────
 
 /** The rows one review read takes at once: a window is read a page at a time, never whole. */
-const REVIEW_PAGE = { sessions: 50, messages: 200, events: 500 } as const
+const REVIEW_PAGE = { messages: 200, events: 500 } as const
 
 /** The events a session line folds. */
 const REVIEW_EVENT_TAGS = [
@@ -1486,11 +1489,25 @@ const isReviewEvent = (event: AgentEvent): event is ReviewEvent =>
 
 const isRuntimeUserMessage = Schema.is(RuntimeUserMessageType)
 
+/**
+ * The file tool whose paths a session line counts (`rereads`, `skills`): the
+ * shipped `read` (`fs-tools.ts`), whose input names a `path`.
+ */
+const REVIEW_READ_TOOL = "read"
+const reviewReadPath = Schema.decodeUnknownOption(Schema.Struct({ path: Schema.String }))
+/** A read path's skill, as the miner finds one (`SKILL_PATH`). */
+const REVIEW_SKILL_PATH = /skills\/([\w-]+)\/SKILL\.md/g
+/** A path read this often or more is a reread, as the miner counts one. */
+const REVIEW_REREAD = 4
+
+const reviewTextBytes = new TextEncoder()
+
 /** What a session did in the window so far: its line, less the session's own fields. */
 interface ReviewTally {
   readonly turns: number
-  readonly owner: number
+  readonly human: number
   readonly peer: number
+  readonly bytes: number
   readonly handoffs: number
   readonly prunes: number
   readonly interrupts: number
@@ -1498,14 +1515,18 @@ interface ReviewTally {
   readonly models: Readonly<Record<string, Omit<ReviewModelUsage, "model">>>
   readonly tools: Readonly<Record<string, number>>
   readonly limits: Readonly<Record<string, number>>
+  /** Read-tool calls by path. */
+  readonly reads: Readonly<Record<string, number>>
+  readonly skills: Readonly<Record<string, number>>
   /** The model of the last stream that started: a limit error's provider. */
   readonly lastModel: Option.Option<string>
 }
 
 const emptyReviewTally: ReviewTally = {
   turns: 0,
-  owner: 0,
+  human: 0,
   peer: 0,
+  bytes: 0,
   handoffs: 0,
   prunes: 0,
   interrupts: 0,
@@ -1513,6 +1534,8 @@ const emptyReviewTally: ReviewTally = {
   models: {},
   tools: {},
   limits: {},
+  reads: {},
+  skills: {},
   lastModel: Option.none(),
 }
 
@@ -1534,10 +1557,12 @@ const reviewProject = (session: Session) => session.cwd ?? ""
  */
 const reviewMessageStep = (
   session: Session,
-  tally: ReviewTally,
+  current: ReviewTally,
   message: Message,
 ): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => {
   const metadata = message.metadata ?? {}
+  const raw = messagePartsText(message.parts)
+  const tally = { ...current, bytes: current.bytes + reviewTextBytes.encode(raw).length }
   if (metadata.customType === CONTEXT_WINDOW_MESSAGE_TYPE) {
     return [[], { ...tally, handoffs: tally.handoffs + 1 }]
   }
@@ -1546,7 +1571,7 @@ const reviewMessageStep = (
   }
   if (isRuntimeUserMessage(metadata.customType)) return [[], tally]
   const owner = metadata.fromClient === true && Predicate.isUndefined(metadata.extensionId)
-  const text = cleanReviewText(messagePartsText(message.parts))
+  const text = cleanReviewText(raw)
   const lineOf = (kind: "msg" | "peer"): ReadonlyArray<ReviewRecord> => {
     if (text.length === 0) return []
     return [
@@ -1562,8 +1587,20 @@ const reviewMessageStep = (
       }),
     ]
   }
-  if (owner) return [lineOf("msg"), { ...tally, owner: tally.owner + 1 }]
+  if (owner) return [lineOf("msg"), { ...tally, human: tally.human + 1 }]
   return [lineOf("peer"), { ...tally, peer: tally.peer + 1 }]
+}
+
+/** A read-tool call: its path's count, and the skill a `SKILL.md` path names, once. */
+const reviewReadStep = (tally: ReviewTally, path: string): ReviewTally => {
+  const skills = Array.from(path.matchAll(REVIEW_SKILL_PATH), (match) => match[1]).filter(
+    Predicate.isNotUndefined,
+  )
+  return {
+    ...tally,
+    reads: bumpCount(tally.reads, path),
+    skills: { ...tally.skills, ...Object.fromEntries(skills.map((name) => [name, 1])) },
+  }
 }
 
 /** One event of the window: tokens per model, turns, tools, interrupts and errors. */
@@ -1609,15 +1646,20 @@ const reviewEventStep = (
       TurnCompleted: (completed): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => {
         const turns = tally.turns + 1
         if (completed.interrupted !== true) return [[], { ...tally, turns }]
+        // The miner's interrupt line has no text.
+        return [[lineOf("interrupt", "")], { ...tally, turns, interrupts: tally.interrupts + 1 }]
+      },
+      ToolCallStarted: (call): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => {
+        const counted = { ...tally, tools: bumpCount(tally.tools, call.toolName) }
+        if (call.toolName !== REVIEW_READ_TOOL) return [[], counted]
         return [
-          [lineOf("interrupt", "interrupted")],
-          { ...tally, turns, interrupts: tally.interrupts + 1 },
+          [],
+          Option.match(reviewReadPath(call.input), {
+            onNone: () => counted,
+            onSome: ({ path }) => reviewReadStep(counted, path),
+          }),
         ]
       },
-      ToolCallStarted: (call): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => [
-        [],
-        { ...tally, tools: bumpCount(tally.tools, call.toolName) },
-      ],
       ErrorOccurred: (error): readonly [ReadonlyArray<ReviewRecord>, ReviewTally] => {
         if (error.notice === true) return [[], tally]
         const errors = tally.errors + 1
@@ -1627,7 +1669,7 @@ const reviewEventStep = (
           () => "unknown",
         )
         return [
-          [lineOf("limit", cleanReviewText(error.error))],
+          [lineOf("limit", cleanReviewText(error.error, 160))],
           { ...tally, errors, limits: bumpCount(tally.limits, provider) },
         ]
       },
@@ -1650,12 +1692,68 @@ const pagedRows = <A, E, R>(
       }),
   )
 
+/** The window one review read covers, epoch ms: `until` is the read's start. */
+interface ReviewSpan {
+  readonly since: number
+  readonly until: number
+}
+
+const sumOf = (values: ReadonlyArray<number>) => values.reduce((total, value) => total + value, 0)
+
+/** A session's line from its tally: the miner's fields, then gent's own. */
+const reviewSessionLine = (
+  session: Session,
+  span: ReviewSpan,
+  done: ReviewTally,
+  agents: number,
+): ReviewSession => {
+  const usage = Object.values(done.models)
+  return {
+    src: "gent",
+    project: reviewProject(session),
+    session: session.id,
+    sub: isSpawnedSession(session),
+    bytes: done.bytes,
+    first: isoOf(session.createdAt.getTime()),
+    last: isoOf(Math.min(session.updatedAt.getTime(), span.until)),
+    human: done.human,
+    peer: done.peer,
+    interrupts: done.interrupts,
+    compactions: done.handoffs + done.prunes,
+    limits: sumOf(Object.values(done.limits)),
+    cacheRead: sumOf(usage.map((model) => model.cacheRead)),
+    cacheWrite: sumOf(usage.map((model) => model.cacheWrite)),
+    output: sumOf(usage.map((model) => model.output)),
+    skills: done.skills,
+    slash: {},
+    agents,
+    rereads: Object.fromEntries(
+      Object.entries(done.reads).filter(([, count]) => count >= REVIEW_REREAD),
+    ),
+    ...omitUndefined({ parent: session.parentSessionId }),
+    turns: done.turns,
+    input: sumOf(usage.map((model) => model.input)),
+    models: Object.entries(done.models).map(([model, tokens]) => ({ model, ...tokens })),
+    handoffs: done.handoffs,
+    prunes: done.prunes,
+    tools: done.tools,
+    errors: done.errors,
+    limitsByProvider: done.limits,
+  }
+}
+
 /**
  * One session's review: its message lines and its interrupt and limit lines
  * as each page is read, then its session line. The tally is the only state
  * the read keeps.
+ *
+ * A branch counts only the messages written on it. A fork copies its
+ * parent's rows up to the fork point, and a session that inherits history
+ * copies its source's window, each with fresh ids and the first rows' times,
+ * so a branch's own rows start at its creation and after its fork point; a
+ * message written in its fork point's millisecond counts as a copy.
  */
-const reviewSession = (session: Session, since: number) =>
+const reviewSession = (session: Session, span: ReviewSpan) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const branchStorage = yield* BranchStorage
@@ -1664,13 +1762,24 @@ const reviewSession = (session: Session, since: number) =>
       const sessionStorage = yield* SessionStorage
       const tally = yield* Ref.make(emptyReviewTally)
       const branches = yield* branchStorage.listBranches(session.id)
+      const ownFrom = Effect.fn("review.branchStart")(function* (branch: Branch) {
+        const created = branch.createdAt.getTime()
+        if (Predicate.isUndefined(branch.parentMessageId)) return created
+        const forkPoint = yield* messageStorage.getMessage(branch.parentMessageId)
+        if (Predicate.isUndefined(forkPoint)) return created
+        return Math.max(created, forkPoint.createdAt.getTime() + 1)
+      })
       const messages = Stream.fromIterable(branches).pipe(
-        Stream.flatMap((branch) =>
+        Stream.mapEffect((branch) =>
+          Effect.map(ownFrom(branch), (start) => ({ branch, since: Math.max(span.since, start) })),
+        ),
+        Stream.flatMap(({ branch, since }) =>
           pagedRows(REVIEW_PAGE.messages, (after: Option.Option<Message>) =>
             messageStorage.listMessagesSince({
               branchId: branch.id,
               role: "user",
               since,
+              until: span.until,
               after,
               limit: REVIEW_PAGE.messages,
             }),
@@ -1685,7 +1794,8 @@ const reviewSession = (session: Session, since: number) =>
           .listSessionEventsSince({
             sessionId: session.id,
             tags: REVIEW_EVENT_TAGS,
-            since,
+            since: span.since,
+            until: span.until,
             afterId: Option.getOrElse(
               Option.map(after, (envelope) => envelope.id),
               () => 0,
@@ -1705,22 +1815,9 @@ const reviewSession = (session: Session, since: number) =>
       )
       const line = Effect.gen(function* () {
         const done = yield* Ref.get(tally)
-        const children = yield* sessionStorage.countChildrenSince(session.id, since)
-        const { lastModel: _lastModel, models, ...counts } = done
+        const agents = yield* sessionStorage.countChildrenSince({ parent: session.id, ...span })
         return [
-          ReviewRecord.cases.Session.make({
-            line: {
-              src: "gent",
-              project: reviewProject(session),
-              session: session.id,
-              ...omitUndefined({ parent: session.parentSessionId }),
-              started: isoOf(session.createdAt.getTime()),
-              ended: isoOf(session.updatedAt.getTime()),
-              ...counts,
-              models: Object.entries(models).map(([model, usage]) => ({ model, ...usage })),
-              children,
-            },
-          }),
+          ReviewRecord.cases.Session.make({ line: reviewSessionLine(session, span, done, agents) }),
         ]
       })
       return Stream.concat(messages, events).pipe(
@@ -1731,24 +1828,34 @@ const reviewSession = (session: Session, since: number) =>
   )
 
 /**
- * Every session of every workspace touched at or after `since` (epoch ms),
- * one workspace at a time, each paged on `idx_sessions_workspace`.
+ * Every session of every workspace touched at or after `since` (epoch ms).
+ * The read starts with a snapshot: its start time, then each workspace's ids
+ * of the sessions touched since `since` (`idx_sessions_workspace`), so a
+ * session written while the read runs is read once, and nothing written
+ * after the start counts.
  */
 const reviewWindow = (since: number) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const sessionStorage = yield* SessionStorage
+      const span: ReviewSpan = { since, until: yield* Clock.currentTimeMillis }
       const workspaces = yield* sessionStorage.listWorkspaces
-      return Stream.fromIterable(workspaces).pipe(
-        Stream.flatMap((workspaceId) =>
-          pagedRows(REVIEW_PAGE.sessions, (after: Option.Option<Session>) =>
-            sessionStorage.listSessionsTouchedSince({
-              since,
-              after,
-              limit: REVIEW_PAGE.sessions,
+      const snapshot = yield* Effect.forEach(workspaces, (workspaceId) =>
+        Effect.map(
+          sessionStorage
+            .listSessionIdsTouchedSince(span)
+            .pipe(Effect.provideService(CurrentWorkspaceId, workspaceId)),
+          (ids) => ({ workspaceId, ids }),
+        ),
+      )
+      return Stream.fromIterable(snapshot).pipe(
+        Stream.flatMap(({ workspaceId, ids }) =>
+          Stream.fromIterable(ids).pipe(
+            Stream.mapEffect((id) => sessionStorage.getSession(id)),
+            Stream.flatMap((session) => {
+              if (Predicate.isUndefined(session)) return Stream.empty
+              return reviewSession(session, span)
             }),
-          ).pipe(
-            Stream.flatMap((session) => reviewSession(session, since)),
             Stream.provideService(CurrentWorkspaceId, workspaceId),
           ),
         ),

@@ -167,26 +167,37 @@ than `serverNow` is read against the local clock.
 
 `review --since <N>d|<ISO date> --out <dir>` exports the sessions of every
 workspace touched in the window for the owner's review, in the shapes of the
-retro skill's miner. The server reads its own store a page at a time
-(`review.window`); the client writes the files into `--out`, which it makes
-when absent and refuses when it is a file. A `--since` that is neither form
-exits 2. `messages.jsonl` holds one line per user message in the window:
-`kind` is `msg` for the owner's (a client sent it and no extension wrote it),
-`peer` for one a child, a parent, a machine or a wake wrote, `interrupt` for
-a turn the owner stopped and `limit` for a usage-limit error. `sessions.jsonl`
-holds one line per session: its parent, its turns, its tokens per model from
-the stored receipts, its handoffs and prunes (gent's compactions), its tool
-calls by tool, the children it started, its interrupts and errors, and its
-limit errors by provider. `rounds.jsonl` is the machines extension's (a
-client `review` projection over its server request `MachinesRpc.Review`): one
-line per machine round that ended in the window, with its machine, run, unit,
-state, visit, role, model, effort, tokens, cost, minutes and outcome (the
-verdict move, the ask, the wait or the error it led to). `digest.md` sums
-them: the tokens per model, the costliest sessions by cache read, the owner's
-messages repeated in two or more sessions, and the rounds per role and
-`model@effort`. Free text is redacted with the miner's secret patterns and
-clipped to 300 characters. Gent does not record slash commands, so no line
-counts one. It prints `Review` with the file paths and the counts.
+retro skill's miner. The server reads its own store (`review.window`): at the
+start it takes the read's time and each workspace's ids of the sessions in the
+window, then reads each session a page at a time, so a session written during
+the read is read once and a row written after the start does not count. The
+client writes every file into a staging directory beside `--out`, then moves
+them into `--out`, which it makes when absent and refuses when it is a file;
+a failed read leaves the export before it whole. A `--since` that is neither
+form exits 2. `messages.jsonl` holds one line per user message written in the
+window, the miner's `{src, project, session, ts, kind, text}`: `kind` is `msg`
+for the owner's (a client sent it and no extension wrote it), `peer` for one a
+child, a parent, a machine or a wake wrote, `interrupt` (no text) for a turn
+the owner stopped and `limit` for a usage-limit error. A branch counts only the
+messages written on it, not the prefix a fork copied. `sessions.jsonl` holds
+one line per session, first the miner's fields with its names and types:
+`sub` (another session spawned it), `bytes`, `first`, `last`, `human`, `peer`,
+`interrupts`, `compactions` (handoffs and prunes), `limits`, the token totals
+`cacheRead`, `cacheWrite` and `output`, `skills`, `slash` (always empty: gent
+stores no slash command), `agents` (sessions it spawned) and `rereads`; then
+gent's own: its parent, turns, input tokens, tokens per model from the stored
+receipts, handoffs, prunes, tool calls by tool, errors and limit errors by
+provider. `rounds.jsonl` is the machines extension's (a client `review`
+projection over its server request `MachinesRpc.Review`): one line per machine
+round that ended in the window, with its machine, run, unit, state, visit,
+role, model, effort, tokens, cost, minutes and outcome (the verdict move, the
+ask, the wait or the error it led to). A projection whose extension the
+server's launch profile does not run is skipped, and `digest.md` notes it
+(`rounds: @gent/machines not loaded`). `digest.md` sums them: the tokens per
+model, the costliest sessions by cache read, the owner's messages repeated in
+two or more sessions, and the rounds per role and `model@effort`. Free text is
+redacted with the miner's secret patterns and clipped to 300 characters (160
+for a limit error). It prints `Review` with the file paths and the counts.
 
 `lanes` names no session: the accounts are the server's. It prints `Lanes`,
 the `accounts.lanes` report, with one record per provider gent read a quota

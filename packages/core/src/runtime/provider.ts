@@ -10156,6 +10156,30 @@ const MACHINE_STEPS: ReadonlyArray<ScenarioStep> = [
   { reasoning: "Summarize.", ops: [] },
 ]
 
+/** The machine `debug rounds` defines: a writer's round at low effort, then a reviewer's. */
+const SCENARIO_ROUNDS_MACHINE = {
+  name: "rounds",
+  threads: { writer: { effort: "low" }, reviewer: {} },
+  start: "draft",
+  states: {
+    draft: { kind: "thread", thread: "writer", say: "Draft the greeting.", next: "review" },
+    review: { kind: "thread", thread: "reviewer", say: "Review the draft.", next: "done" },
+    done: { kind: "final" },
+  },
+}
+
+const ROUNDS_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "Two rounds apart from this turn: a writer, then a reviewer.",
+    ops: [{ tool: "machine.define", input: { definition: SCENARIO_ROUNDS_MACHINE } }],
+  },
+  {
+    reasoning: "Start it; its rounds need no turn of mine.",
+    ops: [{ tool: "machine.start", input: { machine: SCENARIO_ROUNDS_MACHINE.name } }],
+  },
+  { reasoning: "Summarize.", ops: [] },
+]
+
 // Reasoning as a model's summaries arrive: a bold heading, then prose.
 const THINK_STEPS: ReadonlyArray<ScenarioStep> = [
   {
@@ -10196,6 +10220,11 @@ const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
     phrase: "debug machine",
     steps: MACHINE_STEPS,
     answer: "Started the soak machine; its run shows under the status line for 45 s.",
+  },
+  {
+    phrase: "debug rounds",
+    steps: ROUNDS_STEPS,
+    answer: "Started the rounds machine: a writer's round, then a reviewer's.",
   },
   {
     phrase: "debug think",

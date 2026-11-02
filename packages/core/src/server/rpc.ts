@@ -753,11 +753,12 @@ const REVIEW_SECRET = new RegExp(
 
 /**
  * Free text as a review file keeps it, as the miner clips it: secrets
- * redacted, whitespace collapsed, at most 300 characters. The server cleans
- * what it sends; a client cleans any free text it adds.
+ * redacted, whitespace collapsed, at most `length` characters (the miner
+ * keeps 300, and 160 of a limit error). The server cleans what it sends; a
+ * client cleans any free text it adds.
  */
-export const cleanReviewText = (text: string): string =>
-  text.replace(REVIEW_SECRET, "[REDACTED]").replace(/\s+/g, " ").trim().slice(0, 300)
+export const cleanReviewText = (text: string, length = 300): string =>
+  text.replace(REVIEW_SECRET, "[REDACTED]").replace(/\s+/g, " ").trim().slice(0, length)
 
 /**
  * The kind of a `messages.jsonl` line, as the miner names it: `msg` the
@@ -767,7 +768,10 @@ export const cleanReviewText = (text: string): string =>
  */
 const ReviewMessageKind = Schema.Literals(["msg", "peer", "interrupt", "limit"])
 
-/** One `messages.jsonl` line: the miner's `{src, project, session, ts, kind, text}`. */
+/**
+ * One `messages.jsonl` line: the miner's `Message`, `{src, project, session,
+ * ts, kind, text}`. An interrupt has no text, as the miner's has none.
+ */
 export const ReviewMessage = Schema.Struct({
   src: Schema.Literal("gent"),
   /** The session's working directory. */
@@ -790,30 +794,57 @@ export const ReviewModelUsage = Schema.Struct({
 })
 export type ReviewModelUsage = typeof ReviewModelUsage.Type
 
-/** One `sessions.jsonl` line: what one session did in the window. */
+/**
+ * One `sessions.jsonl` line: what one session did in the window. Its first
+ * fields are the miner's `Session` (`mine-sessions.ts`), with its names and
+ * types, so one reader mines a gent export as it mines a Claude Code or a
+ * Codex one. Gent stores no slash command, so `slash` is always empty, and
+ * it skips no session, so the line has no `skipped`. The fields after
+ * `rereads` are gent's own.
+ */
 export const ReviewSession = Schema.Struct({
   src: Schema.Literal("gent"),
   project: Schema.String,
   session: SessionId,
+  /** A session another session spawned: the miner's subagent transcript. */
+  sub: Schema.Boolean,
+  /** UTF-8 bytes of the window's user-message text: gent keeps no transcript file to measure. */
+  bytes: Schema.Int,
+  /** ISO time the session started, and its last write the read saw. */
+  first: Schema.String,
+  last: Schema.String,
+  /** Messages the owner wrote, and messages another agent, a child or a machine wrote. */
+  human: Schema.Int,
+  peer: Schema.Int,
+  interrupts: Schema.Int,
+  /** Context-window handoffs and pruned tool results: gent's compactions. */
+  compactions: Schema.Int,
+  /** Usage-limit errors. */
+  limits: Schema.Int,
+  /** Tokens summed over every model. */
+  cacheRead: Schema.Finite,
+  cacheWrite: Schema.Finite,
+  output: Schema.Finite,
+  /** Skills by name: a read of `skills/<name>/SKILL.md` counts once per session, as the miner counts one. */
+  skills: Schema.Record(Schema.String, Schema.Int),
+  /** Slash commands by name: always empty, as no slash command reaches the store. */
+  slash: Schema.Record(Schema.String, Schema.Int),
+  /** Sessions it spawned in the window. */
+  agents: Schema.Int,
+  /** Paths the read tool read four or more times. */
+  rereads: Schema.Record(Schema.String, Schema.Int),
   /** The session that spawned this one. */
   parent: Schema.optionalKey(SessionId),
-  started: Schema.String,
-  ended: Schema.String,
   turns: Schema.Int,
-  owner: Schema.Int,
-  peer: Schema.Int,
+  input: Schema.Finite,
   models: Schema.Array(ReviewModelUsage),
-  /** Context-window handoffs and pruned tool results: gent's compactions. */
   handoffs: Schema.Int,
   prunes: Schema.Int,
   /** Tool calls by tool name. */
   tools: Schema.Record(Schema.String, Schema.Int),
-  /** Sessions it spawned in the window. */
-  children: Schema.Int,
-  interrupts: Schema.Int,
   errors: Schema.Int,
   /** Usage-limit errors by provider: of the model the last stream before each ran on, else `unknown`. */
-  limits: Schema.Record(Schema.String, Schema.Int),
+  limitsByProvider: Schema.Record(Schema.String, Schema.Int),
 })
 export type ReviewSession = typeof ReviewSession.Type
 

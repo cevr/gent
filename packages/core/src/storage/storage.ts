@@ -164,20 +164,25 @@ export interface SessionStorageService {
   /** Every workspace that holds a session: the data directory's, not the current one's. */
   readonly listWorkspaces: Effect.Effect<ReadonlyArray<WorkspaceId>, StorageError>
   /**
-   * One page of the current workspace's sessions touched at or after `since`
-   * (epoch ms), oldest touch first, after the `after` session of the page
-   * before; at most `limit`. It reads `idx_sessions_workspace`.
+   * The ids of the current workspace's sessions touched at or after `since`
+   * and created at or before `until` (epoch ms), oldest touch first: ids
+   * only, so a window of any size is one small read. It reads
+   * `idx_sessions_workspace`.
    */
-  readonly listSessionsTouchedSince: (params: {
+  readonly listSessionIdsTouchedSince: (params: {
     readonly since: number
-    readonly after: Option.Option<Session>
-    readonly limit: number
-  }) => Effect.Effect<ReadonlyArray<Session>, StorageError>
-  /** How many sessions `parent` spawned at or after `since` (epoch ms). */
-  readonly countChildrenSince: (
-    parent: SessionId,
-    since: number,
-  ) => Effect.Effect<number, StorageError>
+    readonly until: number
+  }) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
+  /**
+   * How many sessions `parent` spawned from `since` to `until` (epoch ms,
+   * both included): each starts its own thread (`isSpawnedSession`), so a
+   * handoff, which joins the parent's, is not one.
+   */
+  readonly countChildrenSince: (params: {
+    readonly parent: SessionId
+    readonly since: number
+    readonly until: number
+  }) => Effect.Effect<number, StorageError>
   /**
    * Each write sets only the columns it names, so two writers that touch
    * different fields of one session (a rename and a `/model` switch) never
@@ -374,31 +379,27 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
           }),
         ).pipe(Effect.mapError(storageError("Failed to list workspaces"))),
 
-        listSessionsTouchedSince: Effect.fn("SessionStorage.listSessionsTouchedSince")(
-          function* ({ since, after, limit }) {
+        listSessionIdsTouchedSince: Effect.fn("SessionStorage.listSessionIdsTouchedSince")(
+          function* ({ since, until }) {
             const workspaceId = yield* CurrentWorkspaceId
-            const afterRow = Option.match(after, {
-              onNone: () => sql.literal(""),
-              onSome: (session) =>
-                sql`AND (updated_at > ${session.updatedAt.getTime()} OR (updated_at = ${session.updatedAt.getTime()} AND id > ${session.id}))`,
-            })
-            const rows = yield* sql<SessionRow>`SELECT ${sql.literal(SESSION_COLUMNS)} FROM sessions
-              WHERE workspace_id = ${workspaceId} AND updated_at >= ${since} ${afterRow}
-              ORDER BY updated_at ASC, id ASC
-              LIMIT ${limit}`
-            return yield* Effect.forEach(rows, sessionFromRow)
+            const rows = yield* sql<{ readonly id: string }>`SELECT id FROM sessions
+              WHERE workspace_id = ${workspaceId} AND updated_at >= ${since} AND created_at <= ${until}
+              ORDER BY updated_at ASC, id ASC`
+            return yield* Effect.forEach(rows, (row) => Schema.decodeEffect(SessionId)(row.id))
           },
           Effect.mapError(storageError("Failed to list touched sessions")),
         ),
 
         countChildrenSince: Effect.fn("SessionStorage.countChildrenSince")(
-          function* (parent, since) {
+          function* ({ parent, since, until }) {
             const workspaceId = yield* CurrentWorkspaceId
             const rows = yield* sql<{ readonly count: number }>`SELECT COUNT(*) AS count
               FROM sessions
               WHERE parent_session_id = ${parent}
                 AND workspace_id = ${workspaceId}
-                AND created_at >= ${since}`
+                AND (thread_id IS NULL OR thread_id = id)
+                AND created_at >= ${since}
+                AND created_at <= ${until}`
             return Option.getOrElse(
               Option.map(Arr.head(rows), (row) => row.count),
               () => 0,
@@ -597,14 +598,15 @@ interface MessageStorageService {
   readonly getMessage: (id: MessageId) => Effect.Effect<Message | undefined, StorageError>
   readonly listMessages: (branchId: BranchId) => Effect.Effect<ReadonlyArray<Message>, StorageError>
   /**
-   * One page of the branch's `role` messages created at or after `since`
-   * (epoch ms), oldest first, after the `after` message of the page before;
-   * at most `limit`. It reads `idx_messages_branch_created`.
+   * One page of the branch's `role` messages created from `since` to `until`
+   * (epoch ms, both included), oldest first, after the `after` message of
+   * the page before; at most `limit`. It reads `idx_messages_branch_created`.
    */
   readonly listMessagesSince: (params: {
     readonly branchId: BranchId
     readonly role: Message["role"]
     readonly since: number
+    readonly until: number
     readonly after: Option.Option<Message>
     readonly limit: number
   }) => Effect.Effect<ReadonlyArray<Message>, StorageError>
@@ -737,7 +739,7 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
           ),
 
           listMessagesSince: Effect.fn("MessageStorage.listMessagesSince")(
-            function* ({ branchId, role, since, after, limit }) {
+            function* ({ branchId, role, since, until, after, limit }) {
               const workspaceId = yield* CurrentWorkspaceId
               const afterRow = Option.match(after, {
                 onNone: () => sql.literal(""),
@@ -747,7 +749,8 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               const rawRows = yield* sql`${sql.literal(MESSAGE_CHUNK_SELECT)}
             WHERE m.id IN (
               SELECT id FROM messages
-              WHERE branch_id = ${branchId} AND role = ${role} AND created_at >= ${since} ${afterRow}
+              WHERE branch_id = ${branchId} AND role = ${role}
+                AND created_at >= ${since} AND created_at <= ${until} ${afterRow}
               ORDER BY created_at ASC, id ASC
               LIMIT ${limit}
             ) AND s.workspace_id = ${workspaceId}
@@ -893,14 +896,16 @@ interface EventStorageService {
     tags: ReadonlyArray<AgentEvent["_tag"]>
   }) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStorageError>
   /**
-   * One page of the session's events of `tags` written at or after `since`
-   * (epoch ms), on any branch or none, in log order after the event
-   * `afterId`; at most `limit`. It reads `idx_events_session_tag`.
+   * One page of the session's events of `tags` written from `since` to
+   * `until` (epoch ms, both included), on any branch or none, in log order
+   * after the event `afterId`; at most `limit`. It reads
+   * `idx_events_session_tag`.
    */
   readonly listSessionEventsSince: (params: {
     readonly sessionId: SessionId
     readonly tags: ReadonlyArray<AgentEvent["_tag"]>
     readonly since: number
+    readonly until: number
     readonly afterId: number
     readonly limit: number
   }) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStorageError>
@@ -1019,7 +1024,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
         ),
 
         listSessionEventsSince: Effect.fn("EventStorage.listSessionEventsSince")(
-          function* ({ sessionId, tags, since, afterId, limit }) {
+          function* ({ sessionId, tags, since, until, afterId, limit }) {
             if (tags.length === 0) return []
             const workspaceId = yield* CurrentWorkspaceId
             const rawRows = yield* sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
@@ -1030,6 +1035,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
                 AND e.event_tag IN ${sqlInList(sql, tags)}
                 AND e.id > ${afterId}
                 AND e.created_at >= ${since}
+                AND e.created_at <= ${until}
               ORDER BY e.id ASC
               LIMIT ${limit}`
             return yield* rowsToEnvelopes(rawRows, "listSessionEventsSince")

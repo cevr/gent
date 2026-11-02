@@ -134,7 +134,10 @@
     check (`pass`/`fail`) and gate (`green`/`red`) moves after each round,
     and the rounds a run its final state accepted took. A verdict is the model's own word,
     counted as itself (`constructor` included). A round's `Recorded` step
-    keeps the model and effort its session runs. `MachinesRpc.Review`, a
+    keeps the model and effort its session runs, and a pending round
+    keeps its effort; `effort` stays optional for a round that names none
+    (table version 3: version 2 had no `effort`, and a version change
+    drops every run). `MachinesRpc.Review`, a
     server request (no session), reads every run that changed since a time,
     20 runs a page by run id, and folds each round that ended in the window
     with its outcome: `gent ctl review` writes them to `rounds.jsonl`. The owner is woken only by an ask (`machine-ask`), a final
