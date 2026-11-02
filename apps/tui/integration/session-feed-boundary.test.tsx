@@ -53,15 +53,16 @@ describe("session feed boundary", () => {
           yield* controls.waitForStreamStart
           // Emit all chunks + finish
           yield* controls.emitAll
-          // Wait for idle state with response content
+          // The turn footer lands only once the turn is over: the status row
+          // carries no phase word, so the footer is the idle signal.
           const responseFrame = yield* waitForFrame(
             setup,
-            (frame) => frame.includes("debug response") && frame.includes("idle"),
-            "assistant debug response with idle",
+            (frame) => frame.includes("debug response") && frame.includes("Worked for"),
+            "assistant debug response with the turn footer",
             5000,
           )
           expect(responseFrame).toContain("debug response")
-          expect(responseFrame).toContain("idle")
+          expect(responseFrame).toContain("Worked for")
         }),
       ),
     10000,
