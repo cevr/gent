@@ -158,7 +158,11 @@
     target's `{{visit.note}}`: `Check error: the <state> command exited
     <n>|timed out after <s> seconds|did not start, so it gave no verdict`
     and the output's last 1,000 characters. An error move is not a check
-    move: the quality tally counts it as neither `pass` nor `fail`.
+    move: the quality tally counts it as neither `pass` nor `fail`. A run
+    state with `judges: false` screens and judges no round: its move keeps
+    `Moved.judged: false`, counts in no model's `checks` and leaves the
+    rounds since the last check to the next check that judges (the merge
+    gate, after the orchestrate machines' repeat-test check).
   - The orchestrate machines' `repeats` state (`fix-repeats` in the light
     one) runs the shipped `repeat-tests.ts` (`packages/extensions/src`,
     embedded by a Bun text import) as `{{bun}} "{{files.repeat-tests.ts}}"

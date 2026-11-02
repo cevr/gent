@@ -6328,6 +6328,35 @@ describe("the shipped orchestrate machine", () => {
   }
 
   it.live(
+    "a red merge gate counts against the implementor's round, past the repeat-test check before review",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run } = yield* unitRun(
+          { "resume:1": "blocked" },
+          { gate: "false" },
+        )
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "merge")
+        yield* answerAsk(client, owner, 3, "drop")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toContain("gate→resume")
+        const status = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), {
+          run: decodeRunId(run),
+        })
+        const checks = status.quality.map((row) => [String(row.state), row.model, row.checks])
+        // The repeat-test check judges no round: the red gate judges every round since the run's start.
+        expect(checks).toEqual([
+          ["implement", HAIKU, { pass: 0, fail: 1 }],
+          ["plan", OPUS, { pass: 0, fail: 1 }],
+          ["resume", HAIKU, { pass: 0, fail: 0 }],
+          ["review", SOL, { pass: 0, fail: 1 }],
+          ["verify", HAIKU, { pass: 0, fail: 1 }],
+        ])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
     "a red acceptance check at decide is a fix, a counted round: the third goes back to decide",
     () =>
       Effect.gen(function* () {

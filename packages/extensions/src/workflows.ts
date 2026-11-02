@@ -110,7 +110,9 @@ const implementorRound = (
  * The repeat-test check after an implementor round, with no model turn, on
  * gent's own runtime (`{{bun}}`): a pass moves to `pass`, a fail (exit 1, the
  * test evidence is wrong) is a failed round (`fix`, which counts), and an
- * error (the check could not run) goes to decide, counting nothing.
+ * error (the check could not run) goes to decide, counting nothing. It
+ * screens a request before review and judges no round: the merge gate
+ * still judges the implementor's.
  */
 const repeatCheck = (pass: string) => ({
   kind: "run" as const,
@@ -118,6 +120,7 @@ const repeatCheck = (pass: string) => ({
   // Two clean checkouts, each with its packages installed.
   timeoutSeconds: 1200,
   on: { pass, fail: "fix", error: "decide" },
+  judges: false,
   // One visit before each review, and one per failed check or recheck.
   maxVisits: 20,
   exhausted: "decide",

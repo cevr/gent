@@ -229,6 +229,13 @@ const RunState = Schema.Struct({
   /** Default 3600. A timeout takes `fail`, or `error` when the state has one. */
   timeoutSeconds: Schema.optionalKey(PositiveInt),
   on: Schema.Struct({ pass: StateName, fail: StateName, error: Schema.optionalKey(StateName) }),
+  /**
+   * Whether the command judges the work of the rounds since the run's last
+   * check (`ModelQuality.checks`); default true. A screen before a review
+   * (the repeat-test check) says false: its pass or fail counts for no
+   * model, and the next check that judges still counts those rounds.
+   */
+  judges: Schema.optionalKey(Schema.Boolean),
   ...VisitCap,
 })
 type RunState = typeof RunState.Type
@@ -496,6 +503,8 @@ const MachineStep = Schema.TaggedUnion({
     to: StateName,
     by: Schema.String,
     note: Schema.optionalKey(Schema.String),
+    /** A command's move: its state's `judges`, when it names one; false, its `pass` or `fail` judged no round. */
+    judged: Schema.optionalKey(Schema.Boolean),
   },
   /** `accepted`: the final state's `accepts`; a step without it accepted. */
   Finished: { state: StateName, accepted: Schema.optionalKey(Schema.Boolean) },
@@ -3831,7 +3840,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
             from: action.state,
             to,
             by,
-            ...omitUndefined({ note: Option.getOrUndefined(note) }),
+            ...omitUndefined({ note: Option.getOrUndefined(note), judged: state.judges }),
           }),
         ],
       }
@@ -4567,8 +4576,9 @@ const runView = (run: Run): MachineRunView => ({
 
 /**
  * How one model fared in one state of a machine, over every run of it. A
- * check (a command's `pass` or `fail`) and a gate (`green` or `red`) count
- * for each model that ran a round since the run's last one. `accepted`: the
+ * check (a command's `pass` or `fail`, unless its state `judges` nothing)
+ * and a gate (`green` or `red`) count for each model that ran a round since
+ * the run's last one. `accepted`: the
  * runs it had rounds in that reached a final state that accepts the work,
  * and those rounds, so `rounds / runs` is
  * what a run that got there took of it.
@@ -4638,10 +4648,12 @@ const tallyRound = (row: QualityTally, step: RoundEnded, run: RunTally): void =>
   run.sinceGate.add(row)
 }
 
-const tallyMove = (by: string, run: RunTally): void => {
+const tallyMove = (step: Extract<MachineStep, { readonly _tag: "Moved" }>, run: RunTally): void => {
+  const by = step.by
   // A size stop moves off the round that ended just before it.
   if (by === "oversize") for (const row of Option.toArray(run.latest)) row.oversize += 1
-  if (isCheckMove(by)) {
+  // A screen (`judged: false`) leaves the rounds to the next check that judges them.
+  if (isCheckMove(by) && step.judged !== false) {
     for (const row of run.sinceCheck) row.checks[by] += 1
     run.sinceCheck.clear()
   }
@@ -4673,7 +4685,7 @@ const tallyRun = (
     if (step._tag === "RoundEnded" && Predicate.isNotUndefined(step.model)) {
       tallyRound(tallyOf(step.state, step.model), step, run)
     }
-    if (step._tag === "Moved") tallyMove(step.by, run)
+    if (step._tag === "Moved") tallyMove(step, run)
     if (step._tag === "Finished" && step.accepted !== false) tallyFinish(run)
   }
 }
