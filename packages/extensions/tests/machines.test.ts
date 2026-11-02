@@ -7492,3 +7492,267 @@ describe("a run state's pass receipt", () => {
     65_000,
   )
 })
+
+// ── restack ─────────────────────────────────────────────────────────────────
+
+/**
+ * gate (counts its runs) → merge, which pushes to main; a push main moved
+ * past restacks and checks again in gate, and a conflict ends in conflicted.
+ */
+const RESTACK = {
+  name: "restack",
+  threads: {},
+  start: "gate",
+  states: {
+    gate: {
+      kind: "run",
+      run: `echo "run {{visit}}" >> "{{input.count}}"`,
+      on: { pass: "merge", fail: "broken" },
+    },
+    merge: {
+      kind: "integrate",
+      ref: "main",
+      on: { green: "done", red: "broken", restack: "gate", conflict: "conflicted" },
+    },
+    done: { kind: "final" },
+    broken: { kind: "final" },
+    conflicted: { kind: "final" },
+  },
+}
+
+/**
+ * A bare origin with `shared.txt` on main, the run's checkout on a branch
+ * `unit` from it, and a second clone that moves main. The checkout's own
+ * config names who commits, so the server's rebase needs no global config.
+ */
+const restackRepos = (home: Effect.Success<typeof restartableHome>) =>
+  Effect.gen(function* () {
+    const origin = `${home.home}/origin.git`
+    const other = `${home.home}/other`
+    yield* unitGit(home.home, ["init", "-q", "--bare", "-b", "main", origin])
+    yield* unitGit(home.cwd, ["init", "-q", "-b", "main"])
+    for (const [key, value] of [
+      ["user.name", "test"],
+      ["user.email", "test@example.com"],
+      ["commit.gpgsign", "false"],
+      ["core.hooksPath", "/dev/null"],
+    ] as const) {
+      yield* unitGit(home.cwd, ["config", key, value])
+    }
+    yield* commitFiles(home.cwd, { ".gitignore": ".gent/\n", "shared.txt": "one\n" }, "base")
+    yield* unitGit(home.cwd, ["remote", "add", "origin", origin])
+    yield* unitGit(home.cwd, ["push", "-q", "origin", "main"])
+    yield* unitGit(home.cwd, ["checkout", "-q", "-b", "unit"])
+    yield* unitGit(home.home, ["clone", "-q", origin, other])
+    return { origin, other, base: yield* unitGit(home.cwd, ["rev-parse", "HEAD"]) }
+  })
+
+/** The run's checkout commits `unit`, and the other clone pushes `main` to origin: the moved head. */
+const divergeFiles = (
+  home: Effect.Success<typeof restartableHome>,
+  other: string,
+  files: {
+    readonly unit: Readonly<Record<string, string>>
+    readonly main: Readonly<Record<string, string>>
+  },
+) =>
+  Effect.gen(function* () {
+    yield* commitFiles(home.cwd, files.unit, "unit work")
+    yield* commitFiles(other, files.main, "main moved")
+    yield* unitGit(other, ["push", "-q", "origin", "main"])
+    return {
+      unit: yield* unitGit(home.cwd, ["rev-parse", "HEAD"]),
+      moved: yield* unitGit(other, ["rev-parse", "HEAD"]),
+    }
+  })
+
+type FakeGitHub = Effect.Success<ReturnType<typeof fakeGitHub>>
+
+/** A server beside the fake GitHub, over real git: the run's restack fetches the real origin. */
+const restackLayer = (home: Effect.Success<typeof restartableHome>, github: FakeGitHub) =>
+  Effect.map(makeModels(trackWorker), (models) =>
+    home.layerFor(machineModels(models), {
+      extensionInputs: [githubBoundary(Layer.provide(github.layerOverRealGit, BunServices.layer))],
+    }),
+  )
+
+const restackClient = (home: Effect.Success<typeof restartableHome>, github: FakeGitHub) =>
+  Effect.gen(function* () {
+    const { client } = yield* createRpcClient(yield* restackLayer(home, github))
+    const owner = ownerOf(yield* client.session.create({}))
+    return { client, owner }
+  })
+
+/** The integrate's wait for the gate is over: its retry and the run's record come due now. */
+const retryDueNow = (run: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`UPDATE machine_runs SET pending_json = json_remove(pending_json, '$.notBefore')
+      WHERE run = ${run}`
+    yield* sql`UPDATE branch_wakes SET at = 0, version = version + 1
+      WHERE source_id = ${`machine-run:${run}`}`
+  })
+
+describe("an integrate state's restack", () => {
+  it.live(
+    "a push main moved past rebases onto it and runs the gate again, then pushes the rebased head",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const count = `${home.home}/count`
+        const { other, base } = yield* restackRepos(home)
+        const { unit, moved } = yield* divergeFiles(home, other, {
+          unit: { "unit.txt": "unit\n" },
+          main: { "other.txt": "other\n" },
+        })
+        const github = yield* fakeGitHub({ head: moved })
+        const { client, owner } = yield* restackClient(home, github)
+        expect(moved).not.toBe(base)
+        const run = yield* startRun(client, owner, RESTACK, "restack", { count })
+        yield* waitFor(
+          home.sql(runRow(run)),
+          (row) =>
+            Option.exists(row, (found) => (found.pending_json ?? "").includes('"generation":1')),
+          15_000,
+          "the gate admitted the rebased push",
+        )
+        const rebased = yield* unitGit(home.cwd, ["rev-parse", "HEAD"])
+        expect(rebased).not.toBe(unit)
+        // The rebased head holds main's commit; dies when it does not.
+        yield* unitGit(home.cwd, ["merge-base", "--is-ancestor", moved, rebased])
+        // One more gate, no round: the gate ran at the old head and at the rebased one.
+        expect(yield* runsCounted(count)).toBe(2)
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          "gate→merge",
+          "merge→gate",
+          "gate→merge",
+        ])
+        expect(yield* home.sql(savedValue(run, "merge"))).toEqual({
+          outcome: "restacked",
+          from: unit,
+          to: rebased,
+          onto: moved,
+        })
+        expect(github.remote.pushes).toEqual([rebased])
+        expect(yield* unitGit(other, ["ls-remote", "origin", "refs/heads/main"])).toContain(rebased)
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a rebase that conflicts is aborted and takes conflict, naming the files, with nothing pushed",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const count = `${home.home}/count`
+        const { other, base } = yield* restackRepos(home)
+        const { unit, moved } = yield* divergeFiles(home, other, {
+          unit: { "shared.txt": "unit\n" },
+          main: { "shared.txt": "main\n" },
+        })
+        const github = yield* fakeGitHub({ head: moved })
+        const { client, owner } = yield* restackClient(home, github)
+        expect(moved).not.toBe(base)
+        // A conflict edge with no restack could never be taken.
+        const { restack: _restack, ...noRestack } = RESTACK.states.merge.on
+        const [refused] = yield* call(client, owner, [
+          [
+            "machine.define",
+            "define-conflict-alone",
+            {
+              definition: {
+                ...RESTACK,
+                name: "conflict-alone",
+                states: { ...RESTACK.states, merge: { ...RESTACK.states.merge, on: noRestack } },
+              },
+            },
+          ],
+        ])
+        expect(refused?.failed).toBe(true)
+        expect(encodeJson(refused?.result)).toContain("merge: on.conflict needs on.restack")
+        const run = yield* startRun(client, owner, RESTACK, "restack", { count })
+        yield* waitForEnd(client, owner)
+        expect(Option.map(yield* home.sql(runRow(run)), (row) => row.state)).toEqual(
+          Option.some("conflicted"),
+        )
+        expect(yield* home.sql(savedValue(run, "merge"))).toMatchObject({
+          outcome: "conflict",
+          onto: moved,
+          files: ["shared.txt"],
+        })
+        // The abort put the checkout back: its head, its file, and no rebase left open.
+        expect(yield* unitGit(home.cwd, ["rev-parse", "HEAD"])).toBe(unit)
+        expect(yield* readUnitFile(`${home.cwd}/shared.txt`)).toBe("unit\n")
+        const rebaseDir = yield* unitGit(home.cwd, ["rev-parse", "--git-path", "rebase-merge"])
+        expect(yield* fileExists(`${home.cwd}/${rebaseDir}`)).toBe(false)
+        expect(yield* runsCounted(count)).toBe(1)
+        expect(github.remote.pushes).toEqual([])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a head a crash left rebased under a pending push is checked again, not pushed as it stands",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const count = `${home.home}/count`
+        const { other } = yield* restackRepos(home)
+        const { unit, moved } = yield* divergeFiles(home, other, {
+          unit: { "unit.txt": "unit\n" },
+          main: { "other.txt": "other\n" },
+        })
+        // gh is signed out: the merge visit holds its push, pinned to the gated head.
+        const github = yield* fakeGitHub({ head: moved, gh: "signed-out" })
+        const run = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client, owner } = yield* restackClient(home, github)
+            const run = yield* startRun(client, owner, RESTACK, "restack", { count })
+            yield* waitFor(
+              home.sql(stepsOf(run)),
+              (all) => all.some((step) => step._tag === "Waiting"),
+              15_000,
+              "the push waits for gh",
+            )
+            return run
+          }),
+        )
+        // As a restack leaves the checkout when the server dies after its rebase, before its move.
+        yield* unitGit(home.cwd, ["fetch", "-q", "origin", "main"])
+        yield* unitGit(home.cwd, ["rebase", "-q", "FETCH_HEAD"])
+        const rebased = yield* unitGit(home.cwd, ["rev-parse", "HEAD"])
+        github.remote.gh = "ready"
+        yield* home.sql(retryDueNow(run))
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* createRpcClient(yield* restackLayer(home, github))
+            // No client call: the run's own record activates its host.
+            yield* waitFor(
+              home.sql(runRow(run)),
+              (row) =>
+                Option.exists(row, (found) =>
+                  (found.pending_json ?? "").includes('"generation":1'),
+                ),
+              15_000,
+              "the gate admitted the rebased push",
+            )
+          }),
+        )
+        // The pinned head no longer fast-forwards; the head it became is gated first.
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          "gate→merge",
+          "merge→gate",
+          "gate→merge",
+        ])
+        expect(yield* home.sql(savedValue(run, "merge"))).toEqual({
+          outcome: "restacked",
+          from: unit,
+          to: rebased,
+          onto: moved,
+        })
+        expect(yield* runsCounted(count)).toBe(2)
+        expect(github.remote.pushes).toEqual([rebased])
+      }).pipe(Effect.scoped, Effect.timeout("50 seconds")),
+    55_000,
+  )
+})

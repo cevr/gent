@@ -1512,12 +1512,14 @@ const runToneColor = (
 }
 
 /**
- * The outcomes that failed their visit: a check's `fail`, a gate's `red`,
- * a state out of rounds, a round too big for its thread, a run that failed in it.
+ * The outcomes that failed their visit: a check's `fail`, a gate's `red`, a
+ * restack's `conflict`, a state out of rounds, a round too big for its
+ * thread, a run that failed in it.
  */
 const FAILED_OUTCOMES: ReadonlySet<string> = new Set([
   "fail",
   "red",
+  "conflict",
   "exhausted",
   "oversize",
   "failed",

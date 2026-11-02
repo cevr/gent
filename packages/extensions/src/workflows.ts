@@ -98,7 +98,7 @@ const implementorRound = (
     "Before any edit, read the spec, state.md, diagnosis.md when the unit dir holds it, and every round-*-findings.md, round-*-verify.md, round-*-repeat-check.md, blocked.md and merge-gate-*.log in the unit dir that is newer than your last request.",
     "The orchestrator's latest notes: {{blocked.note}} {{decide.note}}",
     "The last merge gate: exit {{gate.exitCode}}, timed out {{gate.timedOut}}, log merge-gate-N.log in the unit dir.",
-    "The last push through the integration gate: {{merge}}",
+    "The last push through the integration gate: {{merge}}; after a conflict, fetch, rebase onto the remote main and resolve the files it names.",
     "Write round-N-request.md, N one more than the last request in the unit dir.",
   ].join("\n"),
   on: { ready: "repeats", blocked: "blocked" },
@@ -306,7 +306,13 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       reuse: {},
       on: { pass: "merge", fail: "resume" },
     },
-    merge: { kind: "integrate", ref: "main", on: { green: "merged", red: "resume" } },
+    // A push main moved past rebases onto it and runs the gate again, with no
+    // round; a rebase that conflicts goes to the implementor.
+    merge: {
+      kind: "integrate",
+      ref: "main",
+      on: { green: "merged", red: "resume", restack: "gate", conflict: "resume" },
+    },
     merged: { kind: "final", say: "Unit {{input.unit}} merged." },
     rewrite: {
       kind: "final",

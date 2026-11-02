@@ -1382,29 +1382,38 @@ describe("agents pane machine runs", () => {
     }),
   )
 
-  it.scopedLive("a visit that stopped on size draws the failed mark", () =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis
-      const track = trackRun(now, "running")
-      // The review round was too big for its thread: the size stop moved the run to decide.
-      const page = yield* Schema.decodeUnknownEffect(MachineRunPage)({
-        ...track,
-        trail: [
-          track.trail[0],
-          { ...track.trail[1], outcome: "oversize", to: "decide" },
-          track.trail[2],
-        ],
-      })
-      const { setup } = yield* pageOpen(page, { width: 80, height: 24 })
-      yield* waitForFrame(setup, (frame) => frame.includes("review #1"), "run page")
-      const lines = renderFrame(setup).split("\n")
-      const review = lines.find((line) => line.includes("review #1")) ?? ""
-      expect(review).toContain("✕ review #1")
-      expect(review).toContain("oversize → decide")
-      // The visit that moved on its verdict keeps the done mark.
-      expect(lines.find((line) => line.includes("implement #1")) ?? "").toContain("✓ implement #1")
-    }),
-  )
+  for (const failed of [
+    // The review round was too big for its thread: the size stop moved the run to decide.
+    { why: "stopped on size", state: "review", outcome: "oversize", to: "decide" },
+    // The push's rebase onto the moved main conflicted: the run went back to the implementor.
+    { why: "conflicted on restack", state: "merge", outcome: "conflict", to: "resume" },
+  ]) {
+    it.scopedLive(`a visit that ${failed.why} draws the failed mark`, () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const track = trackRun(now, "running")
+        const page = yield* Schema.decodeUnknownEffect(MachineRunPage)({
+          ...track,
+          trail: [
+            track.trail[0],
+            { ...track.trail[1], state: failed.state, outcome: failed.outcome, to: failed.to },
+            track.trail[2],
+          ],
+        })
+        const { setup } = yield* pageOpen(page, { width: 80, height: 24 })
+        const label = `${failed.state} #1`
+        yield* waitForFrame(setup, (frame) => frame.includes(label), "run page")
+        const lines = renderFrame(setup).split("\n")
+        const visit = lines.find((line) => line.includes(label)) ?? ""
+        expect(visit).toContain(`✕ ${label}`)
+        expect(visit).toContain(`${failed.outcome} → ${failed.to}`)
+        // The visit that moved on its verdict keeps the done mark.
+        expect(lines.find((line) => line.includes("implement #1")) ?? "").toContain(
+          "✓ implement #1",
+        )
+      }),
+    )
+  }
 
   it.scopedLive("Enter on a visit opens its round's thread by the thread's listed row", () =>
     Effect.gen(function* () {

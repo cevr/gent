@@ -269,6 +269,36 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
       if (command.command === "git") return git(command.args)
       return unexpected(command.command, command.args)
     })
+    /** A real push that exits 0 lands on the fake's head, as GitHub would read it. */
+    const landed = (args: ReadonlyArray<string>, handle: ChildProcessSpawner.ChildProcessHandle) =>
+      ChildProcessSpawner.makeHandle({
+        ...handle,
+        exitCode: Effect.tap(handle.exitCode, (code) =>
+          Effect.sync(() => {
+            if (code !== 0) return
+            const sha = (args[2] ?? "").split(":")[0] ?? ""
+            remote.pushes.push(sha)
+            remote.head = sha
+          }),
+        ),
+      })
+    /** `gh` and the git commands `fakes` names on the fake; any other runs on `real`. */
+    const over = (fakes: (args: ReadonlyArray<string>) => boolean) =>
+      Layer.effect(
+        ChildProcessSpawner.ChildProcessSpawner,
+        Effect.map(ChildProcessSpawner.ChildProcessSpawner, (real) =>
+          ChildProcessSpawner.make((command) => {
+            if (command._tag !== "StandardCommand") return real.spawn(command)
+            if (command.command === "gh") return spawner.spawn(command)
+            if (command.command !== "git") return real.spawn(command)
+            if (fakes(command.args)) return spawner.spawn(command)
+            if (command.args[0] === "push") {
+              return Effect.map(real.spawn(command), (handle) => landed(command.args, handle))
+            }
+            return real.spawn(command)
+          }),
+        ),
+      )
     return {
       remote,
       addRun,
@@ -278,17 +308,12 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
        * The fake for `gh` and the git verbs it answers; any other command
        * spawns on the spawner it is given.
        */
-      layerOverReal: Layer.effect(
-        ChildProcessSpawner.ChildProcessSpawner,
-        Effect.map(ChildProcessSpawner.ChildProcessSpawner, (real) =>
-          ChildProcessSpawner.make((command) => {
-            const owned =
-              command._tag === "StandardCommand" &&
-              (command.command === "gh" || (command.command === "git" && fakeOwnsGit(command.args)))
-            if (owned) return spawner.spawn(command)
-            return real.spawn(command)
-          }),
-        ),
-      ),
+      layerOverReal: over(fakeOwnsGit),
+      /**
+       * The fake for `gh` and the remote's GitHub URL alone: every other git
+       * command runs on the spawner it is given, against a real repository.
+       * A push that lands moves the fake's head.
+       */
+      layerOverRealGit: over((args) => args[0] === "remote" && args[1] === "get-url"),
     }
   })

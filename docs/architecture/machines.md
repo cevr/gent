@@ -177,6 +177,22 @@
     recipe).
   - An `integrate` state pushes the run's head through the integration gate
     and moves by `on.green` or `on.red` (Integration gate in `shipped-extensions.md`).
+    The visit pins the head its cwd had when entered
+    (`PendingAction.Integrate.head`) and pushes that commit, so a crash
+    after a rebase never pushes an unchecked head. With `on.restack`, a push
+    refused for a moved ref restacks: `git fetch` of the ref, then
+    `git rebase` onto it. A clean rebase moves by `restack`
+    (`GateOutcome.restacked`, from, to and onto) to a state that checks the
+    new head again (the orchestrate machines go back to `gate`, whose
+    receipt key now differs); a head that already contains the ref but
+    differs from the pinned one (a rebase before a crash) counts as
+    restacked too. A conflicting rebase is aborted and moves by `conflict`
+    to `on.conflict`, or `on.red` without it (`GateOutcome.conflict`, the
+    unmerged files and git's output); a rebase already in progress is a
+    conflict and is not aborted. A fetch that fails waits and retries, as
+    an unreachable remote does. `on.conflict` without `on.restack` is
+    refused. The orchestrate machines send a conflict to `resume`, where
+    the implementor rebases and resolves.
   - A definition can ship files (`files`, a name to its text, each at most
     64,000 characters), so a check travels with the definition, not with a
     project. A `run` state names one as `{{files.<name>}}`: each command

@@ -256,14 +256,23 @@ type RunState = typeof RunState.Type
  * gate, then moves by the CI verdict for that push. A gate that is not clear
  * makes the run wait; a push the gate refuses (not a fast-forward) or one a
  * crash cut off before it landed takes `red`. A visit after a red one
- * passes that red generation as its repair.
+ * passes that red generation as its repair. The visit pushes the head its
+ * cwd had when the run entered it. With `on.restack`, a push the ref moved
+ * past rebases the checkout onto the fetched ref and moves by `restack`, so
+ * the new head is checked again; a rebase that conflicts is aborted and
+ * moves by `conflict` (default `red`).
  */
 const IntegrateState = Schema.Struct({
   kind: Schema.Literal("integrate"),
   ref: Schema.String,
   /** Default origin. */
   remote: Schema.optionalKey(Schema.String),
-  on: Schema.Struct({ green: StateName, red: StateName }),
+  on: Schema.Struct({
+    green: StateName,
+    red: StateName,
+    restack: Schema.optionalKey(StateName),
+    conflict: Schema.optionalKey(StateName),
+  }),
   ...VisitCap,
 })
 type IntegrateState = typeof IntegrateState.Type
@@ -432,11 +441,14 @@ const PendingAction = Schema.TaggedUnion({
    * new, and a stop or a failure releases the gate by it. `repo`, `generation` and `sha` are set once the gate
    * admitted the push; the run then waits for that generation's verdict.
    * `notBefore` (epoch ms): the gate was not clear, the push is tried again then.
+   * `head`: the commit the visit pushes, read as it was entered; absent when
+   * it could not be read, and the push takes the cwd's `HEAD`.
    */
   Integrate: {
     state: StateName,
     visit: PositiveInt,
     requestId: Schema.String,
+    head: Schema.optionalKey(Schema.String),
     repairOf: Schema.optionalKey(PositiveInt),
     repo: Schema.optionalKey(Schema.String),
     generation: Schema.optionalKey(PositiveInt),
@@ -680,6 +692,8 @@ const targetsOf = (state: MachineState): ReadonlyArray<StateName> => {
       return [
         state.on.green,
         state.on.red,
+        ...Option.toArray(Option.fromUndefinedOr(state.on.restack)),
+        ...Option.toArray(Option.fromUndefinedOr(state.on.conflict)),
         ...Option.toArray(Option.fromUndefinedOr(state.exhausted)),
       ]
     case "ask":
@@ -714,6 +728,8 @@ const MOVE_KINDS: ReadonlySet<string> = new Set([
   "error",
   "green",
   "red",
+  "restack",
+  "conflict",
   "answer",
 ])
 
@@ -745,6 +761,13 @@ const stateProblems = (
     if (Predicate.isNotUndefined(state.exhausted) && Predicate.isUndefined(state.maxVisits)) {
       problems.push(`${name}: exhausted needs maxVisits`)
     }
+  }
+  if (
+    state.kind === "integrate" &&
+    Predicate.isNotUndefined(state.on.conflict) &&
+    Predicate.isUndefined(state.on.restack)
+  ) {
+    problems.push(`${name}: on.conflict needs on.restack`)
   }
   if (state.kind === "thread" || state.kind === "ask") {
     const reserved = Object.keys(state.on ?? {}).filter((key) => RESERVED_KEYS.has(key))
@@ -2610,7 +2633,7 @@ const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
         requestId: action.requestId,
         poller: "caller",
         notify: false,
-        ...omitUndefined({ remote: state.remote, repairOf: action.repairOf }),
+        ...omitUndefined({ remote: state.remote, repairOf: action.repairOf, sha: action.head }),
       })
       .pipe(Effect.result)
     if (pushed._tag === "Success") {
@@ -2627,12 +2650,11 @@ const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
       return
     }
     const error = pushed.failure
-    switch (error._tag) {
-      case "IntegrationBlocked":
-      case "GhUnavailable": {
+    const retryLater = (reason: string) =>
+      Effect.gen(function* () {
         const until = now + Duration.toMillis(GATE_RETRY_WAIT)
         yield* Effect.logInfo("machines.integrate.waiting").pipe(
-          Effect.annotateLogs({ run: run.run, state: action.state, error: error.message }),
+          Effect.annotateLogs({ run: run.run, state: action.state, error: reason }),
         )
         yield* commitMove(
           run,
@@ -2644,9 +2666,50 @@ const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
           },
           [MachineStep.cases.Waiting.make({ state: action.state, until, reason: "integration" })],
         )
+      })
+    switch (error._tag) {
+      case "IntegrationBlocked":
+      case "GhUnavailable":
+        yield* retryLater(error.message)
         return
-      }
-      case "PushRefused":
+      case "PushRefused": {
+        const restackTo = Option.fromUndefinedOr(state.on.restack)
+        if (Option.isSome(restackTo)) {
+          const restacked = yield* restack(run.cwd, state, Option.fromUndefinedOr(action.head))
+          switch (restacked._tag) {
+            case "Restacked":
+              yield* leaveIntegrate(
+                run,
+                action,
+                restackTo.value,
+                "restack",
+                GateOutcome.cases.restacked.make({
+                  from: restacked.from,
+                  to: restacked.to,
+                  onto: restacked.onto,
+                }),
+              )
+              return
+            case "Conflict":
+              yield* leaveIntegrate(
+                run,
+                action,
+                state.on.conflict ?? state.on.red,
+                "conflict",
+                GateOutcome.cases.conflict.make({
+                  onto: restacked.onto,
+                  files: restacked.files,
+                  message: restacked.message,
+                }),
+              )
+              return
+            case "Unreachable":
+              yield* retryLater(restacked.message)
+              return
+            case "UpToDate":
+              break
+          }
+        }
         yield* leaveIntegrate(
           run,
           action,
@@ -2655,6 +2718,7 @@ const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
           GateOutcome.cases.refused.make({ message: error.message }),
         )
         return
+      }
       // The push never landed, and its request id never pushes again.
       case "PushInterrupted":
         yield* leaveIntegrate(
@@ -2695,8 +2759,9 @@ const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
 /**
  * The gate's outcome for an integrate, saved as the state's value: green or
  * red from CI, `refused` (not a fast-forward, or the remote said no) or
- * `interrupted` (a push a crash cut off, which never landed). The last two
- * take `on.red`.
+ * `interrupted` (a push a crash cut off, which never landed), which take
+ * `on.red`; `restacked` (the head `from` rebased onto the ref's `onto`, now
+ * `to`) and `conflict` (that rebase conflicted in `files` and was aborted).
  */
 const GateOutcome = Schema.Union([
   Schema.Struct({
@@ -2712,6 +2777,18 @@ const GateOutcome = Schema.Union([
   }),
   Schema.Struct({ outcome: Schema.tag("refused"), message: Schema.String }),
   Schema.Struct({ outcome: Schema.tag("interrupted"), message: Schema.String }),
+  Schema.Struct({
+    outcome: Schema.tag("restacked"),
+    from: Schema.String,
+    to: Schema.String,
+    onto: Schema.String,
+  }),
+  Schema.Struct({
+    outcome: Schema.tag("conflict"),
+    onto: Schema.String,
+    files: Schema.Array(Schema.String),
+    message: Schema.String,
+  }),
 ]).pipe(Schema.toTaggedUnion("outcome"))
 type GateOutcome = typeof GateOutcome.Type
 const decodeGateOutcome = Schema.decodeUnknownOption(GateOutcome)
@@ -2745,6 +2822,116 @@ const settledVerdict = (
       return Option.none()
   }
 }
+
+// ── restack ─────────────────────────────────────────────────────────────────
+
+/** A fetch, or a rebase, of the run's checkout. */
+const RESTACK_TIMEOUT = Duration.minutes(2)
+/** The most of git's words a conflict keeps. */
+const RESTACK_MESSAGE_MAX = 2_000
+
+/**
+ * What a restack did. `UpToDate`: the head the visit pushed already holds
+ * the fetched ref, so the push failed for another reason. `Restacked`: the
+ * checkout's head is now `to`, on `onto`; a head that moved since the visit
+ * began counts too, since the gate never saw it. `Conflict`: the rebase
+ * stopped and was aborted, or the checkout was in a rebase of its own.
+ * `Unreachable`: the fetch failed.
+ */
+const Restack = Schema.TaggedUnion({
+  UpToDate: {},
+  Restacked: { from: Schema.String, to: Schema.String, onto: Schema.String },
+  Conflict: { onto: Schema.String, files: Schema.Array(Schema.String), message: Schema.String },
+  Unreachable: { message: Schema.String },
+})
+
+/** A git command of the restack, its exit read by the caller. No editor or prompt waits. */
+const restackGit = (cwd: string, args: ReadonlyArray<string>) =>
+  runProcess("git", args, {
+    cwd,
+    env: { GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true" },
+    extendEnv: true,
+    timeout: RESTACK_TIMEOUT,
+  })
+
+/** The commit `HEAD` of `cwd` names; none outside git. */
+const headOf = (cwd: string) =>
+  Effect.option(receiptGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"]))
+
+/** Whether the checkout is inside a rebase: git keeps its state in rebase-merge or rebase-apply. */
+const rebasing = Effect.fn("Machines.rebasing")(function* (cwd: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  for (const name of ["rebase-merge", "rebase-apply"]) {
+    const found = path.resolve(cwd, yield* receiptGit(cwd, ["rev-parse", "--git-path", name]))
+    if (yield* fs.exists(found)) return true
+  }
+  return false
+})
+
+/**
+ * Fetches the integrate state's ref and rebases the checkout onto it. `from`
+ * is the head the visit pushed (default the checkout's head). A rebase in
+ * progress before it is never aborted: it is not the restack's to end.
+ */
+const restack = Effect.fn("Machines.restack")(
+  function* (cwd: string, state: IntegrateState, pushed: Option.Option<string>) {
+    const remote = state.remote ?? "origin"
+    if (yield* rebasing(cwd)) {
+      return Restack.cases.Conflict.make({
+        onto: state.ref,
+        files: [],
+        message: "The checkout is inside a rebase the run did not start: finish or abort it",
+      })
+    }
+    const fetched = yield* restackGit(cwd, [
+      "fetch",
+      "--no-tags",
+      remote,
+      `refs/heads/${state.ref}`,
+    ])
+    if (fetched.exitCode !== 0) {
+      return Restack.cases.Unreachable.make({
+        message: `git fetch ${remote} ${state.ref} exited ${fetched.exitCode}: ${fetched.stderr.trim()}`,
+      })
+    }
+    const onto = yield* receiptGit(cwd, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"])
+    const head = yield* receiptGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"])
+    const from = Option.getOrElse(pushed, () => head)
+    const ancestry = yield* restackGit(cwd, ["merge-base", "--is-ancestor", onto, head])
+    if (ancestry.exitCode > 1) {
+      return yield* new MachineFault({
+        message: `git merge-base --is-ancestor ${onto} ${head} exited ${ancestry.exitCode}`,
+      })
+    }
+    if (ancestry.exitCode === 0) {
+      if (head === from) return Restack.cases.UpToDate.make({})
+      return Restack.cases.Restacked.make({ from, to: head, onto })
+    }
+    const rebased = yield* restackGit(cwd, ["rebase", "--no-autostash", onto])
+    if (rebased.exitCode === 0) {
+      const to = yield* receiptGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"])
+      return Restack.cases.Restacked.make({ from, to, onto })
+    }
+    const conflicted = yield* restackGit(cwd, ["diff", "--name-only", "--diff-filter=U"])
+    const files = conflicted.stdout.split("\n").filter((line) => line.length > 0)
+    if (yield* rebasing(cwd)) {
+      const aborted = yield* restackGit(cwd, ["rebase", "--abort"])
+      if (aborted.exitCode !== 0) {
+        return yield* new MachineFault({
+          message: `git rebase --abort exited ${aborted.exitCode}: ${aborted.stderr.trim()}`,
+        })
+      }
+    }
+    const said = `${rebased.stdout}\n${rebased.stderr}`.trim()
+    return Restack.cases.Conflict.make({
+      onto,
+      files,
+      message: said.slice(0, RESTACK_MESSAGE_MAX),
+    })
+  },
+  Effect.mapError((error) => new MachineFault({ message: `restack: ${error.message}` })),
+)
 
 /** Removes the run's core record once its end is settled. */
 const withdrawWake = Effect.fn("Machines.withdrawWake")(function* (run: Run) {
@@ -2818,11 +3005,15 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
     }
     case "integrate": {
       // The push itself is the next move: the driver reads the action first.
+      const head = yield* headOf(run.cwd)
       const action = PendingAction.cases.Integrate.make({
         state: name,
         visit,
         requestId: `machine:${run.run}:${run.seq + 1}`,
-        ...omitUndefined({ repairOf: Option.getOrUndefined(repairOf(run.context, name)) }),
+        ...omitUndefined({
+          repairOf: Option.getOrUndefined(repairOf(run.context, name)),
+          head: Option.getOrUndefined(head),
+        }),
       })
       yield* commitMove(run, { ...run, pending: Option.some(action) }, [
         MachineStep.cases.Dispatched.make({ action }),
