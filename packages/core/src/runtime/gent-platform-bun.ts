@@ -33,6 +33,7 @@ import {
   Schedule,
   Schema,
   Scope,
+  Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
 import type { ChildProcessSpawner } from "effect/process"
@@ -97,8 +98,11 @@ class NoRelease extends Schema.TaggedError<NoRelease, { readonly brand: unique s
   { reason: Schema.String },
 ) {}
 
-/** How long one git call may take before the checkout names no release. */
-const GIT_TIMEOUT = Duration.seconds(10)
+/** One deadline for all git, entry and lock reads (warm trees take 30–56 ms). */
+const RELEASE_TIMEOUT = Duration.seconds(10)
+
+/** Leave room to reap a stubborn git within the deadline plus one second. */
+const RELEASE_FORCE_KILL_AFTER = Duration.millis(500)
 
 /** How many files of a checkout one capture reads at once. */
 const TREE_READS = 16
@@ -115,26 +119,41 @@ const sha256 = (input: Uint8Array | string) =>
  */
 const releaseGit = (directory: string, args: ReadonlyArray<string>) =>
   runProcess("git", ["--no-optional-locks", "-C", directory, ...args], {
-    timeout: GIT_TIMEOUT,
+    forceKillAfter: RELEASE_FORCE_KILL_AFTER,
   }).pipe(
     Effect.mapError((error) => new NoRelease({ reason: `no git: ${error.message}` })),
-    Effect.flatMap(({ exitCode, stdout, stderr }) => {
-      if (exitCode === 0) return Effect.succeed(stdout)
+    Effect.flatMap((result) => {
+      const { exitCode, stderr } = result
+      if (exitCode === 0) return Effect.succeed(result)
       return Effect.fail(new NoRelease({ reason: `git ${args[0]}: ${stderr.trim()}` }))
     }),
   )
 
+/** Hash a file incrementally: memory is bounded by the stream's chunks. */
+const hashFile = (file: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const hash = new Bun.CryptoHasher("sha256")
+    yield* fs.stream(file).pipe(
+      Stream.runForEach((chunk) =>
+        Effect.sync(() => {
+          hash.update(chunk)
+        }),
+      ),
+    )
+    return hash.digest("hex")
+  })
+
 /**
- * The tree of the checkout at `top`: the content of its working files. Git
+ * The tree of the checkout at `top`: its working entries. Git
  * only names them: every tracked file, and every untracked file it does not
  * ignore. Gent reads each one's bytes itself, so no git filter, diff driver
  * or line-ending conversion touches them, and no git config changes the
- * tree. The tree is the SHA-256 of one line per file, sorted by path:
- * `<path>\0<SHA-256 of its bytes>\n`, or `<path>\0deleted\n` for a tracked
- * file the working tree lacks. A path holds no NUL and a digest no newline,
- * so the lines split one way. The commit the tree sits on is a fact of its
- * own, so two checkouts of one commit with byte-identical working files
- * name one tree, and any byte another.
+ * tree. Each UTF-8 path contributes one sorted line: `<path>\0file\0<digest>\n`,
+ * `<path>\0link\0<target>\n`, or `<path>\0deleted\n`. lstat never follows
+ * links; a dangling link names its target too. Other entry types and paths
+ * that cannot be decoded losslessly fail closed. The commit is a separate
+ * fact: identical listed entries on one commit name one release.
  */
 const captureTree = (top: string) =>
   Effect.gen(function* () {
@@ -147,17 +166,34 @@ const captureTree = (top: string) =>
       "--exclude-standard",
     ])
     // A file in a merge conflict is listed once per stage.
-    const files = [...new Set(listed.split("\0").filter((file) => file.length > 0))].sort()
+    const paths = yield* Effect.try({
+      try: () =>
+        new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(listed.stdoutBytes),
+      catch: () => new NoRelease({ reason: "git listed a path that is not valid UTF-8" }),
+    })
+    const files = [...new Set(paths.split("\0").filter((file) => file.length > 0))].sort()
     const lines = yield* Effect.forEach(
       files,
       (file) =>
-        fs.readFile(`${top}/${file}`).pipe(
-          Effect.map((bytes) => `${file}\0${sha256(bytes)}\n`),
-          Effect.catchIf(
-            (error) => error.reason._tag === "NotFound",
-            () => Effect.succeed(`${file}\0${DELETED_FILE}\n`),
+        Effect.gen(function* () {
+          const full = `${top}/${file}`
+          const info = yield* fs.lstat(full).pipe(
+            Effect.asSome,
+            Effect.catchIf(
+              (error) => error.reason._tag === "NotFound",
+              () => Effect.succeedNone,
+            ),
+          )
+          if (Option.isNone(info)) return `${file}\0${DELETED_FILE}\n`
+          if (info.value.type === "SymbolicLink") {
+            return `${file}\0link\0${yield* fs.readLink(full)}\n`
+          }
+          if (info.value.type === "File") return `${file}\0file\0${yield* hashFile(full)}\n`
+          return yield* new NoRelease({ reason: `${file}: unsupported ${info.value.type} entry` })
+        }).pipe(
+          Effect.catchTag("PlatformError", (error) =>
+            Effect.fail(new NoRelease({ reason: `${file}: ${error.message}` })),
           ),
-          Effect.mapError((error) => new NoRelease({ reason: `${file}: ${error.message}` })),
         ),
       { concurrency: TREE_READS },
     )
@@ -191,26 +227,30 @@ export const captureRelease = (
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
     const [top = "", commit = ""] = (yield* releaseGit(directory, [
       "rev-parse",
       "--show-toplevel",
       "HEAD",
-    ]))
+    ])).stdout
       .trim()
       .split("\n")
     if (top.length === 0 || commit.length === 0) {
       return yield* new NoRelease({ reason: "git names no checkout" })
     }
     const tree = yield* captureTree(top)
-    if ((yield* releaseGit(top, ["rev-parse", "HEAD"])).trim() !== commit) {
+    if ((yield* releaseGit(top, ["rev-parse", "HEAD"])).stdout.trim() !== commit) {
       return yield* new NoRelease({ reason: "the commit moved while it was read" })
     }
-    const lock = yield* fs
-      .readFile(`${top}/bun.lock`)
-      .pipe(Effect.mapError((error) => new NoRelease({ reason: `no bun.lock: ${error.message}` })))
-    return { commit, tree, lock: sha256(lock), bun: Bun.version }
-  })
+    const lock = yield* hashFile(`${top}/bun.lock`).pipe(
+      Effect.mapError((error) => new NoRelease({ reason: `no bun.lock: ${error.message}` })),
+    )
+    return { commit, tree, lock, bun: Bun.version }
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: RELEASE_TIMEOUT,
+      orElse: () => Effect.fail(new NoRelease({ reason: "release capture exceeded 10 seconds" })),
+    }),
+  )
 
 /**
  * The release a source run from `directory` runs: its checkout's

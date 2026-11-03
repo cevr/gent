@@ -1831,29 +1831,46 @@ const sha256Hex = (input: Uint8Array | string) =>
 const utf8 = (text: string) => new TextEncoder().encode(text)
 const pick = <A>(random: Random, from: ReadonlyArray<A>): A => from[random(from.length)] ?? from[0]!
 
-/** A working file of a generated checkout: its bytes, none once a tracked file is deleted. */
+const TreeEntry = Schema.TaggedUnion({
+  File: { bytes: Schema.Uint8Array },
+  Link: { target: Schema.String },
+  Deleted: {},
+})
+type TreeEntry = typeof TreeEntry.Type
+
+/** A listed entry of a generated checkout, including deleted tracked entries. */
 interface ModelFile {
   readonly tracked: boolean
-  readonly bytes: Option.Option<Uint8Array>
+  readonly entry: TreeEntry
 }
 
 /**
- * The tree of `files` from the model's own bytes, never the disk's: one line
- * per file git lists, `<path>\0<SHA-256 of its bytes>` or `<path>\0deleted`.
+ * Independent oracle: the model names the paths (never git); lstat reads
+ * their kinds and readLink reads links themselves. Whole-file reads are
+ * fine for these tiny fixtures; production must stream them.
  */
-const modelTree = (files: ReadonlyMap<string, ModelFile>) =>
-  sha256Hex(
-    [...files]
-      .map(
-        ([path, file]) =>
-          `${path}\0${Option.match(file.bytes, {
-            onNone: () => DELETED_FILE,
-            onSome: (bytes) => sha256Hex(bytes),
-          })}\n`,
+const modelTree = (directory: string, files: ReadonlyMap<string, ModelFile>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const lines: Array<string> = []
+    for (const file of [...files.keys()].sort()) {
+      const full = `${directory}/${file}`
+      const stat = yield* fs.lstat(full).pipe(
+        Effect.asSome,
+        Effect.catchIf(
+          (error) => error.reason._tag === "NotFound",
+          () => Effect.succeedNone,
+        ),
       )
-      .sort()
-      .join(""),
-  )
+      if (Option.isNone(stat)) lines.push(`${file}\0${DELETED_FILE}\n`)
+      else if (stat.value.type === "SymbolicLink")
+        lines.push(`${file}\0link\0${yield* fs.readLink(full)}\n`)
+      else if (stat.value.type === "File")
+        lines.push(`${file}\0file\0${sha256Hex(yield* fs.readFile(full))}\n`)
+      else return Option.none<string>()
+    }
+    return Option.some(sha256Hex(lines.join("")))
+  })
 
 /** Pieces of a file's bytes: digits a clean filter hides, CRLF, a function line, bytes no UTF-8 names. */
 const FRAGMENTS: ReadonlyArray<Uint8Array> = [
@@ -1939,16 +1956,28 @@ const TREE_EDITS = [
   "an untracked file added",
   "an untracked file removed",
   "an ignored file written",
+  "a tracked link repointed",
+  "an untracked link added",
+  "an untracked link repointed",
+  "a tracked link made dangling",
+  "a dangling link re-dangled",
+  "a link to a non-regular target",
+  "a link replaced by a file",
 ] as const
 
 /** One generated edit to the checkout at `directory` and to its model: the edit it made. */
-const generateEdit = (directory: string, files: Map<string, ModelFile>, random: Random) =>
+const generateEdit = (
+  directory: string,
+  files: Map<string, ModelFile>,
+  random: Random,
+  selected = pick(random, TREE_EDITS),
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const present = (tracked: boolean) => {
       const paths: Array<string> = []
       for (const [path, file] of files) {
-        if (file.tracked === tracked && Option.isSome(file.bytes) && !FIXED_PATHS.has(path)) {
+        if (file.tracked === tracked && file.entry._tag === "File" && !FIXED_PATHS.has(path)) {
           paths.push(path)
         }
       }
@@ -1957,34 +1986,65 @@ const generateEdit = (directory: string, files: Map<string, ModelFile>, random: 
     const put = (file: string, tracked: boolean, bytes: Uint8Array) =>
       writeBytes(directory, file, bytes).pipe(
         Effect.tap(() =>
-          Effect.sync(() => files.set(file, { tracked, bytes: Option.some(bytes) })),
+          Effect.sync(() =>
+            files.set(file, { tracked, entry: TreeEntry.cases.File.make({ bytes }) }),
+          ),
         ),
       )
-    let edit: (typeof TREE_EDITS)[number] = pick(random, TREE_EDITS)
+    const link = (file: string, tracked: boolean, target: string) =>
+      Effect.gen(function* () {
+        // exists follows links, so remove by the model, including dangling links.
+        if (files.has(file)) yield* fs.remove(`${directory}/${file}`, { force: true })
+        yield* fs.makeDirectory(`${directory}/fresh`, { recursive: true })
+        yield* fs.symlink(target, `${directory}/${file}`)
+        files.set(file, { tracked, entry: TreeEntry.cases.Link.make({ target }) })
+      })
+    let edit = selected
     const tracked = present(true)
     const untracked = present(false)
     if (tracked.length === 0 && edit.startsWith("a tracked")) edit = "an untracked file added"
-    if (untracked.length === 0 && edit === "an untracked file removed") {
-      edit = "an untracked file added"
-    }
     if (edit === "a tracked file edited")
       yield* put(pick(random, tracked), true, generateBytes(random))
     if (edit === "a tracked file emptied") yield* put(pick(random, tracked), true, new Uint8Array())
     if (edit === "a tracked file deleted") {
       const file = pick(random, tracked)
       yield* fs.remove(`${directory}/${file}`)
-      files.set(file, { tracked: true, bytes: Option.none() })
+      files.set(file, { tracked: true, entry: TreeEntry.cases.Deleted.make({}) })
     }
     if (edit === "an untracked file added") {
       yield* put(pick(random, UNTRACKED_PATHS), false, generateBytes(random))
     }
     if (edit === "an untracked file removed") {
+      if (untracked.length === 0) {
+        yield* put("fresh/transient.ts", false, generateBytes(random))
+        untracked.push("fresh/transient.ts")
+      }
       const file = pick(random, untracked)
       yield* fs.remove(`${directory}/${file}`)
       files.delete(file)
     }
     if (edit === "an ignored file written") {
       yield* writeBytes(directory, `cache/${String(random(3))}.js`, generateBytes(random))
+    }
+    if (edit === "a tracked link repointed") yield* link("linked.ts", true, "src/old.ts")
+    if (edit === "an untracked link added") yield* link("fresh/link.ts", false, "../src/main.ts")
+    if (edit === "an untracked link repointed") yield* link("fresh/link.ts", false, "../src/old.ts")
+    if (edit === "a tracked link made dangling") yield* link("linked.ts", true, "missing-one.ts")
+    if (edit === "a dangling link re-dangled") {
+      yield* link("linked.ts", true, "missing-one.ts")
+      yield* link("linked.ts", true, "missing-two.ts")
+    }
+    if (edit === "a link to a non-regular target") {
+      yield* fs.makeDirectory(`${directory}/cache`, { recursive: true })
+      if (!(yield* fs.exists(`${directory}/cache/pipe`))) {
+        expect((yield* runProcess("mkfifo", [`${directory}/cache/pipe`])).exitCode).toBe(0)
+      }
+      yield* link("linked.ts", true, "cache/pipe")
+    }
+    if (edit === "a link replaced by a file") {
+      yield* link("linked.ts", true, "src/main.ts")
+      yield* fs.remove(`${directory}/linked.ts`)
+      yield* put("linked.ts", true, generateBytes(random))
     }
     return edit
   })
@@ -2020,9 +2080,380 @@ const gitStatus = (directory: string) =>
 const TREE_CASES = 16
 const TREE_SEED = 20_261_106
 
+/** Git prints canonical roots (/private/var on macOS), so boundary paths use them too. */
+const treeDirectory = makeTempDirectoryScoped("gent-tree-").pipe(
+  Effect.flatMap((directory) =>
+    Effect.flatMap(FileSystem.FileSystem, (fs) => fs.realPath(directory)),
+  ),
+)
+
+/** Replace only git's path-list bytes; real git still owns its child and exit. */
+const listedBytes = (bytes: Uint8Array) =>
+  Effect.map(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
+    ChildProcessSpawner.make((command) =>
+      spawner.spawn(command).pipe(
+        Effect.map((handle) => {
+          if (ChildProcess.isStandardCommand(command) && command.args.includes("ls-files")) {
+            return { ...handle, stdout: Stream.make(bytes) }
+          }
+          return handle
+        }),
+      ),
+    ),
+  )
+
 describe("the tree a release names", () => {
   it.live(
-    `${TREE_CASES} generated checkouts (seed ${TREE_SEED}): the tree is the hash of the working files' own bytes, the same under any clean filter, diff driver or line-ending config; one byte changed names another`,
+    "a non-UTF-8 path from git names no release; a valid leading BOM in a path is preserved",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const directory = yield* treeDirectory
+          yield* checkout(directory, "one")
+          const invalid = yield* listedBytes(Uint8Array.of(0x63, 0x61, 0x66, 0xe9, 0))
+          const failed = yield* captureRelease(directory).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, invalid),
+            Effect.flip,
+          )
+          expect(failed._tag).toBe("NoRelease")
+          expect(failed.reason).toContain("UTF-8")
+          const file = "\ufeffentry.ts"
+          yield* writeBytes(directory, file, utf8("content\n"))
+          const valid = yield* listedBytes(utf8(`${file}\0`))
+          const tree = yield* treeOf(directory).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, valid),
+          )
+          expect(tree).toBe(sha256Hex(`${file}\0file\0${sha256Hex("content\n")}\n`))
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live("a listed directory or gitlink, FIFO, socket or device names no release", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* treeDirectory
+        yield* checkout(directory, "one")
+        const kinds: ReadonlyArray<FileSystem.File.Type> = [
+          "Directory",
+          "FIFO",
+          "Socket",
+          "BlockDevice",
+          "CharacterDevice",
+          "Unknown",
+        ]
+        for (const type of kinds) {
+          const boundary = FileSystem.FileSystem.of({
+            ...fs,
+            lstat: (file) =>
+              fs.lstat(file).pipe(
+                Effect.map((info) => {
+                  if (file === `${directory}/src/main.ts`) return { ...info, type }
+                  return info
+                }),
+              ),
+          })
+          const failed = yield* captureRelease(directory).pipe(
+            Effect.provideService(FileSystem.FileSystem, boundary),
+            Effect.flip,
+          )
+          expect(failed._tag, type).toBe("NoRelease")
+          expect(failed.reason, type).toContain(`unsupported ${type}`)
+        }
+        // A real gitlink: git lists its directory, not the nested files.
+        const { commit } = yield* captureRelease(directory)
+        yield* fs.makeDirectory(`${directory}/submodule`)
+        yield* fixtureGit(directory, [
+          "update-index",
+          "--add",
+          "--cacheinfo",
+          `160000,${commit},submodule`,
+        ])
+        expect((yield* captureRelease(directory).pipe(Effect.flip)).reason).toContain(
+          "unsupported Directory",
+        )
+      }),
+    ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live(
+    "a large file and bun.lock are hashed through bounded streams, never whole-file reads",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const directory = yield* treeDirectory
+          yield* checkout(directory, "one")
+          const bytes = Uint8Array.from({ length: 8 * 1024 * 1024 }, (_, at) => at % 251)
+          yield* fs.writeFile(`${directory}/large.bin`, bytes)
+          const expected = yield* captureRelease(directory)
+          const streams = new Set<string>()
+          let chunks = 0
+          let maxChunk = 0
+          const boundary = FileSystem.FileSystem.of({
+            ...fs,
+            readFile: (file) => Effect.die(`whole-file read of ${file}`),
+            stream: (file, options) =>
+              fs.stream(file, options).pipe(
+                Stream.tap((chunk) =>
+                  Effect.sync(() => {
+                    streams.add(file)
+                    if (file === `${directory}/large.bin`) {
+                      chunks++
+                      maxChunk = Math.max(maxChunk, chunk.length)
+                    }
+                  }),
+                ),
+              ),
+          })
+          const actual = yield* captureRelease(directory).pipe(
+            Effect.provideService(FileSystem.FileSystem, boundary),
+          )
+          expect(actual).toEqual(expected)
+          expect(streams.has(`${directory}/bun.lock`)).toBe(true)
+          expect(chunks).toBeGreaterThan(1)
+          expect(maxChunk).toBeLessThanOrEqual(64 * 1024)
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live(
+    "one deadline bounds a hung entry read and the later lock read, leaving no git child",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+          const directory = yield* treeDirectory
+          yield* checkout(directory, "one")
+          for (const phase of ["lstat", "file", "lock"] as const) {
+            const children: Array<string> = []
+            let lockReads = 0
+            const held = yield* Deferred.make<boolean>()
+            const never = Deferred.succeed(held, true).pipe(Effect.andThen(Effect.never))
+            const boundary = FileSystem.FileSystem.of({
+              ...fs,
+              lstat: (file) => {
+                if (phase === "lstat" && file.endsWith("/src/main.ts")) return never
+                return fs.lstat(file)
+              },
+              stream: (file, options) => {
+                if (phase === "file" && file.endsWith("/src/main.ts"))
+                  return Stream.fromEffect(never)
+                if (phase === "lock" && file.endsWith("/bun.lock")) {
+                  lockReads++
+                  if (lockReads === 2) return Stream.fromEffect(never)
+                }
+                return fs.stream(file, options)
+              },
+            })
+            const observed = ChildProcessSpawner.make((command) =>
+              spawner.spawn(command).pipe(
+                Effect.tap((handle) =>
+                  Effect.sync(() => {
+                    children.push(String(handle.pid))
+                  }),
+                ),
+              ),
+            )
+            const started = yield* Clock.currentTimeMillis
+            const capture = yield* captureRelease(directory).pipe(
+              Effect.provideService(FileSystem.FileSystem, boundary),
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observed),
+              Effect.result,
+              Effect.forkChild,
+            )
+            yield* Deferred.await(held).pipe(Effect.timeout("2 seconds"))
+            const failed = yield* Fiber.join(capture).pipe(Effect.timeout("11 seconds"))
+            expect(failed._tag, phase).toBe("Failure")
+            if (failed._tag === "Failure") {
+              expect(failed.failure._tag, phase).toBe("NoRelease")
+              expect(failed.failure.reason, phase).toContain("10 seconds")
+            }
+            expect((yield* Clock.currentTimeMillis) - started, phase).toBeLessThan(11_000)
+            expect(children.length, phase).toBeGreaterThan(0)
+            for (const pid of children)
+              expect(yield* alive(pid), `${phase}: git ${pid}`).toBe(false)
+          }
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+    40_000,
+  )
+
+  it.live(
+    "the release deadline reaps even a git child that ignores SIGTERM within one extra second",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const directory = yield* treeDirectory
+          yield* checkout(directory, "one")
+          const calls = `${directory}/calls`
+          const git = `${directory}/git`
+          yield* fs.writeFileString(
+            git,
+            [
+              `#!${process.execPath}`,
+              'import { appendFileSync } from "node:fs"',
+              `appendFileSync(${encodeText(calls)}, String(process.pid) + "\\n")`,
+              'process.on("SIGTERM", () => {})',
+              "setInterval(() => {}, 1000)",
+              "",
+            ].join("\n"),
+          )
+          yield* fs.chmod(git, 0o755)
+          const started = yield* Clock.currentTimeMillis
+          const error = yield* captureRelease(directory).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, yield* gitAs(git)),
+            Effect.flip,
+            Effect.timeout("14 seconds"),
+          )
+          expect(error._tag).toBe("NoRelease")
+          expect(error.reason).toContain("10 seconds")
+          expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(11_000)
+          const children = yield* logged(calls)
+          expect(children.length).toBe(1)
+          for (const pid of children) expect(yield* alive(pid), `git ${pid}`).toBe(false)
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+    16_000,
+  )
+
+  it.scoped(
+    "the deadline is shared across git and the tree, rather than restarted for each read",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const directory = yield* treeDirectory
+        yield* checkout(directory, "one")
+        const gitEntered = yield* Deferred.make<boolean>()
+        const gitContinue = yield* Deferred.make<boolean>()
+        const treeEntered = yield* Deferred.make<boolean>()
+        const completed = yield* Deferred.make<boolean>()
+        const waiting = ChildProcessSpawner.make((command) => {
+          if (ChildProcess.isStandardCommand(command) && command.args.includes("--show-toplevel")) {
+            return Deferred.succeed(gitEntered, true).pipe(
+              Effect.andThen(Deferred.await(gitContinue)),
+              Effect.andThen(spawner.spawn(command)),
+            )
+          }
+          return spawner.spawn(command)
+        })
+        const boundary = FileSystem.FileSystem.of({
+          ...fs,
+          stream: (file, options) => {
+            if (file.endsWith("/src/main.ts"))
+              return Stream.fromEffect(
+                Deferred.succeed(treeEntered, true).pipe(Effect.andThen(Effect.never)),
+              )
+            return fs.stream(file, options)
+          },
+        })
+        const capture = yield* captureRelease(directory).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, waiting),
+          Effect.provideService(FileSystem.FileSystem, boundary),
+          Effect.result,
+          Effect.tap(() => Deferred.succeed(completed, true)),
+          Effect.forkChild,
+        )
+        yield* Deferred.await(gitEntered)
+        yield* TestClock.adjust("6 seconds")
+        yield* Deferred.succeed(gitContinue, true)
+        yield* Deferred.await(treeEntered)
+        yield* TestClock.adjust("4 seconds")
+        expect(yield* Deferred.isDone(completed)).toBe(true)
+        const failed = yield* Fiber.join(capture)
+        expect(failed._tag).toBe("Failure")
+        if (failed._tag === "Failure") expect(failed.failure._tag).toBe("NoRelease")
+      }).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live("a tracked symlink repointed between identical entry bytes names another tree", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* treeDirectory
+        yield* checkout(directory, "one")
+        for (const name of ["a", "b"]) {
+          yield* writeBytes(
+            directory,
+            `${name}/entry.ts`,
+            utf8('export { value } from "./dep.ts"\n'),
+          )
+          yield* writeBytes(directory, `${name}/dep.ts`, utf8(`export const value = "${name}"\n`))
+        }
+        yield* fs.symlink("a/entry.ts", `${directory}/entry.ts`)
+        yield* fixtureGit(directory, ["add", "-A"])
+        yield* fixtureGit(directory, ["commit", "-q", "--no-verify", "-m", "links"])
+        const before = yield* captureRelease(directory)
+        yield* fs.remove(`${directory}/entry.ts`)
+        yield* fs.symlink("b/entry.ts", `${directory}/entry.ts`)
+        const after = yield* captureRelease(directory)
+        expect(after.commit).toBe(before.commit)
+        expect(after.tree).not.toBe(before.tree)
+      }),
+    ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live(
+    "a dangling tracked symlink names its target, distinct from another target and deletion",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const directory = yield* treeDirectory
+          yield* checkout(directory, "one")
+          yield* fs.symlink("missing-one.ts", `${directory}/optional.ts`)
+          yield* fixtureGit(directory, ["add", "optional.ts"])
+          yield* fixtureGit(directory, ["commit", "-q", "--no-verify", "-m", "dangling"])
+          const before = yield* treeOf(directory)
+          yield* fs.remove(`${directory}/optional.ts`)
+          yield* fs.symlink("missing-two.ts", `${directory}/optional.ts`)
+          const repointed = yield* treeOf(directory)
+          yield* fs.remove(`${directory}/optional.ts`)
+          const deleted = yield* treeOf(directory)
+          expect(new Set([before, repointed, deleted]).size).toBe(3)
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live("an untracked symlink to a FIFO names the target without opening it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* treeDirectory
+        yield* checkout(directory, "one")
+        yield* fs.makeDirectory(`${directory}/cache`)
+        const fifo = `${directory}/cache/pipe`
+        expect((yield* runProcess("mkfifo", [fifo])).exitCode).toBe(0)
+        yield* fs.symlink("cache/pipe", `${directory}/pipe.ts`)
+        // A FileSystem boundary that refuses the blocking open also makes the
+        // regression fail promptly, without leaving an OS thread in a FIFO.
+        const safe = FileSystem.FileSystem.of({
+          ...fs,
+          readFile: (file) => {
+            expect(file).not.toBe(`${directory}/pipe.ts`)
+            return fs.readFile(file)
+          },
+          stream: (file, options) => {
+            expect(file).not.toBe(`${directory}/pipe.ts`)
+            return fs.stream(file, options)
+          },
+        })
+        const before = yield* treeOf(directory).pipe(
+          Effect.provideService(FileSystem.FileSystem, safe),
+          Effect.timeout("2 seconds"),
+        )
+        yield* fs.remove(`${directory}/pipe.ts`)
+        yield* fs.symlink("cache/another-pipe", `${directory}/pipe.ts`)
+        expect(yield* treeOf(directory)).not.toBe(before)
+      }),
+    ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live(
+    `${TREE_CASES} generated checkouts (seed ${TREE_SEED}): the tree changes iff a listed working entry changes, under any git config; unsupported entries name no release`,
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -2035,13 +2466,22 @@ describe("the tree a release names", () => {
             const put = (file: string, bytes: Uint8Array) =>
               writeBytes(directory, file, bytes).pipe(
                 Effect.tap(() =>
-                  Effect.sync(() => files.set(file, { tracked: true, bytes: Option.some(bytes) })),
+                  Effect.sync(() =>
+                    files.set(file, { tracked: true, entry: TreeEntry.cases.File.make({ bytes }) }),
+                  ),
                 ),
               )
             const attributes = ATTRIBUTES.filter(() => random(2) === 0)
             yield* put(".gitattributes", utf8(attributes.map((line) => `${line}\n`).join("")))
             yield* put(".gitignore", utf8("cache/\n"))
             yield* put("bun.lock", utf8("lock\n"))
+            yield* put("special.ts", utf8("regular before the special entry\n"))
+            const fs = yield* FileSystem.FileSystem
+            yield* fs.symlink("src/main.ts", `${directory}/linked.ts`)
+            files.set("linked.ts", {
+              tracked: true,
+              entry: TreeEntry.cases.Link.make({ target: "src/main.ts" }),
+            })
             for (const file of TRACKED_PATHS) {
               if (random(3) > 0) yield* put(file, generateBytes(random))
             }
@@ -2051,31 +2491,51 @@ describe("the tree a release names", () => {
             yield* fixtureGit(directory, ["commit", "-q", "--no-verify", "-m", "fixture"])
             const edits = 2 + random(5)
             for (let edit = 0; edit < edits; edit++) {
-              made.add(yield* generateEdit(directory, files, random))
+              const before = yield* treeOf(directory)
+              const expectedBefore = yield* modelTree(directory, files)
+              let selected = pick(random, TREE_EDITS)
+              if (edit === 0) selected = TREE_EDITS[at % TREE_EDITS.length]!
+              made.add(yield* generateEdit(directory, files, random, selected))
+              const expectedAfter = yield* modelTree(directory, files)
+              const after = yield* treeOf(directory)
+              expect(Option.some(after), `case ${at}: ${selected}`).toEqual(expectedAfter)
+              expect(after === before, `case ${at}: ${selected}`).toBe(
+                Option.getOrThrow(expectedAfter) === Option.getOrThrow(expectedBefore),
+              )
             }
             const name = `case ${String(at)}: ${attributes.join(", ")}`
             const tree = yield* treeOf(directory)
-            expect(tree, name).toBe(modelTree(files))
+            expect(Option.some(tree), name).toEqual(yield* modelTree(directory, files))
             // Another config over the same bytes: one tree.
             yield* configure(directory, generateConfig(random))
             expect(yield* treeOf(directory), name).toBe(tree)
             // One byte changed: another tree, the model's.
             let present: Array<readonly [string, ModelFile]> = [...files].filter(
-              ([path, model]) => Option.isSome(model.bytes) && !FIXED_PATHS.has(path),
+              ([path, model]) => model.entry._tag === "File" && !FIXED_PATHS.has(path),
             )
             if (present.length === 0) {
-              present = [["fresh/one.ts", { tracked: false, bytes: Option.some(new Uint8Array()) }]]
+              present = [
+                [
+                  "fresh/one.ts",
+                  { tracked: false, entry: TreeEntry.cases.File.make({ bytes: new Uint8Array() }) },
+                ],
+              ]
             }
             const [file, model] = pick(random, present)
-            const bytes = changeOneByte(
-              random,
-              Option.getOrElse(model.bytes, () => new Uint8Array()),
-            )
+            let original: Uint8Array = new Uint8Array()
+            if (model.entry._tag === "File") original = model.entry.bytes
+            const bytes = changeOneByte(random, original)
             yield* writeBytes(directory, file, bytes)
-            files.set(file, { tracked: model.tracked, bytes: Option.some(bytes) })
+            files.set(file, { tracked: model.tracked, entry: TreeEntry.cases.File.make({ bytes }) })
             const changed = yield* treeOf(directory)
             expect(changed, name).not.toBe(tree)
-            expect(changed, name).toBe(modelTree(files))
+            expect(Option.some(changed), name).toEqual(yield* modelTree(directory, files))
+            // Git still lists a tracked path replaced by a directory or FIFO.
+            yield* fs.remove(`${directory}/special.ts`, { force: true })
+            if (at % 2 === 0) yield* fs.makeDirectory(`${directory}/special.ts`)
+            else expect((yield* runProcess("mkfifo", [`${directory}/special.ts`])).exitCode).toBe(0)
+            expect(yield* modelTree(directory, files)).toEqual(Option.none())
+            expect((yield* captureRelease(directory).pipe(Effect.flip))._tag).toBe("NoRelease")
           }
           expect([...made].sort()).toEqual([...TREE_EDITS].sort())
         }),

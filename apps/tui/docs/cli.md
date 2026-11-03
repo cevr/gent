@@ -286,11 +286,15 @@ serves every machine; each server runs every entry but its own name
 Each run asks the far server's `link.hello` first: its machine name and its
 RPC contract: its codecs and the release that holds their code (the commit,
 the tree, the hash of `bun.lock` and the Bun version, read as gent is built,
-or as the server starts in a source run). The tree is the content of the
-working files: git lists the tracked files and the untracked files it does
-not ignore, and gent hashes each one's bytes itself, so no git filter, diff
-driver or line-ending setting changes it. Two machines match on the same
-commit with byte-identical working files, the same lockfile and the same Bun:
+or as the server starts in a source run). Git lists tracked entries and the
+untracked entries it does not ignore. Gent streams regular files' bytes and
+reads links' targets without following them; missing tracked entries count
+as deleted. Two machines match on one commit with identical listed working
+entries: the same bytes for files and the same targets for links, the same
+lockfile and the same Bun. No git filter, diff driver or line-ending setting
+changes this. Any other listed type (directory or gitlink, FIFO, socket or
+device), an invalid UTF-8 path, or a capture exceeding 10 seconds makes the
+release unknown and the link incompatible. For an install, matching means
 two `bun run install:global` runs of one commit, which install the
 lockfile's packages before they build. An edit is a release of its own, and
 two machines match on it only with the same ignore rules too (a global
