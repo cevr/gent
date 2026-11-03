@@ -59,8 +59,9 @@ const namedWsReexports: Bun.BunPlugin = {
 /**
  * `__GENT_BUILD__`: an object literal the bundler puts where the source
  * names it. `release` names the release the build compiles
- * (`captureRelease`): a link's contract names its code by it. A build from
- * a dirty tree embeds its tree's hash; a build with no git embeds none.
+ * (`captureRelease`): a link's contract names its code by it. The tree is
+ * the content of the working files, so an edit moves it; a build with no
+ * git embeds none.
  */
 const encodeBuildDefine = Schema.encodeSync(
   Schema.fromJsonString(
@@ -110,9 +111,9 @@ const build = Effect.gen(function* () {
   const { version } = yield* fs
     .readFileString(path.join(rootDir, "package.json"))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageVersion)))
-  // The release is read here, from the checkout the build compiles: a dirty
-  // tree is named by its hash; with no git the build embeds none, and its
-  // links match no other machine.
+  // The release is read here, from the checkout the build compiles: its tree
+  // is the hash of its working files' bytes; with no git the build embeds
+  // none, and its links match no other machine.
   const main = path.join(rootDir, "src/main.tsx")
   const captured = yield* Effect.result(captureRelease(rootDir))
   yield* Effect.log(

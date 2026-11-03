@@ -94,9 +94,9 @@ export const GentBuild = Schema.TaggedUnion({
 export type GentBuild = typeof GentBuild.Type
 
 /**
- * What names a release of gent: the commit it was built from, its tree
- * against that commit (`clean`, or the hash of the tracked diff and the
- * untracked files), the SHA-256 of the checkout's `bun.lock`, and the Bun
+ * What names a release of gent: the commit it was built from, its tree (the
+ * hash of the bytes of its tracked and untracked working files, read by gent,
+ * never through git), the SHA-256 of the checkout's `bun.lock`, and the Bun
  * that runs it.
  */
 const releaseFields = {
@@ -274,7 +274,7 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           source: Effect.succeed(
             GentRelease.cases.Released.make({
               commit: "test-commit",
-              tree: "clean",
+              tree: "test-tree",
               lock: "test-lock",
               bun: "test-bun",
             }),

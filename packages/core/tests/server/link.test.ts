@@ -40,7 +40,7 @@ import {
 } from "../../src/runtime/gent-platform"
 import {
   BunGentPlatformLive,
-  CLEAN_TREE,
+  DELETED_FILE,
   captureRelease,
   sourceRelease,
 } from "../../src/runtime/gent-platform-bun"
@@ -1310,10 +1310,10 @@ const HEX = "0123456789abcdef"
 const hex = (random: Random, length: number) =>
   Array.from({ length }, () => HEX[random(HEX.length)] ?? "0").join("")
 
-/** A generated release: a commit, a tree (clean or a hash), a lockfile hash and a Bun version. */
+/** A generated release: a commit, a tree hash, a lockfile hash and a Bun version. */
 const generateRelease = (random: Random): ReleaseFacts => ({
   commit: hex(random, 40),
-  tree: [CLEAN_TREE, hex(random, 64)][random(2)] ?? CLEAN_TREE,
+  tree: hex(random, 64),
   lock: hex(random, 64),
   bun: `1.${String(random(10))}.${String(random(20))}`,
 })
@@ -1426,7 +1426,8 @@ const PRINT_CONFIG: ReadonlyArray<readonly [string, string]> = [
 
 /**
  * The same edits in a checkout: a tracked change, a rename, a deletion, a
- * mode change, a binary file and an untracked file with a name git quotes.
+ * mode change (no content, so no edit of the tree by itself), a binary file
+ * and an untracked file with a name git quotes.
  */
 const editCheckout = (directory: string) =>
   Effect.gen(function* () {
@@ -1446,6 +1447,44 @@ const RELEASES_IN_PROCESS = 20
 
 /** The Bun platform: its `hash` is the real SHA-256 a process of its own runs. */
 const bunPlatformLayer = Layer.mergeAll(BunTestServices, BunGentPlatformLive)
+
+/** A stopped child's force-kill window (`runProcess`), plus 1 s. */
+const AFTER_CLOSE = Duration.seconds(3)
+
+/** A slow git: it logs its pid to `calls`, waits half a second, then runs as `git`. */
+const slowGit = (calls: string, git: string) =>
+  ["#!/bin/sh", `echo $$ >> '${calls}'`, "/bin/sleep 0.5", `exec '${git}' "$@"`, ""].join("\n")
+
+/** The spawner in context, with each `git` it runs started as `git` instead: the real process path, the slow git. */
+const gitAs = (git: string) =>
+  Effect.map(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
+    ChildProcessSpawner.make((command) => {
+      if (ChildProcess.isStandardCommand(command) && command.command === "git") {
+        return spawner.spawn(ChildProcess.make(git, command.args, command.options))
+      }
+      return spawner.spawn(command)
+    }),
+  )
+
+/**
+ * The calls the slow git logged once `seen` grew, or by `deadline` (wall
+ * clock millis) when it did not.
+ */
+const callsUntil = (calls: string, seen: number, deadline: number) =>
+  Effect.gen(function* () {
+    let lines = yield* logged(calls)
+    while (lines.length === seen && (yield* Clock.currentTimeMillis) < deadline) {
+      yield* wallSleep(50)
+      lines = yield* logged(calls)
+    }
+    return lines
+  })
+
+/** Whether the process `pid` runs. */
+const alive = (pid: string) =>
+  runProcess("/bin/ps", ["-p", pid], { stdout: "ignore", stderr: "ignore" }).pipe(
+    Effect.map(({ exitCode }) => exitCode === 0),
+  )
 
 describe("the release a contract names", () => {
   it.live(
@@ -1503,7 +1542,7 @@ describe("the release a contract names", () => {
           yield* checkout(near, "one")
           yield* checkout(far, "one")
           const release = yield* captureRelease(near)
-          expect(release.tree).toBe(CLEAN_TREE)
+          expect(release.tree).toMatch(/^[0-9a-f]{64}$/)
           expect(yield* captureRelease(far)).toEqual(release)
           // A checkout read from a directory inside it names the same release.
           expect(yield* captureRelease(`${far}/src`)).toEqual(release)
@@ -1538,8 +1577,8 @@ describe("the release a contract names", () => {
           for (const [key, value] of PRINT_CONFIG) {
             yield* fixtureGit(configured, ["config", key, value])
           }
-          // The config is the repository's, not its tree: still clean.
-          expect(yield* treeOf(configured)).toBe(CLEAN_TREE)
+          // The config is the repository's, not its working files: one tree.
+          expect(yield* treeOf(configured)).toBe(clean.tree)
           yield* editCheckout(plain)
           yield* editCheckout(configured)
           const dirty = yield* captureRelease(plain)
@@ -1560,7 +1599,7 @@ describe("the release a contract names", () => {
           yield* fs.writeFileString(`${plain}/cache/built.js`, "ignored\n")
           expect(yield* treeOf(plain)).toBe(dirty.tree)
           // Each further edit names another tree.
-          const seen = new Set([CLEAN_TREE, dirty.tree])
+          const seen = new Set([clean.tree, dirty.tree])
           const edits: ReadonlyArray<
             readonly [string, Effect.Effect<void, PlatformError.PlatformError>]
           > = [
@@ -1682,6 +1721,56 @@ describe("the release a contract names", () => {
   )
 
   it.live(
+    "a server that stops while git reads its release stops the read: no git starts after the close, no git it started outlives the force-kill window, and the close takes less than that window plus 1 s",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const root = yield* makeTempDirectoryScoped("gent-release-")
+          const repo = `${root}/repo`
+          yield* checkout(repo, "one")
+          const calls = `${root}/calls`
+          const bin = `${root}/bin`
+          yield* fs.makeDirectory(bin)
+          yield* fs.writeFileString(
+            `${bin}/git`,
+            slowGit(calls, Bun.which("git") ?? "/usr/bin/git"),
+          )
+          yield* fs.chmod(`${bin}/git`, 0o755)
+          const read = yield* Deferred.make<boolean>()
+          const source = sourceRelease(repo).pipe(
+            Effect.tap(() => Deferred.succeed(read, true)),
+            Effect.provideService(
+              ChildProcessSpawner.ChildProcessSpawner,
+              yield* gitAs(`${bin}/git`),
+            ),
+            Effect.provideContext(
+              yield* Effect.context<
+                ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+              >(),
+            ),
+          )
+          const server = yield* Scope.make()
+          yield* linksOver({}).pipe(withSource(source), Scope.provide(server))
+          // The read waits in its first git call.
+          yield* logUntil(calls, (lines) => lines.length > 0)
+          const closing = yield* Clock.currentTimeMillis
+          yield* Scope.close(server, Exit.void)
+          const closedIn = (yield* Clock.currentTimeMillis) - closing
+          const atClose = yield* logged(calls)
+          // Watch the force-kill window plus 1 s for another git call.
+          expect(
+            yield* callsUntil(calls, atClose.length, closing + Duration.toMillis(AFTER_CLOSE)),
+          ).toEqual(atClose)
+          expect(yield* Deferred.isDone(read)).toBe(false)
+          for (const pid of atClose) expect(yield* alive(pid), `git ${pid}`).toBe(false)
+          expect(closedIn).toBeLessThan(Duration.toMillis(AFTER_CLOSE))
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+    30_000,
+  )
+
+  it.live(
     "a compiled gent names the release its build embedded; a build that embedded none names an id of its own process",
     () =>
       Effect.gen(function* () {
@@ -1709,5 +1798,327 @@ describe("the release a contract names", () => {
         expect(new Set([...first, ...second, ...embedded]).size).toBe(3)
       }).pipe(Effect.provide(bunPlatformLayer)),
     30_000,
+  )
+})
+
+// ── the tree a release names ────────────────────────────────────────────────
+
+const sha256Hex = (input: Uint8Array | string) =>
+  new Bun.CryptoHasher("sha256").update(input).digest("hex")
+const utf8 = (text: string) => new TextEncoder().encode(text)
+const pick = <A>(random: Random, from: ReadonlyArray<A>): A => from[random(from.length)] ?? from[0]!
+
+/** A working file of a generated checkout: its bytes, none once a tracked file is deleted. */
+interface ModelFile {
+  readonly tracked: boolean
+  readonly bytes: Option.Option<Uint8Array>
+}
+
+/**
+ * The tree of `files` from the model's own bytes, never the disk's: one line
+ * per file git lists, `<path>\0<SHA-256 of its bytes>` or `<path>\0deleted`.
+ */
+const modelTree = (files: ReadonlyMap<string, ModelFile>) =>
+  sha256Hex(
+    [...files]
+      .map(
+        ([path, file]) =>
+          `${path}\0${Option.match(file.bytes, {
+            onNone: () => DELETED_FILE,
+            onSome: (bytes) => sha256Hex(bytes),
+          })}\n`,
+      )
+      .sort()
+      .join(""),
+  )
+
+/** Pieces of a file's bytes: digits a clean filter hides, CRLF, a function line, bytes no UTF-8 names. */
+const FRAGMENTS: ReadonlyArray<Uint8Array> = [
+  utf8("export const value = 3\n"),
+  utf8("export const value = 7\r\n"),
+  utf8("function alpha() {\n"),
+  utf8("  const x15 = 99\n"),
+  utf8("// a comment\r\n"),
+  utf8("no newline at the end"),
+  new Uint8Array([0, 1, 2, 255]),
+  new Uint8Array([0xc3, 0x28, 13, 10]),
+]
+
+const generateBytes = (random: Random) =>
+  Uint8Array.from(
+    Array.from({ length: random(4) }, () => pick(random, FRAGMENTS)).flatMap((part) => [...part]),
+  )
+
+/** The same bytes with one byte changed, or one byte for an empty file. */
+const changeOneByte = (random: Random, bytes: Uint8Array) => {
+  if (bytes.length === 0) return Uint8Array.of(65)
+  const changed = Uint8Array.from(bytes)
+  const at = random(changed.length)
+  changed[at] = (changed[at] ?? 0) ^ 1
+  return changed
+}
+
+const TRACKED_PATHS = [
+  "src/main.ts",
+  "src/value.ts",
+  "notes/readme.txt",
+  "notes/crlf.txt",
+  "blob/data.dat",
+  "top.ts",
+]
+const UNTRACKED_PATHS = ["src/added.ts", "notes/new.txt", "fresh/deep/file.dat"]
+/** Files an edit leaves alone: the lock a release reads, and the ignore rules the model keeps. */
+const FIXED_PATHS = new Set(["bun.lock", ".gitignore"])
+
+/** `.gitattributes` lines: a clean filter, diff drivers, line-ending conversion. */
+const ATTRIBUTES = [
+  "*.ts filter=mask",
+  "*.txt diff=demo",
+  "*.ts diff=demo",
+  "* text=auto",
+  "*.dat -text",
+  "*.txt text eol=crlf",
+]
+/** Clean filters, most of them many-to-one: git stores another blob than the working bytes. */
+const CLEAN_FILTERS = [
+  "LC_ALL=C sed 's/[0-9]/0/g'",
+  "LC_ALL=C tr -d '\\r'",
+  "LC_ALL=C sed 's/value = .*/value/'",
+  "cat",
+]
+const XFUNCNAMES = ["^function", "^//", "^export"]
+const AUTOCRLF = ["true", "false", "input"]
+
+/** A local git config: the clean filter, the diff driver's hunk header and line-ending conversion. */
+const generateConfig = (random: Random): ReadonlyArray<readonly [string, string]> => [
+  ["filter.mask.clean", pick(random, CLEAN_FILTERS)],
+  ["diff.demo.xfuncname", pick(random, XFUNCNAMES)],
+  ["core.autocrlf", pick(random, AUTOCRLF)],
+]
+
+const configure = (directory: string, config: ReadonlyArray<readonly [string, string]>) =>
+  Effect.forEach(config, ([key, value]) => fixtureGit(directory, ["config", key, value]), {
+    discard: true,
+  })
+
+const writeBytes = (directory: string, file: string, bytes: Uint8Array) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    yield* fs.makeDirectory(path.dirname(`${directory}/${file}`), { recursive: true })
+    yield* fs.writeFile(`${directory}/${file}`, bytes)
+  })
+
+const TREE_EDITS = [
+  "a tracked file edited",
+  "a tracked file deleted",
+  "a tracked file emptied",
+  "an untracked file added",
+  "an untracked file removed",
+  "an ignored file written",
+] as const
+
+/** One generated edit to the checkout at `directory` and to its model: the edit it made. */
+const generateEdit = (directory: string, files: Map<string, ModelFile>, random: Random) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const present = (tracked: boolean) => {
+      const paths: Array<string> = []
+      for (const [path, file] of files) {
+        if (file.tracked === tracked && Option.isSome(file.bytes) && !FIXED_PATHS.has(path)) {
+          paths.push(path)
+        }
+      }
+      return paths
+    }
+    const put = (file: string, tracked: boolean, bytes: Uint8Array) =>
+      writeBytes(directory, file, bytes).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => files.set(file, { tracked, bytes: Option.some(bytes) })),
+        ),
+      )
+    let edit: (typeof TREE_EDITS)[number] = pick(random, TREE_EDITS)
+    const tracked = present(true)
+    const untracked = present(false)
+    if (tracked.length === 0 && edit.startsWith("a tracked")) edit = "an untracked file added"
+    if (untracked.length === 0 && edit === "an untracked file removed") {
+      edit = "an untracked file added"
+    }
+    if (edit === "a tracked file edited")
+      yield* put(pick(random, tracked), true, generateBytes(random))
+    if (edit === "a tracked file emptied") yield* put(pick(random, tracked), true, new Uint8Array())
+    if (edit === "a tracked file deleted") {
+      const file = pick(random, tracked)
+      yield* fs.remove(`${directory}/${file}`)
+      files.set(file, { tracked: true, bytes: Option.none() })
+    }
+    if (edit === "an untracked file added") {
+      yield* put(pick(random, UNTRACKED_PATHS), false, generateBytes(random))
+    }
+    if (edit === "an untracked file removed") {
+      const file = pick(random, untracked)
+      yield* fs.remove(`${directory}/${file}`)
+      files.delete(file)
+    }
+    if (edit === "an ignored file written") {
+      yield* writeBytes(directory, `cache/${String(random(3))}.js`, generateBytes(random))
+    }
+    return edit
+  })
+
+/**
+ * A checkout of `main.ts` holding `source` under `attributes`, committed with
+ * `config` set: the shape of the review's git-input probes.
+ */
+const attributedCheckout = (
+  directory: string,
+  attributes: string,
+  source: string,
+  config: ReadonlyArray<readonly [string, string]> = [],
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    yield* fs.makeDirectory(directory, { recursive: true })
+    yield* fs.writeFileString(`${directory}/bun.lock`, "lock fixture\n")
+    yield* fs.writeFileString(`${directory}/.gitattributes`, attributes)
+    yield* fs.writeFileString(`${directory}/main.ts`, source)
+    yield* fixtureGit(directory, ["init", "-q"])
+    yield* configure(directory, config)
+    yield* fixtureGit(directory, ["add", "-A"])
+    yield* fixtureGit(directory, ["commit", "-q", "--no-verify", "-m", "fixture"])
+  })
+
+/** What `git status` prints of a checkout: empty when git sees no change. */
+const gitStatus = (directory: string) =>
+  runProcess("git", ["-C", directory, "status", "--porcelain"]).pipe(
+    Effect.map(({ stdout }) => stdout),
+  )
+
+const TREE_CASES = 16
+const TREE_SEED = 20_261_106
+
+describe("the tree a release names", () => {
+  it.live(
+    `${TREE_CASES} generated checkouts (seed ${TREE_SEED}): the tree is the hash of the working files' own bytes, the same under any clean filter, diff driver or line-ending config; one byte changed names another`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = yield* makeTempDirectoryScoped("gent-tree-")
+          const random = seeded(TREE_SEED)
+          const made = new Set<string>()
+          for (let at = 0; at < TREE_CASES; at++) {
+            const directory = `${root}/case-${String(at)}`
+            const files = new Map<string, ModelFile>()
+            const put = (file: string, bytes: Uint8Array) =>
+              writeBytes(directory, file, bytes).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => files.set(file, { tracked: true, bytes: Option.some(bytes) })),
+                ),
+              )
+            const attributes = ATTRIBUTES.filter(() => random(2) === 0)
+            yield* put(".gitattributes", utf8(attributes.map((line) => `${line}\n`).join("")))
+            yield* put(".gitignore", utf8("cache/\n"))
+            yield* put("bun.lock", utf8("lock\n"))
+            for (const file of TRACKED_PATHS) {
+              if (random(3) > 0) yield* put(file, generateBytes(random))
+            }
+            yield* fixtureGit(directory, ["init", "-q"])
+            yield* configure(directory, generateConfig(random))
+            yield* fixtureGit(directory, ["add", "-A"])
+            yield* fixtureGit(directory, ["commit", "-q", "--no-verify", "-m", "fixture"])
+            const edits = 2 + random(5)
+            for (let edit = 0; edit < edits; edit++) {
+              made.add(yield* generateEdit(directory, files, random))
+            }
+            const name = `case ${String(at)}: ${attributes.join(", ")}`
+            const tree = yield* treeOf(directory)
+            expect(tree, name).toBe(modelTree(files))
+            // Another config over the same bytes: one tree.
+            yield* configure(directory, generateConfig(random))
+            expect(yield* treeOf(directory), name).toBe(tree)
+            // One byte changed: another tree, the model's.
+            let present: Array<readonly [string, ModelFile]> = [...files].filter(
+              ([path, model]) => Option.isSome(model.bytes) && !FIXED_PATHS.has(path),
+            )
+            if (present.length === 0) {
+              present = [["fresh/one.ts", { tracked: false, bytes: Option.some(new Uint8Array()) }]]
+            }
+            const [file, model] = pick(random, present)
+            const bytes = changeOneByte(
+              random,
+              Option.getOrElse(model.bytes, () => new Uint8Array()),
+            )
+            yield* writeBytes(directory, file, bytes)
+            files.set(file, { tracked: model.tracked, bytes: Option.some(bytes) })
+            const changed = yield* treeOf(directory)
+            expect(changed, name).not.toBe(tree)
+            expect(changed, name).toBe(modelTree(files))
+          }
+          expect([...made].sort()).toEqual([...TREE_EDITS].sort())
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+    60_000,
+  )
+
+  it.live(
+    "a clean filter that hides an edit from git still names another tree and another contract",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const directory = `${yield* makeTempDirectoryScoped("gent-tree-")}/repo`
+          yield* attributedCheckout(
+            directory,
+            "main.ts filter=mask\n",
+            "export const value = 0\n",
+            [["filter.mask.clean", "sed 's/export const value = [0-9]/export const value = 0/'"]],
+          )
+          const before = yield* captureRelease(directory)
+          const [beforeContract] = yield* contractsInProcess(["checkout", directory])
+          yield* fs.writeFileString(`${directory}/main.ts`, "export const value = 1\n")
+          // The premise: git sees no change.
+          expect(yield* gitStatus(directory)).toBe("")
+          const after = yield* captureRelease(directory)
+          expect(after.commit).toBe(before.commit)
+          expect(after.tree).not.toBe(before.tree)
+          expect(yield* contractsInProcess(["checkout", directory])).not.toEqual([beforeContract])
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+    30_000,
+  )
+
+  it.live("a diff driver's hunk header names the same tree for the same bytes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = `${yield* makeTempDirectoryScoped("gent-tree-")}/repo`
+        const source = [
+          "function alpha() {",
+          ...Array.from({ length: 20 }, (_, at) => `  const x${String(at)} = ${String(at)}`),
+          "}\n",
+        ].join("\n")
+        yield* attributedCheckout(directory, "main.ts diff=demo\n", source)
+        yield* fs.writeFileString(`${directory}/main.ts`, source.replace("x15 = 15", "x15 = 99"))
+        yield* fixtureGit(directory, ["config", "diff.demo.xfuncname", "^function"])
+        const before = yield* captureRelease(directory)
+        yield* fixtureGit(directory, ["config", "diff.demo.xfuncname", "^//"])
+        expect(yield* captureRelease(directory)).toEqual(before)
+      }),
+    ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live("core.autocrlf names the same tree for the same CRLF bytes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = `${yield* makeTempDirectoryScoped("gent-tree-")}/repo`
+        yield* attributedCheckout(directory, "", "export const value = 0\n")
+        yield* fs.writeFileString(`${directory}/main.ts`, "export const value = 1\r\n")
+        yield* fixtureGit(directory, ["config", "core.autocrlf", "false"])
+        const before = yield* captureRelease(directory)
+        yield* fixtureGit(directory, ["config", "core.autocrlf", "true"])
+        expect(yield* captureRelease(directory)).toEqual(before)
+      }),
+    ).pipe(Effect.provide(bunPlatformLayer)),
   )
 })

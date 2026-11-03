@@ -273,9 +273,9 @@ const releaseFact = GentRelease.match({
  * codecs decode, sorted by tag, hashed. Two servers whose contracts match
  * run one release and decode each other's frames the same way.
  *
- * The release (`GentPlatform.source`) is the commit gent was built from, its
- * tree against that commit, the hash of its `bun.lock` and the Bun that runs
- * it. It guards the skew the owner's machines can have: another commit,
+ * The release (`GentPlatform.source`) is the commit gent was built from, the
+ * content of its working files, the hash of its `bun.lock` and the Bun that
+ * runs it. It guards the skew the owner's machines can have: another commit,
  * another edit to the tree, another lockfile, another Bun (docs/architecture/server.md, Machine
  * Links). A codec holds code no walk reads (an exit is a declaration, a
  * defect a transformation); the release names that code, and the codec
@@ -483,13 +483,20 @@ export class Links extends Context.Service<
         const own = yield* machineName
         // Read as the server starts, on its own fiber, so the start waits
         // for no git: a source run names the release it started on, and a
-        // commit made later names another. A hello waits for it. The read
-        // is detached: it ends by itself (each git call is bounded), and a
-        // server that stops while it runs stops at once, not after its git
-        // children exit.
+        // commit made later names another. A hello waits for it.
+        //
+        // The read is the layer's. Its close interrupts the read, so no git
+        // starts after it, and `runProcess` kills the git child it holds
+        // (SIGTERM, then SIGKILL after the force-kill window). The close
+        // signals the interrupt and does not wait for that kill: an awaited
+        // kill yields the close to the event loop, and a turn the closing
+        // server still runs records a step in that gap (the recovered-turn
+        // tests in turn.test.ts). A fiber in the layer's scope
+        // (`forkScoped`) would make the close await it.
         const reading = yield* Effect.forkDetach(
           linkContract.pipe(Effect.provideService(GentPlatform, yield* GentPlatform)),
         )
+        yield* Effect.addFinalizer(() => Effect.sync(() => reading.interruptUnsafe()))
         const contract = Fiber.join(reading)
         const started = yield* Clock.currentTimeMillis
         const records = new Map<string, MutableRef.MutableRef<LinkRecord>>()

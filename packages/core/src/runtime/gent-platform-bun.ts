@@ -33,10 +33,9 @@ import {
   Schedule,
   Schema,
   Scope,
-  Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
-import { ChildProcess, type ChildProcessSpawner } from "effect/process"
+import type { ChildProcessSpawner } from "effect/process"
 import { causeMessage } from "../domain/guards.js"
 import { storageError, type StorageError } from "../domain/errors.js"
 import * as EffectPlatformBun from "@effect/platform-bun"
@@ -101,45 +100,11 @@ class NoRelease extends Schema.TaggedError<NoRelease, { readonly brand: unique s
 /** How long one git call may take before the checkout names no release. */
 const GIT_TIMEOUT = Duration.seconds(10)
 
-/** How long a stopped git may take before it is killed. */
-const GIT_FORCE_KILL_AFTER = Duration.seconds(2)
+/** How many files of a checkout one capture reads at once. */
+const TREE_READS = 16
 
-/**
- * The tracked changes against `HEAD`, as git prints them with every option
- * that shapes the print fixed on the command line, so a machine's git config
- * (an external diff, a textconv, color, prefixes, renames, the diff
- * algorithm, the context, the file order, path quoting) prints the same
- * bytes.
- */
-const TRACKED_DIFF = [
-  "-c",
-  "core.quotePath=true",
-  "-c",
-  "diff.orderFile=/dev/null",
-  "-c",
-  "diff.suppressBlankEmpty=false",
-  "-c",
-  "diff.relative=false",
-  "diff",
-  "HEAD",
-  "--binary",
-  "--full-index",
-  "--no-ext-diff",
-  "--no-textconv",
-  "--no-color",
-  "--no-renames",
-  "--diff-algorithm=myers",
-  "--indent-heuristic",
-  "--unified=3",
-  "--inter-hunk-context=0",
-  "--ignore-submodules=none",
-  "--submodule=short",
-  "--src-prefix=a/",
-  "--dst-prefix=b/",
-]
-
-/** The tree of a checkout with no change against `HEAD` and no untracked file. */
-export const CLEAN_TREE = "clean"
+/** A tracked file that is not in the working tree: its line in the tree. */
+export const DELETED_FILE = "deleted"
 
 const sha256 = (input: Uint8Array | string) =>
   new Bun.CryptoHasher("sha256").update(input).digest("hex")
@@ -160,70 +125,43 @@ const releaseGit = (directory: string, args: ReadonlyArray<string>) =>
   )
 
 /**
- * The tracked diff's bytes, fed to `hasher` as git prints them: decoded to
- * text, a byte no UTF-8 names would hash as any other.
- */
-const hashTrackedDiff = (top: string, hasher: Bun.CryptoHasher) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const handle = yield* ChildProcess.make(
-        "git",
-        ["--no-optional-locks", "-C", top, ...TRACKED_DIFF],
-        { stdout: "pipe", stderr: "ignore", forceKillAfter: GIT_FORCE_KILL_AFTER },
-      )
-      const [exitCode, size] = yield* Effect.all(
-        [
-          handle.exitCode,
-          Stream.runFold(
-            handle.stdout,
-            () => 0,
-            (bytes, chunk) => {
-              hasher.update(chunk)
-              return bytes + chunk.length
-            },
-          ),
-        ],
-        { concurrency: "unbounded" },
-      )
-      if (Number(exitCode) !== 0) {
-        return yield* new NoRelease({ reason: `git diff exited ${String(exitCode)}` })
-      }
-      return size
-    }),
-  ).pipe(
-    Effect.timeoutOrElse({
-      duration: GIT_TIMEOUT,
-      orElse: () => Effect.fail(new NoRelease({ reason: "git diff timed out" })),
-    }),
-    Effect.catchTag("PlatformError", (error) =>
-      Effect.fail(new NoRelease({ reason: `no git: ${error.message}` })),
-    ),
-  )
-
-/**
- * The tree of the checkout at `top` against `HEAD`: `CLEAN_TREE` when git
- * prints no tracked diff and no untracked file, else the SHA-256 of the
- * tracked diff and of each untracked file git does not ignore, named by its
- * path and the SHA-256 of its bytes. Gent reads those bytes itself, so no
- * git filter changes them. With `--binary` no NUL is in the diff, so NUL
- * separates its parts.
+ * The tree of the checkout at `top`: the content of its working files. Git
+ * only names them: every tracked file, and every untracked file it does not
+ * ignore. Gent reads each one's bytes itself, so no git filter, diff driver
+ * or line-ending conversion touches them, and no git config changes the
+ * tree. The tree is the SHA-256 of one line per file, sorted by path:
+ * `<path>\0<SHA-256 of its bytes>\n`, or `<path>\0deleted\n` for a tracked
+ * file the working tree lacks. A path holds no NUL and a digest no newline,
+ * so the lines split one way. The commit the tree sits on is a fact of its
+ * own, so two checkouts of one commit with byte-identical working files
+ * name one tree, and any byte another.
  */
 const captureTree = (top: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const hasher = new Bun.CryptoHasher("sha256")
-    const diffBytes = yield* hashTrackedDiff(top, hasher)
-    const untracked = (yield* releaseGit(top, ["ls-files", "--others", "--exclude-standard", "-z"]))
-      .split("\0")
-      .filter((file) => file.length > 0)
-    for (const file of untracked) {
-      const bytes = yield* fs
-        .readFile(`${top}/${file}`)
-        .pipe(Effect.mapError((error) => new NoRelease({ reason: `${file}: ${error.message}` })))
-      hasher.update(`\0${file}\0${sha256(bytes)}`)
-    }
-    if (diffBytes === 0 && untracked.length === 0) return CLEAN_TREE
-    return hasher.digest("hex")
+    const listed = yield* releaseGit(top, [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+    ])
+    // A file in a merge conflict is listed once per stage.
+    const files = [...new Set(listed.split("\0").filter((file) => file.length > 0))].sort()
+    const lines = yield* Effect.forEach(
+      files,
+      (file) =>
+        fs.readFile(`${top}/${file}`).pipe(
+          Effect.map((bytes) => `${file}\0${sha256(bytes)}\n`),
+          Effect.catchIf(
+            (error) => error.reason._tag === "NotFound",
+            () => Effect.succeed(`${file}\0${DELETED_FILE}\n`),
+          ),
+          Effect.mapError((error) => new NoRelease({ reason: `${file}: ${error.message}` })),
+        ),
+      { concurrency: TREE_READS },
+    )
+    return sha256(lines.join(""))
   })
 
 /**
@@ -238,8 +176,8 @@ const unreleased = GentRelease.cases.Unreleased.make({
 
 /**
  * The release the checkout at `directory` holds: the commit at `HEAD`, the
- * tree against it (`captureTree`: `CLEAN_TREE`, or the hash of its tracked
- * diff and untracked files), the SHA-256 of `bun.lock` at the checkout's
+ * tree (`captureTree`: the content of its tracked and untracked working
+ * files), the SHA-256 of `bun.lock` at the checkout's
  * top, and the Bun this process runs. `HEAD` is read again after the tree,
  * and a commit made meanwhile fails. Fails with `NoRelease` with no git or
  * no repository, or a file or a lock that does not read. The build embeds
