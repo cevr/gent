@@ -153,6 +153,10 @@ Each unit compiles and passes `bun run gate` alone, in this order. No test reach
 - **Tests.** Two scratch servers: add an extension on A, B's next turn has its tool. Edit it on A, B gets the edit. Delete it on A, B moves it to `extension-trash`. Edit on both while down: the newer wins, the loser is in trash. Copy a broken edit: B keeps the last good build and reports the failure. Cut a transfer (fail the stream after half the files): B's dir has no partial entry. A skill dir added on B appears in A's skill list.
 - **Live check.** Two scratch servers: drop a one-tool extension into A's `~/.gent/extensions`, run a turn on B on the scripted model that calls the tool.
 
+## Acceptance by the orchestrate rules of 2026-11-02
+
+Each unit: one review that files only Blockers and Majors with a proof at the head (a principle, AGENTS.md, NORTH_STAR.md or owning-skill violation is a Major, and its repair names a lint rule), then a fresh verifier in a clean checkout that runs the checks and shows each new test red under its mutation. Stateful units add a model-based test from round 1: U2 the link's states and backoff; U3 the router (locate, memo, forward, the loop stop); U5 the 3-way merge and sweep; U6 the transfer and staging. U5 also gets a Quint or TLA+ model of two machines editing while the link is down, model-checked before implement (every change on either side survives or lands in `lost/`).
+
 ## Owner questions
 
 Orchestrator defaults (2026-11-02), in force until the owner answers: (1) hostnames, (2) answered: U4 also has a TUI flow to create a session on another machine, (3) one shared file. The orchestrator rewrites both owner configs from `pool.peer` to `link.machines` when U2 merges, with a backup of each.
