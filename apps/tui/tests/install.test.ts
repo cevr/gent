@@ -10,6 +10,7 @@ import {
   Option,
   Path,
   Schedule,
+  Schema,
 } from "effect"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { runProcess } from "@gent/core/extensions/api"
@@ -886,5 +887,29 @@ describe("the in-use marker", () => {
         after: [],
       })
     }).pipe(Effect.timeout("30 seconds"), Effect.provide(services)),
+  )
+})
+
+// ── an install from source ──────────────────────────────────────────────────
+
+const RootScripts = Schema.fromJsonString(
+  Schema.Struct({ scripts: Schema.Record(Schema.String, Schema.String) }),
+)
+
+describe("bun run install:global", () => {
+  it.scopedLive(
+    "installs the packages the lockfile names, and nothing else, before it builds: a link's contract names the lockfile",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const root = yield* path.fromFileUrl(new URL("../../../package.json", import.meta.url))
+        const { scripts } = yield* fs
+          .readFileString(root)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(RootScripts)))
+        const steps = (scripts["install:global"] ?? "").split(" && ")
+        expect(steps[0]).toBe("bun install --frozen-lockfile")
+        expect(steps.slice(1)).toEqual(["turbo run install:global --filter=@gent/tui --ui=stream"])
+      }).pipe(Effect.provide(services)),
   )
 })
