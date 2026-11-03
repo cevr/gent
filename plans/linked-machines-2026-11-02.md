@@ -155,7 +155,7 @@ Each unit compiles and passes `bun run gate` alone, in this order. No test reach
 
 ## Acceptance by the orchestrate rules of 2026-11-02
 
-Each unit: one review that files only Blockers and Majors with a proof at the head (a principle, AGENTS.md, NORTH_STAR.md or owning-skill violation is a Major, and its repair names a lint rule), then a fresh verifier in a clean checkout that runs the checks and shows each new test red under its mutation. Stateful units add a model-based test from round 1: U2 the link's states and backoff; U3 the router (locate, memo, forward, the loop stop); U5 the 3-way merge and sweep; U6 the transfer and staging. U5 also gets a Quint or TLA+ model of two machines editing while the link is down, model-checked before implement (every change on either side survives or lands in `lost/`).
+Each unit: one review that files only Blockers and Majors with a proof at the head (a principle, AGENTS.md, NORTH_STAR.md or owning-skill violation is a Major, and names its guard: the cheapest deterministic mechanism that keeps its class from coming back, a type, a lint rule, a codemod, a property test or a check; a guard outside the unit becomes a tooling unit), then a fresh verifier in a clean checkout that runs the checks and shows each new test red under its mutation. Stateful units add a model-based test from round 1: U2 the link's states and backoff; U3 the router (locate, memo, forward, the loop stop); U5 the 3-way merge and sweep; U6 the transfer and staging. U5 also gets a Quint or TLA+ model of two machines editing while the link is down, model-checked before implement (every change on either side survives or lands in `lost/`).
 
 ## Owner questions
 
