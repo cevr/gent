@@ -39,6 +39,6 @@ Recipe (one Mac, two runs; 2026-11-02):
 - Stop the run loop before B: a headless `gent` on B that finds no server can start one, and that server links to A again. Count the `ready on` lines in B's `server.log` after the stop.
 - A's own entry in `link.machines` never runs: the run's `GENT_MACHINE` is its directory's last part.
 - A silent peer's last runs still count for 30 minutes, so A's provider row keeps `1 running` after B stops.
-- A peer on another build reads `incompatible`: its `link.hello` names another contract, or it has none.
+- A peer on another build reads `incompatible`: its `link.hello` names another contract, or it has none. The contract names the release (commit, tree, `bun.lock`, Bun): two source runs of one checkout match, a clean or a dirty one, and a run outside a git repository matches no other process.
 - The idle and the live peer rows are on `/status` only: a `waitFor peer <host> \d+ runs?` on the bare screen never matches.
 - Steps 1, 2 and 4 and the run loop of step 3 ran on 2026-11-02, read with `gent ctl lanes --line` on A: `peer B 5 runs · 0s` during the loop, `peer! B unread 1m · links down` 73 s after B stopped (the link `connecting`), `peer! B unread 1m · silent` at 93 s. The band steps last ran on 2026-11-01, with `pool.peer`, before the band kept the peer row only while it acts on the server. The band rule is pinned by `apps/tui/tests/extensions/machines.client.test.tsx` (`the peer row shows on the band only while`) and `packages/core/tests/runtime/provider.test.ts` (`the peer`, its `counted` field).

@@ -77,11 +77,14 @@ directory: the loop resolves it once per branch with `sessionWorkingDirectory`
 (the stored session cwd, else the host's, the same rule as
 `ExtensionContext.cwd`) and puts it in the branch's `BranchAddress`, which
 the cell kernel Resource reads. The TUI
-build names itself with one define, `__GENT_BUILD__` (`{ id, version }`: a
-fresh id per build and the version of `apps/tui/package.json`). It has two
-readers: `GentPlatform.build` (`Compiled` with the id and version, else
-`Source`), by which the cell picks its worker and discovery names the build,
-and the builtin extensions, whose artifact identity is `build:<id>`. The CLI's
+build names itself with one define, `__GENT_BUILD__` (`{ id, version,
+release? }`: a fresh id per build, the version of `apps/tui/package.json`, and
+the release the build compiled, `captureRelease`'s commit, tree, lock and Bun,
+absent when the checkout names none). Its readers: `GentPlatform.build`
+(`Compiled` with the id and version, else `Source`), by which the cell picks
+its worker and discovery names the build, `GentPlatform.source`, which names
+the release a link's contract carries (docs/architecture/server.md, Machine
+Links), and the builtin extensions, whose artifact identity is `build:<id>`. The CLI's
 `--version` reads the same `apps/tui/package.json`, which the bundle carries.
 `GENT_COMPILE_TARGET` (a turbo build env input) names the Bun runtime both
 compiles embed, such as `bun-linux-x64-baseline`; unset, each embeds the
