@@ -2061,11 +2061,20 @@ const applyEdit = (directory: string, random: Random, edit: TreeEdit) =>
       if (Option.exists(info, (value) => (value.mode & 0o100) !== 0)) mode = 0o644
       yield* fs.chmod(`${directory}/${tracked}`, mode)
     })
-    const swapLineEnds = () => {
-      let bytes = utf8("one\ntwo\n")
-      if (random(2) === 0) bytes = utf8("one\r\ntwo\r\n")
-      return writeBytes(directory, tracked, bytes)
-    }
+    // The file's own bytes with every line end swapped, so the state before
+    // and the state after differ in line ends alone: one tree only if a
+    // conversion reached the capture.
+    const swapLineEnds = Effect.gen(function* () {
+      const read = yield* fs.readFile(`${directory}/${tracked}`).pipe(Effect.option)
+      let text = Option.match(read, {
+        onNone: () => "",
+        onSome: (bytes) => Buffer.from(bytes).toString("latin1"),
+      })
+      if (!text.includes("\n")) text = "one\ntwo\n"
+      if (text.includes("\r\n")) text = text.replaceAll("\r\n", "\n")
+      else text = text.replaceAll("\n", "\r\n")
+      yield* writeBytes(directory, tracked, Buffer.from(text, "latin1"))
+    })
     // Indexed by every edit, so a missing one does not compile.
     const edits = {
       "a tracked file edited": () => writeBytes(directory, tracked, generateBytes(random)),
@@ -2073,7 +2082,7 @@ const applyEdit = (directory: string, random: Random, edit: TreeEdit) =>
       "a tracked file deleted": () =>
         fs.remove(`${directory}/${tracked}`, { recursive: true, force: true }),
       "an exec bit flipped": () => flipExecBit,
-      "CRLF and LF swapped": swapLineEnds,
+      "CRLF and LF swapped": () => swapLineEnds,
       "an untracked file added": () =>
         writeBytes(directory, pick(random, UNTRACKED_PATHS), generateBytes(random)),
       "an untracked file removed": () =>
@@ -2153,6 +2162,26 @@ const attributedCheckout = (
 const gitStatus = (directory: string) =>
   runProcess("git", ["-C", directory, "status", "--porcelain"]).pipe(
     Effect.map(({ stdout }) => stdout),
+  )
+
+/**
+ * This process's environment holds `values` for the scope, as a user's shell
+ * would: what the capture must not read. The keys come back as they were.
+ */
+const userEnvironment = (values: Readonly<Record<string, string>>) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      // oxlint-disable-next-line effect/noGlobals -- the test plays the user's environment, which the capture must ignore
+      const environment = process.env
+      const held = Object.entries(environment).filter(([key]) => key in values)
+      Object.assign(environment, values)
+      return { environment, held }
+    }),
+    ({ environment, held }) =>
+      Effect.sync(() => {
+        for (const key of Object.keys(values)) Reflect.deleteProperty(environment, key)
+        Object.assign(environment, Object.fromEntries(held))
+      }),
   )
 
 /** What the repository holds: its object counts and its index's bytes. */
@@ -2258,6 +2287,36 @@ describe("the tree a release names", () => {
           // The tree the capture named is not in the repository either.
           const asked = yield* runProcess("git", ["-C", directory, "cat-file", "-e", dirty.tree])
           expect(asked.exitCode).not.toBe(0)
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live(
+    "a user's global ignore hides nothing from the tree: an untracked file it lists still moves the tree, whatever HOME, XDG_CONFIG_HOME or GIT_CONFIG_GLOBAL name",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const directory = yield* treeDirectory
+          const user = yield* treeDirectory
+          yield* checkout(directory, "one")
+          yield* fs.makeDirectory(`${user}/.config/git`, { recursive: true })
+          yield* fs.writeFileString(`${user}/ignore`, "secret.ts\n")
+          yield* fs.writeFileString(`${user}/.config/git/ignore`, "secret.ts\n")
+          yield* fs.writeFileString(
+            `${user}/.gitconfig`,
+            `[core]\n\texcludesFile = ${user}/ignore\n`,
+          )
+          yield* userEnvironment({
+            HOME: user,
+            XDG_CONFIG_HOME: `${user}/.config`,
+            GIT_CONFIG_GLOBAL: `${user}/.gitconfig`,
+          })
+          const before = yield* treeOf(directory)
+          yield* fs.writeFileString(`${directory}/secret.ts`, "export const secret = 1\n")
+          // The premise: the user's own git ignores the file.
+          expect(yield* gitStatus(directory)).toBe("")
+          expect(yield* treeOf(directory)).not.toBe(before)
         }),
       ).pipe(Effect.provide(bunPlatformLayer)),
   )
