@@ -34,6 +34,7 @@ import {
   Schedule,
   Schema,
   Scope,
+  Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
 import type { ChildProcessSpawner } from "effect/process"
@@ -147,17 +148,18 @@ const pinnedGit = (exclude: string) => [
 ]
 
 /**
- * Git at `cwd` with `env` as its whole environment and `pins` before the
- * command, its exit checked, its output in `NoRelease`'s terms: no git, or
- * the command git refused.
+ * Git at `cwd` with `env` as its whole environment, `pins` before the
+ * command and `stdin` as its input, its exit checked, its output in
+ * `NoRelease`'s terms: no git, or the command git refused.
  */
 const releaseGit = (
   cwd: string,
   args: ReadonlyArray<string>,
   env: Record<string, string>,
   pins: ReadonlyArray<string> = [],
+  stdin: Stream.Stream<Uint8Array, PlatformError.PlatformError> | "ignore" = "ignore",
 ) =>
-  runProcess("git", [...pins, ...args], { cwd, env }).pipe(
+  runProcess("git", [...pins, ...args], { cwd, env, stdin }).pipe(
     Effect.mapError((error) => new NoRelease({ reason: `no git: ${error.message}` })),
     Effect.flatMap((result) => {
       const { exitCode, stderr } = result
@@ -178,26 +180,35 @@ const unreleased = GentRelease.cases.Unreleased.make({
 
 /**
  * The release the checkout at `directory` holds: the commit at `HEAD`, the
- * tree, and the Bun this process runs. The tree is the git tree id of the
- * working state, written by git: `HEAD`'s tree read into a throwaway index,
- * every tracked and every untracked, unignored entry added, the tree
- * written. Gent never reads a working entry itself; git's object model
- * names each file's bytes and exec bit and each link's target bytes, and
- * git refuses any other kind of tracked entry.
+ * tree, and the Bun this process runs. The checkout is the physical one: the
+ * nearest directory at or above `directory` that holds a `.git` entry (a
+ * directory, or the file of a linked worktree). The tree is the git tree id
+ * of its working state, written by git: `HEAD`'s entries and the real
+ * index's read into a throwaway index (paths and modes only: the real
+ * index's stats and its assume-unchanged, skip-worktree and intent-to-add
+ * bits never reach it), every one of them and every untracked, unignored
+ * entry added from the working tree, the tree written. Gent never reads a
+ * working entry itself; git's object model names each file's bytes and exec
+ * bit and each link's target bytes, and git refuses any other kind of
+ * tracked entry.
  *
  * The index, the git directory and every object written live in a scoped
  * temporary directory; the repository's objects are reached as an
- * alternate, so nothing is written into the repository. The throwaway git
- * directory holds no config and no `info/attributes`, the environment holds
- * no user or system config, and `pinnedGit` turns every conversion off, so
- * one working state names one tree whatever any config says.
+ * alternate, and its index is only read, so nothing is written into the
+ * repository. The throwaway git directory holds no config and no
+ * `info/attributes`, the environment holds no user or system config, and
+ * `pinnedGit` turns every conversion off, so the repository's or the user's
+ * config changes no tree. The repository's config can still move the
+ * working tree git reads (`core.worktree`), so that names no release.
  *
- * Fails with `NoRelease` with no git, no repository or no commit; when git
- * refuses an entry (a FIFO, a socket or a device at a tracked path); when
- * the tree holds a gitlink (a nested repository); when `bun.lock` is not a
- * regular file of the tree; and when the capture takes longer than
- * `RELEASE_TIMEOUT`. Each git child is stopped on that deadline. The build
- * embeds what it returns; a source run reads its own checkout with it once.
+ * Fails with `NoRelease` with no git, no repository or no commit; when the
+ * repository's config moves its working tree off the physical checkout;
+ * when a tracked path is not UTF-8; when git refuses an entry (a FIFO, a
+ * socket or a device at a tracked path); when the tree holds a gitlink (a
+ * nested repository); when `bun.lock` is not a regular file of the tree;
+ * and when the capture takes longer than `RELEASE_TIMEOUT`. Each git child
+ * is stopped on that deadline. The build embeds what it returns; a source
+ * run reads its own checkout with it once.
  */
 export const captureRelease = (
   directory: string,
@@ -220,8 +231,18 @@ export const captureRelease = (
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: "/dev/null",
       }
+      // The physical checkout holding `directory`, found without git, so no
+      // config can name another.
+      let root = yield* fs.realPath(directory)
+      while (!(yield* fs.exists(`${root}/.git`))) {
+        const parent = path.dirname(root)
+        if (parent === root) {
+          return yield* new NoRelease({ reason: "no repository holds the directory" })
+        }
+        root = parent
+      }
       const found = (yield* releaseGit(
-        directory,
+        root,
         [
           "rev-parse",
           "--path-format=absolute",
@@ -239,6 +260,13 @@ export const captureRelease = (
       if (found.length !== 5 || end.length > 0 || commit.length === 0) {
         return yield* new NoRelease({ reason: "git names no checkout" })
       }
+      // `core.worktree` (set, included or conditional) moves the entries git
+      // reads off the checkout being built.
+      if (top !== root) {
+        return yield* new NoRelease({
+          reason: "the repository's configuration moves its working tree",
+        })
+      }
       const gitDirectory = `${scratch}/git`
       yield* fs.makeDirectory(`${gitDirectory}/objects/info`, { recursive: true })
       yield* fs.makeDirectory(`${gitDirectory}/refs`)
@@ -247,11 +275,28 @@ export const captureRelease = (
       const env = {
         ...isolated,
         GIT_DIR: gitDirectory,
-        GIT_WORK_TREE: top,
+        GIT_WORK_TREE: root,
         GIT_INDEX_FILE: `${scratch}/index`,
       }
-      const git = (args: ReadonlyArray<string>) => releaseGit(top, args, env, pinnedGit(exclude))
+      const pins = pinnedGit(exclude)
+      const git = (args: ReadonlyArray<string>) => releaseGit(root, args, env, pins)
       yield* git(["read-tree", commit])
+      // The real index's entries too: a path it tracks that HEAD lacks (staged,
+      // force-added under an ignore rule, intent to add) is named. Read only:
+      // `ls-files` never refreshes the index. Each entry carries no stat, so
+      // `add -A` rereads every one from the working tree.
+      const tracked = (yield* releaseGit(root, ["ls-files", "--stage", "-z"], isolated, pins))
+        .stdout
+      if (tracked.includes("�")) {
+        return yield* new NoRelease({ reason: "a tracked path is not UTF-8" })
+      }
+      yield* releaseGit(
+        root,
+        ["update-index", "-z", "--index-info"],
+        env,
+        pins,
+        Stream.make(new TextEncoder().encode(tracked)),
+      )
       yield* git(["add", "-A"])
       const tree = (yield* git(["write-tree"])).stdout.trim()
       const entries = (yield* git([
@@ -270,7 +315,7 @@ export const captureRelease = (
       return { commit, tree, bun: Bun.version }
     }).pipe(
       Effect.catchTag("PlatformError", (error) =>
-        Effect.fail(new NoRelease({ reason: `scratch directory: ${error.message}` })),
+        Effect.fail(new NoRelease({ reason: `file system: ${error.message}` })),
       ),
     ),
   ).pipe(
