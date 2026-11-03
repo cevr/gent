@@ -95,22 +95,21 @@ export type GentBuild = typeof GentBuild.Type
 
 /**
  * What names a release of gent: the commit it was built from, its tree (the
- * hash of its tracked and untracked working entries (file bytes and link targets), read by gent,
- * never through git), the SHA-256 of the checkout's `bun.lock`, and the Bun
- * that runs it.
+ * git tree id of its working state: every tracked and every untracked,
+ * unignored entry, written by git with every conversion off, `bun.lock`
+ * among them), and the Bun that runs it.
  */
 const releaseFields = {
   commit: Schema.NonEmptyString,
   tree: Schema.NonEmptyString,
-  lock: Schema.NonEmptyString,
   bun: Schema.NonEmptyString,
 }
 
-/** A release's four facts, as the compiled build embeds them. */
+/** A release's three facts, as the compiled build embeds them. */
 export const GentReleaseFacts = Schema.Struct(releaseFields)
 
 /**
- * The release this process runs: `Released` with its four facts, or
+ * The release this process runs: `Released` with its three facts, or
  * `Unreleased` (no git, no repository, a build that embedded none) with an
  * id drawn once for this process, so it matches no other process. A link's
  * contract names it.
@@ -275,7 +274,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
             GentRelease.cases.Released.make({
               commit: "test-commit",
               tree: "test-tree",
-              lock: "test-lock",
               bun: "test-bun",
             }),
           ),
@@ -368,8 +366,6 @@ export class ProcessError extends Schema.TaggedError<
 interface ProcessResult {
   readonly exitCode: number
   readonly stdout: string
-  /** Unmodified stdout, for byte protocols such as git's NUL-separated paths. */
-  readonly stdoutBytes: Uint8Array
   readonly stderr: string
 }
 
@@ -380,8 +376,6 @@ interface RunProcessOptions {
   /** Merge `env` over the inherited environment instead of replacing it. */
   readonly extendEnv?: boolean
   readonly timeout?: Duration.Duration
-  /** Override the default two-second grace period after SIGTERM. */
-  readonly forceKillAfter?: Duration.Duration
   /** A stream is written to the child's stdin, which closes when the stream ends. */
   readonly stdin?:
     | "pipe"
@@ -398,16 +392,6 @@ const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   let out = ""
   for (const chunk of chunks) out += decoder.decode(chunk, { stream: true })
   return out + decoder.decode()
-}
-
-const concatBytes = (chunks: ReadonlyArray<Uint8Array>): Uint8Array => {
-  const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0))
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.length
-  }
-  return bytes
 }
 
 /**
@@ -436,7 +420,6 @@ export const runProcess = (
     Effect.gen(function* () {
       const stdoutMode = options.stdout ?? "pipe"
       const stderrMode = options.stderr ?? "pipe"
-      const forceKillAfter = options.forceKillAfter ?? PROCESS_FORCE_KILL_AFTER
       const spawn = ChildProcess.make(command, [...args], {
         cwd: options.cwd,
         env: options.env,
@@ -444,7 +427,7 @@ export const runProcess = (
         stdin: options.stdin,
         stdout: stdoutMode,
         stderr: stderrMode,
-        forceKillAfter,
+        forceKillAfter: PROCESS_FORCE_KILL_AFTER,
       })
       const handle = yield* spawn
       // A run that does not succeed (a timeout, an interrupt) stops the child
@@ -453,7 +436,7 @@ export const runProcess = (
       // (Effect-TS/effect#10314); a stopped child closes the pipe under it.
       yield* Effect.addFinalizer((exit) => {
         if (Exit.isSuccess(exit)) return Effect.void
-        return Effect.ignore(handle.kill({ forceKillAfter }))
+        return Effect.ignore(handle.kill({ forceKillAfter: PROCESS_FORCE_KILL_AFTER }))
       })
       let collectStdout: Effect.Effect<
         Option.Option<ReadonlyArray<Uint8Array>>,
@@ -478,10 +461,6 @@ export const runProcess = (
         stdout: Option.match(stdoutChunks, {
           onNone: () => "",
           onSome: decodeUtf8,
-        }),
-        stdoutBytes: Option.match(stdoutChunks, {
-          onNone: () => new Uint8Array(),
-          onSome: concatBytes,
         }),
         stderr: Option.match(stderrChunks, {
           onNone: () => "",

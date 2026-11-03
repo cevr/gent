@@ -260,11 +260,11 @@ const rpcFacts = (rpc: ContractRpc) => {
 const CONTRACT_VERSION = "gent link 2"
 
 /**
- * The release a contract names, as one line: its four facts, or the id of
+ * The release a contract names, as one line: its three facts, or the id of
  * a process that has none.
  */
 const releaseFact = GentRelease.match({
-  Released: ({ commit, tree, lock, bun }) => encodeFacts(["release", commit, tree, lock, bun]),
+  Released: ({ commit, tree, bun }) => encodeFacts(["release", commit, tree, bun]),
   Unreleased: ({ process }) => encodeFacts(["process", process]),
 })
 
@@ -273,11 +273,11 @@ const releaseFact = GentRelease.match({
  * codecs decode, sorted by tag, hashed. Two servers whose contracts match
  * run one release and decode each other's frames the same way.
  *
- * The release (`GentPlatform.source`) is the commit gent was built from, the
- * content of its working files, the hash of its `bun.lock` and the Bun that
- * runs it. It guards the skew the owner's machines can have: another commit,
- * another edit to the tree, another lockfile, another Bun (docs/architecture/server.md, Machine
- * Links). A codec holds code no walk reads (an exit is a declaration, a
+ * The release (`GentPlatform.source`) is the commit gent was built from,
+ * git's tree of its working state (`bun.lock` among it) and the Bun that runs
+ * it. It guards the skew the owner's machines can have: another commit,
+ * another edit to the tree, another lockfile, another Bun
+ * (docs/architecture/server.md, Machine Links). A codec holds code no walk reads (an exit is a declaration, a
  * defect a transformation); the release names that code, and the codec
  * facts are a second factor. Data is described as data: every node's kind,
  * each literal, key, optional and mutable mark, union mode, element and

@@ -60,8 +60,8 @@ const namedWsReexports: Bun.BunPlugin = {
  * `__GENT_BUILD__`: an object literal the bundler puts where the source
  * names it. `release` names the release the build compiles
  * (`captureRelease`): a link's contract names its code by it. The tree is
- * the content of the working files, so an edit moves it; a build with no
- * git embeds none.
+ * git's tree of the working state, `bun.lock` among it, so an edit moves
+ * it; a build with no git embeds none.
  */
 const encodeBuildDefine = Schema.encodeSync(
   Schema.fromJsonString(
@@ -75,10 +75,7 @@ const encodeBuildDefine = Schema.encodeSync(
 
 /** Whether two reads of the checkout name one release, fact by fact. */
 const sameRelease = (one: typeof GentReleaseFacts.Type, other: typeof GentReleaseFacts.Type) =>
-  one.commit === other.commit &&
-  one.tree === other.tree &&
-  one.lock === other.lock &&
-  one.bun === other.bun
+  one.commit === other.commit && one.tree === other.tree && one.bun === other.bun
 
 const build = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -112,15 +109,14 @@ const build = Effect.gen(function* () {
     .readFileString(path.join(rootDir, "package.json"))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageVersion)))
   // The release is read here, from the checkout the build compiles: its tree
-  // is the hash of its working files' bytes; with no git the build embeds
-  // none, and its links match no other machine.
+  // is git's tree of its working state; with no git the build embeds none,
+  // and its links match no other machine.
   const main = path.join(rootDir, "src/main.tsx")
   const captured = yield* Effect.result(captureRelease(rootDir))
   yield* Effect.log(
     Result.match(captured, {
       onFailure: ({ reason }) => `Release: none (${reason})`,
-      onSuccess: ({ commit, tree, lock, bun }) =>
-        `Release: ${commit} ${tree.slice(0, 8)} ${lock.slice(0, 8)} ${bun}`,
+      onSuccess: ({ commit, tree, bun }) => `Release: ${commit} ${tree.slice(0, 8)} ${bun}`,
     }),
   )
   const release = Result.getSuccess(captured)

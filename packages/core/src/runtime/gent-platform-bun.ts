@@ -20,9 +20,9 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { Database } from "bun:sqlite"
 import {
+  Config,
   Duration,
   Effect,
-  Fiber,
   FileSystem,
   Layer,
   Match,
@@ -34,7 +34,6 @@ import {
   Schedule,
   Schema,
   Scope,
-  Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
 import type { ChildProcessSpawner } from "effect/process"
@@ -93,38 +92,72 @@ const thisBuild: GentBuild = Option.match(compiledDefine, {
 
 // ── release ─────────────────────────────────────────────────────────────────
 
-/** Why a checkout names no release: no git, no repository, a file or a lock that does not read. */
+/** Why a checkout names no release: no git, no repository, or a working state git does not hold. */
 class NoRelease extends Schema.TaggedError<NoRelease, { readonly brand: unique symbol }>()(
   "NoRelease",
   { reason: Schema.String },
 ) {}
 
-/** One deadline for all git, entry and lock reads (warm trees take 30–56 ms). */
+/** One deadline over the whole capture (a warm capture of gent takes about 100 ms). */
 const RELEASE_TIMEOUT = Duration.seconds(10)
 
-/** Leave room to reap a stubborn git within the deadline plus one second. */
-const RELEASE_FORCE_KILL_AFTER = Duration.millis(500)
+/** Git's empty tree: the attributes the capture reads from it are none. */
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-/** Bounded acknowledgement: git can reap, an uninterruptible OS read cannot hold the caller. */
-const RELEASE_CLEANUP_TIMEOUT = Duration.millis(750)
+/** A gitlink's mode: a nested repository, whose own working state no tree names. */
+const GITLINK_MODE = "160000"
 
-/** How many files of a checkout one capture reads at once. */
-const TREE_READS = 16
-
-/** A tracked file that is not in the working tree: its line in the tree. */
-export const DELETED_FILE = "deleted"
-
-const sha256 = (input: Uint8Array | string) =>
-  new Bun.CryptoHasher("sha256").update(input).digest("hex")
+/** The tree entries a regular `bun.lock` can be: a file, executable or not. */
+const LOCK_ENTRIES = new Set(["100644 bun.lock", "100755 bun.lock"])
 
 /**
- * Git at `directory`, its exit checked, its output in `NoRelease`'s terms:
- * no git, or the command git refused.
+ * What every capture call pins, whatever the repository or the user
+ * configures: attributes from the empty tree (no filter, diff driver,
+ * `eol` or `text`), no line-ending conversion, symlinks and the exec bit as
+ * they are, paths as they are, no file-system monitor or untracked cache, no
+ * sparse checkout, no user attributes file, and only the repository's own
+ * `info/exclude` beside its `.gitignore` files.
  */
-const releaseGit = (directory: string, args: ReadonlyArray<string>) =>
-  runProcess("git", ["--no-optional-locks", "-C", directory, ...args], {
-    forceKillAfter: RELEASE_FORCE_KILL_AFTER,
-  }).pipe(
+const pinnedGit = (exclude: string) => [
+  `--attr-source=${EMPTY_TREE}`,
+  "-c",
+  "core.autocrlf=false",
+  "-c",
+  "core.safecrlf=false",
+  "-c",
+  "core.symlinks=true",
+  "-c",
+  "core.fileMode=true",
+  "-c",
+  "core.ignorecase=false",
+  "-c",
+  "core.precomposeunicode=false",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.untrackedCache=false",
+  "-c",
+  "core.sparseCheckout=false",
+  "-c",
+  "core.attributesFile=",
+  "-c",
+  `core.excludesFile=${exclude}`,
+  "-c",
+  "add.ignoreErrors=false",
+]
+
+/**
+ * Git at `cwd` with `env` as its whole environment and `pins` before the
+ * command, its exit checked, its output in `NoRelease`'s terms: no git, or
+ * the command git refused.
+ */
+const releaseGit = (
+  cwd: string,
+  args: ReadonlyArray<string>,
+  env: Record<string, string>,
+  pins: ReadonlyArray<string> = [],
+) =>
+  runProcess("git", [...pins, ...args], { cwd, env }).pipe(
     Effect.mapError((error) => new NoRelease({ reason: `no git: ${error.message}` })),
     Effect.flatMap((result) => {
       const { exitCode, stderr } = result
@@ -132,79 +165,6 @@ const releaseGit = (directory: string, args: ReadonlyArray<string>) =>
       return Effect.fail(new NoRelease({ reason: `git ${args[0]}: ${stderr.trim()}` }))
     }),
   )
-
-/** Hash a file incrementally: memory is bounded by the stream's chunks. */
-const hashFile = (file: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const hash = new Bun.CryptoHasher("sha256")
-    yield* fs.stream(file).pipe(
-      Stream.runForEach((chunk) =>
-        Effect.sync(() => {
-          hash.update(chunk)
-        }),
-      ),
-    )
-    return hash.digest("hex")
-  })
-
-/**
- * The tree of the checkout at `top`: its working entries. Git
- * only names them: every tracked file, and every untracked file it does not
- * ignore. Gent reads each one's bytes itself, so no git filter, diff driver
- * or line-ending conversion touches them, and no git config changes the
- * tree. Each UTF-8 path contributes one sorted, NUL-terminated record:
- * `<path>\0file\0<digest>\0`, `<path>\0link\0<target>\0`, or `<path>\0deleted\0`.
- * Neither a path nor a link target can hold NUL, so newlines in either
- * cannot shift record boundaries. lstat never follows
- * links; a dangling link names its target too. Other entry types and paths
- * that cannot be decoded losslessly fail closed. The commit is a separate
- * fact: identical listed entries on one commit name one release.
- */
-const captureTree = (top: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const listed = yield* releaseGit(top, [
-      "ls-files",
-      "-z",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-    ])
-    // A file in a merge conflict is listed once per stage.
-    const paths = yield* Effect.try({
-      try: () =>
-        new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(listed.stdoutBytes),
-      catch: () => new NoRelease({ reason: "git listed a path that is not valid UTF-8" }),
-    })
-    const files = [...new Set(paths.split("\0").filter((file) => file.length > 0))].sort()
-    const lines = yield* Effect.forEach(
-      files,
-      (file) =>
-        Effect.gen(function* () {
-          const full = `${top}/${file}`
-          const info = yield* fs.lstat(full).pipe(
-            Effect.asSome,
-            Effect.catchIf(
-              (error) => error.reason._tag === "NotFound",
-              () => Effect.succeedNone,
-            ),
-          )
-          if (Option.isNone(info)) return `${file}\0${DELETED_FILE}\0`
-          if (info.value.type === "SymbolicLink") {
-            return `${file}\0link\0${yield* fs.readLink(full)}\0`
-          }
-          if (info.value.type === "File") return `${file}\0file\0${yield* hashFile(full)}\0`
-          return yield* new NoRelease({ reason: `${file}: unsupported ${info.value.type} entry` })
-        }).pipe(
-          Effect.catchTag("PlatformError", (error) =>
-            Effect.fail(new NoRelease({ reason: `${file}: ${error.message}` })),
-          ),
-        ),
-      { concurrency: TREE_READS },
-    )
-    return sha256(lines.join(""))
-  })
 
 /**
  * This process's release when it has none: an id drawn once as the module
@@ -218,12 +178,26 @@ const unreleased = GentRelease.cases.Unreleased.make({
 
 /**
  * The release the checkout at `directory` holds: the commit at `HEAD`, the
- * tree (`captureTree`: the content of its tracked and untracked working
- * files), the SHA-256 of `bun.lock` at the checkout's
- * top, and the Bun this process runs. `HEAD` is read again after the tree,
- * and a commit made meanwhile fails. Fails with `NoRelease` with no git or
- * no repository, or a file or a lock that does not read. The build embeds
- * what it returns; a source run reads its own checkout with it once.
+ * tree, and the Bun this process runs. The tree is the git tree id of the
+ * working state, written by git: `HEAD`'s tree read into a throwaway index,
+ * every tracked and every untracked, unignored entry added, the tree
+ * written. Gent never reads a working entry itself; git's object model
+ * names each file's bytes and exec bit and each link's target bytes, and
+ * git refuses any other kind of tracked entry.
+ *
+ * The index, the git directory and every object written live in a scoped
+ * temporary directory; the repository's objects are reached as an
+ * alternate, so nothing is written into the repository. The throwaway git
+ * directory holds no config and no `info/attributes`, the environment holds
+ * no user or system config, and `pinnedGit` turns every conversion off, so
+ * one working state names one tree whatever any config says.
+ *
+ * Fails with `NoRelease` with no git, no repository or no commit; when git
+ * refuses an entry (a FIFO, a socket or a device at a tracked path); when
+ * the tree holds a gitlink (a nested repository); when `bun.lock` is not a
+ * regular file of the tree; and when the capture takes longer than
+ * `RELEASE_TIMEOUT`. Each git child is stopped on that deadline. The build
+ * embeds what it returns; a source run reads its own checkout with it once.
  */
 export const captureRelease = (
   directory: string,
@@ -234,43 +208,75 @@ export const captureRelease = (
 > =>
   Effect.scoped(
     Effect.gen(function* () {
-      // The caller owns cancellation without awaiting an OS acquisition that
-      // may not acknowledge it. When that acquisition returns, the cancelled
-      // fiber runs its resource finalizers before any further read or git.
-      const reading = yield* Effect.forkDetach(
-        Effect.gen(function* () {
-          const [top = "", commit = ""] = (yield* releaseGit(directory, [
-            "rev-parse",
-            "--show-toplevel",
-            "HEAD",
-          ])).stdout
-            .trim()
-            .split("\n")
-          if (top.length === 0 || commit.length === 0) {
-            return yield* new NoRelease({ reason: "git names no checkout" })
-          }
-          const tree = yield* captureTree(top)
-          if ((yield* releaseGit(top, ["rev-parse", "HEAD"])).stdout.trim() !== commit) {
-            return yield* new NoRelease({ reason: "the commit moved while it was read" })
-          }
-          const lock = yield* hashFile(`${top}/bun.lock`).pipe(
-            Effect.mapError((error) => new NoRelease({ reason: `no bun.lock: ${error.message}` })),
-          )
-          return { commit, tree, lock, bun: Bun.version }
-        }),
+      const fs = yield* FileSystem.FileSystem
+      const scratch = yield* fs.makeTempDirectoryScoped({ prefix: "gent-release-" })
+      const searchPath = yield* Config.option(Config.String("PATH")).pipe(
+        Effect.orElseSucceed(() => Option.none<string>()),
       )
-      yield* Effect.addFinalizer(() => Effect.sync(() => reading.interruptUnsafe()))
-      return yield* Fiber.join(reading).pipe(
-        Effect.timeoutOrElse({
-          duration: RELEASE_TIMEOUT,
-          orElse: () =>
-            Effect.gen(function* () {
-              yield* Effect.sync(() => reading.interruptUnsafe())
-              yield* Fiber.await(reading).pipe(Effect.timeoutOption(RELEASE_CLEANUP_TIMEOUT))
-              return yield* new NoRelease({ reason: "release capture exceeded 10 seconds" })
-            }),
-        }),
-      )
+      // The whole environment of every call: no user or system config.
+      const isolated = {
+        PATH: Option.getOrElse(searchPath, () => ""),
+        HOME: scratch,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      }
+      const found = (yield* releaseGit(
+        directory,
+        [
+          "rev-parse",
+          "--path-format=absolute",
+          "--show-toplevel",
+          "--git-path",
+          "objects",
+          "--git-path",
+          "info/exclude",
+          "HEAD",
+        ],
+        isolated,
+      )).stdout.split("\n")
+      const [top = "", objects = "", exclude = "", commit = "", end = ""] = found
+      // A path with a newline in it would shift the lines: no release.
+      if (found.length !== 5 || end.length > 0 || commit.length === 0) {
+        return yield* new NoRelease({ reason: "git names no checkout" })
+      }
+      const gitDirectory = `${scratch}/git`
+      yield* fs.makeDirectory(`${gitDirectory}/objects/info`, { recursive: true })
+      yield* fs.makeDirectory(`${gitDirectory}/refs`)
+      yield* fs.writeFileString(`${gitDirectory}/HEAD`, `${commit}\n`)
+      yield* fs.writeFileString(`${gitDirectory}/objects/info/alternates`, `${objects}\n`)
+      const env = {
+        ...isolated,
+        GIT_DIR: gitDirectory,
+        GIT_WORK_TREE: top,
+        GIT_INDEX_FILE: `${scratch}/index`,
+      }
+      const git = (args: ReadonlyArray<string>) => releaseGit(top, args, env, pinnedGit(exclude))
+      yield* git(["read-tree", commit])
+      yield* git(["add", "-A"])
+      const tree = (yield* git(["write-tree"])).stdout.trim()
+      const entries = (yield* git([
+        "ls-tree",
+        "-r",
+        "-z",
+        "--format=%(objectmode) %(path)",
+        tree,
+      ])).stdout.split("\0")
+      if (entries.some((entry) => entry.startsWith(`${GITLINK_MODE} `))) {
+        return yield* new NoRelease({ reason: "the tree holds a nested repository" })
+      }
+      if (!entries.some((entry) => LOCK_ENTRIES.has(entry))) {
+        return yield* new NoRelease({ reason: "bun.lock is not a file of the tree" })
+      }
+      return { commit, tree, bun: Bun.version }
+    }).pipe(
+      Effect.catchTag("PlatformError", (error) =>
+        Effect.fail(new NoRelease({ reason: `scratch directory: ${error.message}` })),
+      ),
+    ),
+  ).pipe(
+    Effect.timeoutOrElse({
+      duration: RELEASE_TIMEOUT,
+      orElse: () => Effect.fail(new NoRelease({ reason: "release capture exceeded 10 seconds" })),
     }),
   )
 
