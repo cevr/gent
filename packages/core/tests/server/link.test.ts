@@ -1451,9 +1451,28 @@ const bunPlatformLayer = Layer.mergeAll(BunTestServices, BunGentPlatformLive)
 /** A stopped child's force-kill window (`runProcess`), plus 1 s. */
 const AFTER_CLOSE = Duration.seconds(3)
 
-/** A slow git: it logs its pid to `calls`, waits half a second, then runs as `git`. */
-const slowGit = (calls: string, git: string) =>
-  ["#!/bin/sh", `echo $$ >> '${calls}'`, "/bin/sleep 0.5", `exec '${git}' "$@"`, ""].join("\n")
+/**
+ * How long the slow git waits before each call: half a second, so a read that
+ * goes on after the close starts another git inside the watch; then longer
+ * than the watch, so a git the close did not stop still runs at its end.
+ */
+const SLOW_GIT_WAITS = [Duration.millis(500), Duration.sum(AFTER_CLOSE, Duration.seconds(2))]
+
+/**
+ * A slow git: it logs its pid to `calls`, waits `wait`, then runs as `git`.
+ * A SIGTERM during the wait ends the wait and the call.
+ */
+const slowGit = (calls: string, git: string, wait: Duration.Duration) =>
+  [
+    "#!/bin/sh",
+    `echo $$ >> '${calls}'`,
+    `trap 'kill "$waiting" 2>/dev/null; exit 143' TERM`,
+    `/bin/sleep ${String(Duration.toMillis(wait) / 1000)} &`,
+    "waiting=$!",
+    'wait "$waiting"',
+    `exec '${git}' "$@"`,
+    "",
+  ].join("\n")
 
 /** The spawner in context, with each `git` it runs started as `git` instead: the real process path, the slow git. */
 const gitAs = (git: string) =>
@@ -1729,42 +1748,46 @@ describe("the release a contract names", () => {
           const root = yield* makeTempDirectoryScoped("gent-release-")
           const repo = `${root}/repo`
           yield* checkout(repo, "one")
-          const calls = `${root}/calls`
-          const bin = `${root}/bin`
-          yield* fs.makeDirectory(bin)
-          yield* fs.writeFileString(
-            `${bin}/git`,
-            slowGit(calls, Bun.which("git") ?? "/usr/bin/git"),
-          )
-          yield* fs.chmod(`${bin}/git`, 0o755)
-          const read = yield* Deferred.make<boolean>()
-          const source = sourceRelease(repo).pipe(
-            Effect.tap(() => Deferred.succeed(read, true)),
-            Effect.provideService(
-              ChildProcessSpawner.ChildProcessSpawner,
-              yield* gitAs(`${bin}/git`),
-            ),
-            Effect.provideContext(
-              yield* Effect.context<
-                ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
-              >(),
-            ),
-          )
-          const server = yield* Scope.make()
-          yield* linksOver({}).pipe(withSource(source), Scope.provide(server))
-          // The read waits in its first git call.
-          yield* logUntil(calls, (lines) => lines.length > 0)
-          const closing = yield* Clock.currentTimeMillis
-          yield* Scope.close(server, Exit.void)
-          const closedIn = (yield* Clock.currentTimeMillis) - closing
-          const atClose = yield* logged(calls)
-          // Watch the force-kill window plus 1 s for another git call.
-          expect(
-            yield* callsUntil(calls, atClose.length, closing + Duration.toMillis(AFTER_CLOSE)),
-          ).toEqual(atClose)
-          expect(yield* Deferred.isDone(read)).toBe(false)
-          for (const pid of atClose) expect(yield* alive(pid), `git ${pid}`).toBe(false)
-          expect(closedIn).toBeLessThan(Duration.toMillis(AFTER_CLOSE))
+          for (const [at, wait] of SLOW_GIT_WAITS.entries()) {
+            const name = `git waits ${Duration.format(wait)}`
+            const calls = `${root}/calls-${String(at)}`
+            const bin = `${root}/bin-${String(at)}`
+            yield* fs.makeDirectory(bin)
+            yield* fs.writeFileString(
+              `${bin}/git`,
+              slowGit(calls, Bun.which("git") ?? "/usr/bin/git", wait),
+            )
+            yield* fs.chmod(`${bin}/git`, 0o755)
+            const read = yield* Deferred.make<boolean>()
+            const source = sourceRelease(repo).pipe(
+              Effect.tap(() => Deferred.succeed(read, true)),
+              Effect.provideService(
+                ChildProcessSpawner.ChildProcessSpawner,
+                yield* gitAs(`${bin}/git`),
+              ),
+              Effect.provideContext(
+                yield* Effect.context<
+                  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+                >(),
+              ),
+            )
+            const server = yield* Scope.make()
+            yield* linksOver({}).pipe(withSource(source), Scope.provide(server))
+            // The read waits in its first git call.
+            yield* logUntil(calls, (lines) => lines.length > 0)
+            const closing = yield* Clock.currentTimeMillis
+            yield* Scope.close(server, Exit.void)
+            const closedIn = (yield* Clock.currentTimeMillis) - closing
+            const atClose = yield* logged(calls)
+            // Watch the force-kill window plus 1 s for another git call.
+            expect(
+              yield* callsUntil(calls, atClose.length, closing + Duration.toMillis(AFTER_CLOSE)),
+              name,
+            ).toEqual(atClose)
+            expect(yield* Deferred.isDone(read), name).toBe(false)
+            for (const pid of atClose) expect(yield* alive(pid), `${name}: git ${pid}`).toBe(false)
+            expect(closedIn, name).toBeLessThan(Duration.toMillis(AFTER_CLOSE))
+          }
         }),
       ).pipe(Effect.provide(bunPlatformLayer)),
     30_000,
