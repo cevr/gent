@@ -116,6 +116,7 @@ import {
   Session,
   SteerCommand,
   toolResultMessageIdForTurn,
+  type TurnLane,
 } from "../../src/domain/message"
 import {
   BranchAddress,
@@ -5455,10 +5456,14 @@ describe("loop inbox", () => {
       readonly queue: Effect.Effect<LoopQueueStateType>
       readonly inbox: Effect.Success<ReturnType<typeof makeLoopInbox>>
       readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
+      /** The queue row the inbox last stored. */
+      readonly stored: Effect.Effect<LoopQueueStateType>
     }) => Effect.Effect<A, AgentLoopError | FollowUpQueueFull>,
     initial: AgentLoopState = buildInitialAgentLoopState({
       state: buildRunningState({ message: queuedMessage("busy", "busy") }, { startedAtMs: 0 }),
     }),
+    /** The admitted lane each message id's start holds in this process's placement. */
+    grants: ReadonlyMap<string, TurnLane> = new Map(),
   ) =>
     Effect.gen(function* () {
       const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(initial)
@@ -5477,7 +5482,7 @@ describe("loop inbox", () => {
         // The running turn opened on "busy", so its message is stored.
         steerDecided: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
         latestStep: Effect.succeedSome(MessageId.make("busy")),
-        admittedLane: () => Effect.succeedNone,
+        admittedLane: (messageId) => Effect.succeed(Option.fromUndefinedOr(grants.get(messageId))),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),
@@ -5489,6 +5494,7 @@ describe("loop inbox", () => {
         queue: TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue)),
         inbox,
         loopRef,
+        stored: Ref.get(rows),
       })
     })
 
@@ -5649,6 +5655,112 @@ describe("loop inbox", () => {
       buildInitialAgentLoopState({ state: buildIdleState() }),
     ),
   )
+
+  // A follow-up admitted to a lane behind a running turn holds that lane in
+  // its slot. A restart loses the grant from placement memory, and a retry of
+  // the id before the item runs then holds none: the retry must not take the
+  // lane off the held item.
+  it.effect("a retry with no grant keeps the queued run's admitted lane", () =>
+    withInbox(
+      ({ inbox }) =>
+        Effect.gen(function* () {
+          const message = queuedMessage("queued-admitted-run", "run")
+          yield* inbox.admit({ message }, { queueOnly: true })
+          yield* inbox.moveToPhase(buildIdleState())
+          const next = yield* inbox.takeIfIdle
+          expect(Option.map(next, (item) => item.lane)).toEqual(Option.some({}))
+        }),
+      buildInitialAgentLoopState({
+        state: buildRunningState({ message: queuedMessage("busy", "busy") }, { startedAtMs: 0 }),
+        queue: {
+          steering: [],
+          followUp: [{ message: queuedMessage("queued-admitted-run", "run"), lane: {} }],
+        },
+      }),
+    ),
+  )
+
+  // The lane is what admission promised the item's start, so every rewrite
+  // of the held item keeps it until a take runs the item: the retry's own
+  // grant if it holds one, else the held item's lane. Behind a running turn,
+  // so the retry queues; then the loop goes idle and takes it.
+  describe("a held item retried under its own id keeps its admitted lane", () => {
+    const heldLane: TurnLane = {}
+    const grantLane: TurnLane = {
+      sabbath: { latitude: 45.2, longitude: -72.5, timeZone: "America/Toronto" },
+    }
+    const places = ["follow-up", "steer"] as const
+    const retries = ["follow-up", "steer"] as const
+    const cases = places.flatMap((place) =>
+      retries
+        .filter((retry) => retry === "follow-up" || place === "steer")
+        .flatMap((retry) =>
+          [false, true].flatMap((held) =>
+            [false, true].flatMap((grant) => {
+              // The steer verb asks no placement: its retry holds no grant.
+              if (retry === "steer" && grant) return []
+              return [{ place, retry, held, grant }]
+            }),
+          ),
+        ),
+    )
+    const expectedLane = (each: (typeof cases)[number]): Option.Option<TurnLane> => {
+      if (each.grant) return Option.some(grantLane)
+      if (each.held) return Option.some(heldLane)
+      return Option.none()
+    }
+    const laneOf = (item: QueuedTurnItem) => Option.fromUndefinedOr(item.lane)
+    const withOrNo = { true: "with", false: "no" } as const
+    for (const each of cases) {
+      const id = `retried-${each.place}`
+      const heldMessage = queuedMessage(id, "held")
+      const heldItems: Record<"true" | "false", QueuedTurnItem> = {
+        true: { message: heldMessage, lane: heldLane },
+        false: { message: heldMessage },
+      }
+      const heldItem = heldItems[`${each.held}`]
+      const grants = new Map<string, TurnLane>()
+      if (each.grant) grants.set(id, grantLane)
+      it.effect(
+        `held ${each.place}, ${withOrNo[`${each.held}`]} lane, retried as ${each.retry}, ${withOrNo[`${each.grant}`]} grant`,
+        () =>
+          withInbox(
+            ({ inbox, queue, stored }) =>
+              Effect.gen(function* () {
+                const retry: QueuedTurnItem = { message: queuedMessage(id, "retry") }
+                if (each.retry === "steer") yield* inbox.steer(retry)
+                if (each.retry === "follow-up") yield* inbox.admit(retry, { queueOnly: false })
+                const queued = yield* queue
+                const holding = [...queued.steering, ...queued.followUp].filter(
+                  (item) => String(item.message.id) === id,
+                )
+                expect(holding.map(laneOf)).toEqual([expectedLane(each)])
+                yield* inbox.moveToPhase(buildIdleState())
+                const taken = yield* inbox.takeIfIdle
+                expect(Option.map(taken, (item) => String(item.message.id))).toEqual(
+                  Option.some(id),
+                )
+                expect(Option.flatMap(taken, laneOf)).toEqual(expectedLane(each))
+                // The take's slot write is what a restart runs the item from.
+                const slot = Option.fromUndefinedOr((yield* stored).inFlight)
+                expect(Option.map(slot, (item) => String(item.message.id))).toEqual(Option.some(id))
+                expect(Option.flatMap(slot, laneOf)).toEqual(expectedLane(each))
+              }),
+            buildInitialAgentLoopState({
+              state: buildRunningState(
+                { message: queuedMessage("busy", "busy") },
+                { startedAtMs: 0 },
+              ),
+              queue: {
+                steering: [heldItem].filter(() => each.place === "steer"),
+                followUp: [heldItem].filter(() => each.place === "follow-up"),
+              },
+            }),
+            grants,
+          ),
+      )
+    }
+  })
 
   // The work a restart left starts before anything queued while recovery was
   // deferred: the promotion reserves its start as it ends the deferral, so

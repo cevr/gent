@@ -337,17 +337,50 @@ interface RecoveredTurn {
 const FOLLOW_UP_QUEUE_MAX = 10
 
 /**
+ * The lane a queued item holds once a retry of its id is admitted. The lane
+ * is what admission promised the item's start, so it lasts on the item
+ * until a take runs it: a retry that holds no grant of its own keeps the
+ * held lane, and a retry's own grant is the lane its run is admitted to.
+ */
+const retriedLane = (held: QueuedTurnItem, retry: QueuedTurnItem): Option.Option<TurnLane> =>
+  Option.orElse(Option.fromUndefinedOr(retry.lane), () => Option.fromUndefinedOr(held.lane))
+
+const withLane = (item: QueuedTurnItem, lane: Option.Option<TurnLane>): QueuedTurnItem =>
+  Option.match(lane, {
+    onNone: () => item,
+    onSome: (kept): QueuedTurnItem => ({ ...item, lane: kept }),
+  })
+
+/**
  * Each follow-up stays its own item with its own id, parts, and turn. A
  * repeat of a queued id replaces that item in place, so a retry neither
- * duplicates nor drops content.
+ * duplicates nor drops content, and keeps the lane the item was admitted
+ * to (`retriedLane`).
  */
 const appendFollowUpItem = (
   queue: ReadonlyArray<QueuedTurnItem>,
   item: QueuedTurnItem,
 ): QueuedTurnItem[] => {
-  const existingIndex = queue.findIndex((queued) => queued.message.id === item.message.id)
-  if (existingIndex < 0) return [...queue, item]
-  return queue.with(existingIndex, item)
+  const held = queue.find((queued) => queued.message.id === item.message.id)
+  if (Predicate.isUndefined(held)) return [...queue, item]
+  return queue.with(queue.indexOf(held), withLane(item, retriedLane(held, item)))
+}
+
+/**
+ * A retry of a waiting steer's id leaves the steer as it is, with the lane
+ * the retry's own grant admits it to (`retriedLane`). Returns the same queue
+ * when the retry holds no grant, so the caller stores only a change.
+ */
+const laneOntoWaitingSteer = (queue: LoopQueueState, retry: QueuedTurnItem): LoopQueueState => {
+  const held = queue.steering.find((queued) => queued.message.id === retry.message.id)
+  if (Predicate.isUndefined(held) || Predicate.isUndefined(retry.lane)) return queue
+  return {
+    ...queue,
+    steering: queue.steering.with(
+      queue.steering.indexOf(held),
+      withLane(held, retriedLane(held, retry)),
+    ),
+  }
 }
 
 const toQueueEntry = (
@@ -939,9 +972,14 @@ export const makeLoopInbox = (
         // A retry of a queued id keeps the first send's decision: the loop
         // holds the id in one place, and the queue starts it. A queued
         // follow-up takes the retry in place; a waiting steer stays as it is.
+        // Either keeps the lane its admission promised (`retriedLane`).
         const sameId = (queued: QueuedTurnItem) => queued.message.id === item.message.id
         if (current.queue.steering.some(sameId)) {
-          return { value: Option.none(), next: current, persist: false }
+          const queue = laneOntoWaitingSteer(current.queue, item)
+          if (queue === current.queue) {
+            return { value: Option.none(), next: current, persist: false }
+          }
+          return { value: Option.none(), next: { ...current, queue }, persist: true }
         }
         if (current.queue.followUp.some(sameId)) {
           return { value: Option.none(), next: { ...current, queue: nextQueue }, persist: true }

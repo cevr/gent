@@ -102,7 +102,12 @@ Shape:
   Sabbath, in the same slot write (`QueuedTurnItem.lane`, read from
   `CredentialPlacement.admittedLane`). A turn run from the slot opens on no
   grant, and resumes that lane when its record keeps none, so it counts as
-  the run it was admitted as and stops in its Sabbath.
+  the run it was admitted as and stops in its Sabbath. A queued item
+  carries its lane the same way, and every rewrite of a held item keeps it
+  until a take runs the item: a retry of its id with no grant of its own
+  (a restart lost the grant with placement memory) keeps the held lane, a
+  retry's own grant gives the held item that lane, and the take moves the
+  item to the slot with it.
 - Deferred recovery: the open of a loop starts no turn. The loop is built
   with `recoveryDeferred` set when it finds work a restart left (a user turn
   in the history with no completion, or a stored queue that wakes on
