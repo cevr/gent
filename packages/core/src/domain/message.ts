@@ -3,6 +3,7 @@ import * as Prompt from "effect/ai/Prompt"
 import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import { AgentName, ModelId, ReasoningEffort, RunSpecSchema } from "./agent.js"
 import type { EventEnvelope, ToolCallStarted, Usage } from "./event.js"
+import { Sabbath } from "../runtime/config.js"
 import * as Response from "effect/ai/Response"
 
 // ── head-tail ───────────────────────────────────────────────────────────────
@@ -1860,6 +1861,15 @@ export type RequesterBranch = typeof RequesterBranch.Type
 export const requesterBranchKey = (branch: RequesterBranch): string =>
   `${branch.sessionId}/${branch.branchId}`
 
+/**
+ * The admitted lane a turn opened on, as its record keeps it, with the
+ * owner's Sabbath of that lane. A restart opens the turn on no grant: it
+ * counts as an admitted run all the same, and stops in that Sabbath. A turn
+ * no start admitted (the owner's own) keeps none.
+ */
+export const TurnLane = Schema.Struct({ sabbath: Schema.optional(Sabbath) })
+export type TurnLane = typeof TurnLane.Type
+
 /** One turn waiting in a branch's queue. */
 export const QueuedTurnItem = Schema.Struct({
   message: Message,
@@ -1873,6 +1883,12 @@ export const QueuedTurnItem = Schema.Struct({
    * The admitter asked for a turn even when the branch has no prior history.
    */
   wake: Schema.optional(Schema.Boolean),
+  /**
+   * The admitted lane its start held when the loop admitted it. Its turn
+   * opens with no grant after a restart, and counts as that run all the
+   * same, in its Sabbath. Absent on an item no start was admitted for.
+   */
+  lane: Schema.optional(TurnLane),
 })
 export type QueuedTurnItem = typeof QueuedTurnItem.Type
 

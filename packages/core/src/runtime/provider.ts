@@ -29,7 +29,7 @@ import {
   Struct,
 } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
-import { ModelCatalogSnapshotStorage, type TurnLane } from "../storage/storage.js"
+import { ModelCatalogSnapshotStorage } from "../storage/storage.js"
 import { type ExtensionModelsService, ExtensionServiceError } from "../domain/extension.js"
 import {
   AgentName,
@@ -46,7 +46,7 @@ import { CredentialSlot, DEFAULT_CREDENTIAL_SLOT, SessionId, ToolCallId } from "
 import { ExtensionRegistry, type ExtensionRegistryService } from "./extension-host.js"
 import { causeMessage, type JsonRecord, omitUndefined } from "../domain/guards.js"
 import { wireToolName } from "../domain/capability.js"
-import { encodeToolOutput } from "../domain/message.js"
+import { encodeToolOutput, type TurnLane } from "../domain/message.js"
 import {
   AuthAuthorizationMethod,
   AuthMetadata,
@@ -4127,6 +4127,13 @@ interface CredentialPlacementService {
    */
   readonly openLane: (lane: OpenLane) => Effect.Effect<Option.Option<TurnLane>>
   /**
+   * The admitted lane the start admitted under `key` holds now, with its
+   * request's Sabbath: what its turn counts as when it opens on no grant
+   * (`OpenLane.resumed`). None when no start holds a grant under `key`.
+   * It changes nothing.
+   */
+  readonly admittedLane: (key: string) => Effect.Effect<Option.Option<TurnLane>>
+  /**
    * The start admitted or queued under `key` opens no turn of its own: its
    * message joined a turn that holds its session's lane already, its
    * caller's admission failed after the lane admitted it, or it was
@@ -8201,6 +8208,14 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       })
       yield* afterServe(opened.grants)
       return opened.turnLane
+    }),
+    // What `openLane` would count the start as, read as it reads its grant.
+    admittedLane: Effect.fn("CredentialPlacement.admittedLane")(function* (key: string) {
+      return yield* locked(() =>
+        Option.map(Option.fromUndefinedOr(reserved.get(key)), (held): TurnLane =>
+          omitUndefined({ sabbath: Option.getOrUndefined(held.sabbath) }),
+        ),
+      )
     }),
     freeReservation: Effect.fn("CredentialPlacement.freeReservation")(function* (key: string) {
       const now = yield* Clock.currentTimeMillis

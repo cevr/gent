@@ -89,6 +89,25 @@ Shape:
   and fires again after 5 s, twice as long each time, at most 10 minutes
   later (`retry`, guarded the same way). A record whose fire still runs is
   not fired again, and at most 8 fires run at once.
+- Durable admission: an admission that reserves a turn's start
+  (`LoopInbox.admit`) stores the item in the queue row's in-flight slot in
+  the same queue transaction, before it returns. Its caller may reply at
+  once (`SubmitDurable` stores its reply, and the cluster never delivers it
+  again), so the reply never names a turn that only memory holds. The turn
+  stores its message, with its turn record's lane in the same transaction,
+  then clears the slot. A kill between the admission and the message leaves
+  the slot, and a stored queue with an item in flight always wakes on
+  recovery (`wantsWakeOnRecovery`), so the next build runs the item once.
+  An item whose start holds an admitted lane carries that lane, with its
+  Sabbath, in the same slot write (`QueuedTurnItem.lane`, read from
+  `CredentialPlacement.admittedLane`). A turn run from the slot opens on no
+  grant, and resumes that lane when its record keeps none, so it counts as
+  the run it was admitted as and stops in its Sabbath. A queued item
+  carries its lane the same way, and every rewrite of a held item keeps it
+  until a take runs the item: a retry of its id with no grant of its own
+  (a restart lost the grant with placement memory) keeps the held lane, a
+  retry's own grant gives the held item that lane, and the take moves the
+  item to the slot with it.
 - Deferred recovery: the open of a loop starts no turn. The loop is built
   with `recoveryDeferred` set when it finds work a restart left (a user turn
   in the history with no completion, or a stored queue that wakes on
@@ -149,6 +168,13 @@ Shape:
   turn starts from a wake that runs after the permit is released, or at the next
   turn boundary. `QueueFollowUp` carries an explicit `wake` flag; without it a
   branch with no prior history keeps the item queued until a real turn arrives.
+  A retry of an id the loop already holds stays one item; its explicit `wake`
+  starts the held item on an idle branch, and a retry without one leaves it
+  queued. The wake is acknowledged before its start runs (the actor forks
+  it), so the write that admits the retry stores it on the held item, a
+  follow-up or a waiting steer, and a later retry without one keeps it. A
+  restart that finds a stored wake starts the item with no new send
+  (`wantsWakeOnRecovery`); the take that starts the item clears it.
 - Orphan reconciliation: a stored tool result that has no terminal tool event
   (a recovered cell, a binding replay failure, a host that died mid-call) gets
   its `ToolCallSucceeded`/`ToolCallFailed` event from `reconcileToolProjections`

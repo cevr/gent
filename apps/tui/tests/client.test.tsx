@@ -1110,6 +1110,27 @@ describe("ClientProvider session lifecycle", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   // ── the server clock ──
+  // The clock tests count the client's own lanes reads on a TestClock their
+  // mock replies move. A shipped extension reads the lanes too (the machines
+  // band), and its reply moved the same clock inside the measure's trip:
+  // a mounted client loads no extension the test does not name.
+  it.scopedLive("a mounted client loads no client extension the test does not name", () =>
+    Effect.gen(function* () {
+      let ui = Option.none<ReturnType<typeof useExtensionUI>>()
+      function ExtensionProbe() {
+        const ext = useExtensionUI()
+        onMount(() => {
+          ui = Option.some(ext)
+        })
+        return <box />
+      }
+      yield* mountClient({ view: () => <ExtensionProbe /> })
+      if (Option.isNone(ui)) return yield* Effect.die("the extension probe did not mount")
+      const ext = ui.value
+      yield* waitUntil(() => ext.loaded(), "the extensions load")
+      expect(ext.widgets()).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // The connection measures the server's clock from a lanes reply as it
   // opens, session or not. The server's now is set against the midpoint of
   // the request's trip, so a slow reply moves the offset by none of its trip.

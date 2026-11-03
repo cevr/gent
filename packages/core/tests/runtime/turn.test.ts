@@ -56,6 +56,7 @@ import {
   BranchId,
   CredentialSlot,
   DEFAULT_CREDENTIAL_SLOT,
+  DefaultWorkspaceId,
   MessageId,
   SessionId,
   ToolCallId,
@@ -76,7 +77,7 @@ import {
   ProviderId,
   type ReasoningEffort,
 } from "../../src/domain/agent"
-import { ProviderError } from "../../src/domain/errors"
+import { ProviderError, StorageError } from "../../src/domain/errors"
 import { omitUndefined } from "../../src/domain/guards"
 import {
   finishPart,
@@ -113,12 +114,14 @@ import {
 } from "../../src/domain/event"
 import * as Prompt from "effect/ai/Prompt"
 import {
+  AgentLoopQueueStorage,
   EventStorage,
   MessageStorage,
   makeStorageTransaction,
   SessionOperationStorage,
   SessionStorage,
   ToolCallBindingStorage,
+  TurnRecordStorage,
 } from "../../src/storage/storage"
 import { EventStoreLive } from "../../src/runtime/session"
 import {
@@ -168,6 +171,8 @@ import {
   makeLayer,
   makeLayerWithEvents,
   makeMessage,
+  queueAgentLoop,
+  removeFollowUpAgentLoop,
   runAgentLoop,
   steerAgentLoop,
   stopAgentLoopMessage,
@@ -6920,6 +6925,914 @@ describe("credential order", () => {
         )
       }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
     )
+  })
+
+  // ── an admitted run across a kill ─────────────────────────────────────────
+  //
+  // A start admitted to a lane is a run: its account's load counts it while
+  // its turn runs. Its admission stores the item in the branch's slot before
+  // it returns, so a kill anywhere from the admission to the message leaves
+  // a turn the next process runs on no grant (its placement is new). Each
+  // case takes a lane (or, as the owner's control, does not), submits, kills
+  // one process at one cut, and runs the work in a new process over the same
+  // store. The oracle reads its own record of "admitted as a run": the start
+  // took a lane, and its submit returned or its slot write committed. Every
+  // such run that a process runs is counted on its lane; no other turn is.
+  describe("an admitted run across a kill", () => {
+    const a = CredentialSlot.make("a")
+    const signIn = [[a, AuthApi.make({ type: "api", key: "sk-a", signedInAt: 1 })]] as const
+    /**
+     * Where a process dies, in the order an admission reaches them: in the
+     * slot write before it commits or after; in the turn before its lane
+     * opens or after; between its message and its lane in their one
+     * transaction; in its model call, after both committed; or nowhere.
+     */
+    type Cut =
+      | "slot-uncommitted"
+      | "slot-committed"
+      | "before-lane"
+      | "after-lane"
+      | "message-before-lane"
+      | "model-call"
+      | "none"
+    interface RunCase {
+      readonly cut: Cut
+      /** The processes that die at `cut` before one runs to the end. */
+      readonly kills: number
+      /** The start took a lane before its submit; false for the owner's own turn. */
+      readonly admitted: boolean
+    }
+    const TEXT = "the admitted run"
+    const asksForRun = (prompt: Prompt.Prompt) =>
+      prompt.content.some(
+        (message) =>
+          message.role === "user" &&
+          message.content.some((part) => part.type === "text" && part.text === TEXT),
+      )
+    /** A process's placement, new as a restart's is, reading one window of a's so its lanes list it. */
+    const freshPlacement = Effect.gen(function* () {
+      const placement = yield* placementOnTestHost(Option.none())
+      const now = yield* Clock.currentTimeMillis
+      yield* placement.noteQuota({
+        provider: FALLBACK,
+        slot: a,
+        signedInAt: Option.some(1),
+        readings: [
+          { window: "5h", utilization: 0.01, resetAt: now + 5 * 3_600_000, rejected: false },
+        ],
+      })
+      return placement
+    })
+
+    const runAcrossKill = (name: string, runCase: RunCase) =>
+      Effect.gen(function* () {
+        // One database outlives every process.
+        const shared = yield* Layer.build(testSqliteStorage)
+        const records = Context.get(shared, TurnRecordStorage)
+        const queues = Context.get(shared, AgentLoopQueueStorage)
+        const messageStorage = Context.get(shared, MessageStorage)
+        const ids = credentialRoot({ name: `admitted-${name}`, stored: [], replies: {} })
+        const target = { sessionId: ids.sessionId, branchId: ids.branchId }
+        const message = makeMessage(ids.sessionId, ids.branchId, TEXT)
+        // The test's own record of what the runtime accepted.
+        const submitted = yield* Ref.make(false)
+        const slotCommitted = yield* Ref.make(false)
+        // What each process saw of the run: its account's load at each model
+        // call, and whether its lane opened as an admitted run.
+        const loads = yield* Ref.make<
+          ReadonlyArray<{ readonly process: number; readonly load: number }>
+        >([])
+        const opened = yield* Ref.make<ReadonlyArray<boolean>>([])
+
+        const processRoot = (
+          process: number,
+          placement: CredentialPlacement["Service"],
+          dies: Option.Option<Deferred.Deferred<void>>,
+        ) => {
+          const at = (cut: Cut) => Option.filter(dies, () => runCase.cut === cut)
+          const stop = (reached: Deferred.Deferred<void>) =>
+            Deferred.succeed(reached, void 0).pipe(Effect.andThen(Effect.never))
+          const processRecords: TurnRecordStorage["Service"] = {
+            get: (key) => {
+              const cut = at("before-lane")
+              if (key.messageId === message.id && Option.isSome(cut)) return stop(cut.value)
+              return records.get(key)
+            },
+            put: (key, record) => {
+              const cut = at("message-before-lane")
+              if (
+                key.messageId === message.id &&
+                Predicate.isNotUndefined(record.lane) &&
+                Option.isSome(cut)
+              )
+                return stop(cut.value)
+              return records.put(key, record)
+            },
+          }
+          // The admission's slot write runs uninterruptibly, so a hang there
+          // would hold the process open; the write dies as a failed write
+          // does instead, and the process sees no more of the run.
+          const dieInSlot = (reached: Deferred.Deferred<void>) =>
+            Deferred.succeed(reached, void 0).pipe(
+              Effect.andThen(Effect.fail(new StorageError({ message: "killed" }))),
+            )
+          const processQueues: AgentLoopQueueStorage["Service"] = {
+            ...queues,
+            putQueueState: (sessionId, branchId, queue) =>
+              Effect.gen(function* () {
+                const holds = queue.inFlight?.message.id === message.id
+                const before = at("slot-uncommitted")
+                if (holds && Option.isSome(before)) return yield* dieInSlot(before.value)
+                yield* queues.putQueueState(sessionId, branchId, queue)
+                if (holds) yield* Ref.set(slotCommitted, true)
+                const after = at("slot-committed")
+                if (holds && Option.isSome(after)) return yield* dieInSlot(after.value)
+              }),
+          }
+          const processPlacement: CredentialPlacement["Service"] = {
+            ...placement,
+            openLane: (lane) =>
+              Effect.gen(function* () {
+                const answer = yield* placement.openLane(lane)
+                if (lane.key !== message.id) return answer
+                yield* Ref.update(opened, (seen) => [...seen, Option.isSome(answer)])
+                const cut = at("after-lane")
+                if (Option.isSome(cut)) return yield* stop(cut.value)
+                return answer
+              }),
+          }
+          return credentialRoot({
+            name: `admitted-${name}`,
+            order: [a],
+            stored: signIn,
+            replies: {},
+            storage: Layer.succeedContext(
+              Context.add(
+                Context.add(shared, TurnRecordStorage, processRecords),
+                AgentLoopQueueStorage,
+                processQueues,
+              ),
+            ),
+            placement: processPlacement,
+            respond: (_credential, prompt) => {
+              if (!asksForRun(prompt)) return answer("ok")(0)
+              return Stream.unwrap(
+                Effect.gen(function* () {
+                  const report = yield* placement.lanes(
+                    () => Effect.succeedSome([{ provider: fallbackProvider, slot: a }]),
+                    Option.none(),
+                  )
+                  const load =
+                    report.providers.find((lanes) => lanes.provider === FALLBACK)?.load ?? -1
+                  yield* Ref.update(loads, (seen) => [...seen, { process, load }])
+                  const cut = at("model-call")
+                  if (Option.isSome(cut)) return yield* stop(cut.value)
+                  return answer("done")(0)
+                }),
+              )
+            },
+          })
+        }
+        const ran = messageStorage
+          .getMessage(message.id)
+          .pipe(
+            Effect.map(
+              (row) =>
+                Predicate.isNotUndefined(row) && Predicate.isNotUndefined(row.turnDurationMs),
+            ),
+          )
+
+        // The first process: the start takes a lane under its message, as an
+        // extension's admit does, then submits. It dies at the cut.
+        const firstReached = yield* Deferred.make<void>()
+        const firstPlacement = yield* freshPlacement
+        const first = processRoot(
+          1,
+          firstPlacement,
+          Option.liftPredicate(firstReached, () => runCase.cut !== "none"),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            if (runCase.admitted) {
+              const admission = yield* firstPlacement.admitLane({
+                provider: FALLBACK,
+                scope: [{ provider: fallbackProvider, slot: a }],
+                key: message.id,
+                asker: Option.none(),
+                model: Option.some(fallbackModel),
+                sabbath: Option.none(),
+              })
+              expect(admission._tag).toBe("Admitted")
+              expect(yield* firstPlacement.awaitLane(message.id)).toBe(true)
+            }
+            const submit = yield* Effect.forkChild(
+              submitAgentLoop(message, first.admission).pipe(
+                Effect.andThen(Ref.set(submitted, true)),
+              ),
+            )
+            if (runCase.cut === "none") {
+              yield* Fiber.join(submit)
+              yield* waitFor(ran, (done) => done, 5_000, "the run ended")
+              return
+            }
+            yield* Deferred.await(firstReached)
+          }).pipe(Effect.provide(first.layer)),
+        )
+
+        // Each later process that dies opens the loop, which runs the work
+        // the kill left, and dies at the cut again.
+        let process = 1
+        for (let kill = 1; kill < runCase.kills; kill++) {
+          process++
+          const reached = yield* Deferred.make<void>()
+          const root = processRoot(process, yield* freshPlacement, Option.some(reached))
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const agentLoop = yield* makeAgentLoopService
+              yield* agentLoop.getState(target)
+              yield* Deferred.await(reached)
+            }).pipe(Effect.provide(root.layer)),
+          )
+        }
+
+        // The last process runs what is left to its end.
+        const accepted = (yield* Ref.get(submitted)) || (yield* Ref.get(slotCommitted))
+        const asRun = runCase.admitted && accepted
+        if (runCase.cut !== "none") {
+          process++
+          const root = processRoot(process, yield* freshPlacement, Option.none())
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const agentLoop = yield* makeAgentLoopService
+              yield* agentLoop.getState(target)
+              if (accepted)
+                yield* waitFor(ran, (done) => done, 5_000, "the run ended after the kill")
+              yield* waitForPhase(agentLoop, target, "Idle")
+            }).pipe(Effect.provide(root.layer)),
+          )
+        }
+
+        // Every accepted start ran; one whose slot write rolled back did not.
+        expect(yield* ran).toBe(accepted)
+        // Each model call of the run was counted on its lane, in every
+        // process, iff it was admitted as a run; the last process ran it.
+        const seen = yield* Ref.get(loads)
+        expect(seen.map((each) => each.load)).toEqual(seen.map(() => Number(asRun)))
+        expect(seen.filter((each) => each.process === process).length).toBe(Number(accepted))
+        const answers = yield* Ref.get(opened)
+        expect(answers).toEqual(answers.map(() => asRun))
+        // The turn's record keeps the admitted lane it ran as.
+        const record = yield* records.get({ ...target, messageId: message.id })
+        expect(Predicate.isNotUndefined(record.lane)).toBe(asRun)
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds"))
+
+    // Every cut of a run with one kill or two, and a run no kill reaches. A
+    // cut in the slot write is the first process's alone: it admits. The
+    // owner's own turn, at each cut it reaches, is never counted.
+    const turnCuts: ReadonlyArray<Cut> = [
+      "before-lane",
+      "after-lane",
+      "message-before-lane",
+      "model-call",
+    ]
+    const cases: ReadonlyArray<RunCase> = [
+      ...turnCuts.flatMap((cut) => [1, 2].map((kills) => ({ cut, kills, admitted: true }))),
+      ...(["slot-uncommitted", "slot-committed", "none"] as const).map((cut) => ({
+        cut,
+        kills: 1,
+        admitted: true,
+      })),
+      ...(["slot-committed", "before-lane", "after-lane", "model-call", "none"] as const).map(
+        (cut) => ({ cut, kills: 1, admitted: false }),
+      ),
+    ]
+    const roles = {
+      true: { who: "an admitted run", tag: "run" },
+      false: { who: "the owner's turn", tag: "own" },
+    } as const
+    for (const each of cases) {
+      const { who, tag } = roles[`${each.admitted}`]
+      const name = `${tag}-${each.cut}-${each.kills}`
+      it.live(
+        `${who} cut at ${each.cut}, ${each.kills} kill(s): counted on its lane iff admitted as a run`,
+        () => runAcrossKill(name, each),
+        25_000,
+      )
+    }
+
+    // Seeded histories over one store: sends of item x or y (a follow-up or
+    // a steer, with or without a lane grant and a wake), busy turns held on a
+    // gate, their release, take-backs, and restarts. What a send was told
+    // back is a promise every later process keeps: a woken item runs; an
+    // acknowledged item runs or stays held, never both; a taken-back item
+    // does neither; an item granted a lane before its first take runs
+    // counted on it in whichever process takes it, and one never granted is
+    // never counted. After every operation the stored queue holds each id in
+    // one place. An operation that does not return in its wait (a cold
+    // caller held behind a recovered turn) is left out of the oracle. Known
+    // gap: a granted steer that joins a running turn opens no lane, and
+    // nothing is asserted of it.
+    describe("admission histories", () => {
+      const ITEMS = ["x", "y"] as const
+      const LABELS: ReadonlyArray<string> = [
+        ...ITEMS.map((item) => `item ${item}`),
+        "busy 1",
+        "busy 2",
+      ]
+      const OP_WAIT = "2 seconds"
+      const LENGTH = 8
+      const SEEDS = 24
+      /** Park-Miller: one seed draws the same history on every run. */
+      const drawsFrom = (seed: number) => {
+        let state = seed
+        return () => {
+          state = (state * 16_807) % 2_147_483_647
+          return (state - 1) / 2_147_483_646
+        }
+      }
+      const pick = { true: "x", false: "y" } as const
+      /**
+       * One history as tokens: `xf` sends x as a follow-up and `xs` as a
+       * steer, `g` adds a lane grant and `w` a wake; `B` starts a busy turn,
+       * `R` releases the process's busy turns, `-x` takes x back, and `K`
+       * restarts the process. A steer's request id is its item's, so the
+       * cluster answers a second one from its reply: each item steers once.
+       * A fixed history may also hold `C`, which waits until a busy turn
+       * calls the model in this process.
+       */
+      const historyOf = (seed: number): ReadonlyArray<string> => {
+        const draw = drawsFrom(seed)
+        const steered = new Set<string>()
+        let busy = 0
+        const tokens: Array<string> = []
+        while (tokens.length < LENGTH) {
+          const roll = draw()
+          const item = pick[`${draw() < 0.5}`]
+          if (roll >= 0.5 && roll < 0.62 && busy < 2) {
+            busy += 1
+            tokens.push("B")
+            continue
+          }
+          if (roll >= 0.62 && roll < 0.75) {
+            tokens.push("R")
+            continue
+          }
+          if (roll >= 0.75 && roll < 0.85) {
+            tokens.push(`-${item}`)
+            continue
+          }
+          if (roll >= 0.85) {
+            tokens.push("K")
+            continue
+          }
+          let token: string = item
+          if (!steered.has(item) && draw() < 0.25) {
+            steered.add(item)
+            token += "s"
+          } else {
+            token += "f"
+            if (draw() < 0.4) token += "g"
+          }
+          if (draw() < 0.4) token += "w"
+          tokens.push(token)
+        }
+        return tokens
+      }
+      const labelOfText = (message: Prompt.Message) => {
+        if (message.role !== "user") return ""
+        const text = message.content
+          .flatMap((part) => {
+            if (part.type !== "text") return []
+            return [part.text]
+          })
+          .join("\n")
+        return LABELS.find((label) => text.includes(label)) ?? text
+      }
+      /** The history label a model call answers: its last user message's. */
+      const labelOf = (prompt: Prompt.Prompt) => {
+        const last = prompt.content.filter((message) => message.role === "user").at(-1)
+        if (Predicate.isUndefined(last)) return ""
+        return labelOfText(last)
+      }
+      /**
+       * The labels a model call's turn brings: its user messages since the
+       * last answer, so a turn a steer joined holds both.
+       */
+      const freshOf = (prompt: Prompt.Prompt) => {
+        const answered = prompt.content.findLastIndex((message) => message.role === "assistant")
+        return prompt.content
+          .slice(answered + 1)
+          .filter((message) => message.role === "user")
+          .map(labelOfText)
+      }
+      /** What the test was told about one item, since its last take-back. */
+      interface ItemLedger {
+        readonly acked: boolean
+        readonly woken: boolean
+        /** The order at which the epoch's first send with a grant came back. */
+        readonly grantAt: number
+        readonly everGranted: boolean
+        /** The order of the last take-back that answered true. */
+        readonly epochAt: number
+        readonly withdrawnLast: boolean
+        /** A send or take-back of the item did not come back in its wait. */
+        readonly uncertain: boolean
+      }
+      const FRESH: ItemLedger = {
+        acked: false,
+        woken: false,
+        grantAt: Number.POSITIVE_INFINITY,
+        everGranted: false,
+        epochAt: 0,
+        withdrawnLast: false,
+        uncertain: false,
+      }
+
+      const runHistory = (name: string, history: ReadonlyArray<string>, joined?: string) =>
+        Effect.gen(function* () {
+          // One database outlives every process.
+          const shared = yield* Layer.build(testSqliteStorage)
+          const records = Context.get(shared, TurnRecordStorage)
+          const queues = Context.get(shared, AgentLoopQueueStorage)
+          const messageStorage = Context.get(shared, MessageStorage)
+          // A steer's request id holds the session and branch ids in at most
+          // 128 characters, so a history's name is short.
+          const ids = credentialRoot({ name, stored: [], replies: {} })
+          const target = { sessionId: ids.sessionId, branchId: ids.branchId }
+          const idOf = (item: string) =>
+            followUpMessageIdForSource({
+              workspaceId: DefaultWorkspaceId,
+              ...target,
+              sourceId: `${item}:interjection`,
+            })
+          const busyMessageOf = (text: string) =>
+            makeMessage(target.sessionId, target.branchId, text)
+
+          // The order of what the test saw: grants coming back, takes, take-backs.
+          let order = 0
+          const next = () => {
+            order += 1
+            return order
+          }
+          const calls: Array<{
+            readonly process: number
+            readonly label: string
+            readonly fresh: ReadonlyArray<string>
+          }> = []
+          const openings: Array<{ readonly key: string; readonly counted: boolean }> = []
+          const takes: Array<{ readonly id: string; readonly at: number }> = []
+          let flying = ""
+          let settling = false
+          const ledgers = new Map<string, ItemLedger>()
+          const ledgerOf = (item: string) => ledgers.get(item) ?? FRESH
+          const note = (item: string, change: Partial<ItemLedger>) =>
+            Effect.sync(() => ledgers.set(item, { ...ledgerOf(item), ...change }))
+          const busySent: Array<{ readonly text: string; readonly certain: boolean }> = []
+
+          const startProcess = (process: number) =>
+            Effect.gen(function* () {
+              const placement = yield* freshPlacement
+              const gates = new Map<string, Deferred.Deferred<void>>()
+              const gateOf = (label: string) => {
+                const found = gates.get(label)
+                if (Predicate.isNotUndefined(found)) return found
+                const gate = Deferred.makeUnsafe<void>()
+                gates.set(label, gate)
+                return gate
+              }
+              const openGates = (all: ReadonlyArray<Deferred.Deferred<void>>) =>
+                Effect.forEach(all, (gate) => Deferred.succeed(gate, void 0), { discard: true })
+              // A take is the in-flight slot naming a new id, once stored.
+              const processQueues: AgentLoopQueueStorage["Service"] = {
+                ...queues,
+                putQueueState: (sessionId, branchId, queue) =>
+                  queues.putQueueState(sessionId, branchId, queue).pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        const id = String(queue.inFlight?.message.id ?? "")
+                        if (id !== "" && id !== flying) takes.push({ id, at: next() })
+                        flying = id
+                      }),
+                    ),
+                  ),
+              }
+              const processPlacement: CredentialPlacement["Service"] = {
+                ...placement,
+                openLane: (lane) =>
+                  placement
+                    .openLane(lane)
+                    .pipe(
+                      Effect.tap((answer) =>
+                        Effect.sync(() =>
+                          openings.push({ key: String(lane.key), counted: Option.isSome(answer) }),
+                        ),
+                      ),
+                    ),
+              }
+              const root = credentialRoot({
+                name,
+                order: [a],
+                stored: signIn,
+                replies: {},
+                storage: Layer.succeedContext(
+                  Context.add(shared, AgentLoopQueueStorage, processQueues),
+                ),
+                placement: processPlacement,
+                // A busy turn's model call waits on its gate in this process,
+                // until a release or the settle opens it.
+                respond: (_credential, prompt) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      const label = labelOf(prompt)
+                      const fresh = freshOf(prompt)
+                      // A busy turn waits, also with a steer joined into it.
+                      const gate = yield* Effect.sync(() => {
+                        calls.push({ process, label, fresh })
+                        return Option.map(
+                          Option.filter(
+                            Option.fromUndefinedOr(fresh.find((each) => each.startsWith("busy"))),
+                            () => !settling,
+                          ),
+                          gateOf,
+                        )
+                      })
+                      if (Option.isSome(gate)) yield* Deferred.await(gate.value)
+                      return answer("ok")(0)
+                    }),
+                  ),
+              })
+              const scope = yield* Scope.make()
+              const context = yield* Layer.buildWithScope(root.layer, scope)
+              return {
+                process,
+                root,
+                placement,
+                scope,
+                context,
+                gateOf,
+                release: Effect.suspend(() => openGates([...gates.values()])),
+                // The settle's release: no later busy call waits.
+                releaseForGood: Effect.sync(() => {
+                  settling = true
+                  return [...gates.values()]
+                }).pipe(Effect.flatMap(openGates)),
+              }
+            })
+
+          let proc = yield* startProcess(1)
+          yield* proc.root.seed.pipe(Effect.provide(proc.context))
+
+          /** Runs one operation in the process; none when it did not come back in its wait. */
+          const perform = <A, E>(op: Effect.Effect<A, E>) =>
+            Effect.gen(function* () {
+              const fiber = yield* op.pipe(Effect.forkIn(proc.scope))
+              const exit = yield* Fiber.await(fiber).pipe(Effect.timeoutOption(OP_WAIT))
+              if (Option.isNone(exit)) return Option.none<A>()
+              return Option.some(yield* exit.value)
+            })
+
+          const send = (token: string) =>
+            Effect.gen(function* () {
+              const item = token.charAt(0)
+              const id = idOf(item)
+              const grant = token.includes("g")
+              const wake = token.includes("w")
+              // A lane another start holds queues the admission: this send
+              // holds no grant, though the placement may serve one later.
+              let granted = false
+              if (grant) {
+                const admission = yield* proc.placement.admitLane({
+                  provider: FALLBACK,
+                  scope: [{ provider: fallbackProvider, slot: a }],
+                  key: id,
+                  asker: Option.none(),
+                  model: Option.some(fallbackModel),
+                  sabbath: Option.none(),
+                })
+                yield* note(item, { everGranted: true })
+                granted = admission._tag === "Admitted"
+                if (granted) expect(yield* proc.placement.awaitLane(id)).toBe(true)
+              }
+              const text = `item ${item}`
+              let sent = Option.none<void>()
+              if (token.charAt(1) === "s") {
+                sent = yield* perform(
+                  steerAgentLoop(
+                    SteerCommand.cases.Interject.make({
+                      ...target,
+                      requestId: followUpMessageIdForSource({
+                        workspaceId: DefaultWorkspaceId,
+                        ...target,
+                        sourceId: item,
+                      }),
+                      message: text,
+                      wake,
+                    }),
+                  ).pipe(Effect.provide(proc.context)),
+                )
+              }
+              if (token.charAt(1) === "f") {
+                sent = yield* perform(
+                  queueAgentLoop(
+                    Message.cases.regular.make({
+                      id,
+                      ...target,
+                      role: "user",
+                      parts: [Prompt.textPart({ text })],
+                      createdAt: dateFromMillis(1_767_225_600_000),
+                    }),
+                    wake,
+                  ).pipe(Effect.provide(proc.context)),
+                )
+              }
+              if (Option.isNone(sent)) return yield* note(item, { uncertain: true })
+              const ledger = ledgerOf(item)
+              let grantAt = ledger.grantAt
+              if (granted) grantAt = Math.min(grantAt, next())
+              yield* note(item, {
+                acked: true,
+                woken: ledger.woken || wake,
+                grantAt,
+                withdrawnLast: false,
+              })
+            })
+
+          let withdrawals = 0
+          const withdraw = (item: string) =>
+            Effect.gen(function* () {
+              withdrawals += 1
+              const answered = yield* perform(
+                removeFollowUpAgentLoop({
+                  ...target,
+                  messageId: idOf(item),
+                  requestId: `withdraw-${name}-${withdrawals}`,
+                }).pipe(Effect.provide(proc.context)),
+              )
+              if (Option.isNone(answered)) return yield* note(item, { uncertain: true })
+              if (!answered.value) return
+              // A new epoch: what the item was promised went with it.
+              const ledger = ledgerOf(item)
+              yield* note(item, {
+                ...FRESH,
+                everGranted: ledger.everGranted,
+                uncertain: ledger.uncertain,
+                epochAt: next(),
+                withdrawnLast: true,
+              })
+            })
+
+          const busy = Effect.gen(function* () {
+            const text = `busy ${busySent.length + 1}`
+            // The gate exists before the turn, so a release right after opens it.
+            yield* Effect.sync(() => proc.gateOf(text))
+            const acked = yield* perform(
+              submitAgentLoop(busyMessageOf(text), proc.root.admission).pipe(
+                Effect.provide(proc.context),
+              ),
+            )
+            busySent.push({ text, certain: Option.isSome(acked) })
+          })
+
+          let processes = 1
+          const restart = Effect.gen(function* () {
+            yield* Scope.close(proc.scope, Exit.void)
+            processes += 1
+            proc = yield* startProcess(processes)
+          })
+
+          const busyCalled = Effect.suspend(() =>
+            waitFor(
+              Effect.sync(() =>
+                calls.some(
+                  (call) =>
+                    call.process === processes &&
+                    call.fresh.some((each) => each.startsWith("busy")),
+                ),
+              ),
+              Boolean,
+              5_000,
+              `a busy turn called the model in process ${processes}`,
+            ),
+          )
+
+          const apply = (token: string) => {
+            if (token === "K") return restart
+            if (token === "R") return proc.release
+            if (token === "B") return busy
+            if (token === "C") return busyCalled
+            if (token.startsWith("-")) return withdraw(token.slice(1))
+            return send(token)
+          }
+
+          const heldIn = Effect.gen(function* () {
+            const row = yield* queues.getQueueState(target.sessionId, target.branchId)
+            return {
+              held: [
+                ...row.steering,
+                ...row.followUp,
+                ...Option.toArray(Option.fromUndefinedOr(row.inFlight)),
+              ].map((item) => String(item.message.id)),
+              inFlight: String(row.inFlight?.message.id ?? ""),
+            }
+          })
+
+          for (const token of history) {
+            yield* apply(token)
+            // The stored queue holds each id in one place.
+            const { held } = yield* heldIn
+            expect({ after: token, held }).toEqual({ after: token, held: [...new Set(held)] })
+          }
+
+          // Settle: open every gate, open the loop, and wait until two looks
+          // apart agree, the loop is idle, and what must have run has.
+          yield* proc.releaseForGood
+          const agentLoop = yield* makeAgentLoopService.pipe(Effect.provide(proc.context))
+          const ranIds = [
+            ...ITEMS.map(idOf),
+            ...busySent.map((each) => busyMessageOf(each.text).id),
+          ]
+          const look = Effect.gen(function* () {
+            const state = yield* agentLoop.getState(target).pipe(Effect.provide(proc.context))
+            const { held, inFlight } = yield* heldIn
+            const ran = yield* Effect.forEach(ranIds, (id) =>
+              messageStorage.getMessage(id).pipe(Effect.map(Predicate.isNotUndefined)),
+            )
+            return {
+              phase: state._tag,
+              held,
+              inFlight,
+              ran: ranIds.flatMap((id, index) => {
+                if (ran[index] !== true) return []
+                return [String(id)]
+              }),
+              calls: calls.length,
+              openings: openings.length,
+            }
+          })
+          const done = (seen: Effect.Success<typeof look>) =>
+            seen.phase === "Idle" &&
+            seen.inFlight === "" &&
+            ITEMS.every(
+              (item) =>
+                !ledgerOf(item).woken ||
+                ledgerOf(item).uncertain ||
+                seen.ran.includes(String(idOf(item))),
+            ) &&
+            busySent.every(
+              (each) => !each.certain || seen.ran.includes(String(busyMessageOf(each.text).id)),
+            )
+          const keyOf = (each: Effect.Success<typeof look>) =>
+            [
+              each.phase,
+              each.inFlight,
+              each.held.join(","),
+              each.ran.join(","),
+              each.calls,
+              each.openings,
+            ].join("|")
+          // Twenty polls in a row see the same loop. A loop that never
+          // settles falls through to the checks, which name what is missing.
+          let previous = ""
+          let same = 0
+          const seen = yield* waitFor(
+            look,
+            (now) => {
+              const key = keyOf(now)
+              same += 1
+              if (key !== previous) same = 0
+              previous = key
+              return same >= 20 && done(now)
+            },
+            10_000,
+            "the loop settled",
+          ).pipe(Effect.catch(() => look))
+          expect({ phase: seen.phase, inFlight: seen.inFlight }).toEqual({
+            phase: "Idle",
+            inFlight: "",
+          })
+
+          // Each label reaches the model at most once in a process.
+          const callCounts = new Map<string, number>()
+          for (const call of calls) {
+            if (!LABELS.includes(call.label)) continue
+            const key = `process ${call.process}: ${call.label}`
+            callCounts.set(key, (callCounts.get(key) ?? 0) + 1)
+          }
+          expect([...callCounts].filter(([, count]) => count > 1)).toEqual([])
+
+          const countedFor = (key: string) =>
+            openings.flatMap((each) => {
+              if (each.key !== key) return []
+              return [each.counted]
+            })
+
+          const checkItem = (item: string) =>
+            Effect.gen(function* () {
+              const ledger = ledgerOf(item)
+              if (ledger.uncertain) return
+              const id = String(idOf(item))
+              const ran = seen.ran.includes(id)
+              const held = seen.held.includes(id)
+              if (ledger.withdrawnLast)
+                expect({ item, ran, held }).toEqual({ item, ran: false, held: false })
+              if (ledger.acked)
+                expect({ item, once: Number(ran) + Number(held) }).toEqual({ item, once: 1 })
+              if (ledger.woken) expect({ item, ran }).toEqual({ item, ran: true })
+              const firstTake =
+                takes.find((take) => take.id === id && take.at > ledger.epochAt)?.at ??
+                Number.POSITIVE_INFINITY
+              const counted = countedFor(id)
+              const record = yield* records.get({ ...target, messageId: idOf(item) })
+              const laned = Predicate.isNotUndefined(record.lane)
+              if (ledger.grantAt < firstTake)
+                expect({ item, counted, laned }).toEqual({
+                  item,
+                  counted: counted.map(() => true),
+                  laned: counted.length > 0,
+                })
+              if (!ledger.everGranted)
+                expect({ item, counted, laned }).toEqual({
+                  item,
+                  counted: counted.map(() => false),
+                  laned: false,
+                })
+            })
+          yield* Effect.forEach(ITEMS, checkItem, { discard: true })
+
+          // A busy turn ran once acknowledged, never counted on a lane.
+          for (const each of busySent) {
+            const id = String(busyMessageOf(each.text).id)
+            const counted = countedFor(id)
+            expect({ busy: each.text, counted }).toEqual({
+              busy: each.text,
+              counted: counted.map(() => false),
+            })
+            if (each.certain)
+              expect({ busy: each.text, ran: seen.ran.includes(id) }).toEqual({
+                busy: each.text,
+                ran: true,
+              })
+          }
+
+          // A steer that joined a turn a kill then took is answered by that
+          // turn's recovery, whose prompt carries it, and by no other turn.
+          const checkJoined = (item: string) =>
+            Effect.gen(function* () {
+              const stored = yield* messageStorage.getMessage(idOf(item))
+              const label = `item ${item}`
+              const carried = calls.filter((call) => call.fresh.includes(label))
+              expect({
+                item,
+                mark: stored?.metadata?.joinedTurn,
+                killed: carried.some((call) => call.process < processes),
+                answered: carried.flatMap((call) => {
+                  if (call.process !== processes) return []
+                  return [call.fresh.some((each) => each.startsWith("busy"))]
+                }),
+              }).toEqual({ item, mark: true, killed: true, answered: [true] })
+            })
+          yield* Effect.forEach(Option.toArray(Option.fromUndefinedOr(joined)), checkJoined, {
+            discard: true,
+          })
+          yield* Scope.close(proc.scope, Exit.void)
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds"))
+
+      // Each history the reviews found, then the seeded ones.
+      const found: ReadonlyArray<{
+        readonly why: string
+        readonly tokens: ReadonlyArray<string>
+        /** The item whose steer joins a turn the history then kills. */
+        readonly joined?: string
+      }> = [
+        {
+          // The restart drops the placement's memory of the grant, so only
+          // the held item still holds the lane when the retry replaces it.
+          why: "a retry with no grant after a restart keeps a queued run's lane",
+          tokens: ["B", "xfg", "K", "xf"],
+        },
+        {
+          why: "a woken retry onto a waiting steer starts after a restart",
+          tokens: ["xs", "xfw", "K"],
+        },
+        { why: "a steer under a held follow-up's id is held once", tokens: ["B", "xf", "xs"] },
+        {
+          why: "a resend of a steer that joined a killed turn runs nothing",
+          tokens: ["B", "xs", "K", "yf", "C", "K", "xf", "K"],
+          joined: "x",
+        },
+      ]
+      for (const each of found) {
+        it.live(
+          `${each.why}: ${each.tokens.join(" ")}`,
+          () => runHistory(`f${found.indexOf(each)}`, each.tokens, each.joined),
+          35_000,
+        )
+      }
+      for (let seed = 1; seed <= SEEDS; seed++) {
+        const tokens = historyOf(seed * 7_919)
+        it.live(`seed ${seed}: ${tokens.join(" ")}`, () => runHistory(`h${seed}`, tokens), 35_000)
+      }
+    })
   })
 })
 

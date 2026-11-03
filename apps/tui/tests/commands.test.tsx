@@ -15,6 +15,7 @@ import type { AgentRowEntry } from "@gent/extensions/client"
 import { createMockClient, mountClient, renderFrame, renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 import { makePaneSlot } from "./extension-test-harness-boundary"
+import builtinAgentsView from "../src/extensions/agents.client"
 
 // ── slash commands ──────────────────────────────────────────────────────────
 
@@ -322,6 +323,7 @@ describe("CommandPalette renderer", () => {
     Effect.gen(function* () {
       const { setup, client } = yield* mountClient({
         client: storedSessionsClient(),
+        builtins: [builtinAgentsView],
         initialSession: rootSession,
         width: 90,
         height: 28,

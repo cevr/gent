@@ -56,6 +56,7 @@ import {
   QueueSnapshot,
   type RequesterBranch,
   requesterBranchKey,
+  type TurnLane,
   SteeringQueueEntryInfo,
   SteerCommand,
 } from "../domain/message.js"
@@ -169,7 +170,7 @@ import type {
 } from "../domain/capability.js"
 import type { StorageError } from "../domain/errors.js"
 import {
-  type CredentialPlacement,
+  CredentialPlacement,
   type DecisionModelResolver,
   makeExtensionModels,
   type ModelRegistry,
@@ -294,8 +295,11 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * Should a loop rebuilt over this stored queue take a turn straight away?
  *
  * Startup has a queue and no loop yet, so it cannot ask the inbox. A recovered
- * queue with nothing in it never wakes; one holding an explicit wake request
- * always does. Everything else defers to whether the branch has history.
+ * queue with nothing in it never wakes. One with an item in flight always
+ * does: that item was admitted, and its caller may have its reply already
+ * (`LoopInbox.admit`), while a first turn that never stored its message
+ * leaves no history. One holding an explicit wake request always does too.
+ * Everything else defers to whether the branch has history.
  */
 export const wantsWakeOnRecovery = (
   queue: LoopQueueState,
@@ -306,9 +310,9 @@ export const wantsWakeOnRecovery = (
     queue.followUp.length > 0
   if (!hasItems) return Option.none()
   const unconditional =
+    Predicate.isNotUndefined(queue.inFlight) ||
     queue.followUp.some((item) => item.wake === true) ||
-    queue.steering.some((item) => item.wake === true) ||
-    queue.inFlight?.wake === true
+    queue.steering.some((item) => item.wake === true)
   return Option.some({ unconditional })
 }
 
@@ -333,17 +337,70 @@ interface RecoveredTurn {
 const FOLLOW_UP_QUEUE_MAX = 10
 
 /**
+ * The lane a queued item holds once a retry of its id is admitted. The lane
+ * is what admission promised the item's start, so it lasts on the item
+ * until a take runs it: a retry that holds no grant of its own keeps the
+ * held lane, and a retry's own grant is the lane its run is admitted to.
+ */
+const retriedLane = (held: QueuedTurnItem, retry: QueuedTurnItem): Option.Option<TurnLane> =>
+  Option.orElse(Option.fromUndefinedOr(retry.lane), () => Option.fromUndefinedOr(held.lane))
+
+/**
+ * The promises a held item keeps once a retry of its id is admitted, on
+ * `item` (the retry for a follow-up replaced in place, the held item for a
+ * waiting steer): its lane (`retriedLane`), and an explicit wake either send
+ * asked for. An acknowledged wake is stored on the item in the write that
+ * admits the retry, so a restart starts the item though the wake's own start
+ * never ran (`wantsWakeOnRecovery`); the take that starts it clears it.
+ */
+const keepRetryPromises = (
+  item: QueuedTurnItem,
+  held: QueuedTurnItem,
+  retry: QueuedTurnItem,
+): QueuedTurnItem => {
+  const kept = Option.match(retriedLane(held, retry), {
+    onNone: () => item,
+    onSome: (lane): QueuedTurnItem => ({ ...item, lane }),
+  })
+  if (held.wake === true || retry.wake === true) return { ...kept, wake: true }
+  return kept
+}
+
+/**
  * Each follow-up stays its own item with its own id, parts, and turn. A
  * repeat of a queued id replaces that item in place, so a retry neither
- * duplicates nor drops content.
+ * duplicates nor drops content, and keeps what the item was promised
+ * (`keepRetryPromises`).
  */
 const appendFollowUpItem = (
   queue: ReadonlyArray<QueuedTurnItem>,
   item: QueuedTurnItem,
 ): QueuedTurnItem[] => {
-  const existingIndex = queue.findIndex((queued) => queued.message.id === item.message.id)
-  if (existingIndex < 0) return [...queue, item]
-  return queue.with(existingIndex, item)
+  const held = queue.find((queued) => queued.message.id === item.message.id)
+  if (Predicate.isUndefined(held)) return [...queue, item]
+  return queue.with(queue.indexOf(held), keepRetryPromises(item, held, item))
+}
+
+/**
+ * A retry of a queued id keeps the first send's decision. A retry that
+ * leaves the held item as it is (a waiting steer's id by either verb, a
+ * queued follow-up's id by the steer verb) gives it the lane the retry's
+ * own grant admits it to and the wake the retry asked for
+ * (`keepRetryPromises`). Returns the same queue when the retry promises
+ * nothing new, so the caller stores only a change.
+ */
+const promisesOntoHeldItem = (queue: LoopQueueState, retry: QueuedTurnItem): LoopQueueState => {
+  const keep = (items: ReadonlyArray<QueuedTurnItem>): ReadonlyArray<QueuedTurnItem> => {
+    const held = items.find((queued) => queued.message.id === retry.message.id)
+    if (Predicate.isUndefined(held)) return items
+    const kept = keepRetryPromises(held, held, retry)
+    if (kept.lane === held.lane && kept.wake === held.wake) return items
+    return items.with(items.indexOf(held), kept)
+  }
+  const steering = keep(queue.steering)
+  const followUp = keep(queue.followUp)
+  if (steering === queue.steering && followUp === queue.followUp) return queue
+  return { ...queue, steering, followUp }
 }
 
 const toQueueEntry = (
@@ -414,11 +471,12 @@ const removeQueuedFollowUp = (queue: LoopQueueState, messageId: MessageId): Loop
 
 const appendSteeringItem = (queue: LoopQueueState, item: QueuedTurnItem): LoopQueueState => {
   const inFlight = Option.fromUndefinedOr(queue.inFlight)
-  if (
-    (Option.isSome(inFlight) && inFlight.value.message.id === item.message.id) ||
-    queue.steering.some((existing) => existing.message.id === item.message.id)
-  ) {
-    return queue
+  if (Option.isSome(inFlight) && inFlight.value.message.id === item.message.id) return queue
+  // A steer under a held id (a waiting steer's, or a queued follow-up's)
+  // keeps the held item where it waits (`promisesOntoHeldItem`).
+  const sameId = (existing: QueuedTurnItem) => existing.message.id === item.message.id
+  if (queue.steering.some(sameId) || queue.followUp.some(sameId)) {
+    return promisesOntoHeldItem(queue, item)
   }
   return {
     ...queue,
@@ -452,7 +510,15 @@ const restampQueuedMessage = (message: Message, createdAt: Date): Message => {
   return Message.cases.regular.make(fields)
 }
 
-const restampQueuedTurnItem = (item: QueuedTurnItem, createdAt: Date): QueuedTurnItem => ({
+/**
+ * The item a take moves into flight. The take is the start its wake asked
+ * for, so the wake goes in the take's own write; the in-flight slot starts on
+ * recovery without one (`wantsWakeOnRecovery`).
+ */
+const restampQueuedTurnItem = (
+  { wake: _started, ...item }: QueuedTurnItem,
+  createdAt: Date,
+): QueuedTurnItem => ({
   ...item,
   message: restampQueuedMessage(item.message, createdAt),
 })
@@ -633,7 +699,11 @@ type LoopInboxContext = {
   readonly queuePersistenceSemaphore: Semaphore.Semaphore
   readonly persistenceFailures: TxSubscriptionRef.TxSubscriptionRef<PersistenceFailureMark>
   readonly startedRef: Ref.Ref<boolean>
-  /** Whether this message's turn already has its receipt (a stored duration). */
+  /**
+   * Whether this message is answered: its turn has its receipt (a stored
+   * duration), or it is a steer that joined another turn, which answers it
+   * and, killed, recovers with the steer already in its prompt.
+   */
   readonly turnSettled: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   /**
    * Whether a steering item needs no queueing: its message is stored (it
@@ -645,6 +715,8 @@ type LoopInboxContext = {
    * the runtime wrote, nor a steer a running turn joined (`isRuntimeUserMessage`).
    */
   readonly latestStep: Effect.Effect<Option.Option<MessageId>, AgentLoopError>
+  /** The admitted lane the start of this message holds (`CredentialPlacement.admittedLane`). */
+  readonly admittedLane: (messageId: MessageId) => Effect.Effect<Option.Option<TurnLane>>
 }
 
 /** Admission options: `ifLatest` admits the item only on that condition, and starts it at once. */
@@ -690,9 +762,11 @@ export type LoopInbox = {
    * newest step (`latestStep`). A turn writes its opener before it leaves
    * the phase, and every phase move takes this permit, so no send lands
    * between the test and the reservation, and none overtakes the item later.
-   * An admitted item is a promise: the same transaction stores it in the
-   * in-flight slot, so a restart before its turn stores the message runs it
-   * once, with no new test of `ifLatest`.
+   *
+   * Every `Some` is a promise: the same transaction stores the item in the
+   * in-flight slot before admission returns, so a kill before its turn stores
+   * the message leaves what the next build runs once (with no new test of
+   * `ifLatest`). The caller may reply as soon as this returns.
    */
   readonly admit: (
     item: QueuedTurnItem,
@@ -844,7 +918,8 @@ export const makeLoopInbox = (
      * the queue: every caller has already run its `commitQueueTransaction`,
      * which wrote the row when — and only when — the queue actually changed.
      * So this is a memory write. Dropping `startingState` is the point: the
-     * reservation this phase consumed is spent, and it was never durable.
+     * reservation this phase consumed is spent. It was never durable: the
+     * in-flight slot written with it is, until the turn stores its message.
      */
     const moveToPhase = (state: LoopState): Effect.Effect<void> =>
       TxSubscriptionRef.update(scope.loopRef, (current) => {
@@ -871,11 +946,18 @@ export const makeLoopInbox = (
     )
 
     const admit = Effect.fn("LoopInbox.admit")(function* (
-      item: QueuedTurnItem,
+      sent: QueuedTurnItem,
       options: LoopAdmission,
     ) {
       const startedAtMs = yield* Clock.currentTimeMillis
-      if (yield* scope.turnSettled(item.message.id)) return Option.none<RunningState>()
+      if (yield* scope.turnSettled(sent.message.id)) return Option.none<RunningState>()
+      // A start admitted to a lane is a run: the item keeps that fact in the
+      // slot write that admits it, so a turn a restart opens from the slot,
+      // on no grant, counts as the run it was admitted as.
+      const item: QueuedTurnItem = Option.match(yield* scope.admittedLane(sent.message.id), {
+        onNone: () => sent,
+        onSome: (lane) => ({ ...sent, lane }),
+      })
       const condition = Option.fromUndefinedOr(options.ifLatest)
       let latest = Option.none<MessageId>()
       if (Option.isSome(condition)) latest = yield* scope.latestStep
@@ -885,21 +967,16 @@ export const makeLoopInbox = (
         if (turnAdmitted(current, item.message.id)) {
           return { value: Option.none(), next: current, persist: false }
         }
-        if (Option.isSome(condition)) {
-          if (
-            !canStartTurnNow(current) ||
-            !queueIsEmpty(current.queue) ||
-            !Option.contains(latest, condition.value)
-          ) {
-            return { value: Option.none(), next: current, persist: false }
-          }
-          // An accepted line is a promise. Its caller may forget its own
-          // record (an alarm row) once this returns, and the start may wait
-          // for the side-mutation permit, so the item is stored in the
-          // in-flight slot before admission returns. A restart then runs it
-          // once from that slot, without a new check of `ifLatest`; the
-          // reservation still orders it ahead of every later admission, and
-          // its turn clears the slot when it stores the message.
+        // An admitted item is a promise. Its caller replies once this returns
+        // (a durable request's reply is stored, so the cluster never delivers
+        // it again), and its caller may forget its own record (an alarm row),
+        // while the turn stores the message only later. So the reservation
+        // and the in-flight slot are one stored transaction: a kill before
+        // the turn stores the message leaves the slot, and the next build
+        // runs the item from it once (`wantsWakeOnRecovery`). The reservation
+        // orders it ahead of every later admission, and its turn clears the
+        // slot when it stores the message.
+        const reserveInFlight = () => {
           const reserved = buildRunningState(item, { startedAtMs })
           return {
             value: Option.some(reserved),
@@ -911,9 +988,37 @@ export const makeLoopInbox = (
             persist: true,
           }
         }
+        if (Option.isSome(condition)) {
+          if (
+            !canStartTurnNow(current) ||
+            !queueIsEmpty(current.queue) ||
+            !Option.contains(latest, condition.value)
+          ) {
+            return { value: Option.none(), next: current, persist: false }
+          }
+          // A restart runs an accepted line without a new check of `ifLatest`.
+          return reserveInFlight()
+        }
         // Build the next queue first: a retry of a queued id replaces in
         // place, so only an admission that grows the queue past the cap fails.
         const nextQueue = appendFollowUpQueueState(current.queue, item)
+        // A retry of a queued id keeps the first send's decision: the loop
+        // holds the id in one place, and the queue starts it. A queued
+        // follow-up takes the retry in place; a waiting steer stays as it is.
+        // Either keeps the lane its admission promised and stores the wake
+        // the retry asked for, before the caller hears back
+        // (`keepRetryPromises`).
+        const sameId = (queued: QueuedTurnItem) => queued.message.id === item.message.id
+        if (current.queue.steering.some(sameId)) {
+          const queue = promisesOntoHeldItem(current.queue, item)
+          if (queue === current.queue) {
+            return { value: Option.none(), next: current, persist: false }
+          }
+          return { value: Option.none(), next: { ...current, queue }, persist: true }
+        }
+        if (current.queue.followUp.some(sameId)) {
+          return { value: Option.none(), next: { ...current, queue: nextQueue }, persist: true }
+        }
         if (
           nextQueue.followUp.length > current.queue.followUp.length &&
           nextQueue.followUp.length > FOLLOW_UP_QUEUE_MAX
@@ -941,12 +1046,7 @@ export const makeLoopInbox = (
           }
         }
 
-        const reservedRunningState = buildRunningState(item, { startedAtMs })
-        return {
-          value: Option.some(reservedRunningState),
-          next: { ...current, startingState: reservedRunningState },
-          persist: false,
-        }
+        return reserveInFlight()
       })
       if (Schema.is(FollowUpQueueFull)(decided)) return yield* decided
       return decided
@@ -1389,8 +1489,10 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
    * Drops a turn that was admitted as the next run but has not started. It
    * takes no side-mutation permit: a re-entrant caller (an extension request
    * or hook) already holds it, and the `RemoveFollowUp` handler holds none.
-   * The admission gate serializes it against the worker's claim, and the
-   * in-flight marker proves the turn is only queued. The next queued item (if
+   * The admission gate serializes it against the worker's claim. The
+   * in-flight marker means "admitted, message not stored": a queue take sets
+   * it, and so does a direct admission (`admit`), so a direct admission whose
+   * worker has not yet claimed it can be withdrawn too. The next queued item (if
    * any) takes its place under the interrupt permit, as every other hand-over
    * does, so an interrupt latched for the withdrawn turn never stops it.
    */
@@ -2065,6 +2167,7 @@ const makeAgentLoopBehavior = (
     const approval = yield* ApprovalService
     const messageStorage = yield* MessageStorage
     const operations = yield* SessionOperationStorage
+    const placement = yield* CredentialPlacement
     const recoveryEvents = yield* EventStorage
     const interactions = yield* InteractionStorage
     const host = yield* makeExtensionHostPlatform
@@ -2608,7 +2711,11 @@ const makeAgentLoopBehavior = (
       startedRef,
       turnSettled: (messageId) =>
         messageStorage.getMessage(messageId).pipe(
-          Effect.map((message) => Predicate.isNotUndefined(message?.turnDurationMs)),
+          Effect.map(
+            (message) =>
+              Predicate.isNotUndefined(message?.turnDurationMs) ||
+              message?.metadata?.joinedTurn === true,
+          ),
           asAgentLoopError("Cannot read submitted message"),
         ),
       steerDecided: (messageId) =>
@@ -2631,6 +2738,7 @@ const makeAgentLoopBehavior = (
         ),
         asAgentLoopError("Cannot read the branch's newest message"),
       ),
+      admittedLane: placement.admittedLane,
     })
 
     const recordTurnFailure = (cause: Cause.Cause<unknown>, messageId: MessageId) =>
@@ -3434,12 +3542,18 @@ const agentLoopActorHandlers = Effect.gen(function* () {
   ) {
     const wasAlreadyWarm = yield* markWrite
     const item = yield* buildFollowUpItem(input)
-    yield* handle
+    const started = yield* handle
       .admitAndStart(item, { queueOnly: !wasAlreadyWarm, ifLatest: input.ifLatest })
       .pipe(orCleanup(handle))
-    if (!wasAlreadyWarm && (yield* shouldWake(handle, input))) {
-      yield* startNextQueuedTurnIfIdle(handle)
+    if (!wasAlreadyWarm) {
+      if (yield* shouldWake(handle, input)) yield* startNextQueuedTurnIfIdle(handle)
+      return
     }
+    // A warm loop starts a new item at its admission. A retry of an id the
+    // loop already holds starts nothing there, so its explicit wake asks the
+    // actor to take the held item once the permit is free: the take finds
+    // nothing while a turn runs, and the caller never waits behind one.
+    if (input.wake === true && Option.isNone(started)) yield* wakeAfterPermit(handle)
   })
 
   /**

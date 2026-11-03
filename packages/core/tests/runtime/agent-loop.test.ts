@@ -116,6 +116,7 @@ import {
   Session,
   SteerCommand,
   toolResultMessageIdForTurn,
+  type TurnLane,
 } from "../../src/domain/message"
 import {
   BranchAddress,
@@ -146,6 +147,7 @@ import {
   SessionOperationStorage,
   SessionStorage,
   ToolCallBindingStorage,
+  TurnRecordStorage,
 } from "../../src/storage/storage"
 import {
   actorTestRoot,
@@ -155,6 +157,7 @@ import {
   makeLayerWithEventStore,
   makeLayerWithEvents,
   makeMessage,
+  queueAgentLoop,
   respondAgentLoopInteraction,
   runAgentLoop,
   steerAgentLoop,
@@ -219,7 +222,7 @@ import * as AiError from "effect/ai/AiError"
 import { StorageError } from "../../src/domain/errors"
 import type { LanguageModel } from "effect/ai"
 import { SingleRunner } from "effect/cluster"
-import { SessionRuntime } from "../../src/runtime/session"
+import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
 import { SqlClient } from "effect/sql"
 import {
@@ -1550,6 +1553,7 @@ const makeHarness = (
       turnSettled: () => Effect.succeed(false),
       steerDecided: () => Effect.succeed(false),
       latestStep: Effect.succeedNone,
+      admittedLane: () => Effect.succeedNone,
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
@@ -5453,14 +5457,18 @@ describe("loop inbox", () => {
       readonly queue: Effect.Effect<LoopQueueStateType>
       readonly inbox: Effect.Success<ReturnType<typeof makeLoopInbox>>
       readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
+      /** The queue row as stored: the initial queue, until the inbox writes one. */
+      readonly stored: Effect.Effect<LoopQueueStateType>
     }) => Effect.Effect<A, AgentLoopError | FollowUpQueueFull>,
     initial: AgentLoopState = buildInitialAgentLoopState({
       state: buildRunningState({ message: queuedMessage("busy", "busy") }, { startedAtMs: 0 }),
     }),
+    /** The admitted lane each message id's start holds in this process's placement. */
+    grants: ReadonlyMap<string, TurnLane> = new Map(),
   ) =>
     Effect.gen(function* () {
       const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(initial)
-      const rows = yield* Ref.make(emptyLoopQueueState())
+      const rows = yield* Ref.make<LoopQueueStateType>(initial.queue)
       const inbox = yield* makeLoopInbox({
         sessionId: wakeSessionId,
         branchId: wakeBranchId,
@@ -5475,6 +5483,7 @@ describe("loop inbox", () => {
         // The running turn opened on "busy", so its message is stored.
         steerDecided: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
         latestStep: Effect.succeedSome(MessageId.make("busy")),
+        admittedLane: (messageId) => Effect.succeed(Option.fromUndefinedOr(grants.get(messageId))),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),
@@ -5486,6 +5495,7 @@ describe("loop inbox", () => {
         queue: TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue)),
         inbox,
         loopRef,
+        stored: Ref.get(rows),
       })
     })
 
@@ -5598,6 +5608,226 @@ describe("loop inbox", () => {
       }),
     ),
   )
+
+  // A send queued on a cold loop, then retried once the loop is warm and idle:
+  // the retry keeps the first send's decision. Held twice (queued and in
+  // flight), a take-back of the queued copy would leave a start to withdraw.
+  it.effect("a retried queued follow-up is held once", () =>
+    withInbox(
+      ({ inbox, loopRef }) =>
+        Effect.gen(function* () {
+          yield* inbox.admit({ message: queuedMessage("retried", "first") }, { queueOnly: true })
+          const retry = yield* inbox.admit(
+            { message: queuedMessage("retried", "first (retry)") },
+            { queueOnly: false },
+          )
+          expect(retry).toEqual(Option.none())
+          const state = yield* TxSubscriptionRef.get(loopRef)
+          expect(state.queue.inFlight).toBeUndefined()
+          expect(state.startingState).toBeUndefined()
+          expect(state.state._tag).toBe("Idle")
+          expect(
+            state.queue.followUp.map((item) => [
+              String(item.message.id),
+              messagePartsText(item.message.parts),
+            ]),
+          ).toEqual([["retried", "first (retry)"]])
+        }),
+      buildInitialAgentLoopState({ state: buildIdleState() }),
+    ),
+  )
+
+  it.effect("a follow-up that repeats a waiting steer's id is held once", () =>
+    withInbox(
+      ({ inbox, loopRef }) =>
+        Effect.gen(function* () {
+          yield* inbox.steer({ message: queuedMessage("steered", "steer") })
+          const repeat = yield* inbox.admit(
+            { message: queuedMessage("steered", "steer (as follow-up)") },
+            { queueOnly: false },
+          )
+          expect(repeat).toEqual(Option.none())
+          const state = yield* TxSubscriptionRef.get(loopRef)
+          expect(state.queue.inFlight).toBeUndefined()
+          expect(state.startingState).toBeUndefined()
+          expect(state.queue.followUp).toEqual([])
+          expect(state.queue.steering.map((item) => String(item.message.id))).toEqual(["steered"])
+        }),
+      buildInitialAgentLoopState({ state: buildIdleState() }),
+    ),
+  )
+
+  // A follow-up admitted to a lane behind a running turn holds that lane in
+  // its slot. A restart loses the grant from placement memory, and a retry of
+  // the id before the item runs then holds none: the retry must not take the
+  // lane off the held item.
+  it.effect("a retry with no grant keeps the queued run's admitted lane", () =>
+    withInbox(
+      ({ inbox }) =>
+        Effect.gen(function* () {
+          const message = queuedMessage("queued-admitted-run", "run")
+          yield* inbox.admit({ message }, { queueOnly: true })
+          yield* inbox.moveToPhase(buildIdleState())
+          const next = yield* inbox.takeIfIdle
+          expect(Option.map(next, (item) => item.lane)).toEqual(Option.some({}))
+        }),
+      buildInitialAgentLoopState({
+        state: buildRunningState({ message: queuedMessage("busy", "busy") }, { startedAtMs: 0 }),
+        queue: {
+          steering: [],
+          followUp: [{ message: queuedMessage("queued-admitted-run", "run"), lane: {} }],
+        },
+      }),
+    ),
+  )
+
+  // The lane is what admission promised the item's start, so every rewrite
+  // of the held item keeps it until a take runs the item: the retry's own
+  // grant if it holds one, else the held item's lane. Behind a running turn,
+  // so the retry queues; then the loop goes idle and takes it.
+  describe("a held item retried under its own id keeps its admitted lane", () => {
+    const heldLane: TurnLane = {}
+    const grantLane: TurnLane = {
+      sabbath: { latitude: 45.2, longitude: -72.5, timeZone: "America/Toronto" },
+    }
+    const places = ["follow-up", "steer"] as const
+    const retries = ["follow-up", "steer"] as const
+    const cases = places.flatMap((place) =>
+      retries.flatMap((retry) =>
+        [false, true].flatMap((held) =>
+          [false, true].flatMap((grant) => {
+            // The steer verb asks no placement: its retry holds no grant.
+            if (retry === "steer" && grant) return []
+            return [{ place, retry, held, grant }]
+          }),
+        ),
+      ),
+    )
+    const expectedLane = (each: (typeof cases)[number]): Option.Option<TurnLane> => {
+      if (each.grant) return Option.some(grantLane)
+      if (each.held) return Option.some(heldLane)
+      return Option.none()
+    }
+    const laneOf = (item: QueuedTurnItem) => Option.fromUndefinedOr(item.lane)
+    const withOrNo = { true: "with", false: "no" } as const
+    for (const each of cases) {
+      const id = `retried-${each.place}`
+      const heldMessage = queuedMessage(id, "held")
+      const heldItems: Record<"true" | "false", QueuedTurnItem> = {
+        true: { message: heldMessage, lane: heldLane },
+        false: { message: heldMessage },
+      }
+      const heldItem = heldItems[`${each.held}`]
+      const grants = new Map<string, TurnLane>()
+      if (each.grant) grants.set(id, grantLane)
+      it.effect(
+        `held ${each.place}, ${withOrNo[`${each.held}`]} lane, retried as ${each.retry}, ${withOrNo[`${each.grant}`]} grant`,
+        () =>
+          withInbox(
+            ({ inbox, queue, stored }) =>
+              Effect.gen(function* () {
+                const retry: QueuedTurnItem = { message: queuedMessage(id, "retry") }
+                if (each.retry === "steer") yield* inbox.steer(retry)
+                if (each.retry === "follow-up") yield* inbox.admit(retry, { queueOnly: false })
+                const queued = yield* queue
+                const holding = [...queued.steering, ...queued.followUp].filter(
+                  (item) => String(item.message.id) === id,
+                )
+                expect(holding.map(laneOf)).toEqual([expectedLane(each)])
+                yield* inbox.moveToPhase(buildIdleState())
+                const taken = yield* inbox.takeIfIdle
+                expect(Option.map(taken, (item) => String(item.message.id))).toEqual(
+                  Option.some(id),
+                )
+                expect(Option.flatMap(taken, laneOf)).toEqual(expectedLane(each))
+                // The take's slot write is what a restart runs the item from.
+                const slot = Option.fromUndefinedOr((yield* stored).inFlight)
+                expect(Option.map(slot, (item) => String(item.message.id))).toEqual(Option.some(id))
+                expect(Option.flatMap(slot, laneOf)).toEqual(expectedLane(each))
+              }),
+            buildInitialAgentLoopState({
+              state: buildRunningState(
+                { message: queuedMessage("busy", "busy") },
+                { startedAtMs: 0 },
+              ),
+              queue: {
+                steering: [heldItem].filter(() => each.place === "steer"),
+                followUp: [heldItem].filter(() => each.place === "follow-up"),
+              },
+            }),
+            grants,
+          ),
+      )
+    }
+  })
+
+  // An explicit wake is acknowledged when its send returns, and its start
+  // may not have run yet (the actor forks it). So the wake lives on the held
+  // item, in the write that admits the retry, through every later retry of
+  // the id until the take that starts it: a restart with no new send starts
+  // the item from the stored row. Behind a running turn, so nothing starts at
+  // admission; then the loop goes idle and takes it.
+  describe("a held item retried under its own id keeps its acknowledged wake", () => {
+    const places = ["follow-up", "steer"] as const
+    const cases = places.flatMap((place) =>
+      (["follow-up", "steer"] as const).flatMap((retry) =>
+        [false, true].flatMap((heldWake) =>
+          [false, true].map((retryWake) => ({ place, retry, heldWake, retryWake })),
+        ),
+      ),
+    )
+    const withOrNo = { true: "with", false: "no" } as const
+    for (const each of cases) {
+      const id = `woken-${each.place}`
+      const wake = each.heldWake || each.retryWake
+      const heldItem: QueuedTurnItem = { message: queuedMessage(id, "held"), wake: each.heldWake }
+      it.effect(
+        `held ${each.place}, ${withOrNo[`${each.heldWake}`]} wake, retried as ${each.retry}, ${withOrNo[`${each.retryWake}`]} wake`,
+        () =>
+          withInbox(
+            ({ inbox, stored }) =>
+              Effect.gen(function* () {
+                const retry: QueuedTurnItem = {
+                  message: queuedMessage(id, "retry"),
+                  wake: each.retryWake,
+                }
+                if (each.retry === "steer") yield* inbox.steer(retry)
+                if (each.retry === "follow-up") yield* inbox.admit(retry, { queueOnly: false })
+                // The stored row, as a restart reads it before any start ran.
+                const row = yield* stored
+                const holding = [...row.steering, ...row.followUp].filter(
+                  (item) => String(item.message.id) === id,
+                )
+                expect(holding.map((item) => item.wake === true)).toEqual([wake])
+                expect(
+                  Option.map(wantsWakeOnRecovery(row), (wakes) => wakes.unconditional),
+                ).toEqual(Option.some(wake))
+                yield* inbox.moveToPhase(buildIdleState())
+                const taken = yield* inbox.takeIfIdle
+                expect(Option.map(taken, (item) => String(item.message.id))).toEqual(
+                  Option.some(id),
+                )
+                // The take is the start the wake asked for: its own write
+                // clears the wake, and leaves nothing that wakes twice.
+                const slot = (yield* stored).inFlight
+                expect(slot?.message.id).toBe(MessageId.make(id))
+                expect(slot?.wake).toBeUndefined()
+                expect(Option.map(taken, (item) => "wake" in item)).toEqual(Option.some(false))
+              }),
+            buildInitialAgentLoopState({
+              state: buildRunningState(
+                { message: queuedMessage("busy", "busy") },
+                { startedAtMs: 0 },
+              ),
+              queue: {
+                steering: [heldItem].filter(() => each.place === "steer"),
+                followUp: [heldItem].filter(() => each.place === "follow-up"),
+              },
+            }),
+          ),
+      )
+    }
+  })
 
   // The work a restart left starts before anything queued while recovery was
   // deferred: the promotion reserves its start as it ends the deferral, so
@@ -5852,6 +6082,94 @@ describe("queued follow-ups drain", () => {
             // id makes a no-op; the other order loses input the branch accepted.
             expect(yield* Ref.get(transcriptHeldAtDrop)).toStrictEqual(Option.some(true))
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+        )
+      }),
+    15000,
+  )
+
+  // A steer that joined a running turn is answered by that turn and gets no
+  // receipt of its own. A follow-up resent under its id later is settled: a
+  // turn for it would add no message and call the model on nothing new.
+  it.live(
+    "a follow-up resent under a joined steer's id opens no turn",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-joined-steer-resend")
+        const branchId = BranchId.make("branch-joined-steer-resend")
+        const echoTool = tool({
+          id: "echo",
+          description: "Echoes input",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.Struct({ text: Schema.String }),
+          execute: (params) => Effect.succeed({ text: params.text }),
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+          textStep("Done after steering."),
+          textStep("Next answered."),
+        ])
+        const layer = actorTestRoot({
+          provider: providerLayer,
+          storage: testSqliteStorage,
+          registry: makeExtRegistry([echoTool]),
+        })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const messageStorage = yield* MessageStorage
+            const requestId = RequestId.make("req-joined-steer-resend")
+            const steerId = interjectionMessageId(requestId)
+            const fiber = yield* Effect.forkChild(
+              submitAgentLoop(makeMessage(sessionId, branchId, "run a tool")).pipe(Effect.ignore),
+            )
+            yield* controls.waitForCall(0)
+            yield* steerAgentLoop(
+              SteerCommand.cases.Interject.make({
+                sessionId,
+                branchId,
+                requestId,
+                message: "answer this too",
+              }),
+            )
+            yield* controls.emitAll(0)
+            yield* Fiber.join(fiber).pipe(Effect.ignore)
+            yield* waitFor(
+              messageStorage.getMessage(steerId),
+              (message) => message?.metadata?.joinedTurn === true,
+              4_000,
+              "the steer joined the turn",
+            )
+            yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+            expect(yield* controls.callCount).toBe(2)
+            yield* queueAgentLoop(
+              Message.cases.regular.make({
+                id: steerId,
+                sessionId,
+                branchId,
+                role: "user",
+                parts: [Prompt.textPart({ text: "answer this too" })],
+                createdAt: dateFromMillis(1_767_225_600_000),
+              }),
+              true,
+            )
+            // The loop runs one turn at a time, and a wrongly admitted resend
+            // is held before its send returns: a turn sent next runs after it.
+            const next = makeMessage(sessionId, branchId, "next")
+            yield* submitAgentLoop(next)
+            yield* waitFor(
+              messageStorage.getMessage(next.id),
+              (message) => Predicate.isNotUndefined(message?.turnDurationMs),
+              4_000,
+              "the next turn settled",
+            )
+            yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+            const queue = yield* agentLoop.getQueue({ sessionId, branchId })
+            expect({
+              calls: yield* controls.callCount,
+              held: [...queue.steering, ...queue.followUp].length,
+            }).toEqual({ calls: 3, held: 0 })
+            yield* controls.assertDone
+          }).pipe(Effect.timeout("8 seconds"), Effect.provide(layer)),
         )
       }),
     15000,
@@ -7309,21 +7627,24 @@ describe("a failed turn", () => {
   )
 })
 
+/** The text of each user message a model request carries, in order. */
+const promptUserTexts = (prompt: Parameters<typeof Prompt.make>[0]): ReadonlyArray<string> =>
+  Prompt.make(prompt).content.flatMap((message) => {
+    if (message.role !== "user") return []
+    return [
+      message.content
+        .flatMap((part) => {
+          if (part.type !== "text") return []
+          return [part.text]
+        })
+        .join(""),
+    ]
+  })
+
+const lastUserPromptText = (prompt: Parameters<typeof Prompt.make>[0]): string =>
+  Option.getOrElse(Option.fromUndefinedOr(promptUserTexts(prompt).at(-1)), () => "")
+
 describe("queued follow-ups", () => {
-  const lastUserPromptText = (prompt: Parameters<typeof Prompt.make>[0]): string => {
-    const userTexts = Prompt.make(prompt).content.flatMap((message) => {
-      if (message.role !== "user") return []
-      return [
-        message.content
-          .flatMap((part) => {
-            if (part.type !== "text") return []
-            return [part.text]
-          })
-          .join(""),
-      ]
-    })
-    return Option.getOrElse(Option.fromUndefinedOr(userTexts.at(-1)), () => "")
-  }
   const openQueuedFollowUps = (params: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -9200,4 +9521,174 @@ describe("deferred recovery", () => {
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )
+})
+
+// ── an admitted turn across a kill ──────────────────────────────────────────
+//
+// The admission protocol of `ci-repair-model/admission.qnt`, against the real
+// loop over one store: a submit returns once the loop admitted its turn, and
+// its caller replies then (a durable request's reply is stored, so it is not
+// delivered again). Each case submits, kills the process at one point of one
+// turn, starts a new process over the same store, and so on. The oracle is
+// the model's `repliedIsRecoverable`: every submit that returned runs to its
+// end in the last process.
+
+describe("an admitted turn across a kill", () => {
+  /**
+   * Where a process dies: in the admitted turn before it stores its message
+   * (`turn-start`, the turn's first read), inside its model call after it
+   * stored it (`model-call`), or after every turn ended (`none`).
+   */
+  type KillPoint = "turn-start" | "model-call" | "none"
+
+  interface KillCase {
+    /** The messages the first process submits, in order. */
+    readonly texts: ReadonlyArray<string>
+    /** The message whose turn each killed process dies in. */
+    readonly cut: number
+    readonly point: KillPoint
+    /** The processes that die at `point` before one runs to the end. */
+    readonly kills: number
+  }
+
+  const answer = () =>
+    Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })])
+
+  const runKillCase = (name: string, killCase: KillCase) =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make(`kill-${name}`)
+      const branchId = BranchId.make(`kill-${name}-branch`)
+      const messages = killCase.texts.map((text) => makeMessage(sessionId, branchId, text))
+      const cutMessage = messages[killCase.cut]
+      if (Predicate.isUndefined(cutMessage)) return yield* Effect.die("no message to cut")
+      const cutText = killCase.texts[killCase.cut]
+      // One database outlives every process.
+      const storage = yield* Layer.build(testSqliteStorage)
+      const records = Context.get(storage, TurnRecordStorage)
+      const messageStorage = Context.get(storage, MessageStorage)
+      const ran = (message: Message) =>
+        messageStorage
+          .getMessage(message.id)
+          .pipe(
+            Effect.map(
+              (row) =>
+                Predicate.isNotUndefined(row) && Predicate.isNotUndefined(row.turnDurationMs),
+            ),
+          )
+      // A process over the store. One that dies stops in the cut turn at the
+      // kill point and signals `reached`; a clean one never stops.
+      const processLayer = (dies: Option.Option<Deferred.Deferred<void>>) => {
+        const stopAt = (point: KillPoint) => Option.filter(dies, () => killCase.point === point)
+        const stop = (reached: Deferred.Deferred<void>) =>
+          Deferred.succeed(reached, void 0).pipe(Effect.andThen(Effect.never))
+        const processRecords: typeof records = {
+          ...records,
+          get: (key) => {
+            const atTurnStart = stopAt("turn-start")
+            if (key.messageId === cutMessage.id && Option.isSome(atTurnStart)) {
+              return stop(atTurnStart.value)
+            }
+            return records.get(key)
+          },
+        }
+        const provider = LanguageModelLayers.testStream((options) => {
+          const atModelCall = stopAt("model-call")
+          if (
+            Option.isSome(atModelCall) &&
+            promptUserTexts(options.prompt).some((text) => text === cutText)
+          ) {
+            return stop(atModelCall.value)
+          }
+          return Effect.succeed(answer())
+        })
+        const processStorage = Layer.succeedContext(
+          Context.add(storage, TurnRecordStorage, processRecords),
+        )
+        // The event log is stored, as a server's is: recovery reads it.
+        return actorTestRoot({
+          provider,
+          storage: processStorage,
+          eventStore: Layer.provide(EventStoreLive, processStorage),
+        })
+      }
+
+      // The first process: every submit returns (its caller replied), then
+      // the process dies at the kill point.
+      const firstReached = yield* Deferred.make<void>()
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          for (const message of messages) yield* submitAgentLoop(message)
+          if (killCase.point === "none") {
+            for (const message of messages) {
+              yield* waitFor(ran(message), (done) => done, 5_000, `${message.id} ran`)
+            }
+            return
+          }
+          yield* Deferred.await(firstReached)
+        }).pipe(Effect.provide(processLayer(Option.some(firstReached)))),
+      )
+      // The kill lands where the case says: before the cut turn stored its
+      // message, or after.
+      const storedAtKill = Predicate.isNotUndefined(yield* messageStorage.getMessage(cutMessage.id))
+      expect(storedAtKill).toBe(killCase.point !== "turn-start")
+
+      // Each later process that dies opens the loop, which runs the work
+      // the kill left, and dies in the cut turn again.
+      for (let kill = 1; kill < killCase.kills; kill++) {
+        const reached = yield* Deferred.make<void>()
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId, branchId })
+            yield* Deferred.await(reached)
+          }).pipe(Effect.provide(processLayer(Option.some(reached)))),
+        )
+      }
+
+      // The last process runs to the end: every submit that returned ran once.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          yield* agentLoop.getState({ sessionId, branchId })
+          for (const message of messages) {
+            yield* waitFor(ran(message), (done) => done, 5_000, `${message.id} ran after the kill`)
+          }
+          yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+          const users = (yield* messageStorage.listMessages(branchId)).filter((row) =>
+            messages.some((message) => message.id === row.id),
+          )
+          expect(users.map((row) => messagePartsText(row.parts))).toEqual([...killCase.texts])
+        }).pipe(Effect.provide(processLayer(Option.none()))),
+      )
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds"))
+
+  it.live(
+    "a turn admitted and killed before it stores its message runs in the next process",
+    () => runKillCase("admitted", { texts: ["a"], cut: 0, point: "turn-start", kills: 1 }),
+    25_000,
+  )
+
+  // Every case up to two messages and two kills: each message cut at each
+  // kill point, once or twice. A process that lets every turn end dies once.
+  const killCounts: Record<KillPoint, ReadonlyArray<number>> = {
+    "turn-start": [1, 2],
+    "model-call": [1, 2],
+    none: [1],
+  }
+  const cases: ReadonlyArray<KillCase> = [1, 2].flatMap((count) => {
+    const texts = ["a", "b"].slice(0, count)
+    return texts.flatMap((_, cut) =>
+      (["turn-start", "model-call", "none"] as const).flatMap((point) =>
+        killCounts[point].map((kills) => ({ texts, cut, point, kills })),
+      ),
+    )
+  })
+  for (const killCase of cases) {
+    const name = `${killCase.texts.join("")}-${killCase.cut}-${killCase.point}-${killCase.kills}`
+    it.live(
+      `submits ${killCase.texts.join(", ")}; message ${killCase.cut} cut at ${killCase.point}, ${killCase.kills} kill(s): every admitted turn runs`,
+      () => runKillCase(name, killCase),
+      25_000,
+    )
+  }
 })

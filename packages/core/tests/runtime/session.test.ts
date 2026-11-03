@@ -37,7 +37,7 @@ import {
   Session,
   SteerCommand,
 } from "../../src/domain/message"
-import { followUpMessageIdForSource } from "../../src/domain/agent-loop"
+import { followUpMessageIdForSource, interjectionMessageId } from "../../src/domain/agent-loop"
 import { decodeRequestReply } from "../../src/domain/capability"
 import {
   CurrentWorkspaceId,
@@ -158,6 +158,7 @@ const makeClusterRunnerLayer = (storageLayer: typeof testSqliteStorage) =>
 /**
  * The session runtime root over sqlite storage. `toolRunner: "live"` runs the
  * registered tools through `ToolRunner.Live`; the default stubs them.
+ * `storage` is a store an earlier root used, so a new root is a restart.
  */
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
@@ -165,10 +166,11 @@ const makeRuntimeLayer = (
     readonly tools?: ReadonlyArray<ToolCapability>
     readonly profileCache?: Layer.Layer<SessionProfileCache>
     readonly toolRunner?: "test" | "live"
+    readonly storage?: typeof testSqliteStorage
   } = {},
 ) => {
   const registry = ExtensionRegistry.fromResolved(makeTestExtensions(options.tools))
-  const storageLayer = testSqliteStorage
+  const storageLayer = options.storage ?? testSqliteStorage
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -842,6 +844,181 @@ describe("SessionRuntime", () => {
       }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
     }),
   )
+})
+
+// ── a held item retried under its own id ────────────────────────────────────
+//
+// A branch holds an item in its queue: a follow-up its source queued, or a
+// steer that waits. The source sends it again under the same id: to the warm
+// loop that holds it, as the first operation of a new process over the same
+// store, or as the warm loop's last operation (its process closes as the
+// retry returns, and a new process opens the store and sends nothing); while
+// the branch is idle with no history, or while another turn runs; with an
+// explicit wake or without. The loop keeps one copy of the id. An explicit
+// wake, once its send returns, or a turn that ends with the item queued, runs
+// it once; with neither, the idle branch keeps it queued.
+describe("a held item retried under its own id", () => {
+  interface RetryCase {
+    readonly held: "follow-up" | "steer"
+    readonly temperature: "warm" | "cold" | "closing"
+    readonly activity: "idle" | "running"
+    readonly wake: boolean
+  }
+  const BUSY = "the turn that runs"
+  const HELD = "the held item"
+  const SOURCE = "held-source"
+  const cases: ReadonlyArray<RetryCase> = (["follow-up", "steer"] as const).flatMap((held) =>
+    (["warm", "cold", "closing"] as const).flatMap((temperature) =>
+      (["idle", "running"] as const).flatMap((activity) =>
+        [false, true].map((wake) => ({ held, temperature, activity, wake })),
+      ),
+    ),
+  )
+  // A steer's id is its request id and `:interjection`; the follow-up's
+  // source names the same id, so the retry finds the steer.
+  const retrySource = { "follow-up": SOURCE, steer: `${SOURCE}:interjection` }
+
+  const runRetry = (each: RetryCase) =>
+    Effect.gen(function* () {
+      // One database outlives both processes. Its ids are short: a steer's
+      // request id names the follow-up id, and a request id has a length cap.
+      const shared = yield* Layer.build(testSqliteStorage)
+      const storage = Layer.succeedContext(shared)
+      const messageStorage = Context.get(shared, MessageStorage)
+      const target = { sessionId: SessionId.make("retry"), branchId: BranchId.make("retry-b") }
+      // The latest user text of every model call, in order.
+      const calls = yield* Ref.make<ReadonlyArray<string>>([])
+      const busyStarted = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      // `holdsBusy`: the busy turn's model call waits for the gate. A new
+      // process answers every call at once.
+      const model = (holdsBusy: boolean) =>
+        LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            const text = latestUserText(options)
+            yield* Ref.update(calls, (seen) => [...seen, text])
+            if (text === BUSY && holdsBusy) {
+              yield* Deferred.succeed(busyStarted, void 0)
+              yield* Deferred.await(gate)
+            }
+            return Stream.fromIterable([
+              textDeltaPart(`reply: ${text}`),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+      const send = (wake: boolean) =>
+        Effect.gen(function* () {
+          const facade = yield* runtimeHostContext(target)
+          yield* facade.Session.send({
+            delivery: "queue",
+            ...target,
+            sourceId: retrySource[each.held],
+            content: HELD,
+            wake,
+          })
+        })
+      const heldEntries = (queue: QueueSnapshot) =>
+        [...queue.followUp, ...queue.steering].filter((entry) => entry.content === HELD)
+
+      /** Hold the item: queued on an idle branch, or behind a busy turn. */
+      const hold = Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const workspaceId = yield* CurrentWorkspaceId
+        yield* createSessionBranchWithIds(target)
+        const id = followUpMessageIdForSource({
+          workspaceId,
+          ...target,
+          sourceId: retrySource[each.held],
+        })
+        if (each.activity === "running") {
+          yield* sessionRuntime.sendUserMessage({ ...target, content: BUSY })
+          yield* Deferred.await(busyStarted)
+        }
+        if (each.held === "follow-up") yield* send(false)
+        if (each.held === "steer") {
+          const requestId = RequestId.make(
+            followUpMessageIdForSource({ workspaceId, ...target, sourceId: SOURCE }),
+          )
+          expect(interjectionMessageId(requestId)).toBe(id)
+          yield* sessionRuntime.steer(
+            SteerCommand.cases.Interject.make({ ...target, requestId, message: HELD }),
+          )
+        }
+        const held = yield* waitFor(
+          sessionRuntime.getQueuedMessages(target),
+          (queue) => heldEntries(queue).length === 1,
+          3_000,
+          "the item is held",
+        )
+        expect(heldEntries(held).map((entry) => entry.id)).toEqual([id])
+        return id
+      })
+
+      /** Let the busy turn end, and read what ran. */
+      const check = (heldId: MessageId) =>
+        Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          yield* Deferred.succeed(gate, void 0)
+          const seen = Effect.all({
+            calls: Ref.get(calls),
+            queue: sessionRuntime.getQueuedMessages(target),
+            state: currentState(sessionRuntime, target),
+          })
+          if (each.wake || each.activity === "running") {
+            yield* waitFor(
+              seen,
+              (now) =>
+                now.calls.includes(HELD) &&
+                heldEntries(now.queue).length === 0 &&
+                now.state?._tag === "Idle",
+              5_000,
+              "the held item ran",
+            )
+            expect((yield* Ref.get(calls)).filter((text) => text === HELD)).toHaveLength(1)
+            const stored = (yield* messageStorage.listMessages(target.branchId)).filter(
+              (message) =>
+                message.role === "user" &&
+                message.parts.some((part) => part.type === "text" && part.text === HELD),
+            )
+            expect(stored.map((message) => message.id)).toEqual([heldId])
+            return
+          }
+          // A start runs inside the retry, so it would have begun by now.
+          const now = yield* seen
+          expect(now.calls).not.toContain(HELD)
+          expect(heldEntries(now.queue).map((entry) => entry.id)).toEqual([heldId])
+          expect(now.state?._tag).toBe("Idle")
+          expect(yield* messageStorage.getMessage(heldId)).toBeUndefined()
+        })
+
+      const retryAndCheck = (heldId: MessageId) =>
+        send(each.wake).pipe(Effect.andThen(check(heldId)))
+
+      // A warm case holds and retries in one process. A cold case retries as
+      // a new process's first operation; a closing case retries as the first
+      // process's last, so the actor's forked start may never run there. In
+      // both, a busy turn the restart cut short resumes in the new process,
+      // which answers its model at once.
+      const first = makeRuntimeLayer(model(true), { storage })
+      const next = makeRuntimeLayer(model(false), { storage })
+      if (each.temperature === "warm") {
+        return yield* hold.pipe(Effect.flatMap(retryAndCheck), Effect.provide(first))
+      }
+      if (each.temperature === "cold") {
+        const heldId = yield* hold.pipe(Effect.provide(first))
+        return yield* retryAndCheck(heldId).pipe(Effect.provide(next))
+      }
+      const heldId = yield* hold.pipe(Effect.tap(send(each.wake)), Effect.provide(first))
+      return yield* check(heldId).pipe(Effect.provide(next))
+    })
+
+  for (const each of cases) {
+    it.scopedLive(
+      `${each.held}, ${each.temperature}, ${each.activity}, wake ${String(each.wake)}: runs once iff woken or behind a turn`,
+      () => runRetry(each).pipe(Effect.timeout("10 seconds")),
+    )
+  }
 })
 
 // ── session metrics ─────────────────────────────────────────────────────────

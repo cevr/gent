@@ -810,12 +810,18 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
  * A scoped render that also hands back the client its tree reads. `view`
  * mounts after the probe; without it the render holds only the probe. The
  * effect dies when the probe does not mount.
+ *
+ * It loads no client extension unless the test names it in `builtins`: a
+ * shipped extension reads the same server the client does (the machines band
+ * reads `accounts.lanes`, the connect measure's reply), so with them a test
+ * that counts the client's reads, or moves a TestClock in a mock reply,
+ * counts theirs too.
  */
 export const mountClient = (
   options: Parameters<typeof renderWithProviders>[1] & { readonly view?: () => JSX.Element } = {},
 ) =>
   Effect.gen(function* () {
-    const { view, ...renderOptions } = options
+    const { view, builtins = [], ...renderOptions } = options
     let held = Option.none<ClientContextValue>()
     const setup = yield* renderScoped(
       () => (
@@ -824,7 +830,7 @@ export const mountClient = (
           {view?.()}
         </>
       ),
-      renderOptions,
+      { ...renderOptions, builtins },
     )
     if (Option.isNone(held)) return yield* Effect.die("the client probe did not mount")
     return { setup, client: held.value }

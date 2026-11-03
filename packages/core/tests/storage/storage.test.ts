@@ -785,6 +785,9 @@ describe("persisted loop queue format", () => {
           "role": "user",
           "parts": [{ "options": {}, "type": "text", "text": "next" }],
           "createdAt": 1767225600000
+        },
+        "lane": {
+          "sabbath": { "latitude": 45.2, "longitude": -72.5, "timeZone": "America/Toronto" }
         }
       }
     ],
@@ -816,6 +819,7 @@ describe("persisted loop queue format", () => {
       expect(loaded.steering[0]?.wake).toBe(true)
       expect(loaded.steering[0]?.message._tag).toBe("interjection")
       expect(loaded.followUp).toHaveLength(1)
+      expect(loaded.followUp[0]?.lane?.sabbath?.timeZone).toBe("America/Toronto")
       expect(String(loaded.steering[0]?.sender?.sessionId)).toBe("other-session")
       expect(String(loaded.inFlight?.message.id)).toBe("in-flight-1")
     }).pipe(Effect.provide(testSqliteStorage)),
