@@ -1798,7 +1798,8 @@ const toWsUrl = (httpUrl: string): string => httpUrl.replace(/^http(s?):\/\//, "
  * stdout line. It decodes neither; JSON frames hold no raw newline. It ends
  * at stdin's end (a last line with no newline is a frame too) and closes the
  * socket, so the server cancels what still runs, as for any client that
- * closes; it fails as the server closes the socket.
+ * closes; it fails as the server closes the socket, a clean close (1000)
+ * too: a socket's pull fails at every close and never ends.
  */
 const link = Command.make("link", { connect: connectFlag }, (input) =>
   Effect.scoped(
@@ -1822,7 +1823,6 @@ const link = Command.make("link", { connect: connectFlag }, (input) =>
         Stream.map((frame) => `${frame}\n`),
         Stream.run(stdio.stdout()),
         Effect.mapError((error) => new CtlFailed({ message: `link output: ${error.message}` })),
-        Effect.andThen(Effect.fail(new CtlFailed({ message: "the server closed the link" }))),
       )
       yield* Effect.raceFirst(toServer, fromServer)
     }),

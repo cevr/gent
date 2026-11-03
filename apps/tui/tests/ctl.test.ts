@@ -240,6 +240,30 @@ const recordingListener = Effect.gen(function* () {
   return { url: `http://127.0.0.1:${address.port}/rpc`, frames, closed }
 })
 
+/**
+ * A WebSocket listener in place of a server, for `link --connect`, that
+ * closes each socket at once with code 1000: a close with no error.
+ */
+const closingListener = Effect.gen(function* () {
+  const app = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const socket = yield* Effect.orDie(request.upgrade)
+    const { pull } = yield* Effect.orDie(socket.reader)
+    const writer = yield* socket.writer
+    yield* Effect.orDie(writer.write(new Socket.CloseEvent(1000)))
+    yield* pull.pipe(Effect.forever, Effect.ignore)
+    return HttpServerResponse.empty()
+  })
+  const context = yield* Layer.build(
+    HttpServer.serve(app).pipe(
+      Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
+    ),
+  )
+  const address = Context.get(context, HttpServer.HttpServer).address
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
+  return { url: `http://127.0.0.1:${address.port}/rpc` }
+})
+
 /** The one JSON value a successful call printed, decoded as the result `tag` names. */
 const resultAs =
   <Tag extends CtlResult["_tag"]>(tag: Tag) =>
@@ -1134,6 +1158,28 @@ describe("gent ctl against a running server", () => {
             1000,
           )
           expect(yield* Ref.get(listener.frames)).toEqual([first, last])
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "link fails, exit 1, once its server closes the socket with no error while its stdin stays open",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const listener = yield* closingListener
+          const home = yield* makeTempDirectoryScoped("gent-ctl-link-")
+          // A clean close (1000) is still the link's end: the linking
+          // server's link sees its run end and runs its command again.
+          const ended = yield* runCtl(home, ["link", "--connect", listener.url], {
+            stdin: `${helloFrame("1", home)}\n`,
+            holdStdin: true,
+          }).pipe(Effect.timeout("10 seconds"))
+          expect(ended.code).toBe(CTL_EXIT.failed)
+          const error = yield* Schema.decodeEffect(Schema.fromJsonString(ErrorLine))(ended.stderr)
+          expect(error._tag).toBe("CtlFailed")
+          expect(error.message).toContain("link")
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
       ),
     30_000,
