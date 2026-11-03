@@ -2,6 +2,7 @@ import { BunCrypto, BunRuntime, BunServices } from "@effect/platform-bun"
 import solidTransformPlugin from "@opentui/solid/bun-plugin"
 import { Config, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { SecureRandom } from "effect/crypto"
+import { checkoutSource } from "@gent/core/host"
 
 class BuildError extends Schema.TaggedError<BuildError, { readonly brand: unique symbol }>()(
   "BuildError",
@@ -54,9 +55,19 @@ const namedWsReexports: Bun.BunPlugin = {
   },
 }
 
-/** `__GENT_BUILD__`: an object literal the bundler puts where the source names it. */
+/**
+ * `__GENT_BUILD__`: an object literal the bundler puts where the source
+ * names it. `source` names the checkout the build ran in
+ * (`checkoutSource`); a link's contract names its code by it.
+ */
 const encodeBuildDefine = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ id: Schema.String, version: Schema.String })),
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: Schema.String,
+      version: Schema.String,
+      source: Schema.optionalKey(Schema.String),
+    }),
+  ),
 )
 
 const build = Effect.gen(function* () {
@@ -90,6 +101,8 @@ const build = Effect.gen(function* () {
   const { version } = yield* fs
     .readFileString(path.join(rootDir, "package.json"))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageVersion)))
+  const source = yield* checkoutSource(rootDir)
+  yield* Effect.log(`Source: ${Option.getOrElse(source, () => "no checkout")}`)
   const target = yield* compileTarget
   yield* Effect.log(`Compile target: ${Option.getOrElse(target, () => "this host")}`)
   const buildResult = yield* Effect.promise(() =>
@@ -104,7 +117,11 @@ const build = Effect.gen(function* () {
       plugins: [namedWsReexports, solidTransformPlugin],
       minify: false,
       define: {
-        __GENT_BUILD__: encodeBuildDefine({ id, version }),
+        __GENT_BUILD__: encodeBuildDefine({
+          id,
+          version,
+          ...Option.match(source, { onNone: () => ({}), onSome: (name) => ({ source: name }) }),
+        }),
       },
       compile: {
         ...Option.match(target, { onNone: () => ({}), onSome: (name) => ({ target: name }) }),

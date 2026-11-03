@@ -6,6 +6,7 @@
  * extensions read `extensions/api`; tests read `test-utils`.
  */
 export {
+  checkoutSource,
   GentPlatform,
   resolveDataDir,
   type RuntimeModuleSource,

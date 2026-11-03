@@ -6,6 +6,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Logger,
@@ -19,6 +20,7 @@ import {
   Stream,
 } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
+import { Rpc } from "effect/rpc"
 import { TestClock } from "effect/testing"
 import {
   ConfigService,
@@ -26,10 +28,11 @@ import {
   RuntimeEnvironment,
   UserConfig,
 } from "../../src/runtime/config"
-import { GentPlatform } from "../../src/runtime/gent-platform"
+import { GentPlatform, runProcess } from "../../src/runtime/gent-platform"
+import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { PoolFacts } from "../../src/domain/driver"
 import { CredentialPlacement, makeCredentialPlacement } from "../../src/runtime/provider"
-import { Links, linkContract } from "../../src/server/link"
+import { Links, linkContract, rpcContract } from "../../src/server/link"
 import { BunTestServices, makeTempDirectoryScoped } from "../../src/test-utils/harness"
 
 /** The test platform's host name: this server's machine name. */
@@ -918,5 +921,242 @@ describe("the link's state machine", () => {
         ),
       ),
     120_000,
+  )
+})
+
+// ── the link's contract ─────────────────────────────────────────────────────
+
+/** A schema change that changes what decodes, and a value only one side decodes. */
+/** A schema that needs no service to decode or encode. */
+type PlainCodec = Schema.Codec<unknown, unknown>
+
+interface CodecChange {
+  readonly before: PlainCodec
+  readonly after: PlainCodec
+  readonly witness: Schema.Json
+  readonly name: string
+}
+
+/**
+ * The leaf changes: each pair decodes the witness differently. Some JSON
+ * Schema drops (a pattern's flags), some it keeps; the contract must see
+ * each.
+ */
+const LEAF_CHANGES: ReadonlyArray<(random: (below: number) => number) => CodecChange> = [
+  () => ({
+    name: "pattern flags",
+    before: Schema.String.check(Schema.isPattern(/^ab+c$/)),
+    after: Schema.String.check(Schema.isPattern(/^ab+c$/i)),
+    witness: "ABBC",
+  }),
+  () => ({
+    name: "pattern source",
+    before: Schema.String.check(Schema.isPattern(/^a+$/)),
+    after: Schema.String.check(Schema.isPattern(/^b+$/)),
+    witness: "aa",
+  }),
+  (random) => {
+    const length = 1 + random(5)
+    return {
+      name: "minimum length",
+      before: Schema.String.check(Schema.isMinLength(length)),
+      after: Schema.String.check(Schema.isMinLength(length + 1)),
+      witness: "x".repeat(length),
+    }
+  },
+  (random) => {
+    const bound = random(100)
+    return {
+      name: "lower bound",
+      before: Schema.Number.check(Schema.isGreaterThan(bound)),
+      after: Schema.Number.check(Schema.isGreaterThan(bound + 1)),
+      witness: bound + 1,
+    }
+  },
+  () => ({
+    name: "integer check",
+    before: Schema.Number,
+    after: Schema.Number.check(Schema.isInt()),
+    witness: 1.5,
+  }),
+  () => ({
+    name: "literal",
+    before: Schema.Literal("a"),
+    after: Schema.Literal("b"),
+    witness: "a",
+  }),
+  () => ({ name: "keyword", before: Schema.String, after: Schema.Number, witness: "s" }),
+  () => ({
+    name: "optional key",
+    before: Schema.Struct({ key: Schema.String }),
+    after: Schema.Struct({ key: Schema.optionalKey(Schema.String) }),
+    witness: {},
+  }),
+  () => ({
+    name: "key name",
+    before: Schema.Struct({ a: Schema.String }),
+    after: Schema.Struct({ b: Schema.String }),
+    witness: { a: "x" },
+  }),
+  () => ({
+    name: "union member",
+    before: Schema.Literals(["a", "b"]),
+    after: Schema.Literals(["a", "b", "c"]),
+    witness: "c",
+  }),
+  () => ({
+    name: "tuple or array",
+    before: Schema.Tuple([Schema.String]),
+    after: Schema.Array(Schema.String),
+    witness: ["a", "b"],
+  }),
+]
+
+/** A wrapper around a change, keeping its witness the one value only one side decodes. */
+const WRAPPERS: ReadonlyArray<(change: CodecChange) => CodecChange> = [
+  ({ before, after, witness, name }) => ({
+    name: `${name} in a struct`,
+    before: Schema.Struct({ value: before, other: Schema.Boolean }),
+    after: Schema.Struct({ value: after, other: Schema.Boolean }),
+    witness: { value: witness, other: true },
+  }),
+  ({ before, after, witness, name }) => ({
+    name: `${name} in an array`,
+    before: Schema.Array(before),
+    after: Schema.Array(after),
+    witness: [witness],
+  }),
+  ({ before, after, witness, name }) => ({
+    name: `${name} in a tuple`,
+    before: Schema.Tuple([Schema.Boolean, before]),
+    after: Schema.Tuple([Schema.Boolean, after]),
+    witness: [true, witness],
+  }),
+  ({ before, after, witness, name }) => ({
+    name: `${name} in a union with null`,
+    before: Schema.NullOr(before),
+    after: Schema.NullOr(after),
+    witness,
+  }),
+  ({ before, after, witness, name }) => ({
+    name: `${name} in a record`,
+    before: Schema.Record(Schema.String, before),
+    after: Schema.Record(Schema.String, after),
+    witness: { key: witness },
+  }),
+]
+
+/** A generated change: a leaf change under zero to three wrappers. */
+const generateChange = (random: (below: number) => number): CodecChange => {
+  let change = (LEAF_CHANGES[random(LEAF_CHANGES.length)] ?? LEAF_CHANGES[0]!)(random)
+  for (let depth = random(4); depth > 0; depth--)
+    change = (WRAPPERS[random(WRAPPERS.length)] ?? WRAPPERS[0]!)(change)
+  return change
+}
+
+/** One RPC whose payload is `payload`: the contract of a group of one. */
+const payloadContract = (payload: Schema.Top) =>
+  rpcContract([Rpc.make("probe", { payload, success: Schema.Void })])
+
+const decodes = (schema: PlainCodec, value: Schema.Json) =>
+  Exit.isSuccess(Schema.decodeUnknownExit(Schema.toCodecJson(schema))(value))
+
+/** The test platform with `source` as its source: a checkout's name, or none. */
+const withSource = (source: Option.Option<string>) =>
+  Effect.provideServiceEffect(
+    GentPlatform,
+    Effect.gen(function* () {
+      const platform = yield* GentPlatform
+      return GentPlatform.of({ ...platform, source: Effect.succeed(source) })
+    }),
+  )
+
+const CONTRACT_PAIRS = 400
+const CONTRACT_SEED = 20_261_103
+
+describe("the link's contract", () => {
+  it.effect(
+    `${CONTRACT_PAIRS} generated schema pairs that decode a value differently have different contracts`,
+    () =>
+      Effect.gen(function* () {
+        const random = seeded(CONTRACT_SEED)
+        const seen = new Set<string>()
+        for (let pair = 0; pair < CONTRACT_PAIRS; pair++) {
+          const change = generateChange(random)
+          seen.add(change.name.split(" in ")[0] ?? "")
+          // The premise: the two sides decode the witness differently.
+          expect(
+            [decodes(change.before, change.witness), decodes(change.after, change.witness)],
+            change.name,
+          ).not.toEqual([true, true])
+          expect(decodes(change.before, change.witness), change.name).not.toBe(
+            decodes(change.after, change.witness),
+          )
+          const before = yield* payloadContract(change.before)
+          const after = yield* payloadContract(change.after)
+          expect(before === after, change.name).toBe(false)
+        }
+        expect(seen.size).toBe(LEAF_CHANGES.length)
+      }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.effect("one generated schema, built twice, has one contract", () =>
+    Effect.gen(function* () {
+      for (let pair = 0; pair < 50; pair++) {
+        const first = generateChange(seeded(CONTRACT_SEED + pair))
+        const second = generateChange(seeded(CONTRACT_SEED + pair))
+        expect(yield* payloadContract(first.after)).toBe(yield* payloadContract(second.after))
+      }
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.effect(
+    "code in a codec binds the contract to the source; with no source it matches no other",
+    () =>
+      Effect.gen(function* () {
+        // A transformation is code: only the source names it.
+        const coded = Schema.Struct({ count: Schema.NumberFromString })
+        const atA = yield* payloadContract(coded).pipe(withSource(Option.some("a")))
+        const atAAgain = yield* payloadContract(coded).pipe(withSource(Option.some("a")))
+        const atB = yield* payloadContract(coded).pipe(withSource(Option.some("b")))
+        expect(atA).toBe(atAAgain)
+        expect(atA).not.toBe(atB)
+        const unnamed = yield* payloadContract(coded).pipe(withSource(Option.none()))
+        const unnamedAgain = yield* payloadContract(coded).pipe(withSource(Option.none()))
+        expect(unnamed).not.toBe(unnamedAgain)
+        // Every RPC holds code (its exit, its defect): a payload of data names no source either.
+        const data = Schema.Struct({ count: Schema.Number.check(Schema.isInt()) })
+        expect(yield* payloadContract(data).pipe(withSource(Option.none()))).not.toBe(
+          yield* payloadContract(data).pipe(withSource(Option.none())),
+        )
+        // A check Effect does not name is code too.
+        const custom = Schema.String.check(Schema.makeFilter((text: string) => text.length > 1))
+        expect(yield* payloadContract(custom).pipe(withSource(Option.some("a")))).not.toBe(
+          yield* payloadContract(custom).pipe(withSource(Option.some("b"))),
+        )
+      }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.live(
+    "two fresh processes of this checkout compute this process's contract",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const script = yield* path.fromFileUrl(new URL("./link-contract.ts", import.meta.url))
+        const own = yield* linkContract.pipe(Effect.provide(BunGentPlatformLive))
+        const fresh = yield* Effect.forEach(
+          [1, 2],
+          () =>
+            runProcess(process.execPath, [script]).pipe(
+              Effect.map(({ stdout, exitCode }) => ({ contract: stdout.trim(), exitCode })),
+            ),
+          { concurrency: 2 },
+        )
+        expect(fresh).toEqual([
+          { contract: own, exitCode: 0 },
+          { contract: own, exitCode: 0 },
+        ])
+      }).pipe(Effect.provide(BunTestServices)),
+    30_000,
   )
 })

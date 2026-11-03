@@ -25,11 +25,12 @@ import {
   Ref,
   Schedule,
   Schema,
+  type SchemaAST,
   Stream,
 } from "effect"
 import type { Headers } from "effect/http"
 import { ChildProcess } from "effect/process"
-import { RpcClient, RpcSchema, RpcSerialization } from "effect/rpc"
+import { Rpc, RpcClient, RpcSchema, RpcSerialization } from "effect/rpc"
 import { Socket } from "effect/socket"
 import type { LinkView } from "../domain/driver.js"
 import { causeMessage } from "../domain/guards.js"
@@ -42,34 +43,251 @@ import { LINK_ORIGIN_HEADER, workspaceHeadersForCwd } from "./workspace-rpc.js"
 // ── contract ────────────────────────────────────────────────────────────────
 
 /**
- * The hash of this build's RPC contract: each RPC's tag and the JSON schema
- * of its payload, success (a stream's element and error) and error, sorted
- * by tag. Two servers whose hashes match decode each other's frames. About
- * 340 KB of schema text, hashed in 15 to 55 ms on the laptop; `Links`
- * computes it once.
+ * A codec as data: a fact is a string or a list of facts. A node's facts
+ * name each child node by the child's place in the walk.
  */
-const encodeContractEntry = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+type CodecFact = string | ReadonlyArray<CodecFact>
 
-export const linkContract: Effect.Effect<string, never, GentPlatform> = Effect.gen(function* () {
-  const platform = yield* GentPlatform
-  const document = (schema: Schema.Top) => Schema.toJsonSchemaDocument(schema)
-  const success = (schema: Schema.Top) => {
-    if (RpcSchema.isStreamSchema(schema))
-      return ["stream", document(schema.success), document(schema.error)]
-    return ["once", document(schema)]
+/**
+ * One walk over a codec's AST. Each node is described once, at its place; a
+ * node met again, a recursive one among them, is named by that place.
+ */
+interface CodecWalk {
+  readonly nodes: Array<CodecFact>
+  readonly places: Map<SchemaAST.AST, number>
+}
+
+/**
+ * A fact that is code, not data: a declaration's parser, a transformation, a
+ * check Effect does not name, a value that is no JSON. Only the source that
+ * holds the code names it (`linkContract`).
+ */
+const opaqueFact = (what: string): CodecFact => ["opaque", what]
+
+/** A symbol is data only when registered: its key names it in every process. */
+const symbolFact = (walk: CodecWalk, symbol: symbol): CodecFact =>
+  Option.match(Option.fromUndefinedOr(Symbol.keyFor(symbol)), {
+    onNone: () => opaqueFact("symbol"),
+    onSome: (key) => ["symbol", key],
+  })
+
+/**
+ * A value as data: a check's payload (JSON), a literal (a bigint too) or a
+ * key (a symbol too). An object that is not a plain record is no JSON,
+ * whatever its type says: it is opaque.
+ */
+type FactValue = Schema.Json | bigint | symbol
+
+/** `Array.isArray` narrows to a mutable array only; JSON's arrays are readonly. */
+const isJsonArray = (value: Schema.JsonArray | Schema.JsonObject): value is Schema.JsonArray =>
+  Array.isArray(value)
+
+const valueFact = (walk: CodecWalk, value: FactValue): CodecFact => {
+  if (Predicate.isString(value)) return ["string", value]
+  if (Predicate.isNumber(value)) {
+    if (Object.is(value, -0)) return ["number", "-0"]
+    return ["number", String(value)]
   }
-  const entries = [...GentRpcs.requests.values()]
-    .map((rpc) =>
-      encodeContractEntry([
-        rpc._tag,
-        document(rpc.payloadSchema),
-        success(rpc.successSchema),
-        document(rpc.errorSchema),
-      ]),
-    )
-    .sort()
-  return platform.hash("sha256", entries.join("\n"))
-})
+  if (Predicate.isBoolean(value)) return ["boolean", String(value)]
+  if (Predicate.isBigInt(value)) return ["bigint", String(value)]
+  if (Predicate.isNull(value)) return ["null"]
+  if (Predicate.isSymbol(value)) return symbolFact(walk, value)
+  if (isJsonArray(value)) return ["array", ...value.map((item) => valueFact(walk, item))]
+  const prototype: object = Object.getPrototypeOf(value) ?? Object.prototype
+  if (prototype !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+    return opaqueFact("value")
+  }
+  const record: Schema.JsonObject = value
+  const keys = Object.keys(record).sort()
+  return ["record", ...keys.map((key): CodecFact => [key, valueFact(walk, record[key] ?? "")])]
+}
+
+/**
+ * A check, by what it runs. Effect's own checks name their run: the
+ * representation `effect/schema/...` and its payload (a pattern's source and
+ * flags, a bound) rebuild the same filter. Another check's representation is
+ * a name its author chose, not its run, and a check with none is a function
+ * only: both are opaque.
+ */
+const checkFact = (walk: CodecWalk, check: SchemaAST.Checks[number]): CodecFact => {
+  const structural = String(check.annotations?.["~structural"] === true)
+  if (check._tag === "FilterGroup") {
+    return ["group", structural, ...check.checks.map((inner) => checkFact(walk, inner))]
+  }
+  const representation = Option.fromUndefinedOr(check.annotations?.representation).pipe(
+    Option.filter(({ id }) => id.startsWith("effect/")),
+  )
+  if (Option.isNone(representation)) return opaqueFact("check")
+  const schemas = representation.value.schemas ?? []
+  return [
+    "check",
+    representation.value.id,
+    valueFact(walk, representation.value.payload),
+    structural,
+    String(check.aborted),
+    ...schemas.map((schema) => String(visit(walk, schema))),
+  ]
+}
+
+const checksFact = (
+  walk: CodecWalk,
+  checks: ReadonlyArray<SchemaAST.Checks[number]>,
+): CodecFact => ["checks", ...checks.map((check) => checkFact(walk, check))]
+
+const placesFact = (walk: CodecWalk, asts: ReadonlyArray<SchemaAST.AST>): CodecFact =>
+  asts.map((ast) => String(visit(walk, ast)))
+
+/** What a node is, by its kind: the facts its parser reads besides checks, encoding and context. */
+const kindFact = (walk: CodecWalk, ast: SchemaAST.AST): CodecFact => {
+  switch (ast._tag) {
+    case "Declaration":
+      return [
+        "Declaration",
+        opaqueFact("declaration"),
+        placesFact(walk, ast.typeParameters),
+        checksFact(walk, ast.encodingChecks ?? []),
+      ]
+    case "Literal":
+      return ["Literal", valueFact(walk, ast.literal)]
+    case "UniqueSymbol":
+      return ["UniqueSymbol", symbolFact(walk, ast.symbol)]
+    case "Enum":
+      return [
+        "Enum",
+        ...ast.enums.map(([name, value]): CodecFact => [name, valueFact(walk, value)]),
+      ]
+    case "TemplateLiteral":
+      return ["TemplateLiteral", placesFact(walk, ast.parts)]
+    case "Arrays":
+      return [
+        "Arrays",
+        String(ast.isMutable),
+        placesFact(walk, ast.elements),
+        placesFact(walk, ast.rest),
+        checksFact(walk, ast.encodingChecks ?? []),
+      ]
+    case "Objects":
+      return [
+        "Objects",
+        ast.propertySignatures.map((property): CodecFact => [
+          valueFact(walk, property.name),
+          String(visit(walk, property.type)),
+        ]),
+        ast.indexSignatures.map((index): CodecFact => [
+          String(visit(walk, index.parameter)),
+          String(visit(walk, index.type)),
+        ]),
+        checksFact(walk, ast.encodingChecks ?? []),
+      ]
+    case "Union":
+      return [
+        "Union",
+        ast.options?.mode ?? "anyOf",
+        placesFact(walk, ast.types),
+        checksFact(walk, ast.encodingChecks ?? []),
+      ]
+    case "Suspend":
+      return ["Suspend", String(visit(walk, ast.thunk()))]
+    default:
+      return [ast._tag]
+  }
+}
+
+/**
+ * A node's place in the walk, described on first meeting: its shape, its
+ * checks, each step of its encoding (the encoded node, and the
+ * transformation as code), and whether it is an optional or mutable key.
+ */
+const visit = (walk: CodecWalk, ast: SchemaAST.AST): number => {
+  const known = walk.places.get(ast)
+  if (Predicate.isNumber(known)) return known
+  const place = walk.nodes.length
+  walk.places.set(ast, place)
+  walk.nodes.push("")
+  const encoding = ast.encoding ?? []
+  walk.nodes[place] = [
+    kindFact(walk, ast),
+    checksFact(walk, ast.checks ?? []),
+    encoding.map((link): CodecFact => [String(visit(walk, link.to)), opaqueFact("transformation")]),
+    Option.match(Option.fromUndefinedOr(ast.context), {
+      onNone: () => [],
+      onSome: (context): CodecFact => [String(context.isOptional), String(context.isMutable)],
+    }),
+  ]
+  return place
+}
+
+const encodeFacts = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+/** What the contract reads of an RPC: what `Rpc.exitSchema` and the serialization read. */
+interface ContractRpc {
+  readonly _tag: string
+  readonly payloadSchema: Schema.Top
+  readonly successSchema: Schema.Top
+  readonly errorSchema: Schema.Top
+  readonly defectSchema: Schema.Top
+  readonly annotations: Context.Context<never>
+  readonly middlewares: ReadonlySet<{ readonly error: Schema.Top }>
+}
+
+/**
+ * One RPC as the wire decodes it: its tag, its parse options, and the JSON
+ * codecs of its payload, its success (or a stream's chunk and error), its
+ * error, each middleware's error and its defect: the parts of its exit
+ * (`Rpc.exitSchema`).
+ */
+const rpcFacts = (rpc: ContractRpc) => {
+  const walk: CodecWalk = { nodes: [], places: new Map() }
+  const codec = (schema: Schema.Top) => String(visit(walk, Schema.toCodecJson(schema).ast))
+  let success: CodecFact = ["once", codec(rpc.successSchema)]
+  if (RpcSchema.isStreamSchema(rpc.successSchema)) {
+    success = ["stream", codec(rpc.successSchema.success), codec(rpc.successSchema.error)]
+  }
+  const roots: CodecFact = [
+    rpc._tag,
+    encodeFacts(Context.get(rpc.annotations, Rpc.ParseOptions)),
+    codec(rpc.payloadSchema),
+    success,
+    codec(rpc.errorSchema),
+    [...rpc.middlewares].map((middleware) => codec(middleware.error)),
+    codec(rpc.defectSchema),
+  ]
+  return encodeFacts([roots, walk.nodes])
+}
+
+/**
+ * The contract of `rpcs`: what each RPC's codecs decode, sorted by tag, and
+ * the source that holds their code, hashed. Two servers whose contracts
+ * match decode each other's frames the same way.
+ *
+ * Data is described as data: every node's kind, each literal, key, optional
+ * and mutable mark, union mode, element and rest, and every check Effect
+ * names, with its payload (a pattern's source and flags). Code is not data: a
+ * declaration's parser and a transformation are functions, and a function's
+ * text does not name what it closes over. Every RPC's codec holds code (its
+ * exit is a declaration, its defect a transformation), so the contract names
+ * that code by the source that holds it (`GentPlatform.source`: the
+ * checkout's commit and its uncommitted changes, or the one a compiled build
+ * embeds). With no source to name it, the contract names a value fresh to
+ * this process, and no other machine matches it: the link stays incompatible
+ * rather than connect two builds whose codecs may differ.
+ */
+export const rpcContract = (
+  rpcs: ReadonlyArray<ContractRpc>,
+): Effect.Effect<string, never, GentPlatform> =>
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    const source = yield* Option.match(yield* platform.source, {
+      onNone: () => platform.randomId.pipe(Effect.map((id) => `process ${id}`)),
+      onSome: (name) => Effect.succeed(`source ${name}`),
+    })
+    return platform.hash("sha256", [source, ...rpcs.map(rpcFacts).sort()].join("\n"))
+  })
+
+/** This server's contract: `GentRpcs`'s. `Links` computes it once. */
+export const linkContract: Effect.Effect<string, never, GentPlatform> = rpcContract([
+  ...GentRpcs.requests.values(),
+])
 
 // ── transport ───────────────────────────────────────────────────────────────
 

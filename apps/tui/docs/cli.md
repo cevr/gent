@@ -283,8 +283,9 @@ serves every machine; each server runs every entry but its own name
 ```
 
 Each run asks the far server's `link.hello` first: its machine name and its
-RPC contract. A build with another contract makes the link `incompatible` and
-nothing else runs. Over a connected link the pool's facts cross both ways
+RPC contract: its codecs and the source that holds their code (one commit
+and the same uncommitted files). A build with another contract makes the link
+`incompatible` and nothing else runs. Over a connected link the pool's facts cross both ways
 (docs/architecture/lanes.md, docs/architecture/server.md). A run that ends, or
 that brings no frame for 90 s, runs again after 1 s, the wait doubling to 5
 minutes. The server reads the machines at start (a new one takes a server

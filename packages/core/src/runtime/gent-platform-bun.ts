@@ -43,6 +43,7 @@ import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { AuthError, ProviderLock } from "./provider.js"
 import { FetchHttpClient } from "effect/http"
 import {
+  checkoutSource,
   GentBuild,
   GentPlatform,
   ImageCodecError,
@@ -62,19 +63,45 @@ import {
  */
 declare const __GENT_BUILD__: unknown
 
-/** An undeclared symbol throws a ReferenceError: a source run. */
-const thisBuild: GentBuild = Result.try(() => __GENT_BUILD__).pipe(
+/**
+ * The compiled build's define: its id, its version, and the name of the
+ * checkout it was built from (`checkoutSource`) when the build had one. An
+ * undeclared symbol throws a ReferenceError: a source run.
+ */
+const compiledDefine = Result.try(() => __GENT_BUILD__).pipe(
   Result.getSuccess,
   Option.flatMap(
     Schema.decodeUnknownOption(
-      Schema.Struct({ id: Schema.NonEmptyString, version: Schema.NonEmptyString }),
+      Schema.Struct({
+        id: Schema.NonEmptyString,
+        version: Schema.NonEmptyString,
+        source: Schema.optionalKey(Schema.NonEmptyString),
+      }),
     ),
   ),
-  Option.match({
-    onNone: () => GentBuild.cases.Source.make({}),
-    onSome: (fields) => GentBuild.cases.Compiled.make(fields),
-  }),
 )
+
+const thisBuild: GentBuild = Option.match(compiledDefine, {
+  onNone: () => GentBuild.cases.Source.make({}),
+  onSome: ({ id, version }) => GentBuild.cases.Compiled.make({ id, version }),
+})
+
+/**
+ * The source this process runs: the compiled build's embedded name, or the
+ * name of the checkout this file sits in, read once. A compiled build with
+ * no embedded name has none: its embedded file path is no checkout.
+ */
+const thisSource: Effect.Effect<Option.Option<string>> = Option.match(compiledDefine, {
+  onNone: () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      return yield* checkoutSource(yield* path.fromFileUrl(new URL(".", import.meta.url)))
+    }).pipe(
+      Effect.orElseSucceed(() => Option.none<string>()),
+      Effect.provide(BunServices.layer),
+    ),
+  onSome: (define) => Effect.succeed(Option.fromUndefinedOr(define.source)),
+})
 
 /**
  * The real path of the running executable, resolved once as the process
@@ -264,47 +291,52 @@ const transcodeBunImage = (bytes: Uint8Array, options: ImageTranscode) =>
     }),
   )
 
-export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
+export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.effect(
   GentPlatform,
-  GentPlatform.of({
-    bindModules: bindBunModules,
+  Effect.gen(function* () {
+    const source = yield* Effect.cached(thisSource)
+    return GentPlatform.of({
+      bindModules: bindBunModules,
 
-    bundleModule: bundleBunModule,
+      bundleModule: bundleBunModule,
 
-    serveModule: serveBunModule,
+      serveModule: serveBunModule,
 
-    // oxlint-disable-next-line effect/noGlobals -- GentPlatform.randomId is the one owner of Bun's UUIDv7
-    randomId: Effect.sync(() => Bun.randomUUIDv7()),
+      // oxlint-disable-next-line effect/noGlobals -- GentPlatform.randomId is the one owner of Bun's UUIDv7
+      randomId: Effect.sync(() => Bun.randomUUIDv7()),
 
-    osInfo: Effect.sync(() => ({
-      platform: os.platform(),
-      arch: os.arch(),
-      release: os.release(),
-      hostname: os.hostname(),
-      type: os.type(),
-    })),
+      osInfo: Effect.sync(() => ({
+        platform: os.platform(),
+        arch: os.arch(),
+        release: os.release(),
+        hostname: os.hostname(),
+        type: os.type(),
+      })),
 
-    pid: Effect.sync(() => process.pid),
+      pid: Effect.sync(() => process.pid),
 
-    execPath: Effect.succeed(executablePath),
+      execPath: Effect.succeed(executablePath),
 
-    build: Effect.succeed(thisBuild),
+      build: Effect.succeed(thisBuild),
 
-    homeDirectory: Effect.sync(() => os.homedir()),
+      source,
 
-    signal: (pid, signal) =>
-      Effect.try({
-        try: () => {
-          process.kill(pid, signal)
-        },
-        catch: (cause) => new SignalError({ pid, signal, reason: causeMessage(cause) }),
-      }),
+      homeDirectory: Effect.sync(() => os.homedir()),
 
-    hash: (algorithm, input) => new Bun.CryptoHasher(algorithm).update(input).digest("hex"),
+      signal: (pid, signal) =>
+        Effect.try({
+          try: () => {
+            process.kill(pid, signal)
+          },
+          catch: (cause) => new SignalError({ pid, signal, reason: causeMessage(cause) }),
+        }),
 
-    transcodeImage: transcodeBunImage,
+      hash: (algorithm, input) => new Bun.CryptoHasher(algorithm).update(input).digest("hex"),
 
-    loopbackServer: (port) => BunHttpServer.layerServer({ port, hostname: "127.0.0.1" }),
+      transcodeImage: transcodeBunImage,
+
+      loopbackServer: (port) => BunHttpServer.layerServer({ port, hostname: "127.0.0.1" }),
+    })
   }),
 )
 

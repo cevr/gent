@@ -180,6 +180,13 @@ interface GentPlatformApi {
   readonly execPath: Effect.Effect<string>
   /** The build this process runs: `Compiled` with its id and version, or `Source`. */
   readonly build: Effect.Effect<GentBuild>
+  /**
+   * The source this process runs, named as `checkoutSource` names a
+   * checkout: the compiled gent carries the name of the checkout it was
+   * built from, a source run reads its own checkout once. None when
+   * neither names it. A link's contract names its code by it.
+   */
+  readonly source: Effect.Effect<Option.Option<string>>
   readonly homeDirectory: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
@@ -236,6 +243,7 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
           build: Effect.succeed(GentBuild.cases.Source.make({})),
+          source: Effect.succeed(Option.some("test-source")),
           homeDirectory: Effect.succeed("/nonexistent/gent-test-home"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.
@@ -458,6 +466,80 @@ export const runProcess = (
     }),
   )
 }
+
+// ── checkout source ─────────────────────────────────────────────────────────
+
+/** A git command's stdout in `cwd`; a failed or non-zero run fails. */
+const gitOutput = (
+  cwd: string,
+  args: ReadonlyArray<string>,
+  stdin: Option.Option<string> = Option.none(),
+): Effect.Effect<string, ProcessError, ChildProcessSpawner.ChildProcessSpawner> =>
+  runProcess("git", args, {
+    cwd,
+    stderr: "ignore",
+    ...Option.match(stdin, {
+      onNone: () => ({ stdin: "ignore" as const }),
+      onSome: (text) => ({ stdin: Stream.make(new TextEncoder().encode(text)) }),
+    }),
+  }).pipe(
+    Effect.flatMap((result) => {
+      if (result.exitCode === 0) return Effect.succeed(result.stdout)
+      return Effect.fail(
+        new ProcessError({
+          command: "git",
+          message: `git ${args.join(" ")} exited ${String(result.exitCode)}`,
+        }),
+      )
+    }),
+  )
+
+/**
+ * The source in the git checkout that holds `directory`, as one name: its
+ * commit, then a git object id over that commit, the binary diff of every
+ * tracked change against it, and each untracked file's path and content id.
+ * Two checkouts with one name hold the same files, the ignored ones aside:
+ * the installed packages in `node_modules` are not named. None when
+ * `directory` is in no checkout or git fails. A source run names its code by
+ * it, and the build embeds it in the compiled gent (`GentPlatform.source`).
+ */
+export const checkoutSource = (
+  directory: string,
+): Effect.Effect<Option.Option<string>, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const [top = "", commit = ""] = (yield* gitOutput(directory, [
+      "rev-parse",
+      "--show-toplevel",
+      "HEAD",
+    ])).split("\n")
+    const diff = yield* gitOutput(top, [
+      "diff",
+      "HEAD",
+      "--binary",
+      "--full-index",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-color",
+    ])
+    const untracked = (yield* gitOutput(top, ["ls-files", "--others", "--exclude-standard", "-z"]))
+      .split("\0")
+      .filter((file) => file.length > 0)
+    let contents: ReadonlyArray<string> = []
+    if (untracked.length > 0) {
+      contents = (yield* gitOutput(
+        top,
+        ["hash-object", "--stdin-paths"],
+        Option.some(untracked.join("\n")),
+      )).split("\n")
+    }
+    const files = untracked.map((file, index) => `${file}\0${contents[index] ?? ""}`)
+    const named = yield* gitOutput(
+      top,
+      ["hash-object", "--stdin"],
+      Option.some([commit, diff, ...files].join("\0\n")),
+    )
+    return Option.some(`${commit}+${named.trim()}`)
+  }).pipe(Effect.orElseSucceed(() => Option.none<string>()))
 
 // ── write-file-atomic ───────────────────────────────────────────────────────
 
