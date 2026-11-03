@@ -4,7 +4,7 @@
  * call finds that server through the data directory's lock, as a shell does.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { BunServices, BunSocket } from "@effect/platform-bun"
+import { BunHttpServer, BunServices, BunSocket } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
 import { ReviewRound } from "@gent/extensions/client"
 import {
@@ -33,21 +33,28 @@ import {
   Cause,
   Clock,
   ConfigProvider,
+  Context,
+  Deferred,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Option,
   Order,
+  Predicate,
   Ref,
   Runtime,
   Schedule,
   Schema,
+  Scope,
   Sink,
   Stdio,
   Stream,
   Tracer,
 } from "effect"
+import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
+import { Socket } from "effect/socket"
 import { CTL_EXIT, CtlResult, runCtlCli } from "../src/ctl"
 
 // ── harness ─────────────────────────────────────────────────────────────────
@@ -62,8 +69,9 @@ interface CtlRun {
  * Run `gent ctl <args>` through its process boundary with `HOME` set to
  * `home`; collect its exit code and streams. `brokenStdout` makes a write to
  * stdout die, as a closed pipe can. `stdout` lets a test read stdout while
- * the call still runs. `stdin` is what the call reads on its stdin, which
- * then closes (`holdStdin`: stays open); none by default. `clock` is the call's own clock, not the
+ * the call still runs. `stdin` is what the call reads on its stdin, one
+ * read for a string, one read each for an array's parts, which then closes
+ * (`holdStdin`: stays open); none by default. `clock` is the call's own clock, not the
  * server's; the wall clock by default. `tracer` takes the call's spans, one
  * per RPC it sends. `env` adds variables to the call's environment.
  */
@@ -73,7 +81,7 @@ const runCtl = (
   options: {
     readonly brokenStdout?: boolean
     readonly stdout?: Ref.Ref<string>
-    readonly stdin?: string
+    readonly stdin?: string | ReadonlyArray<string>
     readonly holdStdin?: boolean
     readonly clock?: Clock.Clock
     readonly tracer?: Tracer.Tracer
@@ -93,7 +101,10 @@ const runCtl = (
       onNone: () => clocked,
       onSome: (tracer) => clocked.pipe(Effect.withTracer(tracer)),
     })
-    let stdin = Stream.make(new TextEncoder().encode(options.stdin ?? ""))
+    let reads: ReadonlyArray<string> = [""]
+    if (Predicate.isString(options.stdin)) reads = [options.stdin]
+    else if (Predicate.isNotUndefined(options.stdin)) reads = options.stdin
+    let stdin = Stream.fromIterable(reads.map((read) => new TextEncoder().encode(read)))
     if (options.holdStdin === true) stdin = Stream.concat(stdin, Stream.never)
     const exit = yield* cli.pipe(
       Effect.provide(
@@ -198,6 +209,36 @@ const repliesUntil = (out: Ref.Ref<string>, count: number) =>
     }),
     Effect.timeout("10 seconds"),
   )
+
+/**
+ * A WebSocket listener in place of a server, for `link --connect`: each
+ * message it took, in order, and the close code that ended them.
+ */
+const recordingListener = Effect.gen(function* () {
+  const frames = yield* Ref.make<ReadonlyArray<string>>([])
+  const closed = yield* Deferred.make<number>()
+  const app = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const pull = yield* Socket.readerString(yield* Effect.orDie(request.upgrade))
+    yield* pull.pipe(
+      Effect.flatMap((batch) => Ref.update(frames, (kept) => [...kept, ...batch])),
+      Effect.forever,
+      Effect.catchReason("SocketError", "SocketCloseError", (close) =>
+        Deferred.succeed(closed, close.code),
+      ),
+      Effect.orDie,
+    )
+    return HttpServerResponse.empty()
+  })
+  const context = yield* Layer.build(
+    HttpServer.serve(app).pipe(
+      Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
+    ),
+  )
+  const address = Context.get(context, HttpServer.HttpServer).address
+  if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
+  return { url: `http://127.0.0.1:${address.port}/rpc`, frames, closed }
+})
 
 /** The one JSON value a successful call printed, decoded as the result `tag` names. */
 const resultAs =
@@ -1040,6 +1081,62 @@ describe("gent ctl against a running server", () => {
         expect({ code: help.code, stderr: help.stderr }).toEqual({ code: CTL_EXIT.ok, stderr: "" })
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     ),
+  )
+
+  it.live(
+    "link fails, exit 1, once its server stops while its stdin stays open",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const serverScope = yield* Scope.make()
+          const { home } = yield* serveScratchHome.pipe(Scope.provide(serverScope))
+          const out = yield* Ref.make("")
+          const relay = yield* runCtl(home, ["link"], {
+            stdout: out,
+            stdin: `${helloFrame("1", home)}\n`,
+            holdStdin: true,
+          }).pipe(Effect.forkScoped)
+          yield* repliesUntil(out, 1)
+          yield* Scope.close(serverScope, Exit.void)
+          // The relay ends with the server, its stdin still open: the linking
+          // server's link sees the run end and runs its command again.
+          const ended = yield* Fiber.join(relay).pipe(Effect.timeout("10 seconds"))
+          expect(ended.code).toBe(CTL_EXIT.failed)
+          const error = yield* Schema.decodeEffect(Schema.fromJsonString(ErrorLine))(ended.stderr)
+          expect(error._tag).toBe("CtlFailed")
+          expect(error.message).toContain("link")
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "link sends a frame split across two reads just before its stdin's end as one frame, then closes the socket, exit 0",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const listener = yield* recordingListener
+          const home = yield* makeTempDirectoryScoped("gent-ctl-link-")
+          const first = helloFrame("1", home)
+          const last = helloFrame("2", home)
+          const half = Math.floor(last.length / 2)
+          // The second read ends the first frame's line: no newline after the last.
+          const ended = yield* runCtl(home, ["link", "--connect", listener.url], {
+            stdin: [`${first}\n${last.slice(0, half)}`, last.slice(half)],
+          }).pipe(Effect.timeout("10 seconds"))
+          expect({ code: ended.code, stderr: ended.stderr }).toEqual({
+            code: CTL_EXIT.ok,
+            stderr: "",
+          })
+          // Each line went as one whole frame, then a normal close: a server
+          // cancels what still runs then, as for any client that closes.
+          expect(yield* Deferred.await(listener.closed).pipe(Effect.timeout("5 seconds"))).toBe(
+            1000,
+          )
+          expect(yield* Ref.get(listener.frames)).toEqual([first, last])
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+      ),
+    30_000,
   )
 
   it.live("with no server for the data directory a call or a link exits 3 and starts none", () =>

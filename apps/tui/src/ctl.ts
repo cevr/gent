@@ -1796,7 +1796,9 @@ const toWsUrl = (httpUrl: string): string => httpUrl.replace(/^http(s?):\/\//, "
  * the local server's RPC socket and its own stdio, frame for line: each
  * stdin line goes to the server as one frame, each frame comes out as one
  * stdout line. It decodes neither; JSON frames hold no raw newline. It ends
- * at stdin's end, and fails as the server closes the socket.
+ * at stdin's end (a last line with no newline is a frame too) and closes the
+ * socket, so the server cancels what still runs, as for any client that
+ * closes; it fails as the server closes the socket.
  */
 const link = Command.make("link", { connect: connectFlag }, (input) =>
   Effect.scoped(

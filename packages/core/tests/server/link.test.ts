@@ -2,11 +2,13 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   type Cause,
   Clock,
+  ConfigProvider,
   Context,
   Deferred,
   Duration,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Logger,
@@ -16,6 +18,7 @@ import {
   Queue,
   References,
   Schema,
+  Scope,
   Sink,
   Stream,
 } from "effect"
@@ -334,6 +337,57 @@ describe("links", () => {
         expect(view.get("garbage")).toBe("connecting")
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(platformLayer, logs.layer)))
     },
+  )
+
+  it.live(
+    "a far end that stops reading after its hello, with its stdin full, ends with the link's scope within the force-kill window",
+    () =>
+      Effect.gen(function* () {
+        const contract = yield* linkContract
+        const dir = yield* makeTempDirectoryScoped("gent-link-far-")
+        const log = `${dir}/far.log`
+        const scope = yield* Scope.make()
+        // A 1.5 MB machine name: each call's origin header and the facts
+        // this server pushes carry it, past what the pipe and the far end's
+        // read-ahead hold (about 1 MB under Bun).
+        const { links } = yield* linksOver({ far: yield* farEnd(contract, "deaf", log) }).pipe(
+          Scope.provide(scope),
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { GENT_MACHINE: "m".repeat(1_500_000) } }),
+            ),
+          ),
+        )
+        yield* viewUntil(links, (view) => view[0]?.state === "connected")
+        const lines = yield* logUntil(log, (found) =>
+          found.some((line) => line.startsWith("deaf ")),
+        )
+        const pid = Number((lines.find((line) => line.startsWith("deaf ")) ?? "").slice(5))
+        // The pool's request and the facts' push go out, and the pipe fills.
+        yield* wallSleep(500)
+        const alive = Effect.try(() => process.kill(pid, 0)).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        )
+        expect(yield* alive).toBe(true)
+        // The far end outlives SIGTERM: the force kill after 2 s ends it.
+        // The close runs apart, so one that hangs fails here at 6 s.
+        const closing = yield* Effect.forkDetach(Effect.timed(Scope.close(scope, Exit.void)))
+        const closed = yield* Fiber.await(closing).pipe(Effect.timeout("6 seconds"), Effect.option)
+        const took = Option.match(closed, {
+          onNone: () => Number.POSITIVE_INFINITY,
+          onSome: (exit) =>
+            Exit.match(exit, {
+              onSuccess: ([duration]) => Duration.toMillis(duration),
+              onFailure: () => Number.POSITIVE_INFINITY,
+            }),
+        })
+        // Past the 2 s SIGTERM grace: the far end did outlive it.
+        expect(took).toBeGreaterThanOrEqual(1_900)
+        expect(took).toBeLessThan(3_500)
+        expect(yield* alive).toBe(false)
+      }).pipe(Effect.scoped, Effect.provide(platformLayer)),
+    15_000,
   )
 })
 

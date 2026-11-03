@@ -262,8 +262,10 @@ time of this machine's clock.
 `link` is the far end of a link between two machines' servers. It relays the
 local server's RPC socket over its stdio: each stdin line goes to the server
 as one frame, each frame comes out as one stdout line, and it decodes
-neither. It ends with exit 0 at its stdin's end, and with one `CtlFailed`
-line and exit 1 when the server closes the socket. With no server it exits 3
+neither. It ends with exit 0 at its stdin's end (a last line with no newline
+is a frame too) and closes the socket, so the server cancels the requests
+still running, as for any client that closes; it ends with one `CtlFailed`
+line and exit 1 when the server closes the socket, its stdin open or not. With no server it exits 3
 and starts none. The other machine's server runs it through ssh: `link.machines`
 in the user file `~/.gent/config.json` (a project file cannot set it) maps
 each machine's name to the command that reaches it, an argv array. One file

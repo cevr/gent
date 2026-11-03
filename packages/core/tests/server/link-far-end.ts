@@ -16,6 +16,9 @@
  * - `garbage`: answers the hello with a line that is no frame, and stays up.
  * - `nohello`: answers the hello with a defect, as a build with no
  *   `link.hello` does.
+ * - `deaf`: logs `deaf <pid>`, reads its stdin no more (it stays open, so
+ *   the pipe fills) and outlives SIGTERM for a minute: a command a SIGKILL
+ *   alone ends.
  */
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Option, Runtime, Schema, Stdio, Stream } from "effect"
@@ -117,7 +120,24 @@ const main = Effect.gen(function* () {
       return say()
     })
 
+  /**
+   * `deaf`: answers the hello, then pulls no more of its stdin and holds
+   * an interrupt off for a minute, so SIGTERM leaves it running.
+   */
+  const deaf = Effect.gen(function* () {
+    const pull = yield* Stream.toPull(stdio.stdin.pipe(Stream.decodeText, Stream.splitLines))
+    const printed: Array<string> = []
+    while (printed.length === 0) {
+      for (const line of yield* pull) printed.push(...(yield* answer(line)).lines)
+    }
+    yield* Stream.fromIterable(printed.map((line) => `${line}\n`)).pipe(Stream.run(stdio.stdout()))
+    yield* note(`deaf ${process.pid}`)
+    // A minute, so a run whose kill failed leaves no process for good.
+    return yield* Effect.uninterruptible(Effect.timeoutOption(Effect.never, "1 minute"))
+  })
+
   yield* note("start")
+  if (mode === "deaf") return yield* Effect.scoped(deaf)
   yield* stdio.stdin.pipe(
     Stream.decodeText,
     Stream.splitLines,
