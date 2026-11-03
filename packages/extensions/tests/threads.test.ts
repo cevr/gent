@@ -768,7 +768,7 @@ describe("threads", () => {
           expect(thread.parentBranchId).toBe(branchId)
           const threadKey = { sessionId: thread.id, branchId: thread.activeBranchId }
           const threadMessages = yield* waitFor(
-            client.message.list({ branchId: threadKey.branchId }),
+            client.message.list({ sessionId: threadKey.sessionId, branchId: threadKey.branchId }),
             (messages) => messages.some((message) => message.role === "assistant"),
             3_000,
             "the thread's reply",
@@ -778,7 +778,7 @@ describe("threads", () => {
           expect(messagePartsDisplayText(task?.parts ?? [])).toContain(THREAD_TASK)
           // The starter's conversation ends on its own reply: no completion,
           // no wake, so its cached prefix is what it was.
-          const starterMessages = yield* client.message.list({ branchId })
+          const starterMessages = yield* client.message.list({ sessionId, branchId })
           expect(starterMessages.at(-1)?.role).toBe("assistant")
           expect(messagePartsDisplayText(starterMessages.at(-1)?.parts ?? [])).toBe("started it")
           expect(starterCalls).toBe(2)
@@ -2215,7 +2215,7 @@ describe("threads", () => {
           expect(children).toHaveLength(1)
           // Once the thread answered, its branch holds every task it was sent.
           const messages = yield* waitFor(
-            client.message.list({ branchId: first.branchId }),
+            client.message.list({ sessionId: first.sessionId, branchId: first.branchId }),
             (found) => found.some((message) => message.role === "assistant"),
             3_000,
             "the thread's reply",
@@ -3064,7 +3064,7 @@ describe("thread round ownership", () => {
           expect(Result.isFailure(failed) && failed.failure).toContain("the reply was lost")
           // The turn the lost send admitted runs to its end before the retry.
           yield* waitFor(
-            client.message.list({ branchId: impl.branchId }),
+            client.message.list({ sessionId: impl.sessionId, branchId: impl.branchId }),
             (messages) => messages.some((message) => message.role === "assistant"),
             5_000,
             "the thread's answer",

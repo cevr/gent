@@ -823,8 +823,9 @@ describe("debug session", () => {
           })
           const { client } = yield* Gent.client(server, { cwd })
           const [session] = yield* client.session.list()
+          const sessionId = yield* Effect.fromNullishOr(session?.id)
           const branchId = yield* Effect.fromNullishOr(session?.activeBranchId)
-          const messages = yield* client.message.list({ branchId })
+          const messages = yield* client.message.list({ sessionId, branchId })
           const calls = messages.flatMap((message) =>
             message.parts.filter((part) => part.type === "tool-call"),
           )

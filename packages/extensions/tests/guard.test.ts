@@ -287,7 +287,7 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
       )
       yield* client.message.send({ sessionId, branchId, content })
       const events = Array.from(yield* Fiber.join(turn))
-      const messages = yield* client.message.list({ branchId })
+      const messages = yield* client.message.list({ sessionId, branchId })
       const results = messages
         .flatMap((message) => message.parts)
         .filter((part) => part.type === "tool-result")

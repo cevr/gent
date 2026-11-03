@@ -25,6 +25,7 @@ import {
   type RequestId,
   SessionId,
   CurrentWorkspaceId,
+  type WorkspaceId,
 } from "../domain/ids.js"
 import {
   Branch,
@@ -147,7 +148,12 @@ import {
   SessionRuntime,
   type SessionRuntimeError,
 } from "../runtime/session.js"
-import { workspaceIdForCwd, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
+import {
+  provideWorkspaceIdHeader,
+  sessionNamedBy,
+  workspaceIdForCwd,
+  WorkspaceRpcMiddleware,
+} from "./workspace-rpc.js"
 import {
   Auth,
   AuthApi,
@@ -1415,7 +1421,6 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
 
 // Each helper yields its Tags; no service bag is threaded through.
 
-type BranchPayload = { readonly branchId: BranchId }
 type ExtensionStatusPayload = { readonly scope: ExtensionStatusScope }
 type SessionIdPayload = { readonly sessionId: SessionId }
 
@@ -2220,7 +2225,15 @@ const RpcHandlers = GentRpcs.toLayer(
           { requestId: input.requestId },
         ),
 
-      "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
+      "message.list": ({ sessionId, branchId }: QueueTarget) =>
+        Effect.gen(function* () {
+          yield* loadSession(sessionId)
+          const branch = yield* branchStorage.getBranch(branchId)
+          if (Predicate.isUndefined(branch) || branch.sessionId !== sessionId) {
+            return yield* new NotFoundError({ message: "Branch not found" })
+          }
+          return yield* messageStorage.listMessages(branchId)
+        }),
 
       "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
         rpc(
@@ -2592,7 +2605,37 @@ const RpcHandlers = GentRpcs.toLayer(
   }),
 )
 
-export const RpcHandlersLive = Layer.merge(RpcHandlers, WorkspaceRpcMiddleware.Live)
+/**
+ * The session decides the workspace. A call that names a stored session runs
+ * in the workspace the session is stored under (`sessions.workspace_id`, set
+ * once by `session.create`), whatever directory the client runs in: the
+ * session's loop, its storage reads and its profile key are one, from any
+ * client. A server-scoped call, and a call that names no stored session,
+ * runs in the header's workspace, so an unknown id still reads as not found.
+ * The header is checked on every call.
+ */
+const WorkspaceRpcMiddlewareLive = Layer.effect(
+  WorkspaceRpcMiddleware,
+  Effect.gen(function* () {
+    const sessions = yield* SessionStorage
+    return WorkspaceRpcMiddleware.of((effect, options) =>
+      Option.match(sessionNamedBy(options), {
+        onNone: () => Effect.succeed(Option.none<WorkspaceId>()),
+        onSome: sessions.workspaceOf,
+      }).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => effect,
+            onSome: (workspaceId) => Effect.provideService(effect, CurrentWorkspaceId, workspaceId),
+          }),
+        ),
+        provideWorkspaceIdHeader(options.headers),
+      ),
+    )
+  }),
+)
+
+export const RpcHandlersLive = Layer.merge(RpcHandlers, WorkspaceRpcMiddlewareLive)
 
 /**
  * A client that calls built handlers directly, with no socket in between.

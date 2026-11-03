@@ -2367,7 +2367,7 @@ describe("FsToolsExtension via model turn", () => {
             expect(succeeded.event.output).toContain("Hello from fs model turn")
           }
           // Every tool event names the assistant message that holds its tool-call part.
-          const messages = yield* client.message.list({ branchId })
+          const messages = yield* client.message.list({ sessionId, branchId })
           const assistant = messages.find(
             (message) =>
               message.role === "assistant" &&
@@ -2513,7 +2513,7 @@ describe("agent paths", () => {
         })
         yield* client.message.send({ sessionId, branchId, content: "Paint the scene." })
         const messages = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (list) =>
             list.some(
               (message) =>
@@ -2643,7 +2643,7 @@ const turnFailures = (
   Effect.gen(function* () {
     yield* client.message.send({ ...target, content: "Work." })
     const messages = yield* waitFor(
-      client.message.list({ branchId: target.branchId }),
+      client.message.list({ sessionId: target.sessionId, branchId: target.branchId }),
       (list) =>
         list.some(
           (message) =>
@@ -2774,14 +2774,14 @@ const agentDropper = (cwd: string, agents: AgentEntries) =>
     }),
   })
 
-/** The tool results on `branchId` once `count` of them are there: the turn may end after them. */
+/** The tool results on a branch once `count` of them are there: the turn may end after them. */
 const toolResultsOf = (
   client: Effect.Success<ReturnType<typeof narrowedHarness>>["client"],
-  branchId: BranchId,
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId },
   count: number,
 ) =>
   waitFor(
-    client.message.list({ branchId }),
+    client.message.list({ sessionId: target.sessionId, branchId: target.branchId }),
     (list) =>
       list.flatMap((message) => message.parts).filter((part) => part.type === "tool-result")
         .length >= count,
@@ -2834,7 +2834,7 @@ const callFailures = (
     ])
     yield* client.message.send({ sessionId, branchId, content: "Work." })
     const messages = yield* waitFor(
-      client.message.list({ branchId }),
+      client.message.list({ sessionId, branchId }),
       (list) =>
         list.some(
           (message) =>
@@ -3258,7 +3258,7 @@ describe("run overrides narrow the agent", () => {
         const { open: _removed, ...rest } = NARROWED_AGENTS
         yield* writeAgents(dirs.cwd, rest)
         yield* harness.controls.emitAll(0)
-        const results = yield* toolResultsOf(harness.client, child.branchId, 2)
+        const results = yield* toolResultsOf(harness.client, child, 2)
         expect(results.map((part) => part.isFailure)).toEqual([true, true])
         expect(encodeJson(results.map((part) => part.result))).not.toContain("outside")
         expect(encodeJson(results[0]?.result)).toContain('agent \\"open\\"')
@@ -3298,7 +3298,7 @@ describe("run overrides narrow the agent", () => {
           admission: { agent: WIDE },
         })
         yield* harness.client.message.send({ ...child, content: "Work." })
-        const results = yield* toolResultsOf(harness.client, child.branchId, 3)
+        const results = yield* toolResultsOf(harness.client, child, 3)
         expect(results.map((part) => part.isFailure)).toEqual([false, true, true])
         expect(encodeJson(results.map((part) => part.result))).not.toContain("outside")
         expect(yield* fs.exists(path.join(dirs.cwd, "b", "x.txt"))).toBe(false)
@@ -3332,7 +3332,7 @@ describe("run overrides narrow the agent", () => {
         const { scoped: _removed, ...rest } = NARROWED_AGENTS
         yield* writeAgents(dirs.cwd, rest)
         yield* harness.controls.emitAll(0)
-        const results = yield* toolResultsOf(harness.client, harness.branchId, 2)
+        const results = yield* toolResultsOf(harness.client, harness, 2)
         expect(results.map((part) => part.isFailure)).toEqual([true, true])
         expect(encodeJson(results.map((part) => part.result))).not.toContain("outside")
         for (const part of results) {

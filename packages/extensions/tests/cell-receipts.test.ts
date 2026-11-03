@@ -436,7 +436,7 @@ describe("cell approvals", () => {
               Stream.runDrain,
               Effect.timeout("5 seconds"),
             )
-            const results = (yield* client.message.list({ branchId }))
+            const results = (yield* client.message.list({ sessionId, branchId }))
               .flatMap((message) => message.parts)
               .filter((part) => part.type === "tool-result")
               .filter((part) => part.name === "cell")
@@ -639,9 +639,9 @@ const runTurn = (
 /** The `cell` results on a branch, oldest first. */
 const cellResults = (
   client: Effect.Success<ReturnType<typeof cellServer>>["client"],
-  branchId: BranchId,
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId },
 ) =>
-  client.message.list({ branchId }).pipe(
+  client.message.list({ sessionId: target.sessionId, branchId: target.branchId }).pipe(
     Effect.map((messages) =>
       messages
         .flatMap((message) => message.parts)
@@ -681,7 +681,7 @@ describe("cell tables", () => {
             })
             const target = yield* client.session.create({})
             yield* runTurn(client, target, "run a cell")
-            expect(yield* cellResults(client, target.branchId)).toMatchObject([
+            expect(yield* cellResults(client, target)).toMatchObject([
               { isFailure: false, result: { display: "42" } },
             ])
             const before = yield* readDatabase(storagePath, (db) => ({
@@ -786,7 +786,7 @@ describe("cell tables", () => {
             yield* Fiber.join(recovered).pipe(Effect.timeout("8 seconds"))
             expect(yield* Ref.get(cell.allowed)).toBe(1)
             yield* runTurn(client, target, "read the value")
-            const results = yield* cellResults(client, target.branchId)
+            const results = yield* cellResults(client, target)
             expect(results).toHaveLength(3)
             expect(results[1]).toMatchObject({ result: { stateLost: true } })
             expect(results[2]).toMatchObject({ isFailure: false, result: { display: "42" } })

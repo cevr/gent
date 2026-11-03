@@ -14,7 +14,9 @@ Shape:
 - `AgentLoop` is an actor-backed internal control plane. There is no public
   `AgentLoop` service facade; `runtime/session.ts` talks to the actor in
   `agent-loop.ts` directly. The actor entity id includes
-  `(workspaceId, sessionId, branchId)`.
+  `(workspaceId, sessionId, branchId)`. The workspace is the one the session
+  is stored under, never the calling client's (`WorkspaceRpcMiddlewareLive`
+  in `server/server.ts`), so every client of a session addresses one entity.
 - Residency (`AgentLoopResidency` in `agent-loop.ts`): the cluster reaper
   passivates an entity idle past `entityMaxIdleTime` (one minute), and its
   runtime-state stream and branch scope close with it. Four things hold the

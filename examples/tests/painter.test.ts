@@ -63,7 +63,7 @@ describe("painter example extension", () => {
         })
         yield* client.message.send({ sessionId, branchId, content: "Paint the scene." })
         const messages = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (list) =>
             list.some((message) =>
               message.parts.some((part) => part.type === "text" && part.text === "done"),

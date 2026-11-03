@@ -2073,7 +2073,7 @@ const runOneTurn = (params: {
     })
     yield* client.message.send({ sessionId, branchId, content: "Paint the scene." })
     yield* waitFor(
-      client.message.list({ branchId }),
+      client.message.list({ sessionId, branchId }),
       (messages) =>
         messages.some(
           (message) => message.role === "assistant" && messagePartsText(message.parts) === "done",
@@ -2296,7 +2296,7 @@ describe("a config file that does not load", () => {
         content: "Paint it again.",
       })
       yield* waitFor(
-        root.client.message.list({ branchId: root.branchId }),
+        root.client.message.list({ sessionId: root.sessionId, branchId: root.branchId }),
         (messages) =>
           messages.some(
             (message) => message.role === "assistant" && messagePartsText(message.parts) === "done",

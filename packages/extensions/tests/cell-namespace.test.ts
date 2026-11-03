@@ -24,7 +24,7 @@ import {
   waitFor,
 } from "@gent/core/test-utils"
 import type * as Prompt from "effect/ai/Prompt"
-import type { Message } from "@gent/core/protocol"
+import type { Message, SessionId } from "@gent/core/protocol"
 import {
   BranchId,
   Branch,
@@ -372,9 +372,12 @@ describe("thread namespace", () => {
             },
           ],
         })
-        const cellResults = (branch: BranchId) =>
+        const cellResults = (branch: {
+          readonly sessionId: SessionId
+          readonly branchId: BranchId
+        }) =>
           client.message
-            .list({ branchId: branch })
+            .list({ sessionId: branch.sessionId, branchId: branch.branchId })
             .pipe(
               Effect.map((messages) =>
                 messages
@@ -385,9 +388,12 @@ describe("thread namespace", () => {
                   ),
               ),
             )
-        const replied = (branch: BranchId, text: string) =>
+        const replied = (
+          branch: { readonly sessionId: SessionId; readonly branchId: BranchId },
+          text: string,
+        ) =>
           waitFor(
-            client.message.list({ branchId: branch }),
+            client.message.list({ sessionId: branch.sessionId, branchId: branch.branchId }),
             (items) =>
               items.some(
                 (item) => item.role === "assistant" && messagePartsText(item.parts) === text,
@@ -397,7 +403,7 @@ describe("thread namespace", () => {
           )
 
         yield* client.message.send({ sessionId, branchId, content: "scratch A" })
-        yield* replied(branchId, "A woke")
+        yield* replied({ sessionId, branchId }, "A woke")
         // A delegate thread is side work: it does not join the thread, so its
         // cell starts empty.
         const child = (yield* client.session.list()).find(
@@ -406,7 +412,10 @@ describe("thread namespace", () => {
         if (Predicate.isUndefined(child?.activeBranchId)) {
           return yield* Effect.die("Missing child session")
         }
-        const childResults = yield* cellResults(child.activeBranchId)
+        const childResults = yield* cellResults({
+          sessionId: child.id,
+          branchId: child.activeBranchId,
+        })
         expect(childResults).toMatchObject([{ isFailure: false, result: { display: "undefined" } }])
         expect(childResults[0]?.result).not.toHaveProperty("restored")
 
@@ -419,8 +428,8 @@ describe("thread namespace", () => {
           branchId: b.branchId,
           content: "scratch B",
         })
-        yield* replied(b.branchId, "B done")
-        const [bResult] = yield* cellResults(b.branchId)
+        yield* replied(b, "B done")
+        const [bResult] = yield* cellResults(b)
         expect(bResult).toMatchObject({
           isFailure: false,
           result: { display: "alpha,beta", restored: { previousSession: sessionId } },
@@ -438,8 +447,8 @@ describe("thread namespace", () => {
           branchId: c.branchId,
           content: "scratch C",
         })
-        yield* replied(c.branchId, "C done")
-        expect(yield* cellResults(c.branchId)).toMatchObject([
+        yield* replied(c, "C done")
+        expect(yield* cellResults(c)).toMatchObject([
           { isFailure: false, result: { display: "alpha" } },
         ])
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platform)),
@@ -491,10 +500,10 @@ describe("model context directives from a cell", () => {
           ],
         })
         yield* client.message.send({ sessionId, branchId, content: "older history" })
-        yield* waitFor(client.message.list({ branchId }), hasReply("history reply"))
+        yield* waitFor(client.message.list({ sessionId, branchId }), hasReply("history reply"))
         yield* client.message.send({ sessionId, branchId, content: "compact older history" })
         const compacted = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           hasReply("after compaction"),
         )
         const handoff = Option.getOrThrow(
@@ -510,7 +519,7 @@ describe("model context directives from a cell", () => {
           compactions: 1,
         })
         yield* client.message.send({ sessionId, branchId, content: "reuse the summary" })
-        yield* waitFor(client.message.list({ branchId }), hasReply("summary reused"))
+        yield* waitFor(client.message.list({ sessionId, branchId }), hasReply("summary reused"))
         const reused = yield* client.session.getSnapshot({ sessionId, branchId })
         expect(reused.metrics.context).toMatchObject({
           handoffMessageId: handoff.id,
@@ -518,7 +527,7 @@ describe("model context directives from a cell", () => {
         })
         yield* client.message.send({ sessionId, branchId, content: "open a new window" })
         const afterFirst = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           hasReply("after window"),
         )
         // The handoff marker and the bare window marker are both durable.
@@ -532,7 +541,7 @@ describe("model context directives from a cell", () => {
 
         yield* client.message.send({ sessionId, branchId, content: "and again" })
         const afterSecond = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           hasReply("second turn"),
         )
         expect(windowMarkers(afterSecond)).toHaveLength(2)
@@ -587,9 +596,9 @@ describe("model context directives from a cell", () => {
           ],
         })
         yield* client.message.send({ sessionId, branchId, content: "bind the rows" })
-        yield* waitFor(client.message.list({ branchId }), hasReply("rows bound"))
+        yield* waitFor(client.message.list({ sessionId, branchId }), hasReply("rows bound"))
         yield* client.message.send({ sessionId, branchId, content: "compact, then count rows" })
-        yield* waitFor(client.message.list({ branchId }), hasReply("after compaction"))
+        yield* waitFor(client.message.list({ sessionId, branchId }), hasReply("after compaction"))
         yield* controls.assertDone
         expect(summaryPrompts).toHaveLength(1)
         expect(summaryPrompts[0]).toContain("Names retained on this branch: rows")
@@ -653,7 +662,7 @@ describe("model context directives from a cell", () => {
             ],
           })
           yield* client.message.send({ sessionId, branchId, content: "keep older context" })
-          yield* waitFor(client.message.list({ branchId }), hasReply("history reply"))
+          yield* waitFor(client.message.list({ sessionId, branchId }), hasReply("history reply"))
           yield* client.message.send({ sessionId, branchId, content: "schedule then wait" })
           yield* Deferred.await(scheduled)
           yield* client.steer.command({
@@ -670,14 +679,14 @@ describe("model context directives from a cell", () => {
             Stream.take(1),
             Stream.runDrain,
           )
-          expect(windowMarkers(yield* client.message.list({ branchId }))).toHaveLength(0)
+          expect(windowMarkers(yield* client.message.list({ sessionId, branchId }))).toHaveLength(0)
           yield* client.message.send({
             sessionId,
             branchId,
             content: "continue without that directive",
           })
           const messages = yield* waitFor(
-            client.message.list({ branchId }),
+            client.message.list({ sessionId, branchId }),
             hasReply("after interrupt"),
           )
           expect(windowMarkers(messages)).toHaveLength(0)
@@ -759,7 +768,7 @@ describe("cell kernel across an edit", () => {
         })
         const replied = (text: string) =>
           waitFor(
-            client.message.list({ branchId }),
+            client.message.list({ sessionId, branchId }),
             (items) =>
               items.some(
                 (item) => item.role === "assistant" && messagePartsText(item.parts) === text,
@@ -779,7 +788,7 @@ describe("cell kernel across an edit", () => {
           5_000,
           "the first version released",
         )
-        const results = (yield* client.message.list({ branchId }))
+        const results = (yield* client.message.list({ sessionId, branchId }))
           .flatMap((message) => message.parts)
           .filter((part) => part.type === "tool-result")
           .filter((part) => part.name === "cell")

@@ -360,10 +360,10 @@ const systemRecorder = () => {
 /** The first cell result, once the reply `done` arrives. */
 const cellResultAfterDone = (
   client: Effect.Success<ReturnType<typeof createRpcHarness>>["client"],
-  branchId: Effect.Success<ReturnType<typeof createRpcHarness>>["branchId"],
+  target: Pick<Effect.Success<ReturnType<typeof createRpcHarness>>, "sessionId" | "branchId">,
 ) =>
   waitFor(
-    client.message.list({ branchId }),
+    client.message.list({ sessionId: target.sessionId, branchId: target.branchId }),
     (all) =>
       all.some(
         (message) => message.role === "assistant" && messagePartsText(message.parts) === "done",
@@ -405,7 +405,7 @@ const runMcpCell = <E = never, R = never>(
     yield* options.beforeSend ?? Effect.void
     const { client, sessionId, branchId } = harness
     yield* client.message.send({ sessionId, branchId, content: "run" })
-    return { ...harness, result: yield* cellResultAfterDone(client, branchId) }
+    return { ...harness, result: yield* cellResultAfterDone(client, { sessionId, branchId }) }
   })
 
 /** The `display` of a cell result, decoded by `schema`. */
@@ -501,7 +501,7 @@ describe("mcp config", () => {
           input: "",
         })
         const shown = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (all) => all.some((message) => messagePartsText(message.parts).includes("- user")),
           10_000,
           "the /mcp report",
@@ -1530,7 +1530,7 @@ describe("mcp status", () => {
           input: "",
         })
         const shown = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (all) => all.some((message) => messagePartsText(message.parts).includes("- fixture")),
           10_000,
           "the /mcp report",
@@ -1575,7 +1575,7 @@ describe("mcp status", () => {
           input: "",
         })
         const shown = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (all) => all.some((message) => messagePartsText(message.parts).includes("mcp.json")),
           10_000,
           "the /mcp report",
@@ -1924,7 +1924,7 @@ const commandSession = (oauth: OAuthFixtureState, type: "auto" | "sse" = "auto")
         input,
       })
     const texts = harness.client.message
-      .list({ branchId: harness.branchId })
+      .list({ sessionId: harness.sessionId, branchId: harness.branchId })
       .pipe(Effect.map((all) => all.map((message) => messagePartsText(message.parts))))
     const shown = (needle: string) =>
       waitFor(texts, (all) => all.some((text) => text.includes(needle)), 10_000, needle).pipe(
@@ -2327,7 +2327,7 @@ describe("mcp oauth", () => {
           cwd: data.directory,
         }).pipe(Effect.provide(data.layer))
         yield* client.message.send({ sessionId, branchId, content: "Call both retained logins" })
-        const result = yield* cellResultAfterDone(client, branchId)
+        const result = yield* cellResultAfterDone(client, { sessionId, branchId })
         expect(result).toMatchObject({ isFailure: false })
         const called = yield* cellDisplay(
           result,
@@ -2715,7 +2715,7 @@ const mcpImageTurn = (png: string) =>
         admission: { agent: AgentName.make("picture") },
       })
       yield* client.message.send({ sessionId, branchId, content: "look" })
-      return yield* cellResultAfterDone(client, branchId)
+      return yield* cellResultAfterDone(client, { sessionId, branchId })
     }).pipe(
       Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: dataDir }))),
     )
@@ -2835,7 +2835,7 @@ describe("mcp images", () => {
             providerLayer,
           })
           yield* client.message.send({ sessionId, branchId, content: "look" })
-          return yield* cellResultAfterDone(client, branchId)
+          return yield* cellResultAfterDone(client, { sessionId, branchId })
         }).pipe(
           Effect.provide(
             ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: dataDir })),
@@ -3266,7 +3266,7 @@ describe("mcp tools in the cell", () => {
           providerLayer,
         })
         const texts = client.message
-          .list({ branchId })
+          .list({ sessionId, branchId })
           .pipe(Effect.map((all) => all.map((message) => messagePartsText(message.parts))))
         const shown = (needle: string) =>
           waitFor(texts, (all) => all.some((text) => text.includes(needle)), 10_000, needle)
@@ -3289,7 +3289,7 @@ describe("mcp tools in the cell", () => {
         )
         yield* client.message.send({ sessionId, branchId, content: "count" })
         yield* shown("counted")
-        const results = (yield* client.message.list({ branchId }))
+        const results = (yield* client.message.list({ sessionId, branchId }))
           .flatMap((message) => message.parts)
           .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
         expect(results.at(-1)).toMatchObject({ name: "cell", isFailure: false })

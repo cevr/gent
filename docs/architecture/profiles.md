@@ -242,7 +242,9 @@ The production server uses one live profile owner:
   `auth.deleteKey`, `auth.listMethods`, `auth.listProviders`, `driver.set`,
   `driver.list` and `model.list`, so a payload that leaves it out is a type
   error at the call site and a decode failure on the wire; no handler has a
-  launch-profile branch for a missing session. `extension.listStatus` takes an
+  launch-profile branch for a missing session. The call runs in the workspace
+  the session is stored under, not the caller's, so its profile key is the
+  session's workspace and cwd from any client, the key its loop's turns read. `extension.listStatus` takes an
   explicit `scope` (`ExtensionStatusScope`: `Session { id }` or `Launch`);
   only `gent doctor`, which has no session, asks for `Launch`. Its tags carry
   no constructor default (plain `Schema.Literal`, not `TaggedStruct`): the RPC

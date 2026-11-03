@@ -3834,7 +3834,7 @@ export function createSessionController(props: {
 
   const openForkPicker = () => {
     cast(
-      client.client.message.list({ branchId: props.branchId }).pipe(
+      client.client.message.list({ sessionId: props.sessionId, branchId: props.branchId }).pipe(
         Effect.tap((messages) =>
           Effect.sync(() => {
             if (messages.length === 0) {

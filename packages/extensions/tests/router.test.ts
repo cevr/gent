@@ -553,7 +553,10 @@ describe("router stickiness", () => {
           [STRONG, 0, "high"],
           [STRONG, 1, "low"],
         ])
-        const messages = yield* session.client.message.list({ branchId: session.branchId })
+        const messages = yield* session.client.message.list({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+        })
         expect(messages.some((message) => message.metadata?.customType === "model-change")).toBe(
           false,
         )

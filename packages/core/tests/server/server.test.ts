@@ -132,7 +132,8 @@ import {
   textStep,
 } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
-import { SessionRuntimeStateSchema } from "../../src/domain/agent-loop"
+import { AgentLoop, entityIdOf, SessionRuntimeStateSchema } from "../../src/domain/agent-loop"
+import { listStateEntityIds } from "effect-encore"
 import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc"
 import {
   WORKSPACE_ID_HEADER,
@@ -603,7 +604,7 @@ describe("branch tree", () => {
         const { sessionId, branchId: rootId } = yield* client.session.create({})
         yield* client.message.send({ sessionId, branchId: rootId, content: "hello" })
         const rootMessages = yield* waitFor(
-          client.message.list({ branchId: rootId }),
+          client.message.list({ sessionId, branchId: rootId }),
           (messages) => messages.some((message) => message.role === "assistant"),
           5_000,
           "the first reply",
@@ -616,7 +617,7 @@ describe("branch tree", () => {
           atMessageId: prompt.id,
         })
         const { branchId: siblingId } = yield* client.branch.create({ sessionId })
-        const forkMessages = yield* client.message.list({ branchId: forkId })
+        const forkMessages = yield* client.message.list({ sessionId, branchId: forkId })
 
         const tree = yield* client.branch.getTree({ sessionId })
 
@@ -1761,8 +1762,9 @@ describe("session event stream", () => {
             content: "replay this turn",
           })
 
-          yield* waitFor(client.message.list({ branchId: created.branchId }), (messages) =>
-            messages.some((message) => message.role === "assistant"),
+          yield* waitFor(
+            client.message.list({ sessionId: created.sessionId, branchId: created.branchId }),
+            (messages) => messages.some((message) => message.role === "assistant"),
           )
 
           const buffered = yield* startCollecting(
@@ -2279,7 +2281,10 @@ describe("session transport contract", () => {
           expect(snapshot.metrics.lastInputTokens).toBeGreaterThan(0)
           expect(snapshot.resolvedModelId).toBeDefined()
 
-          const messages = yield* client.message.list({ branchId: created.branchId })
+          const messages = yield* client.message.list({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          })
           expect(messages.some(said("user", userText))).toBe(true)
           expect(messages.some(said("assistant", assistantText))).toBe(true)
 
@@ -4235,5 +4240,101 @@ describe("review.window", () => {
         const later = DateTime.formatIso(DateTime.makeUnsafe(now + 60_000))
         expect(lines.every((line) => line.last < later)).toBe(true)
       }).pipe(Effect.scoped, Effect.timeout("15 seconds")),
+  )
+})
+
+// ── one loop per session ────────────────────────────────────────────────────
+
+describe("a session's workspace", () => {
+  it.live("a client in another cwd drives the session's one loop, in the session's workspace", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("reply to the other cwd"),
+      ])
+      const context = yield* Layer.build(
+        Layer.provideMerge(RpcHandlersLive, createE2ELayer({ ...e2ePreset, providerLayer })),
+      )
+      const { cwd } = Context.get(context, RuntimeEnvironment)
+      const home = yield* makeInProcessClient(context, workspaceHeadersForCwd(cwd))
+      const elsewhere = yield* makeInProcessClient(
+        context,
+        workspaceHeadersForCwd("/nonexistent/gent-other-cwd"),
+      )
+      const { sessionId, branchId } = yield* home.session.create({ cwd })
+
+      const turnCompleted = yield* home.session.events({ sessionId, branchId }).pipe(
+        Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkScoped,
+      )
+      yield* elsewhere.message.send({ sessionId, branchId, content: "from the other cwd" })
+      yield* Fiber.join(turnCompleted)
+
+      // The home client reads the turn the other client started: one turn,
+      // its message and reply in one transcript.
+      const snapshot = yield* home.session.getSnapshot({ sessionId, branchId })
+      expect(snapshot.messages.map((message) => messagePartsText(message.parts))).toEqual([
+        "from the other cwd",
+        "reply to the other cwd",
+      ])
+      const events = yield* home.session.events({ sessionId, branchId }).pipe(
+        Stream.takeUntil(({ id }) => id >= (snapshot.lastEventId ?? 0)),
+        Stream.runCollect,
+      )
+      expect(Array.from(events).filter(({ event }) => event._tag === "TurnCompleted")).toHaveLength(
+        1,
+      )
+      // Both clients address one loop: the one entity of the session's workspace.
+      const loops = (yield* listStateEntityIds(AgentLoop.name).pipe(
+        Effect.provideContext(context),
+      )).filter((entityId) => entityId.includes(sessionId))
+      expect(loops).toEqual([entityIdOf(workspaceIdForCwd(cwd), sessionId, branchId)])
+      const homeState = yield* home.session
+        .watchRuntime({ sessionId, branchId })
+        .pipe(Stream.take(1), Stream.runCollect)
+      const elsewhereState = yield* elsewhere.session
+        .watchRuntime({ sessionId, branchId })
+        .pipe(Stream.take(1), Stream.runCollect)
+      expect(Array.from(elsewhereState)).toEqual(Array.from(homeState))
+      // A read by id reaches the session from any cwd; the server-scoped
+      // list stays the client's own workspace.
+      const read = yield* elsewhere.message.list({ sessionId, branchId })
+      expect(read.map((message) => messagePartsText(message.parts))).toEqual([
+        "from the other cwd",
+        "reply to the other cwd",
+      ])
+      expect((yield* elsewhere.session.list()).map((session) => session.id)).not.toContain(
+        sessionId,
+      )
+      yield* controls.assertDone
+    }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+  )
+})
+
+describe("message.list", () => {
+  it.live("a branch of another session reads as not found", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep("first reply"),
+      ])
+      const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+      const first = yield* client.session.create({ cwd: testCwd })
+      const second = yield* client.session.create({ cwd: testCwd })
+      yield* client.message.send({ ...first, content: "first ask" })
+      yield* waitFor(client.message.list(first), (messages) => messages.length === 2)
+
+      const crossed = yield* client.message
+        .list({ sessionId: second.sessionId, branchId: first.branchId })
+        .pipe(Effect.flip)
+      expect(crossed._tag).toBe("NotFoundError")
+      expect(crossed.message).toBe("Branch not found")
+      const missing = yield* client.message
+        .list({ sessionId: SessionId.make("no-such-session"), branchId: first.branchId })
+        .pipe(Effect.flip)
+      expect(missing._tag).toBe("NotFoundError")
+      expect(missing.message).toBe("Session not found")
+      expect(yield* client.message.list(second)).toEqual([])
+    }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
   )
 })

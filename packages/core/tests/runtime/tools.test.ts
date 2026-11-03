@@ -486,7 +486,7 @@ describe("tool execution", () => {
       })
       yield* client.message.send({ sessionId, branchId, content: "Exercise the readonly tool." })
       const messages = yield* waitFor(
-        client.message.list({ branchId }),
+        client.message.list({ sessionId, branchId }),
         (messages) =>
           messages.some((message) => messagePartsText(message.parts) === "queued reply complete"),
         3000,
@@ -917,7 +917,7 @@ describe("extension model surface over RPC", () => {
         })
         yield* client.message.send({ sessionId, branchId, content: "Use the bridge." })
         const messages = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (messages) =>
             messages.some(
               (message) =>
@@ -990,7 +990,7 @@ describe("extension model surface over RPC", () => {
       })
       yield* client.message.send({ sessionId, branchId, content: "Use the hidden tool." })
       const messages = yield* waitFor(
-        client.message.list({ branchId }),
+        client.message.list({ sessionId, branchId }),
         (messages) =>
           messages.some(
             (message) =>
@@ -1061,7 +1061,7 @@ describe("extension model surface over RPC", () => {
       )
       yield* client.message.send({ sessionId, branchId, content: "Add milk." })
       const events = Array.from(yield* Fiber.join(turn))
-      const messages = yield* client.message.list({ branchId })
+      const messages = yield* client.message.list({ sessionId, branchId })
       const results = messages
         .flatMap((message) => message.parts)
         .filter((part) => part.type === "tool-result")
@@ -1142,7 +1142,7 @@ describe("extension model surface over RPC", () => {
       })
       yield* client.message.send({ sessionId, branchId, content: "Look at the scene." })
       yield* waitFor(
-        client.message.list({ branchId }),
+        client.message.list({ sessionId, branchId }),
         (messages) =>
           messages.some(
             (message) =>
@@ -1247,7 +1247,7 @@ const gatedServer = Effect.fn("test.gatedServer")(function* (params: {
       )
       yield* client.message.send({ sessionId, branchId, content })
       const events = Array.from(yield* Fiber.join(turn))
-      const messages = yield* client.message.list({ branchId })
+      const messages = yield* client.message.list({ sessionId, branchId })
       const results = messages
         .flatMap((message) => message.parts)
         .filter((part) => part.type === "tool-result")

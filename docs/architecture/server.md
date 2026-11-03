@@ -53,7 +53,7 @@ commands      queries/events
 
 Process topology is secondary. Default CLI topology is not.
 
-Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })`. SQLite-backed local clients share one server per database, decided by the lock files beside `data.db` (see Shared Server Discovery); workspace routing is carried by the `x-gent-workspace-id` RPC header. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for shared local server, `Gent.client({ url })` for remote.
+Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })`. SQLite-backed local clients share one server per database, decided by the lock files beside `data.db` (see Shared Server Discovery). The `x-gent-workspace-id` RPC header names the client's workspace, the hash of its cwd; every call must send it. A server-scoped call (`session.create`, `session.list`, the lane and pool calls) runs in that workspace, and `session.create` stores it on the session (`sessions.workspace_id`). A call that names a session (a `sessionId`, a steer command's session, a `Session` status scope) runs in the workspace the session is stored under, whatever the client's cwd: `WorkspaceRpcMiddlewareLive` in `server.ts` reads it per request (`SessionStorage.workspaceOf`), so the session's storage reads, its one loop and its profile key are the same from every client. A call that names no stored session keeps the header's workspace, so an unknown id reads as not found. `message.list` names the session and the branch, and a branch of another session reads as not found. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for shared local server, `Gent.client({ url })` for remote.
 
 ## Transport Boundary
 
@@ -138,7 +138,7 @@ A start that finds a confirmed server of another build on the database fails wit
 
 A fixed port (`gent server start --port`) changes only the attach decision. A SQLite server on a fixed port still takes the kernel lock and writes its entry, so the TUI finds and attaches to it; it never attaches to another server itself, and fails with the holder's pid when the database is owned. The standalone server runs until a signal stops it: there is no idle shutdown and no shared launch mode.
 
-`packages/sdk/src/discovery.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
+`packages/sdk/src/discovery.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header, which scopes the session list and new sessions, and from the session's stored workspace, which prefixes its AgentLoop actor entity IDs; it does not come from per-workspace server processes.
 
 E2E coverage that needs process boundaries uses focused server-process fixtures; transport contract tests run through the in-process direct transport.
 

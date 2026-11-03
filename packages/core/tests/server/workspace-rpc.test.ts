@@ -1,18 +1,20 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { RpcClient, RpcTest } from "effect/rpc"
 import { Headers } from "effect/http"
 import { textStep } from "../../src/runtime/provider"
-import { createE2ELayer, LanguageModelLayers } from "../../src/test-utils/harness"
-import { GentRpcs } from "../../src/server/rpc"
+import { createE2ELayer, LanguageModelLayers, waitFor } from "../../src/test-utils/harness"
+import { ExtensionStatusScope, GentRpcs } from "../../src/server/rpc"
+import { SteerCommand } from "../../src/domain/message"
 import { RpcHandlersLive } from "../../src/server/server"
 import {
   WORKSPACE_ID_HEADER,
   provideWorkspaceIdHeader,
+  sessionNamedBy,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
 } from "../../src/server/workspace-rpc"
-import { CurrentWorkspaceId, WorkspaceId } from "../../src/domain/ids"
+import { BranchId, CurrentWorkspaceId, SessionId, WorkspaceId } from "../../src/domain/ids"
 import { e2ePreset } from "../helpers/test-preset"
 
 const validWorkspaceId = WorkspaceId.make("a".repeat(64))
@@ -73,6 +75,80 @@ describe("workspace RPC middleware", () => {
 
         expect(first.map((session) => session.name)).toEqual(["workspace-a-session"])
         expect(second.map((session) => session.name)).toEqual(["workspace-b-session"])
+      }),
+    ),
+  )
+
+  it.live("reads the session a payload names, in each shape the contract uses", () =>
+    Effect.sync(() => {
+      const sessionId = SessionId.make("named-session")
+      const branchId = BranchId.make("named-branch")
+      expect(sessionNamedBy({ payload: { sessionId, branchId } })).toEqual(Option.some(sessionId))
+      const command = SteerCommand.cases.Cancel.make({ sessionId, branchId, requestId: "r-1" })
+      expect(sessionNamedBy({ payload: { command } })).toEqual(Option.some(sessionId))
+      const scope = ExtensionStatusScope.cases.Session.make({ id: sessionId })
+      expect(sessionNamedBy({ payload: { scope } })).toEqual(Option.some(sessionId))
+      // Server-scoped calls name no session: the header's workspace stands.
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw payload this test reads; `Launch` has no tag default on purpose (`ExtensionStatusScope`)
+      expect(sessionNamedBy({ payload: { scope: { _tag: "Launch" } } })).toEqual(Option.none())
+      expect(sessionNamedBy({ payload: { parentSessionId: sessionId } })).toEqual(Option.none())
+      expect(sessionNamedBy({ payload: {} })).toEqual(Option.none())
+    }),
+  )
+
+  it.live("runs a call that names a session in the session's workspace, whatever the header", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const context = yield* Layer.build(
+          Layer.provide(RpcHandlersLive, createE2ELayer({ ...e2ePreset, providerLayer })),
+        )
+        const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
+        const inWorkspace = <A, E, R>(workspaceId: string, effect: Effect.Effect<A, E, R>) =>
+          RpcClient.withHeaders(effect, { [WORKSPACE_ID_HEADER]: workspaceId })
+
+        const created = yield* inWorkspace(
+          validWorkspaceId,
+          client["session.create"]({ name: "workspace-a-session", cwd: "/nonexistent/a" }),
+        )
+        const target = { sessionId: created.sessionId, branchId: created.branchId }
+        // A steer command names its session inside the command.
+        const command = SteerCommand.cases.Interject.make({
+          ...target,
+          requestId: "steer-from-b",
+          message: "steer from b",
+        })
+        yield* inWorkspace(otherWorkspaceId, client["steer.command"]({ command }))
+        const queued = yield* waitFor(
+          inWorkspace(validWorkspaceId, client["queue.get"](target)),
+          (snapshot) => snapshot.steering.length === 1,
+          2_000,
+          "the steer from the other workspace",
+        )
+        expect(queued.steering.map((entry) => entry.content)).toEqual(["steer from b"])
+        // A status scope names its session as `id`.
+        const status = yield* inWorkspace(
+          otherWorkspaceId,
+          client["extension.listStatus"]({
+            scope: ExtensionStatusScope.cases.Session.make({ id: created.sessionId }),
+          }),
+        )
+        expect(status).toEqual(
+          yield* inWorkspace(
+            validWorkspaceId,
+            client["extension.listStatus"]({
+              scope: ExtensionStatusScope.cases.Session.make({ id: created.sessionId }),
+            }),
+          ),
+        )
+        // The list stays the header's: B lists none of A's sessions.
+        expect(yield* inWorkspace(otherWorkspaceId, client["session.list"]())).toEqual([])
+        // An id that names no stored session keeps the header's workspace.
+        const missing = yield* inWorkspace(
+          otherWorkspaceId,
+          client["session.get"]({ sessionId: SessionId.make("no-such-session") }),
+        )
+        expect(missing).toBeNull()
       }),
     ),
   )

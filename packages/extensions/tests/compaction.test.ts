@@ -858,7 +858,7 @@ describe("model compaction RPC boundary", () => {
           providerLayer,
         })
         const replied = (text: string) =>
-          waitFor(client.message.list({ branchId }), (items) =>
+          waitFor(client.message.list({ sessionId, branchId }), (items) =>
             items.some((item) =>
               item.parts.some((part) => part.type === "text" && part.text === text),
             ),
@@ -1712,8 +1712,9 @@ describe("role windows", () => {
         const turn = (content: string, reply: string) =>
           Effect.gen(function* () {
             yield* client.message.send({ sessionId: turnSession, branchId: turnBranch, content })
-            return yield* waitFor(client.message.list({ branchId: turnBranch }), (items) =>
-              items.some((item) => partsText(item) === reply),
+            return yield* waitFor(
+              client.message.list({ sessionId: turnSession, branchId: turnBranch }),
+              (items) => items.some((item) => partsText(item) === reply),
             )
           })
         const first = yield* turn("first task", "first reply")

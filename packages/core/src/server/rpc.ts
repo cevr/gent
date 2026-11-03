@@ -638,8 +638,10 @@ class SessionRpcs extends RpcGroup.make(
     payload: SendMessageInput.fields,
     error: GentRpcError,
   }),
+  /** A branch's messages. The branch must belong to the session: another
+   *  session's branch reads as not found. */
   Rpc.make("message.list", {
-    payload: { branchId: BranchId },
+    payload: { sessionId: SessionId, branchId: BranchId },
     success: Schema.Array(Message),
     error: GentRpcError,
   }),

@@ -935,7 +935,7 @@ const imageTurn = Effect.fn("test.imageTurn")(function* (params: {
   yield* client.message.send({ sessionId, branchId, content: "look at the screens" })
   yield* Fiber.join(turn)
   yield* controls.assertDone
-  const stored = yield* client.message.list({ branchId })
+  const stored = yield* client.message.list({ sessionId, branchId })
   return { prompts, stored, home, sessionId }
 })
 

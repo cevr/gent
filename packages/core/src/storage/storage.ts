@@ -160,6 +160,12 @@ export interface SessionStorageService {
   readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
   // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
+  /**
+   * The workspace a session is stored under, whatever the current one is:
+   * the workspace every call that names the session runs in. None for an id
+   * that names no session.
+   */
+  readonly workspaceOf: (id: SessionId) => Effect.Effect<Option.Option<WorkspaceId>, StorageError>
   readonly listSessions: Effect.Effect<ReadonlyArray<Session>, StorageError>
   /** Every workspace that holds a session: the data directory's, not the current one's. */
   readonly listWorkspaces: Effect.Effect<ReadonlyArray<WorkspaceId>, StorageError>
@@ -357,6 +363,20 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
             return yield* sessionFromRow(row)
           },
           Effect.mapError(storageError("Failed to get session")),
+        ),
+
+        workspaceOf: Effect.fn("SessionStorage.workspaceOf")(
+          function* (id) {
+            const rows = yield* sql<{
+              readonly workspace_id: string
+            }>`SELECT workspace_id FROM sessions WHERE id = ${id}`
+            return yield* Option.match(Option.fromUndefinedOr(rows[0]), {
+              onNone: () => Effect.succeed(Option.none<WorkspaceId>()),
+              onSome: (row) =>
+                Schema.decodeEffect(WorkspaceId)(row.workspace_id).pipe(Effect.asSome),
+            })
+          },
+          Effect.mapError(storageError("Failed to read the session's workspace")),
         ),
 
         listSessions: Effect.suspend(

@@ -179,7 +179,7 @@ describe("Gent.server seed", () => {
 
 describe("Gent.server workspace isolation", () => {
   it.live(
-    "a single owned server isolates persisted session reads by client workspace",
+    "a single owned server lists sessions by client workspace, and a named session reads from any",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -205,26 +205,33 @@ describe("Gent.server workspace isolation", () => {
             content: "workspace-a-message",
           })
 
-          yield* waitFor(clientA.message.list({ branchId: created.branchId }), (messages) =>
-            messages.some((message) => messagePartsText(message.parts) === "workspace-a-message"),
+          yield* waitFor(
+            clientA.message.list({ sessionId: created.sessionId, branchId: created.branchId }),
+            (messages) =>
+              messages.some((message) => messagePartsText(message.parts) === "workspace-a-message"),
           )
 
           const sessionsB = yield* clientB.session.list()
           const sessionB = yield* clientB.session.get({ sessionId: created.sessionId })
           const branchesB = yield* clientB.branch.list({ sessionId: created.sessionId })
-          const messagesB = yield* clientB.message.list({ branchId: created.branchId })
-          const snapshotB = yield* Effect.result(
-            clientB.session.getSnapshot({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            }),
-          )
+          const messagesB = yield* clientB.message.list({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          })
+          const snapshotB = yield* clientB.session.getSnapshot({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          })
 
+          // The list is server-scoped: it reads the client's own workspace.
           expect(sessionsB.map((session) => session.id)).not.toContain(created.sessionId)
-          expect(sessionB).toBeNull()
-          expect(branchesB).toEqual([])
-          expect(messagesB).toEqual([])
-          expect(snapshotB._tag).toBe("Failure")
+          // A call that names the session runs in the session's workspace.
+          expect(sessionB?.id).toBe(created.sessionId)
+          expect(branchesB.map((branch) => branch.id)).toContain(created.branchId)
+          expect(messagesB.map((message) => messagePartsText(message.parts))).toContain(
+            "workspace-a-message",
+          )
+          expect(snapshotB.sessionId).toBe(created.sessionId)
         }).pipe(Effect.timeout("20 seconds")),
       ),
     30_000,
@@ -291,7 +298,7 @@ describe("Gent.provider.mock tool scenario", () => {
           yield* client.message.send({ sessionId, branchId, content: "debug tools please" })
 
           const messages = yield* waitFor(
-            client.message.list({ branchId }),
+            client.message.list({ sessionId, branchId }),
             (all) => all.some((message) => messagePartsText(message.parts).includes("d.ts failed")),
             20_000,
           )
@@ -356,7 +363,7 @@ describe("Gent.provider.mock tool scenario", () => {
           })
           yield* client.message.send({ sessionId, branchId, content: "hello offline" })
           const messages = yield* waitFor(
-            client.message.list({ branchId }),
+            client.message.list({ sessionId, branchId }),
             (all) => all.some((message) => message.role === "assistant"),
             10_000,
           )

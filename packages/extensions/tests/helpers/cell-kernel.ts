@@ -233,7 +233,7 @@ export const cellResultsAfterTurn = (
       Stream.take(1),
       Stream.runDrain,
     )
-    return (yield* client.message.list({ branchId }))
+    return (yield* client.message.list({ sessionId, branchId }))
       .flatMap((message) => message.parts)
       .filter((part) => part.type === "tool-result")
       .filter((part) => part.name === "cell")

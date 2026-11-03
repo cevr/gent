@@ -1630,7 +1630,10 @@ describe("AgentsViewExtension via RPC", () => {
             Effect.gen(function* () {
               yield* harness.client.message.send({ ...target, content: "go on" })
               yield* waitFor(
-                harness.client.message.list({ branchId: target.branchId }),
+                harness.client.message.list({
+                  sessionId: target.sessionId,
+                  branchId: target.branchId,
+                }),
                 (list) =>
                   list.some(
                     (message) =>

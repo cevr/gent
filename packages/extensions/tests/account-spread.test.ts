@@ -489,7 +489,10 @@ const runWorkload = (
     const sessions = yield* Effect.forEach(named, ([name, key]) =>
       Effect.gen(function* () {
         const events = yield* historyOf(client, key)
-        const messages = yield* client.message.list({ branchId: key.branchId })
+        const messages = yield* client.message.list({
+          sessionId: key.sessionId,
+          branchId: key.branchId,
+        })
         const labels = new Map(
           messages
             .filter((message) => message.role === "user")
@@ -741,7 +744,10 @@ describe("account spread", () => {
             })
           yield* turn(root, bulk("P-1"))
           yield* turn(root, bulk("P-2"))
-          const last = (yield* client.message.list({ branchId: root.branchId })).at(-1)
+          const last = (yield* client.message.list({
+            sessionId: root.sessionId,
+            branchId: root.branchId,
+          })).at(-1)
           if (Predicate.isUndefined(last)) return yield* Effect.die("the root has no message")
           // The root's cache lives on a: ranked, a fresh run would go to b.
           const { branchId } = yield* client.branch.fork({

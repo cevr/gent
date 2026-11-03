@@ -534,7 +534,7 @@ const sendAndAwaitReply = Effect.fn("test.sendAndAwaitReply")(function* (
   const { client, sessionId, branchId } = harness
   yield* client.message.send({ sessionId, branchId, content })
   const messages = yield* waitFor(
-    client.message.list({ branchId }),
+    client.message.list({ sessionId, branchId }),
     (all) =>
       all.some(
         (message) => message.role === "assistant" && messagePartsText(message.parts) === reply,
@@ -1234,7 +1234,7 @@ describe("shipped model surface", () => {
           Stream.take(2),
           Stream.runCollect,
         )
-        const cellAssistant = (yield* client.message.list({ branchId })).find(
+        const cellAssistant = (yield* client.message.list({ sessionId, branchId })).find(
           (message) =>
             message.role === "assistant" &&
             message.parts.some((part) => part.type === "tool-call" && part.id === cellToolCallId),
@@ -1507,7 +1507,7 @@ describe("child cell", () => {
         // The round's end wakes the parent; the parent's reply to it is the
         // last thing to land.
         const parentMessages = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (items) =>
             items.some(
               (item) => item.role === "assistant" && messagePartsText(item.parts) === "done",
@@ -1531,7 +1531,10 @@ describe("child cell", () => {
         if (Predicate.isUndefined(child?.activeBranchId)) {
           return yield* Effect.die("Missing child session")
         }
-        const childResults = (yield* client.message.list({ branchId: child.activeBranchId }))
+        const childResults = (yield* client.message.list({
+          sessionId: child.id,
+          branchId: child.activeBranchId,
+        }))
           .flatMap((message) => message.parts)
           .filter((part) => part.type === "tool-result" && part.name === "cell")
         expect(childResults).toHaveLength(1)
@@ -1699,7 +1702,7 @@ describe("branch cell lifetime", () => {
             item.metadata?.customType === "thread-round-end"
           if (turn.send) yield* client.message.send({ sessionId, branchId, content })
           else completions += 1
-          const messages = yield* waitFor(client.message.list({ branchId }), (items) => {
+          const messages = yield* waitFor(client.message.list({ sessionId, branchId }), (items) => {
             if (turn.send)
               return items.some(
                 (item) => item.role === "user" && messagePartsText(item.parts) === content,
@@ -1719,14 +1722,14 @@ describe("branch cell lifetime", () => {
             Stream.take(1),
             Stream.runDrain,
           )
-          const completed = yield* client.message.list({ branchId })
+          const completed = yield* client.message.list({ sessionId, branchId })
           const results = completed
             .flatMap((message) => message.parts)
             .filter((part) => part.type === "tool-result" && part.name === "cell")
           expect(results.at(-1)).toMatchObject({ isFailure: false, result: { display: "true" } })
           if (index === 5) yield* controls.emitAll(12)
         }
-        const parentMessages = yield* client.message.list({ branchId })
+        const parentMessages = yield* client.message.list({ sessionId, branchId })
         // Only the finished round woke the parent; the stopped one told its stopper.
         const notices = parentMessages.filter(
           (item) => item.metadata?.customType === "thread-round-end",
@@ -1734,7 +1737,10 @@ describe("branch cell lifetime", () => {
         expect(notices).toHaveLength(1)
         expect(messagePartsText(notices[0]?.parts ?? [])).toContain("verified child result")
         const saved = yield* Effect.fromOption(yield* Ref.get(handle))
-        const childMessages = yield* client.message.list({ branchId: saved.branchId })
+        const childMessages = yield* client.message.list({
+          sessionId: saved.sessionId,
+          branchId: saved.branchId,
+        })
         expect(childMessages.filter((message) => message.role === "user")).toHaveLength(1)
         expect(yield* controls.callCount).toBe(16)
         yield* controls.assertDone
@@ -1815,7 +1821,7 @@ describe("branch cell lifetime", () => {
               const content = `run-${index}`
               yield* client.message.send({ sessionId, branchId: targetBranch, content })
               const messages = yield* waitFor(
-                client.message.list({ branchId: targetBranch }),
+                client.message.list({ sessionId, branchId: targetBranch }),
                 (messages) =>
                   messages.some(
                     (message) =>
@@ -1853,7 +1859,7 @@ describe("branch cell lifetime", () => {
                 Stream.take(1),
                 Stream.runDrain,
               )
-              const completed = yield* client.message.list({ branchId: targetBranch })
+              const completed = yield* client.message.list({ sessionId, branchId: targetBranch })
               const results = completed
                 .flatMap((message) => message.parts)
                 .filter((part) => part.type === "tool-result")
@@ -2248,7 +2254,7 @@ describe("saved cell recovery through RPC", () => {
             })
           }
           yield* Fiber.join(finished)
-          const messages = yield* client.message.list({ branchId })
+          const messages = yield* client.message.list({ sessionId, branchId })
           expect(
             messages.some(
               (message) =>

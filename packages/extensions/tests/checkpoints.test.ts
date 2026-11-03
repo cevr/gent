@@ -179,7 +179,7 @@ const checkpointSession = (cwd: string, home: string, steps: Steps) =>
         Effect.gen(function* () {
           yield* client.message.send({ ...target, content })
           yield* waitFor(
-            client.message.list({ branchId: target.branchId }),
+            client.message.list({ sessionId: target.sessionId, branchId: target.branchId }),
             (messages) =>
               messages.some(
                 (message) =>
@@ -785,7 +785,7 @@ describe("turn reverts", () => {
           expect(yield* contentOf(repo, "a.txt")).toBe("two")
           yield* session.controls.emitAll(2)
           yield* waitFor(
-            session.client.message.list({ branchId: near.branchId }),
+            session.client.message.list({ sessionId: near.sessionId, branchId: near.branchId }),
             (messages) => messages.some((message) => messagePartsText(message.parts) === "near 1"),
             8000,
             "near reply",
@@ -828,7 +828,10 @@ describe("turn reverts", () => {
           expect(forked).not.toBe(session.branchId)
           expect(yield* contentOf(repo, "b.txt")).toBe("<absent>")
           expect(yield* contentOf(repo, "a.txt")).toBe("two")
-          const copied = yield* session.client.message.list({ branchId: forked })
+          const copied = yield* session.client.message.list({
+            sessionId: session.sessionId,
+            branchId: forked,
+          })
           expect(copied.at(-1)?.role).toBe("assistant")
           expect(messagePartsText(copied.at(-1)?.parts ?? [])).toBe("done 1")
           expect(yield* session.revert("revert-1", bothOf(1))).toEqual(outcome)

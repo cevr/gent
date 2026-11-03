@@ -1,7 +1,8 @@
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Headers } from "effect/http"
 import { RpcMiddleware } from "effect/rpc"
-import { CurrentWorkspaceId, WorkspaceId } from "../domain/ids.js"
+import { StorageError } from "../domain/errors.js"
+import { CurrentWorkspaceId, SessionId, WorkspaceId } from "../domain/ids.js"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- a client and its server derive the wire id in separate processes; it is pinned to node:crypto sha256, not an adapter's hash
 import { createHash } from "node:crypto"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- sync, context-free canonicalization: the wire id must not depend on a Path layer being wired
@@ -74,11 +75,36 @@ export const provideWorkspaceIdHeader =
         ),
     })
 
+const decodeSessionField = Schema.decodeUnknownOption(Schema.Struct({ sessionId: SessionId }))
+const decodeCommandField = Schema.decodeUnknownOption(
+  Schema.Struct({ command: Schema.Struct({ sessionId: SessionId }) }),
+)
+const decodeSessionScope = Schema.decodeUnknownOption(
+  Schema.Struct({ scope: Schema.TaggedStruct("Session", { id: SessionId }) }),
+)
+
+/**
+ * The session an RPC request names, in the three shapes the contract uses: a
+ * `sessionId` field, a steer command's `sessionId`, or a `Session` status
+ * scope. None for a server-scoped call (`session.create`, `session.list`, the
+ * pool and auth-store calls); `session.create`'s `parentSessionId` names the
+ * parent, not the session the call runs in.
+ */
+export const sessionNamedBy = (request: { readonly payload: unknown }): Option.Option<SessionId> =>
+  Option.firstSomeOf([
+    decodeSessionField(request.payload).pipe(Option.map(({ sessionId }) => sessionId)),
+    decodeCommandField(request.payload).pipe(Option.map(({ command }) => command.sessionId)),
+    decodeSessionScope(request.payload).pipe(Option.map(({ scope }) => scope.id)),
+  ])
+
+/**
+ * Provides `CurrentWorkspaceId` to every RPC handler. The header names the
+ * client's workspace; a call that names a stored session runs in the
+ * workspace that session is stored under instead, so a client in any
+ * directory reaches the one loop of the session. The server composes the
+ * layer (`RpcHandlersLive`), because it reads the session store.
+ */
 export class WorkspaceRpcMiddleware extends RpcMiddleware.Service<WorkspaceRpcMiddleware>()(
   "@gent/core/src/server/workspace-rpc/WorkspaceRpcMiddleware",
-  { error: WorkspaceHeaderError },
-) {
-  static Live = Layer.succeed(WorkspaceRpcMiddleware, (effect, options) =>
-    effect.pipe(provideWorkspaceIdHeader(options.headers)),
-  )
-}
+  { error: Schema.Union([WorkspaceHeaderError, StorageError]) },
+) {}

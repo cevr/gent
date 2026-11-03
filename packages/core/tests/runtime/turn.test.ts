@@ -7986,7 +7986,7 @@ describe("model-change notice", () => {
         })
         yield* Deferred.succeed(gate.release, void 0)
         const messages = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (current) =>
             current.some((message) =>
               message.parts.some(
@@ -8046,7 +8046,7 @@ describe("model-change notice", () => {
         })
         yield* controls.emitAll(0)
         yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (current) =>
             current.some((message) =>
               message.parts.some(
@@ -8142,7 +8142,7 @@ describe("model-change notice", () => {
               content: "continue",
             })
             yield* waitFor(
-              client.message.list({ branchId: started.branchId }),
+              client.message.list({ sessionId: started.sessionId, branchId: started.branchId }),
               (messages) =>
                 messages.some((message) =>
                   message.parts.some(
@@ -8191,7 +8191,7 @@ describe("model-change notice", () => {
         })
         const answered = (reply: string) =>
           waitFor(
-            client.message.list({ branchId }),
+            client.message.list({ sessionId, branchId }),
             (current) =>
               current.some((message) =>
                 message.parts.some((part) => part.type === "text" && part.text === reply),
@@ -8240,7 +8240,7 @@ describe("model-change notice", () => {
         })
         yield* client.message.send({ sessionId, branchId, content: "first turn" })
         yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (current) => current.some((message) => message.role === "assistant"),
           10_000,
           "the first turn answered",
@@ -8253,7 +8253,7 @@ describe("model-change notice", () => {
         const newPrompt = "SECOND-USER-PROMPT"
         yield* client.message.send({ sessionId, branchId, content: newPrompt })
         const messages = yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (current) => current.filter((message) => message.role === "assistant").length >= 2,
           15_000,
           "the second turn answered",
@@ -8711,7 +8711,7 @@ describe("virtual model routing", () => {
           })
           yield* client.message.send({ sessionId, branchId, content: "second" })
           const events = yield* afterTurns(2)
-          const messages = yield* client.message.list({ branchId })
+          const messages = yield* client.message.list({ sessionId, branchId })
           const [prompt] = seen
           return {
             models: stepModels(events),
@@ -9028,7 +9028,7 @@ describe("virtual model routing", () => {
         })
         expect(routedEvents(first)[0]?.choice).toBeUndefined()
         expect(yield* Ref.get(calls)).toBe(0)
-        const messages = yield* client.message.list({ branchId })
+        const messages = yield* client.message.list({ sessionId, branchId })
         expect(messages.some((message) => message.metadata?.customType === "model-change")).toBe(
           false,
         )
@@ -11188,7 +11188,7 @@ describe("turn record", () => {
         )
         yield* client.message.send({ sessionId, branchId, content: "run the probe" })
         yield* Fiber.join(completed)
-        const messages = yield* client.message.list({ branchId })
+        const messages = yield* client.message.list({ sessionId, branchId })
         const messageId = openingTurnMessageId(messages)
         expect(Option.isSome(messageId)).toBe(true)
 
@@ -11283,7 +11283,7 @@ describe("turn record", () => {
               content: "continue",
             })
             yield* waitFor(
-              client.message.list({ branchId: started.branchId }),
+              client.message.list({ sessionId: started.sessionId, branchId: started.branchId }),
               (messages) =>
                 messages.some((message) =>
                   message.parts.some(
@@ -11355,7 +11355,7 @@ describe("turn record", () => {
               content: "continue",
             })
             yield* waitFor(
-              client.message.list({ branchId: started.branchId }),
+              client.message.list({ sessionId: started.sessionId, branchId: started.branchId }),
               (messages) =>
                 messages.some((message) =>
                   message.parts.some(
@@ -11441,7 +11441,7 @@ describe("turn record", () => {
               content: "continue",
             })
             yield* waitFor(
-              client.message.list({ branchId: started.branchId }),
+              client.message.list({ sessionId: started.sessionId, branchId: started.branchId }),
               (messages) =>
                 messages.some((message) =>
                   message.parts.some(
@@ -11534,7 +11534,7 @@ describe("turn record", () => {
               content: "continue",
             })
             yield* waitFor(
-              client.message.list({ branchId: started.branchId }),
+              client.message.list({ sessionId: started.sessionId, branchId: started.branchId }),
               (messages) =>
                 messages.some((message) =>
                   message.parts.some(

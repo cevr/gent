@@ -683,7 +683,7 @@ describe("loop residency", () => {
         yield* controls.emitAll(0)
         yield* Fiber.join(completed)
         expect(yield* controls.callCount).toBe(1)
-        const messages = yield* client.message.list({ branchId })
+        const messages = yield* client.message.list({ sessionId, branchId })
         expect(
           messages.some((message) =>
             message.parts.some(
@@ -2815,7 +2815,7 @@ describe("loop open hooks", () => {
             // A turn on the open loop does not open it again.
             yield* client.message.send({ ...started, content: "again" })
             yield* waitFor(
-              client.message.list({ branchId: started.branchId }),
+              client.message.list({ sessionId: started.sessionId, branchId: started.branchId }),
               (messages) => hasAssistantText(messages, "second answer"),
               5_000,
               "the second turn answered",
@@ -2954,7 +2954,7 @@ describe("loop open hooks", () => {
               message.role === "user" &&
               messagePartsText(message.parts) === "work was lost in the restart"
             const messages = yield* waitFor(
-              client.message.list({ branchId: started.branchId }),
+              client.message.list({ sessionId: started.sessionId, branchId: started.branchId }),
               (all) => hasAssistantText(all, "noticed the loss") && all.some(isNotice),
               5_000,
               "the queued notice started a turn",
@@ -3092,7 +3092,7 @@ describe("loop open hooks", () => {
       yield* client.message.send({ sessionId, branchId, content: "are you there?" })
       yield* Deferred.await(later)
       yield* waitFor(
-        client.message.list({ branchId }),
+        client.message.list({ sessionId, branchId }),
         (all) => hasAssistantText(all, "still answering"),
         5_000,
         "the turn answered",
@@ -3134,7 +3134,7 @@ describe("loop open hooks", () => {
         yield* Deferred.await(hanging)
         yield* Deferred.await(later)
         yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (all) => hasAssistantText(all, "not held up"),
           5_000,
           "the turn answered while a loopOpen hook still ran",
@@ -3516,7 +3516,7 @@ describe("turn stop", () => {
         yield* client.message.send({ sessionId, branchId, content: "fresh" })
         yield* Fiber.join(completed)
         yield* controls.assertDone
-        const messages = yield* client.message.list({ branchId })
+        const messages = yield* client.message.list({ sessionId, branchId })
         const texts = messages
           .flatMap((message) => message.parts)
           .filter((part) => part.type === "text")
@@ -8148,12 +8148,18 @@ describe("a repeated durable send", () => {
             const { client } = yield* createRpcClient(layerFor(providerLayer))
             yield* client.session.getSnapshot(sender)
             yield* waitFor(
-              client.message.list({ branchId: targetBranch.branchId }),
+              client.message.list({
+                sessionId: targetBranch.sessionId,
+                branchId: targetBranch.branchId,
+              }),
               (messages) => hasAssistantText(messages, "resumed answer"),
               5_000,
               "the target's unfinished turn resumed",
             )
-            const messages = yield* client.message.list({ branchId: targetBranch.branchId })
+            const messages = yield* client.message.list({
+              sessionId: targetBranch.sessionId,
+              branchId: targetBranch.branchId,
+            })
             expect(messages.filter((message) => message.role === "user")).toHaveLength(1)
             expect(yield* Ref.get(targetCalls)).toBe(1)
           }),

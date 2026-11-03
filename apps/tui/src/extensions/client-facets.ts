@@ -234,10 +234,11 @@ export interface ClientTransport {
   readonly threadSessions: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Session>, ClientTransportRequestError>
-  /** Every durable message on one branch, in order. */
-  readonly listMessages: (
-    branchId: BranchId,
-  ) => Effect.Effect<ReadonlyArray<Message>, ClientTransportRequestError>
+  /** Every durable message on one branch of a session, in order. */
+  readonly listMessages: (target: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+  }) => Effect.Effect<ReadonlyArray<Message>, ClientTransportRequestError>
   /** Route one agent to a driver; the server rejects unknown driver ids. */
   readonly driverSet: (input: {
     readonly agentName: AgentName
@@ -291,8 +292,8 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
     ),
   threadSessions: (sessionId) =>
     shellRead(payload, "session.thread", (client) => client.session.thread({ sessionId })),
-  listMessages: (branchId) =>
-    shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
+  listMessages: (target) =>
+    shellRead(payload, "message.list", (client) => client.message.list(target)),
   // Drivers belong to the active session's profile: its project drivers count.
   driverSet: ({ agentName, driverId }) =>
     shellRead(payload, "driver.set", (client) =>

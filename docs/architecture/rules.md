@@ -10,9 +10,12 @@ commit.
    (the extension surface rejects a Promise at compile time) and `.oxlintrc.json`
    (`effect/noAsyncFunction`, `effect/noPromiseChainsInTests`).
 2. **One actor per (workspace, session, branch).** The agent loop is an
-   effect-encore entity; every session mutation crosses its mailbox.
+   effect-encore entity; every session mutation crosses its mailbox. The
+   workspace is the session's stored one, whichever client calls.
    Receipts: `packages/core/src/runtime/agent-loop.ts`,
-   `packages/core/src/domain/agent-loop.ts`.
+   `packages/core/src/domain/agent-loop.ts`, `WorkspaceRpcMiddlewareLive` in
+   `packages/core/src/server/server.ts`, and "a session's workspace" in
+   `packages/core/tests/server/server.test.ts`.
 3. **Everything is an extension of the loop.** Core registers zero tools;
    drivers, tools, requests, resources, hooks, and TUI facets arrive through the
    extension API. Receipts: `packages/core/src/extensions/api.ts`,

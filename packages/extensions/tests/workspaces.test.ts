@@ -1657,10 +1657,10 @@ describe("a snapshot thread", () => {
         // The starter's scopes resolve against the starter's cwd, not the copy.
         expect(yield* exists(`${copy}/thread.txt`)).toBe(false)
         expect(yield* exists(`${origin}/thread.txt`)).toBe(false)
-        const branches = yield* harness.client.branch.list({
-          sessionId: thread?.id ?? harness.sessionId,
-        })
+        const threadId = thread?.id ?? harness.sessionId
+        const branches = yield* harness.client.branch.list({ sessionId: threadId })
         const messages = yield* harness.client.message.list({
+          sessionId: threadId,
           branchId: branches[0]?.id ?? harness.branchId,
         })
         const results = messages

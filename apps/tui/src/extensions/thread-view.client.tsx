@@ -259,9 +259,10 @@ export const makeThreadController = (
   fetchSessions: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Session>, { readonly message: string }>,
-  fetchMessages: (
-    branchId: BranchId,
-  ) => Effect.Effect<ReadonlyArray<Message>, { readonly message: string }>,
+  fetchMessages: (target: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<ReadonlyArray<Message>, { readonly message: string }>,
   fetchOmitted: (active: {
     sessionId: SessionId
     branchId: BranchId
@@ -289,7 +290,7 @@ export const makeThreadController = (
             Option.match(branchFor(session, active), {
               onNone: () => Effect.succeed<ReadonlyArray<ThreadWindow>>([]),
               onSome: (branchId) =>
-                Effect.map(fetchMessages(branchId), (messages) =>
+                Effect.map(fetchMessages({ sessionId: session.id, branchId }), (messages) =>
                   windowsOf(session, branchId, messages),
                 ),
             }),
@@ -441,9 +442,9 @@ export default defineClientExtension(THREAD_VIEW_EXTENSION_ID, {
         transport
           .threadSessions(sessionId)
           .pipe(Effect.mapError((error) => ({ message: error.message }))),
-      (branchId) =>
+      (target) =>
         transport
-          .listMessages(branchId)
+          .listMessages(target)
           .pipe(Effect.mapError((error) => ({ message: error.message }))),
       (active) =>
         transport.agentDetail(active).pipe(

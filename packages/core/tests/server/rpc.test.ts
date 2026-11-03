@@ -2465,7 +2465,7 @@ describe("extension requests and slash commands", () => {
               .toArray()
           yield* client.message.send({ sessionId, branchId, content: "warm the branch" })
           yield* waitFor(
-            client.message.list({ branchId }),
+            client.message.list({ sessionId, branchId }),
             (messages) => assistantReplies(messages).includes("first reply"),
             4000,
             "first reply",
@@ -2482,7 +2482,7 @@ describe("extension requests and slash commands", () => {
             })
             .pipe(Effect.timeout("4 seconds"))
           const messages = yield* waitFor(
-            client.message.list({ branchId }),
+            client.message.list({ sessionId, branchId }),
             (current) => assistantReplies(current).includes("follow-up reply"),
             4000,
             "follow-up reply",
@@ -3247,7 +3247,7 @@ describe("event subscriptions", () => {
         expect(fresh[1]?.id).toBe(fresh[0]?.id)
         yield* client.message.send({ sessionId, branchId, content: "sync" })
         yield* waitFor(
-          client.message.list({ branchId }),
+          client.message.list({ sessionId, branchId }),
           (messages) =>
             messages.some(
               (message) =>
@@ -3326,14 +3326,14 @@ describe("extension branch forks", () => {
         for (const [index, content] of ["first", "second"].entries()) {
           yield* client.message.send({ sessionId, branchId, content })
           yield* waitFor(
-            client.message.list({ branchId }),
+            client.message.list({ sessionId, branchId }),
             (messages) =>
               messages.filter((message) => message.role === "assistant").length === index + 1,
             4000,
             `reply to ${content}`,
           )
         }
-        const before = yield* client.message.list({ branchId })
+        const before = yield* client.message.list({ sessionId, branchId })
         const firstAnswer = before.find(
           (message) =>
             message.role === "assistant" && messagePartsText(message.parts) === "first answer",
@@ -3359,12 +3359,12 @@ describe("extension branch forks", () => {
         expect(made?.parentBranchId).toBe(branchId)
         expect(made?.name).toBe("rewound")
         // The fork holds the conversation up to the message; the old branch keeps all of it.
-        const copied = yield* client.message.list({ branchId: forked })
+        const copied = yield* client.message.list({ sessionId, branchId: forked })
         expect(copied.map((message) => messagePartsText(message.parts))).toEqual([
           "first",
           "first answer",
         ])
-        expect((yield* client.message.list({ branchId })).length).toBe(before.length)
+        expect((yield* client.message.list({ sessionId, branchId })).length).toBe(before.length)
         // The session's active branch did not move.
         const session = (yield* client.session.list()).find((found) => found.id === sessionId)
         expect(session?.activeBranchId).toBe(branchId)
@@ -4652,6 +4652,8 @@ describe("session profile lookup", () => {
     const exempt = {
       "session.create": "it makes the session",
       "session.list": "it lists every session",
+      // The two below name their session inside the payload; `sessionNamedBy`
+      // (workspace-rpc.ts) reads both, so each runs in its session's workspace.
       "steer.command": "the session is inside the command",
       "extension.listStatus": "its scope names the session or the launch",
       "driver.clear": "it writes the user config, which no session owns",
@@ -4662,8 +4664,6 @@ describe("session profile lookup", () => {
         "it writes the peer server's facts on the server's accounts, which no session owns",
       "extension.serverRequest": "a server request answers the server, with no session",
       "review.window": "it reads every workspace's sessions in a time window",
-      // Owner question: a required `sessionId` here is a wire change that is not additive.
-      "message.list": "it reads a branch by its id; owner question",
     }
     const requiresSession = (payload: Schema.Top): boolean => {
       const ast = payload.ast
