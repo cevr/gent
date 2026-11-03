@@ -1655,7 +1655,8 @@ describe("the release a contract names", () => {
         Effect.gen(function* () {
           const root = yield* makeTempDirectoryScoped("gent-release-")
           const outside = yield* captureRelease(root).pipe(Effect.flip)
-          expect(outside.reason).toStartWith("git rev-parse")
+          // No `.git` at or above it: found without git.
+          expect(outside.reason).toBe("no repository holds the directory")
           yield* checkout(`${root}/clean`, "one")
           const clean = yield* captureRelease(`${root}/clean`)
           // The same clean checkout, read by processes whose PATH holds no git.
