@@ -58,6 +58,7 @@ import {
   stringifyOutput,
   summarizeToolResult,
   openedByClient,
+  type TurnLane,
 } from "../domain/message.js"
 import {
   type BranchId,
@@ -166,7 +167,6 @@ import {
   SessionStorage,
   type StorageTransaction,
   ToolCallBindingStorage,
-  type TurnLane,
   type TurnRecord,
   TurnRecordStorage,
 } from "../storage/storage.js"
@@ -7552,7 +7552,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               sessionId: scope.sessionId,
               messageId: state.message.id,
               own: known.selection,
-              resumed: kept,
+              // The record's lane, else the one its admission stored in the
+              // slot: a turn a restart opens before its record has one is
+              // still the run its start was admitted as.
+              resumed: Option.orElse(kept, () => Option.fromUndefinedOr(state.lane)),
             }),
           ),
           Effect.catch((error) =>

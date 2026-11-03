@@ -8162,6 +8162,39 @@ describe("account lanes", () => {
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect(
+    "the admitted lane a held grant names carries its Sabbath, changes nothing, and is gone once its turn opens",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        const { placement } = fixture
+        const sabbath = sabbathAround(0, EQUATOR)
+        yield* TestClock.setTime(sabbath.start - 2 * MINUTE)
+        yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+        // No start holds a grant under a key it never asked with.
+        expect(yield* placement.admittedLane("never-asked")).toEqual(Option.none())
+        expect(
+          yield* askLane(placement, Option.none(), "granted", planModel, Option.some(EQUATOR)),
+        ).toBe("admitted")
+        expect(yield* askLane(placement, Option.none(), "plain")).toBe("admitted")
+        expect(yield* placement.admittedLane("granted")).toEqual(Option.some({ sabbath: EQUATOR }))
+        expect(yield* placement.admittedLane("plain")).toEqual(Option.some({}))
+        // A read changes nothing: the grant is still there to read, and to open.
+        expect(yield* placement.admittedLane("granted")).toEqual(Option.some({ sabbath: EQUATOR }))
+        // The lane a turn resumes from it is the lane its grant opens.
+        const opened = yield* placement.openLane({
+          sessionId: SessionId.make("worker"),
+          key: "granted",
+          provider: "plan",
+          scope: [receiptOf(a)],
+          model: planModel,
+          resumed: Option.none(),
+        })
+        expect(opened).toEqual(Option.some({ sabbath: EQUATOR }))
+        expect(yield* placement.admittedLane("granted")).toEqual(Option.none())
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("an account hold that ends while runs wait frees its lanes to the queue", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()

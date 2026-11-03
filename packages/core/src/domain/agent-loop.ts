@@ -7,6 +7,7 @@ import {
   RequesterBranch,
   type SessionAdmission,
   SteerCommand,
+  TurnLane,
 } from "./message.js"
 import {
   ActorCommandId,
@@ -68,6 +69,8 @@ export const asAgentLoopError = (message: string) =>
 const RunningTurnFields = {
   message: Message,
   startedAtMs: Schema.Finite,
+  /** The admitted lane its queued item carried (`QueuedTurnItem.lane`); absent on the owner's turn. */
+  lane: Schema.optional(TurnLane),
 }
 
 // ── Phase-tagged loop state (flat, actor-owned) ─────────────────────────────
@@ -403,6 +406,7 @@ export const buildIdleState = (): IdleState => LoopState.cases.Idle.make({})
  */
 type TurnOrigin = {
   readonly message: Message
+  readonly lane?: TurnLane
 }
 
 export const buildRunningState = (
@@ -412,6 +416,7 @@ export const buildRunningState = (
   LoopState.cases.Running.make({
     message: item.message,
     startedAtMs: options.startedAtMs,
+    ...omitUndefined({ lane: item.lane }),
   })
 
 export const toWaitingForInteractionState = (params: {
@@ -422,6 +427,7 @@ export const toWaitingForInteractionState = (params: {
     message: params.state.message,
     startedAtMs: params.state.startedAtMs,
     pendingRequestId: params.pendingRequestId,
+    ...omitUndefined({ lane: params.state.lane }),
   })
 
 // ── entity-id ───────────────────────────────────────────────────────────────

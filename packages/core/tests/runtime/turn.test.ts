@@ -76,7 +76,7 @@ import {
   ProviderId,
   type ReasoningEffort,
 } from "../../src/domain/agent"
-import { ProviderError } from "../../src/domain/errors"
+import { ProviderError, StorageError } from "../../src/domain/errors"
 import { omitUndefined } from "../../src/domain/guards"
 import {
   finishPart,
@@ -113,12 +113,14 @@ import {
 } from "../../src/domain/event"
 import * as Prompt from "effect/ai/Prompt"
 import {
+  AgentLoopQueueStorage,
   EventStorage,
   MessageStorage,
   makeStorageTransaction,
   SessionOperationStorage,
   SessionStorage,
   ToolCallBindingStorage,
+  TurnRecordStorage,
 } from "../../src/storage/storage"
 import { EventStoreLive } from "../../src/runtime/session"
 import {
@@ -6920,6 +6922,300 @@ describe("credential order", () => {
         )
       }).pipe(Effect.scoped, Effect.provide(BunTestServices)),
     )
+  })
+
+  // ── an admitted run across a kill ─────────────────────────────────────────
+  //
+  // A start admitted to a lane is a run: its account's load counts it while
+  // its turn runs. Its admission stores the item in the branch's slot before
+  // it returns, so a kill anywhere from the admission to the message leaves
+  // a turn the next process runs on no grant (its placement is new). Each
+  // case takes a lane (or, as the owner's control, does not), submits, kills
+  // one process at one cut, and runs the work in a new process over the same
+  // store. The oracle reads its own record of "admitted as a run": the start
+  // took a lane, and its submit returned or its slot write committed. Every
+  // such run that a process runs is counted on its lane; no other turn is.
+  describe("an admitted run across a kill", () => {
+    const a = CredentialSlot.make("a")
+    const signIn = [[a, AuthApi.make({ type: "api", key: "sk-a", signedInAt: 1 })]] as const
+    /**
+     * Where a process dies, in the order an admission reaches them: in the
+     * slot write before it commits or after; in the turn before its lane
+     * opens or after; between its message and its lane in their one
+     * transaction; in its model call, after both committed; or nowhere.
+     */
+    type Cut =
+      | "slot-uncommitted"
+      | "slot-committed"
+      | "before-lane"
+      | "after-lane"
+      | "message-before-lane"
+      | "model-call"
+      | "none"
+    interface RunCase {
+      readonly cut: Cut
+      /** The processes that die at `cut` before one runs to the end. */
+      readonly kills: number
+      /** The start took a lane before its submit; false for the owner's own turn. */
+      readonly admitted: boolean
+    }
+    const TEXT = "the admitted run"
+    const asksForRun = (prompt: Prompt.Prompt) =>
+      prompt.content.some(
+        (message) =>
+          message.role === "user" &&
+          message.content.some((part) => part.type === "text" && part.text === TEXT),
+      )
+    /** A process's placement, new as a restart's is, reading one window of a's so its lanes list it. */
+    const freshPlacement = Effect.gen(function* () {
+      const placement = yield* placementOnTestHost(Option.none())
+      const now = yield* Clock.currentTimeMillis
+      yield* placement.noteQuota({
+        provider: FALLBACK,
+        slot: a,
+        signedInAt: Option.some(1),
+        readings: [
+          { window: "5h", utilization: 0.01, resetAt: now + 5 * 3_600_000, rejected: false },
+        ],
+      })
+      return placement
+    })
+
+    const runAcrossKill = (name: string, runCase: RunCase) =>
+      Effect.gen(function* () {
+        // One database outlives every process.
+        const shared = yield* Layer.build(testSqliteStorage)
+        const records = Context.get(shared, TurnRecordStorage)
+        const queues = Context.get(shared, AgentLoopQueueStorage)
+        const messageStorage = Context.get(shared, MessageStorage)
+        const ids = credentialRoot({ name: `admitted-${name}`, stored: [], replies: {} })
+        const target = { sessionId: ids.sessionId, branchId: ids.branchId }
+        const message = makeMessage(ids.sessionId, ids.branchId, TEXT)
+        // The test's own record of what the runtime accepted.
+        const submitted = yield* Ref.make(false)
+        const slotCommitted = yield* Ref.make(false)
+        // What each process saw of the run: its account's load at each model
+        // call, and whether its lane opened as an admitted run.
+        const loads = yield* Ref.make<
+          ReadonlyArray<{ readonly process: number; readonly load: number }>
+        >([])
+        const opened = yield* Ref.make<ReadonlyArray<boolean>>([])
+
+        const processRoot = (
+          process: number,
+          placement: CredentialPlacement["Service"],
+          dies: Option.Option<Deferred.Deferred<void>>,
+        ) => {
+          const at = (cut: Cut) => Option.filter(dies, () => runCase.cut === cut)
+          const stop = (reached: Deferred.Deferred<void>) =>
+            Deferred.succeed(reached, void 0).pipe(Effect.andThen(Effect.never))
+          const processRecords: TurnRecordStorage["Service"] = {
+            get: (key) => {
+              const cut = at("before-lane")
+              if (key.messageId === message.id && Option.isSome(cut)) return stop(cut.value)
+              return records.get(key)
+            },
+            put: (key, record) => {
+              const cut = at("message-before-lane")
+              if (
+                key.messageId === message.id &&
+                Predicate.isNotUndefined(record.lane) &&
+                Option.isSome(cut)
+              )
+                return stop(cut.value)
+              return records.put(key, record)
+            },
+          }
+          // The admission's slot write runs uninterruptibly, so a hang there
+          // would hold the process open; the write dies as a failed write
+          // does instead, and the process sees no more of the run.
+          const dieInSlot = (reached: Deferred.Deferred<void>) =>
+            Deferred.succeed(reached, void 0).pipe(
+              Effect.andThen(Effect.fail(new StorageError({ message: "killed" }))),
+            )
+          const processQueues: AgentLoopQueueStorage["Service"] = {
+            ...queues,
+            putQueueState: (sessionId, branchId, queue) =>
+              Effect.gen(function* () {
+                const holds = queue.inFlight?.message.id === message.id
+                const before = at("slot-uncommitted")
+                if (holds && Option.isSome(before)) return yield* dieInSlot(before.value)
+                yield* queues.putQueueState(sessionId, branchId, queue)
+                if (holds) yield* Ref.set(slotCommitted, true)
+                const after = at("slot-committed")
+                if (holds && Option.isSome(after)) return yield* dieInSlot(after.value)
+              }),
+          }
+          const processPlacement: CredentialPlacement["Service"] = {
+            ...placement,
+            openLane: (lane) =>
+              Effect.gen(function* () {
+                const answer = yield* placement.openLane(lane)
+                if (lane.key !== message.id) return answer
+                yield* Ref.update(opened, (seen) => [...seen, Option.isSome(answer)])
+                const cut = at("after-lane")
+                if (Option.isSome(cut)) return yield* stop(cut.value)
+                return answer
+              }),
+          }
+          return credentialRoot({
+            name: `admitted-${name}`,
+            order: [a],
+            stored: signIn,
+            replies: {},
+            storage: Layer.succeedContext(
+              Context.add(
+                Context.add(shared, TurnRecordStorage, processRecords),
+                AgentLoopQueueStorage,
+                processQueues,
+              ),
+            ),
+            placement: processPlacement,
+            respond: (_credential, prompt) => {
+              if (!asksForRun(prompt)) return answer("ok")(0)
+              return Stream.unwrap(
+                Effect.gen(function* () {
+                  const report = yield* placement.lanes(
+                    () => Effect.succeedSome([{ provider: fallbackProvider, slot: a }]),
+                    Option.none(),
+                  )
+                  const load =
+                    report.providers.find((lanes) => lanes.provider === FALLBACK)?.load ?? -1
+                  yield* Ref.update(loads, (seen) => [...seen, { process, load }])
+                  const cut = at("model-call")
+                  if (Option.isSome(cut)) return yield* stop(cut.value)
+                  return answer("done")(0)
+                }),
+              )
+            },
+          })
+        }
+        const ran = messageStorage
+          .getMessage(message.id)
+          .pipe(
+            Effect.map(
+              (row) =>
+                Predicate.isNotUndefined(row) && Predicate.isNotUndefined(row.turnDurationMs),
+            ),
+          )
+
+        // The first process: the start takes a lane under its message, as an
+        // extension's admit does, then submits. It dies at the cut.
+        const firstReached = yield* Deferred.make<void>()
+        const firstPlacement = yield* freshPlacement
+        const first = processRoot(
+          1,
+          firstPlacement,
+          Option.liftPredicate(firstReached, () => runCase.cut !== "none"),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            if (runCase.admitted) {
+              const admission = yield* firstPlacement.admitLane({
+                provider: FALLBACK,
+                scope: [{ provider: fallbackProvider, slot: a }],
+                key: message.id,
+                asker: Option.none(),
+                model: Option.some(fallbackModel),
+                sabbath: Option.none(),
+              })
+              expect(admission._tag).toBe("Admitted")
+              expect(yield* firstPlacement.awaitLane(message.id)).toBe(true)
+            }
+            const submit = yield* Effect.forkChild(
+              submitAgentLoop(message, first.admission).pipe(
+                Effect.andThen(Ref.set(submitted, true)),
+              ),
+            )
+            if (runCase.cut === "none") {
+              yield* Fiber.join(submit)
+              yield* waitFor(ran, (done) => done, 5_000, "the run ended")
+              return
+            }
+            yield* Deferred.await(firstReached)
+          }).pipe(Effect.provide(first.layer)),
+        )
+
+        // Each later process that dies opens the loop, which runs the work
+        // the kill left, and dies at the cut again.
+        let process = 1
+        for (let kill = 1; kill < runCase.kills; kill++) {
+          process++
+          const reached = yield* Deferred.make<void>()
+          const root = processRoot(process, yield* freshPlacement, Option.some(reached))
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const agentLoop = yield* makeAgentLoopService
+              yield* agentLoop.getState(target)
+              yield* Deferred.await(reached)
+            }).pipe(Effect.provide(root.layer)),
+          )
+        }
+
+        // The last process runs what is left to its end.
+        const accepted = (yield* Ref.get(submitted)) || (yield* Ref.get(slotCommitted))
+        const asRun = runCase.admitted && accepted
+        if (runCase.cut !== "none") {
+          process++
+          const root = processRoot(process, yield* freshPlacement, Option.none())
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const agentLoop = yield* makeAgentLoopService
+              yield* agentLoop.getState(target)
+              if (accepted)
+                yield* waitFor(ran, (done) => done, 5_000, "the run ended after the kill")
+              yield* waitForPhase(agentLoop, target, "Idle")
+            }).pipe(Effect.provide(root.layer)),
+          )
+        }
+
+        // Every accepted start ran; one whose slot write rolled back did not.
+        expect(yield* ran).toBe(accepted)
+        // Each model call of the run was counted on its lane, in every
+        // process, iff it was admitted as a run; the last process ran it.
+        const seen = yield* Ref.get(loads)
+        expect(seen.map((each) => each.load)).toEqual(seen.map(() => Number(asRun)))
+        expect(seen.filter((each) => each.process === process).length).toBe(Number(accepted))
+        const answers = yield* Ref.get(opened)
+        expect(answers).toEqual(answers.map(() => asRun))
+        // The turn's record keeps the admitted lane it ran as.
+        const record = yield* records.get({ ...target, messageId: message.id })
+        expect(Predicate.isNotUndefined(record.lane)).toBe(asRun)
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds"))
+
+    // Every cut of a run with one kill or two, and a run no kill reaches. A
+    // cut in the slot write is the first process's alone: it admits. The
+    // owner's own turn, at each cut it reaches, is never counted.
+    const turnCuts: ReadonlyArray<Cut> = [
+      "before-lane",
+      "after-lane",
+      "message-before-lane",
+      "model-call",
+    ]
+    const cases: ReadonlyArray<RunCase> = [
+      ...turnCuts.flatMap((cut) => [1, 2].map((kills) => ({ cut, kills, admitted: true }))),
+      ...(["slot-uncommitted", "slot-committed", "none"] as const).map((cut) => ({
+        cut,
+        kills: 1,
+        admitted: true,
+      })),
+      ...(["slot-committed", "before-lane", "after-lane", "model-call", "none"] as const).map(
+        (cut) => ({ cut, kills: 1, admitted: false }),
+      ),
+    ]
+    const roles = {
+      true: { who: "an admitted run", tag: "run" },
+      false: { who: "the owner's turn", tag: "own" },
+    } as const
+    for (const each of cases) {
+      const { who, tag } = roles[`${each.admitted}`]
+      const name = `${tag}-${each.cut}-${each.kills}`
+      it.live(
+        `${who} cut at ${each.cut}, ${each.kills} kill(s): counted on its lane iff admitted as a run`,
+        () => runAcrossKill(name, each),
+        25_000,
+      )
+    }
   })
 })
 

@@ -97,8 +97,12 @@ Shape:
   stores its message, with its turn record's lane in the same transaction,
   then clears the slot. A kill between the admission and the message leaves
   the slot, and a stored queue with an item in flight always wakes on
-  recovery (`wantsWakeOnRecovery`), so the next build runs the item once. A
-  turn run from the slot opens no lane: its start's grant was in memory.
+  recovery (`wantsWakeOnRecovery`), so the next build runs the item once.
+  An item whose start holds an admitted lane carries that lane, with its
+  Sabbath, in the same slot write (`QueuedTurnItem.lane`, read from
+  `CredentialPlacement.admittedLane`). A turn run from the slot opens on no
+  grant, and resumes that lane when its record keeps none, so it counts as
+  the run it was admitted as and stops in its Sabbath.
 - Deferred recovery: the open of a loop starts no turn. The loop is built
   with `recoveryDeferred` set when it finds work a restart left (a user turn
   in the history with no completion, or a stored queue that wakes on

@@ -65,9 +65,9 @@ import {
   type Message,
   Session,
   SessionAdmission,
+  TurnLane,
 } from "../domain/message.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
-import { Sabbath } from "../runtime/config.js"
 import { omitUndefined } from "../domain/guards.js"
 import { toolImageDigests } from "../runtime/tool-image.js"
 import {
@@ -2338,15 +2338,6 @@ export const PendingToolCall = Schema.Struct({
   kept: Schema.optional(KeptToolCallVerdict),
 })
 export type PendingToolCall = typeof PendingToolCall.Type
-
-/**
- * The admitted lane a turn opened on, as its record keeps it, with the
- * owner's Sabbath of that lane. A restart opens the turn on no grant: it
- * counts as an admitted run all the same, and stops in that Sabbath. A turn
- * no start admitted (the owner's own) keeps none.
- */
-export const TurnLane = Schema.Struct({ sabbath: Schema.optional(Sabbath) })
-export type TurnLane = typeof TurnLane.Type
 
 export const TurnRecord = Schema.Struct({
   /** The last step whose assistant and tool messages committed. 0 before step 1. */

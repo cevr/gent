@@ -1551,6 +1551,7 @@ const makeHarness = (
       turnSettled: () => Effect.succeed(false),
       steerDecided: () => Effect.succeed(false),
       latestStep: Effect.succeedNone,
+      admittedLane: () => Effect.succeedNone,
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
@@ -5476,6 +5477,7 @@ describe("loop inbox", () => {
         // The running turn opened on "busy", so its message is stored.
         steerDecided: (messageId) => Effect.succeed(messageId === MessageId.make("busy")),
         latestStep: Effect.succeedSome(MessageId.make("busy")),
+        admittedLane: () => Effect.succeedNone,
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),

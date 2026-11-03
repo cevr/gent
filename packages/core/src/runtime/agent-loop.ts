@@ -56,6 +56,7 @@ import {
   QueueSnapshot,
   type RequesterBranch,
   requesterBranchKey,
+  type TurnLane,
   SteeringQueueEntryInfo,
   SteerCommand,
 } from "../domain/message.js"
@@ -169,7 +170,7 @@ import type {
 } from "../domain/capability.js"
 import type { StorageError } from "../domain/errors.js"
 import {
-  type CredentialPlacement,
+  CredentialPlacement,
   type DecisionModelResolver,
   makeExtensionModels,
   type ModelRegistry,
@@ -648,6 +649,8 @@ type LoopInboxContext = {
    * the runtime wrote, nor a steer a running turn joined (`isRuntimeUserMessage`).
    */
   readonly latestStep: Effect.Effect<Option.Option<MessageId>, AgentLoopError>
+  /** The admitted lane the start of this message holds (`CredentialPlacement.admittedLane`). */
+  readonly admittedLane: (messageId: MessageId) => Effect.Effect<Option.Option<TurnLane>>
 }
 
 /** Admission options: `ifLatest` admits the item only on that condition, and starts it at once. */
@@ -877,11 +880,18 @@ export const makeLoopInbox = (
     )
 
     const admit = Effect.fn("LoopInbox.admit")(function* (
-      item: QueuedTurnItem,
+      sent: QueuedTurnItem,
       options: LoopAdmission,
     ) {
       const startedAtMs = yield* Clock.currentTimeMillis
-      if (yield* scope.turnSettled(item.message.id)) return Option.none<RunningState>()
+      if (yield* scope.turnSettled(sent.message.id)) return Option.none<RunningState>()
+      // A start admitted to a lane is a run: the item keeps that fact in the
+      // slot write that admits it, so a turn a restart opens from the slot,
+      // on no grant, counts as the run it was admitted as.
+      const item: QueuedTurnItem = Option.match(yield* scope.admittedLane(sent.message.id), {
+        onNone: () => sent,
+        onSome: (lane) => ({ ...sent, lane }),
+      })
       const condition = Option.fromUndefinedOr(options.ifLatest)
       let latest = Option.none<MessageId>()
       if (Option.isSome(condition)) latest = yield* scope.latestStep
@@ -2084,6 +2094,7 @@ const makeAgentLoopBehavior = (
     const approval = yield* ApprovalService
     const messageStorage = yield* MessageStorage
     const operations = yield* SessionOperationStorage
+    const placement = yield* CredentialPlacement
     const recoveryEvents = yield* EventStorage
     const interactions = yield* InteractionStorage
     const host = yield* makeExtensionHostPlatform
@@ -2650,6 +2661,7 @@ const makeAgentLoopBehavior = (
         ),
         asAgentLoopError("Cannot read the branch's newest message"),
       ),
+      admittedLane: placement.admittedLane,
     })
 
     const recordTurnFailure = (cause: Cause.Cause<unknown>, messageId: MessageId) =>
