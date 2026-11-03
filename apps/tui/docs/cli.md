@@ -293,7 +293,8 @@ bytes, tracked (by `HEAD` or the index) or untracked and not ignored,
 `bun.lock` among them. Two machines match on one commit with one working
 tree and the same Bun. No git filter, diff driver, line-ending or case
 setting, and no index flag or staged edit, changes this. A FIFO, socket or
-device at a tracked path, a nested repository, a `core.worktree` that moves
+device at a tracked path, a nested repository, an index holding a conflict
+or missing its split index's shared file, a `core.worktree` that moves
 the working tree elsewhere, a `bun.lock` that is not a regular file, or a
 capture exceeding 10 seconds makes the release
 unknown and the link incompatible. For an install, matching means two
