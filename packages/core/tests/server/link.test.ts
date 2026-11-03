@@ -1835,15 +1835,21 @@ const utf8 = (text: string) => new TextEncoder().encode(text)
 const pick = <A>(random: Random, from: ReadonlyArray<A>): A => from[random(from.length)] ?? from[0]!
 
 /**
- * Git with no user or system config, its stdout as bytes: the oracle's only
- * git. Bun's own spawn, so the oracle shares no process code with the product.
+ * Git with only PATH inherited and HOME in the scoped fixture directory,
+ * without user or system config, its stdout as bytes: the oracle's only git.
+ * Bun's own spawn, so the oracle shares no process code with the product.
  */
 const rawGit = (directory: string, args: ReadonlyArray<string>) => {
   // oxlint-disable-next-line effect/noGlobals -- the oracle runs git without the product's runProcess
   const run = Bun.spawnSync(["git", ...args], {
     cwd: directory,
-    // oxlint-disable-next-line effect/noGlobals -- the oracle's git inherits this process's PATH
-    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    env: {
+      // oxlint-disable-next-line effect/noGlobals -- the oracle's git inherits only this process's PATH
+      PATH: process.env["PATH"],
+      HOME: directory,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    },
   })
   expect(run.exitCode, run.stderr.toString()).toBe(0)
   return run.stdout
