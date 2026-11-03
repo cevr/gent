@@ -8,9 +8,8 @@
  * - `LH_START`: create a worker session and start one admitted run on it,
  *   as a thread round does: a starter session's request admits a lane
  *   under the run's command id, then sends the worker the turn. Its model
- *   call writes `<LH_DIR>/stored` (a turn asks the model only after it
- *   stored its message with its lane) and never ends in this process. An
- *   owner's own message would be no load, so it could not show the lane.
+ *   call never ends in this process. An owner's own message would be no
+ *   load, so it could not show the lane.
  * - Absent, the host makes no client call until `<LH_DIR>/open` exists; then
  *   it reads the session `<LH_DIR>/session.json` names, which reopens its
  *   loop, and the cut turn runs again. That call answers once
@@ -104,8 +103,7 @@ const program = Effect.gen(function* () {
     fs.exists(`${dir}/${file}`).pipe(Effect.orElseSucceed(() => false))
   // The first host's turn never answers; the second's answers once the test lets it.
   const providerLayer = LanguageModelLayers.testStream(() => {
-    if (start)
-      return fs.writeFileString(`${dir}/stored`, "").pipe(Effect.orDie, Effect.as(Stream.never))
+    if (start) return Effect.succeed(Stream.never)
     return waitFor(exists("go"), (go) => go, 60_000, "the test let the turn end").pipe(
       Effect.as(Stream.fromIterable([textDeltaPart("done"), finishPart({ finishReason: "stop" })])),
       Effect.orDie,

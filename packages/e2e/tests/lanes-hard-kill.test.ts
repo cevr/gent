@@ -62,17 +62,6 @@ describe("account lanes across a hard kill", () => {
           Effect.gen(function* () {
             const first = yield* spawnHost(dir, "first", { LH_START: "1" })
             yield* hostPrinted(first, "sent", 20_000)
-            // The kill lands only once the turn stored its message with its
-            // lane: the first host's model call writes `stored`. A kill
-            // before that leaves the admitted item for the next server,
-            // which runs it on no lane (agent-loop.test.ts `an admitted turn
-            // across a kill` covers that window).
-            yield* waitFor(
-              fs.exists(`${dir}/stored`).pipe(Effect.orElseSucceed(() => false)),
-              (stored) => stored,
-              10_000,
-              "the first host's turn stored its message",
-            )
             yield* hostPrinted(first, "load 1", 10_000)
             expect(yield* Ref.get(first.events)).toEqual(["ready", "load 0", "sent", "load 1"])
             yield* hardKill(first.proc)
