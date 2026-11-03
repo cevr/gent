@@ -1429,7 +1429,7 @@ const fixtureGit = (directory: string, args: ReadonlyArray<string>) =>
     },
     extendEnv: true,
     stdout: "ignore",
-  }).pipe(Effect.flatMap(({ exitCode }) => Effect.succeed(expect(exitCode).toBe(0))))
+  }).pipe(Effect.map(({ exitCode }) => expect(exitCode).toBe(0)))
 
 /** Writes `parts` into `directory` over what is there. */
 const writeProgram = (directory: string, parts: ProgramParts) =>
