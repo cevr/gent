@@ -156,6 +156,19 @@ const laneBandRow = (row: LaneRow): BandRow => ({
 const peerActs = (peer: LanePeer): boolean =>
   (peer.silent && peer.runs > 0) || (peer.counted && peer.down.length > 0)
 
+/** Keep the band small; /status carries the full wrapped reason and update command. */
+const peerBandView = (peer: LanePeer, width: number): LanePeer => {
+  const link = peer.link
+  if (link?.state !== "incompatible" || !link.reason) return peer
+  return {
+    ...peer,
+    link: {
+      ...link,
+      reason: `${truncate(link.reason, Math.max(8, width - 22))} · /status for update`,
+    },
+  }
+}
+
 /**
  * The lanes rows that need the owner in this session: a refusal or a
  * usage-limit wait on the session's provider, a lost login there, the
@@ -173,7 +186,10 @@ const lanesNeedingOwner = (
   provider: Option.Option<string>,
   zone: DateTime.TimeZone,
 ): ReadonlyArray<LaneRow> => {
-  const acting = { ...report, peers: (report.peers ?? []).filter(peerActs) }
+  const acting = {
+    ...report,
+    peers: (report.peers ?? []).filter(peerActs).map((peer) => peerBandView(peer, width)),
+  }
   const ours = (row: LaneRow) =>
     Option.isNone(provider) ||
     Option.match(row.provider, {

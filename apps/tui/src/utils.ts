@@ -771,6 +771,32 @@ const peerRow = (peer: LanePeer, now: number, width: number): LaneRow => {
   }
 }
 
+/** An incompatibility's remedy wraps into existing rows; ctl --line keeps it on one line. */
+const peerRows = (peer: LanePeer, now: number, width: number): ReadonlyArray<LaneRow> => {
+  const row = peerRow(peer, now, width)
+  if (peer.link?.state !== "incompatible" || !peer.link.reason) return [row]
+  const text = `${peerRow(peer, now, Number.MAX_SAFE_INTEGER).text} · ${peer.link.reason}`
+  const limit = Math.max(1, width)
+  const lines: Array<string> = []
+  let line = ""
+  for (const word of text.split(" ")) {
+    if (line.length > 0 && textWidth(`${line} ${word}`) > limit) {
+      lines.push(line)
+      line = ""
+    }
+    if (line.length > 0) line += " "
+    for (const character of word) {
+      if (textWidth(line + character) > limit && line.length > 0) {
+        lines.push(line)
+        line = ""
+      }
+      line += character
+    }
+  }
+  if (line.length > 0) lines.push(line)
+  return lines.map((text) => ({ ...row, text }))
+}
+
 /** `sabbath · no run starts until 18:09`, as the width allows. */
 const sabbathRow = (end: number, now: number, width: number, zone: DateTime.TimeZone): LaneRow => {
   const clock = formatClock(end, now, zone)
@@ -805,7 +831,7 @@ export const laneRows = (
   return [
     ...Option.toArray(rest),
     ...providerRows(report, now, width, zone, Option.isSome(rest)),
-    ...(report.peers ?? []).map((peer) => peerRow(peer, now, width)),
+    ...(report.peers ?? []).flatMap((peer) => peerRows(peer, now, width)),
   ]
 }
 

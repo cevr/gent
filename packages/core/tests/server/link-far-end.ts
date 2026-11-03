@@ -22,6 +22,7 @@
  */
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Option, Runtime, Schema, Stdio, Stream } from "effect"
+import { GentRelease } from "../../src/runtime/gent-platform"
 
 /** A request id: the client numbers its requests, and a reply names the same value. */
 const RequestId = Schema.Union([Schema.String, Schema.Finite])
@@ -107,7 +108,14 @@ const main = Effect.gen(function* () {
         if (mode === "nohello")
           return say(exitOf(id, Failure.make({ cause: [Die.make({ defect: "no link.hello" })] })))
         if (mode === "garbage") return say("not a frame")
-        const hello = exitOf(id, Success.make({ value: { machine, contract } }))
+        let value: Schema.Json = {
+          machine,
+          contract,
+          release: GentRelease.cases.Released.make({ commit: "test-commit", clean: true }),
+          checkout: "/nonexistent/gent-test-checkout",
+        }
+        if (mode === "oldrelease") value = { machine, contract }
+        const hello = exitOf(id, Success.make({ value }))
         return { lines: [hello], exit: mode === "exit" }
       }
       if (mode !== "serve") return say()

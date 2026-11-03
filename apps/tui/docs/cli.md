@@ -239,7 +239,7 @@ of this server's own, the row goes 30 minutes after the peer went silent. The
 JSON holds them as `peers`, sorted by machine: `machine`, `heardAt` (epoch ms, none before its first line), `runs`, `silent`,
 `down` (`own`, `peer`), `counted` (its facts still count, inside the
 30-minute hold) and `link` (`machine`, `state`: `connecting`, `connected`,
-`silent`, `incompatible`), and `serverNow` (epoch ms) is the server's clock as
+`silent`, `incompatible`, with its actionable `reason`), and `serverNow` (epoch ms) is the server's clock as
 it built the report. No free lane is data, not a failure: the call exits 0.
 
 `pool` names no session either. It prints `Pool`: the server's own pool
@@ -283,27 +283,29 @@ serves every machine; each server runs every entry but its own name
 }
 ```
 
-Each run asks the far server's `link.hello` first: its machine name and its
-RPC contract: its codecs and the release that holds their code (the commit,
-the tree and the Bun version, read as gent is built, or as the server
-starts in a source run). The tree is git's own tree id of the working
-state, written into a throwaway index and object directory with every git
-conversion off: each file's bytes and exec bit and each link's target
-bytes, tracked (by `HEAD` or the index) or untracked and not ignored,
-`bun.lock` among them. Two machines match on one commit with one working
-tree and the same Bun. No git filter, diff driver, line-ending or case
-setting, and no index flag or staged edit, changes this. A FIFO, socket or
-device at a tracked path, a nested repository, an index holding a conflict
-or missing its split index's shared file, a `core.worktree` that moves
-the working tree elsewhere, a `bun.lock` that is not a regular file, or a
-capture exceeding 10 seconds makes the release
-unknown and the link incompatible. For an install, matching means two
-`bun run install:global` runs of one commit, which install the lockfile's
-packages before they build. An edit is a release of its own, and two
-machines match on it only with the same `.git/info/exclude` too (the
-user's global `core.excludesFile` is not read). A process with no release (no git, no repository) names a contract no
-other process names. A build with another contract makes the link
-`incompatible` and nothing else runs. Over a connected link the pool's facts cross both ways
+Each run asks the far server's `link.hello` first: its machine, contract,
+release and checkout. A release is a git commit and a clean flag, read when
+gent is built or once as a source server starts. Only clean releases of one
+commit with the same RPC codecs link. A dev build never links to another
+process. An untracked file that git does not ignore makes it dirty; an ignored
+file does not. No git, no checkout, a failed read or a capture exceeding 10 s
+names no release. Every git call uses the bounded process helper.
+
+An incompatible peer keeps a one-line reason in `peers[].link.reason` of
+`gent ctl lanes`; `--line` prints it in full and the TUI wraps it into lanes
+rows. A dev build names the checkout to commit or stash. A clean commit
+mismatch names both short commits and the update command for the side behind
+(local git ancestry decides; unknown or diverged histories name both commands).
+One clean commit with different codecs asks to reinstall both, since another
+Bun may decode differently. The command is
+`cd <checkout> && git pull --ff-only && bun install --frozen-lockfile && bun run install:global`:
+local for this machine, or the configured ssh argv before `gent`, then that
+shell string as one quoted argument for the far machine. With no checkout the
+command names `<gent checkout>`; replace it with the source checkout there.
+No update runs automatically. Git config and the frozen install path are
+trusted (docs/architecture/server.md, Machine Links).
+
+Over a connected link the pool's facts cross both ways
 (docs/architecture/lanes.md, docs/architecture/server.md). A run that ends, or
 that brings no frame for 90 s, runs again after 1 s, the wait doubling to 5
 minutes. The server reads the machines at start (a new one takes a server

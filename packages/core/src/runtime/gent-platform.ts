@@ -94,22 +94,19 @@ export const GentBuild = Schema.TaggedUnion({
 export type GentBuild = typeof GentBuild.Type
 
 /**
- * What names a release of gent: the commit it was built from, its tree (the
- * git tree id of its working state: every tracked and every untracked,
- * unignored entry, written by git with every conversion off, `bun.lock`
- * among them), and the Bun that runs it.
+ * What names a release of gent: its commit and whether git saw a clean
+ * checkout when it was built. A dev build never links to another process.
  */
 const releaseFields = {
   commit: Schema.NonEmptyString,
-  tree: Schema.NonEmptyString,
-  bun: Schema.NonEmptyString,
+  clean: Schema.Boolean,
 }
 
-/** A release's three facts, as the compiled build embeds them. */
-export const GentReleaseFacts = Schema.Struct(releaseFields)
+/** The build embeds its checkout beside the release, for an actionable update command. */
+export const GentReleaseFacts = Schema.Struct({ ...releaseFields, checkout: Schema.NonEmptyString })
 
 /**
- * The release this process runs: `Released` with its three facts, or
+ * The release this process runs: `Released` with its commit and clean flag, or
  * `Unreleased` (no git, no repository, a build that embedded none) with an
  * id drawn once for this process, so it matches no other process. A link's
  * contract names it.
@@ -214,6 +211,10 @@ interface GentPlatformApi {
    * names its code by it.
    */
   readonly source: Effect.Effect<GentRelease>
+  /** The source checkout, captured with `source`; absent when no release was read. */
+  readonly checkout: Effect.Effect<Option.Option<string>>
+  /** An id drawn once for this process, distinct across machines and starts. */
+  readonly processId: Effect.Effect<string>
   readonly homeDirectory: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
@@ -273,10 +274,11 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           source: Effect.succeed(
             GentRelease.cases.Released.make({
               commit: "test-commit",
-              tree: "test-tree",
-              bun: "test-bun",
+              clean: true,
             }),
           ),
+          checkout: Effect.succeedSome("/nonexistent/gent-test-checkout"),
+          processId: Effect.succeed(`${prefix}-process`),
           homeDirectory: Effect.succeed("/nonexistent/gent-test-home"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.

@@ -91,7 +91,6 @@ import {
   GentRpcs,
   type GetSessionSnapshotInput,
   InvalidStateError,
-  LinkHello,
   LinkMachinesView,
   type ListAuthProvidersPayload,
   NotFoundError,
@@ -2382,10 +2381,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "link.hello": () =>
         Effect.gen(function* () {
           const origin = yield* CurrentLinkOrigin
-          const hello = new LinkHello({
-            machine: yield* machineName,
-            contract: yield* links.contract,
-          })
+          const hello = yield* links.hello
           yield* Effect.logInfo("link.hello").pipe(
             Effect.annotateLogs({ origin: Option.getOrElse(origin, () => "none") }),
           )

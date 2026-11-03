@@ -24,21 +24,22 @@ import {
   Pull,
   Queue,
   Ref,
+  Result,
   Schedule,
   Schema,
   type SchemaAST,
   Stream,
 } from "effect"
 import type { Headers } from "effect/http"
-import { ChildProcess } from "effect/process"
+import { ChildProcess, type ChildProcessSpawner, CommandLine } from "effect/process"
 import { Rpc, RpcClient, RpcSchema, RpcSerialization } from "effect/rpc"
 import { Socket } from "effect/socket"
 import type { LinkView } from "../domain/driver.js"
 import { causeMessage } from "../domain/guards.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
-import { GentPlatform, GentRelease, machineName } from "../runtime/gent-platform.js"
+import { GentPlatform, GentRelease, machineName, runProcess } from "../runtime/gent-platform.js"
 import { CredentialPlacement, type LaneScopeOf } from "../runtime/provider.js"
-import { GentRpcs, makeNamespacedClient } from "./rpc.js"
+import { GentRpcs, LinkHello, makeNamespacedClient } from "./rpc.js"
 import { LINK_ORIGIN_HEADER, workspaceHeadersForCwd } from "./workspace-rpc.js"
 
 // ── contract ────────────────────────────────────────────────────────────────
@@ -257,27 +258,26 @@ const rpcFacts = (rpc: ContractRpc) => {
 }
 
 /** The contract's own version: another way to compute it names another. */
-const CONTRACT_VERSION = "gent link 2"
+const CONTRACT_VERSION = "gent link 3"
 
 /**
- * The release a contract names, as one line: its three facts, or the id of
- * a process that has none.
+ * Only a clean commit names shared code. A dev build or no release names
+ * this process alone, even if another process runs the same dirty checkout.
  */
-const releaseFact = GentRelease.match({
-  Released: ({ commit, tree, bun }) => encodeFacts(["release", commit, tree, bun]),
-  Unreleased: ({ process }) => encodeFacts(["process", process]),
-})
+const releaseFact = (release: GentRelease, process: string): string => {
+  if (release._tag === "Released" && release.clean) return `release ${release.commit}`
+  return `process ${process}`
+}
 
 /**
  * The contract of `rpcs`: the release this process runs and what each RPC's
  * codecs decode, sorted by tag, hashed. Two servers whose contracts match
  * run one release and decode each other's frames the same way.
  *
- * The release (`GentPlatform.source`) is the commit gent was built from,
- * git's tree of its working state (`bun.lock` among it) and the Bun that runs
- * it. It guards the skew the owner's machines can have: another commit,
- * another edit to the tree, another lockfile, another Bun
- * (docs/architecture/server.md, Machine Links). A codec holds code no walk reads (an exit is a declaration, a
+ * The release (`GentPlatform.source`) is the commit gent was built from
+ * and whether its checkout was clean. Owner machines install from clean
+ * commits with frozen dependencies (server.md, Machine Links).
+ * A codec holds code no walk reads (an exit is a declaration, a
  * defect a transformation); the release names that code, and the codec
  * facts are a second factor. Data is described as data: every node's kind,
  * each literal, key, optional and mutable mark, union mode, element and
@@ -290,7 +290,7 @@ export const rpcContract = (
 ): Effect.Effect<string, never, GentPlatform> =>
   Effect.gen(function* () {
     const platform = yield* GentPlatform
-    const release = releaseFact(yield* platform.source)
+    const release = releaseFact(yield* platform.source, yield* platform.processId)
     return platform.hash(
       "sha256",
       [CONTRACT_VERSION, release, ...rpcs.map(rpcFacts).sort()].join("\n"),
@@ -301,6 +301,72 @@ export const rpcContract = (
 export const linkContract: Effect.Effect<string, never, GentPlatform> = rpcContract([
   ...GentRpcs.requests.values(),
 ])
+
+// ── release mismatch ────────────────────────────────────────────────────────
+
+/** The shell string runs on the named machine, with the checkout quoted once there. */
+const updateShell = (checkout: string) =>
+  `cd ${Result.getOrElse(CommandLine.quote(checkout), () => "'<gent checkout>'")} && git pull --ff-only && bun install --frozen-lockfile && bun run install:global`
+
+/** A configured ssh argv stops at gent; its remaining argument is one remote shell string. */
+const updateCommand = (hello: LinkHello, command: ReadonlyArray<string> = []) => {
+  const shell = updateShell(hello.checkout ?? "<gent checkout>")
+  if (command.length === 0) return shell
+  const gent = command.findIndex((word) => word === "gent" || word.endsWith("/gent"))
+  let prefix = command
+  if (gent >= 0) prefix = command.slice(0, gent)
+  if (prefix.length === 0) return shell
+  return Result.getOrElse(CommandLine.join([...prefix, shell]), () => "<invalid link command>")
+}
+
+/**
+ * Why two contracts cannot link, with the command that repairs each side.
+ * Only local git decides ancestry. Missing commits, divergence or a failed
+ * read name both commands; no remote command runs to form this message.
+ */
+export const linkMismatch = Effect.fn("Links.mismatch")(function* (
+  local: LinkHello,
+  far: LinkHello,
+  command: ReadonlyArray<string>,
+): Effect.fn.Return<string, never, ChildProcessSpawner.ChildProcessSpawner> {
+  const localCommand = updateCommand(local)
+  const farCommand = updateCommand(far, command)
+  const there = far.checkout ?? "<gent checkout>"
+  const here = local.checkout ?? "<gent checkout>"
+  const one = local.release
+  const other = far.release
+  let commits = ""
+  if (one._tag === "Released" && other._tag === "Released" && one.commit !== other.commit)
+    commits = `; commits ${other.commit.slice(0, 8)} there, ${one.commit.slice(0, 8)} here`
+  if (other._tag === "Released" && !other.clean)
+    return `${far.machine} runs a dev build (uncommitted changes in ${there}${commits}); commit or stash there, then: ${farCommand}`
+  if (one._tag === "Released" && !one.clean)
+    return `This machine runs a dev build (uncommitted changes in ${here}${commits}); commit or stash here, then: ${localCommand}`
+  if (other._tag === "Unreleased")
+    return `${far.machine} runs a build with no release (no git checkout); update ${far.machine}: ${farCommand}`
+  if (one._tag === "Unreleased")
+    return `This machine runs a build with no release (no git checkout); update this machine: ${localCommand}`
+  const shortFar = other.commit.slice(0, 8)
+  const shortLocal = one.commit.slice(0, 8)
+  if (one.commit === other.commit)
+    return `${far.machine} runs ${shortFar} but decodes RPCs differently (another Bun?); reinstall both: ${localCommand}; ${farCommand}`
+  const summary = `${far.machine} runs ${shortFar}; this machine runs ${shortLocal}.`
+  if (Predicate.isString(local.checkout)) {
+    const ancestor = (before: string, after: string) =>
+      runProcess("git", ["merge-base", "--is-ancestor", before, after], {
+        cwd: local.checkout,
+        timeout: Duration.seconds(10),
+      }).pipe(
+        Effect.map(({ exitCode }) => exitCode),
+        Effect.orElseSucceed(() => 128),
+      )
+    const localBehind = yield* ancestor(one.commit, other.commit)
+    if (localBehind === 0) return `${summary} Update this machine: ${localCommand}`
+    if (localBehind === 1 && (yield* ancestor(other.commit, one.commit)) === 0)
+      return `${summary} Update ${far.machine}: ${farCommand}`
+  }
+  return `${summary} Update both (ancestry unavailable or diverged): ${localCommand}; ${farCommand}`
+})
 
 // ── transport ───────────────────────────────────────────────────────────────
 
@@ -446,11 +512,11 @@ interface LinkRecord {
   /** The current run's hello named this server's contract. */
   readonly connected: boolean
   /** The last hello named another contract or machine (or none); a matching hello clears it. */
-  readonly incompatible: boolean
+  readonly reason: Option.Option<string>
 }
 
 const stateOf = (record: LinkRecord, now: number): LinkView["state"] => {
-  if (record.incompatible) return "incompatible"
+  if (Option.isSome(record.reason)) return "incompatible"
   if (now - record.lastFrame >= LINK_SILENT_MS) return "silent"
   if (record.connected) return "connected"
   return "connecting"
@@ -466,6 +532,7 @@ export class Links extends Context.Service<
   Links,
   {
     readonly contract: Effect.Effect<string>
+    readonly hello: Effect.Effect<LinkHello>
     readonly view: Effect.Effect<ReadonlyArray<LinkView>>
   }
 >()("@gent/core/src/server/link/Links") {
@@ -494,10 +561,24 @@ export class Links extends Context.Service<
         // tests in turn.test.ts). A fiber in the layer's scope
         // (`forkScoped`) would make the close await it.
         const reading = yield* Effect.forkDetach(
-          linkContract.pipe(Effect.provideService(GentPlatform, yield* GentPlatform)),
+          Effect.gen(function* () {
+            const platform = yield* GentPlatform
+            const release = yield* platform.source
+            const checkout = yield* platform.checkout
+            return new LinkHello({
+              machine: own,
+              contract: yield* linkContract,
+              release,
+              ...Option.match(checkout, {
+                onNone: () => ({}),
+                onSome: (checkout) => ({ checkout }),
+              }),
+            })
+          }).pipe(Effect.provideService(GentPlatform, yield* GentPlatform)),
         )
         yield* Effect.addFinalizer(() => Effect.sync(() => reading.interruptUnsafe()))
-        const contract = Fiber.join(reading)
+        const hello = Fiber.join(reading)
+        const contract = Effect.map(hello, (value) => value.contract)
         const started = yield* Clock.currentTimeMillis
         const records = new Map<string, MutableRef.MutableRef<LinkRecord>>()
         for (const machine of Object.keys(yield* config.linkMachines)) {
@@ -507,7 +588,7 @@ export class Links extends Context.Service<
             MutableRef.make<LinkRecord>({
               lastFrame: started,
               connected: false,
-              incompatible: false,
+              reason: Option.none(),
             }),
           )
         }
@@ -553,32 +634,35 @@ export class Links extends Context.Service<
                 if (Option.exists(error, (failure) => failure._tag === "RpcClientError"))
                   return yield* ended(Cause.pretty(hello.cause))
                 // A peer with no `link.hello` (an older build) answers a defect.
+                const reason = `${machine} has no link.hello this server reads; update ${machine}: ${updateCommand(new LinkHello({ machine, contract: "", release: GentRelease.cases.Unreleased.make({ process: "older-peer" }) }), command)}`
                 yield* Effect.sync(() =>
-                  MutableRef.update(record, (kept) => ({ ...kept, incompatible: true })),
+                  MutableRef.update(record, (kept) => ({ ...kept, reason: Option.some(reason) })),
                 )
-                return `${machine} has no link.hello this server reads: ${causeMessage(Cause.squash(hello.cause))}`
+                return reason
               }
               if (hello.value.contract !== (yield* contract)) {
+                const reason = yield* linkMismatch(yield* Fiber.join(reading), hello.value, command)
                 yield* Effect.sync(() =>
-                  MutableRef.update(record, (kept) => ({ ...kept, incompatible: true })),
+                  MutableRef.update(record, (kept) => ({ ...kept, reason: Option.some(reason) })),
                 )
-                return `${machine} runs another RPC contract (${hello.value.contract})`
+                return reason
               }
               // The machine is the peer's identity on both links: this
               // link's name, and the origin the peer's own link sends. A
               // command that reaches another machine, or this one, would
               // count one server under two names.
               if (hello.value.machine !== machine) {
+                const reason = `${machine} answers as machine ${hello.value.machine}; fix its link.machines command`
                 yield* Effect.sync(() =>
-                  MutableRef.update(record, (kept) => ({ ...kept, incompatible: true })),
+                  MutableRef.update(record, (kept) => ({ ...kept, reason: Option.some(reason) })),
                 )
-                return `${machine} answers as machine ${hello.value.machine}`
+                return reason
               }
               yield* Effect.sync(() =>
                 MutableRef.update(record, (kept) => ({
                   ...kept,
                   connected: true,
-                  incompatible: false,
+                  reason: Option.none(),
                 })),
               )
               // The peer's facts count as this server's own link's; this
@@ -638,11 +722,21 @@ export class Links extends Context.Service<
 
         return Links.of({
           contract,
+          hello,
           view: Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis
             const views: Array<LinkView> = []
-            for (const [machine, record] of records)
-              views.push({ machine, state: stateOf(MutableRef.get(record), now) })
+            for (const [machine, record] of records) {
+              const kept = MutableRef.get(record)
+              views.push({
+                machine,
+                state: stateOf(kept, now),
+                ...Option.match(kept.reason, {
+                  onNone: () => ({}),
+                  onSome: (reason) => ({ reason }),
+                }),
+              })
+            }
             return views
           }),
         })

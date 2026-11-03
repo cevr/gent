@@ -20,7 +20,6 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { Database } from "bun:sqlite"
 import {
-  Config,
   Duration,
   Effect,
   FileSystem,
@@ -34,7 +33,6 @@ import {
   Schedule,
   Schema,
   Scope,
-  Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
 import type { ChildProcessSpawner } from "effect/process"
@@ -93,81 +91,22 @@ const thisBuild: GentBuild = Option.match(compiledDefine, {
 
 // ── release ─────────────────────────────────────────────────────────────────
 
-/** Why a checkout names no release: no git, no repository, or a working state git does not hold. */
+/** Why a checkout names no release: no git, no repository, or a failed read. */
 class NoRelease extends Schema.TaggedError<NoRelease, { readonly brand: unique symbol }>()(
   "NoRelease",
   { reason: Schema.String },
 ) {}
 
-/** One deadline over the whole capture (a warm capture of gent takes about 100 ms). */
+/** One deadline over the whole capture. */
 const RELEASE_TIMEOUT = Duration.seconds(10)
 
-/** Git's empty tree: the attributes the capture reads from it are none. */
-const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
-/** A gitlink's mode: a nested repository, whose own working state no tree names. */
-const GITLINK_MODE = "160000"
-
-/** The tree entries a regular `bun.lock` can be: a file, executable or not. */
-const LOCK_ENTRIES = new Set(["100644 bun.lock", "100755 bun.lock"])
-
-/** What the UTF-8 decoder writes for bytes it cannot decode: a path holding it was not read whole. */
-const UNDECODED = String.fromCodePoint(0xfffd)
-
-/**
- * What every capture call pins, whatever the repository or the user
- * configures: attributes from the empty tree (no filter, diff driver,
- * `eol` or `text`), no line-ending conversion, symlinks and the exec bit as
- * they are, paths as they are, no file-system monitor or untracked cache, no
- * sparse checkout, no user attributes file, and only the repository's own
- * `info/exclude` beside its `.gitignore` files.
- */
-const pinnedGit = (exclude: string) => [
-  `--attr-source=${EMPTY_TREE}`,
-  "-c",
-  "core.autocrlf=false",
-  "-c",
-  "core.safecrlf=false",
-  "-c",
-  "core.symlinks=true",
-  "-c",
-  "core.fileMode=true",
-  "-c",
-  "core.ignorecase=false",
-  "-c",
-  "core.precomposeunicode=false",
-  "-c",
-  "core.fsmonitor=false",
-  "-c",
-  "core.untrackedCache=false",
-  "-c",
-  "core.sparseCheckout=false",
-  "-c",
-  "core.attributesFile=",
-  "-c",
-  `core.excludesFile=${exclude}`,
-  "-c",
-  "add.ignoreErrors=false",
-]
-
-/**
- * Git at `cwd` with `env` as its whole environment, `pins` before the
- * command and `stdin` as its input, its exit checked, its output in
- * `NoRelease`'s terms: no git, or the command git refused.
- */
-const releaseGit = (
-  cwd: string,
-  args: ReadonlyArray<string>,
-  env: Record<string, string>,
-  pins: ReadonlyArray<string> = [],
-  stdin: Stream.Stream<Uint8Array, PlatformError.PlatformError> | "ignore" = "ignore",
-) =>
-  runProcess("git", [...pins, ...args], { cwd, env, stdin }).pipe(
-    Effect.mapError((error) => new NoRelease({ reason: `no git: ${error.message}` })),
+/** Every git call crosses the process boundary and checks its exit. */
+const releaseGit = (cwd: string, args: ReadonlyArray<string>) =>
+  runProcess("git", args, { cwd }).pipe(
+    Effect.mapError((error) => new NoRelease({ reason: error.message })),
     Effect.flatMap((result) => {
-      const { exitCode, stderr } = result
-      if (exitCode === 0) return Effect.succeed(result)
-      return Effect.fail(new NoRelease({ reason: `git ${args[0]}: ${stderr.trim()}` }))
+      if (result.exitCode === 0) return Effect.succeed(result.stdout)
+      return Effect.fail(new NoRelease({ reason: result.stderr.trim() }))
     }),
   )
 
@@ -182,233 +121,62 @@ const unreleased = GentRelease.cases.Unreleased.make({
 })
 
 /**
- * The release the checkout at `directory` holds: the commit at `HEAD`, the
- * tree, and the Bun this process runs. The checkout is the physical one: the
- * nearest directory at or above `directory` that holds a `.git` entry (a
- * directory, or the file of a linked worktree). The tree is the git tree id
- * of its working state, written by git: `HEAD`'s entries and the real
- * index's read into a throwaway index (paths and modes only: the real
- * index's stats and its assume-unchanged, skip-worktree and intent-to-add
- * bits never reach it), each entry whose working bytes git hashes to its
- * object kept with the stat git just read, every other one and every
- * untracked, unignored entry added from the working tree, the tree written.
- * Gent never reads a working entry itself; git's object model names each
- * file's bytes and exec bit and each link's target bytes, and git refuses
- * any other kind of tracked entry.
- *
- * Nothing is written into the repository, since git writes as a side effect
- * of reading (it freshens a split index's shared file as it reads the
- * index, and an object it is asked to write and finds stored, an
- * alternate's too). So the only git run with the repository's git
- * directory is the `rev-parse` that finds it, which reads no index and
- * writes no object. The index, the git directory and every object written
- * live in a scoped temporary directory; the repository's index (with a
- * split index's shared files) is copied there; its objects are an
- * alternate only of the calls that read objects, never of `add` or
- * `write-tree`. The throwaway git directory holds no config and no
- * `info/attributes`, the environment holds no user or system config, and
- * `pinnedGit` turns every conversion off, so the repository's or the
- * user's config changes no tree. The repository's config can still move
- * the working tree git reads (`core.worktree`), so that names no release.
- *
- * Fails with `NoRelease` with no git, no repository or no commit; when the
- * repository's config moves its working tree off the physical checkout;
- * when a split index's shared file is missing; when the index holds a
- * conflict; when a tracked path is not UTF-8; when git refuses an entry (a
- * FIFO, a socket or a device at a tracked path); when the tree holds a
- * gitlink (a nested repository); when `bun.lock` is not a regular file of
- * the tree; and when the capture takes longer than `RELEASE_TIMEOUT`. Each
- * git child is stopped on that deadline. The build embeds what it returns;
- * a source run reads its own checkout with it once.
+ * The commit and clean flag git reports for the repository holding the
+ * source directory. One deadline spans all reads; interruption makes
+ * runProcess stop the child it owns. Config-driven redirects are outside
+ * the version-skew threat model (server.md, Machine Links).
  */
-export const captureRelease = (
-  directory: string,
-): Effect.Effect<
-  typeof GentReleaseFacts.Type,
-  NoRelease,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
-> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const scratch = yield* fs.makeTempDirectoryScoped({ prefix: "gent-release-" })
-      const searchPath = yield* Config.option(Config.String("PATH")).pipe(
-        Effect.orElseSucceed(() => Option.none<string>()),
-      )
-      // The whole environment of every call: no user or system config.
-      const isolated = {
-        PATH: Option.getOrElse(searchPath, () => ""),
-        HOME: scratch,
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-      }
-      // The physical checkout holding `directory`, found without git, so no
-      // config can name another.
-      let root = yield* fs.realPath(directory)
-      while (!(yield* fs.exists(`${root}/.git`))) {
-        const parent = path.dirname(root)
-        if (parent === root) {
-          return yield* new NoRelease({ reason: "no repository holds the directory" })
-        }
-        root = parent
-      }
-      const found = (yield* releaseGit(
-        root,
-        [
-          "rev-parse",
-          "--path-format=absolute",
-          "--show-toplevel",
-          "--git-path",
-          "objects",
-          "--git-path",
-          "info/exclude",
-          "--git-path",
-          "index",
-          "HEAD",
-        ],
-        isolated,
-      )).stdout.split("\n")
-      const [top = "", objects = "", exclude = "", index = "", commit = "", end = ""] = found
-      // A path with a newline in it would shift the lines: no release.
-      if (found.length !== 6 || end.length > 0 || commit.length === 0) {
-        return yield* new NoRelease({ reason: "git names no checkout" })
-      }
-      // `core.worktree` (set, included or conditional) moves the entries git
-      // reads off the checkout being built.
-      if (top !== root) {
-        return yield* new NoRelease({
-          reason: "the repository's configuration moves its working tree",
-        })
-      }
-      // Git writes as it reads: it freshens a split index's shared file as it
-      // reads the index, and an object it is asked to write and finds stored,
-      // an alternate's too. So the git directory, the index and the objects
-      // are throwaway, and the repository's objects are an alternate only of
-      // the calls that read objects (`read`), never of those that write them
-      // (`write`: `add` and `write-tree` store each object here, beside none).
-      const gitDirectory = `${scratch}/git`
-      const reader = `${scratch}/read`
-      yield* fs.makeDirectory(`${gitDirectory}/objects`, { recursive: true })
-      yield* fs.makeDirectory(`${gitDirectory}/refs`)
-      yield* fs.makeDirectory(`${reader}/info`, { recursive: true })
-      yield* fs.writeFileString(`${gitDirectory}/HEAD`, `${commit}\n`)
-      yield* fs.writeFileString(
-        `${reader}/info/alternates`,
-        `${objects}\n${gitDirectory}/objects\n`,
-      )
-      const writing = {
-        ...isolated,
-        GIT_DIR: gitDirectory,
-        GIT_WORK_TREE: root,
-        GIT_INDEX_FILE: `${scratch}/index`,
-      }
-      const reading = { ...writing, GIT_OBJECT_DIRECTORY: reader }
-      const pins = pinnedGit(exclude)
-      const read = (
-        args: ReadonlyArray<string>,
-        stdin?: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
-      ) => releaseGit(root, args, reading, pins, stdin)
-      const write = (args: ReadonlyArray<string>) => releaseGit(root, args, writing, pins)
-      yield* read(["read-tree", commit])
-      // The real index's entries too: a path it tracks that HEAD lacks (staged,
-      // force-added under an ignore rule, intent to add) is named. Its bytes,
-      // and every split index's shared file beside it, are copied into the
-      // throwaway git directory, where git looks for the shared file and fails
-      // when it is missing.
-      const copied = `${gitDirectory}/index`
-      if (yield* fs.exists(index)) {
-        yield* fs.copyFile(index, copied)
-        const beside = path.dirname(index)
-        for (const name of yield* fs.readDirectory(beside)) {
-          if (name.startsWith("sharedindex.")) {
-            yield* fs.copyFile(`${beside}/${name}`, `${gitDirectory}/${name}`)
-          }
-        }
-      }
-      const tracked = (yield* releaseGit(
-        root,
-        ["ls-files", "--stage", "-z"],
-        { ...reading, GIT_INDEX_FILE: copied },
-        pins,
-      )).stdout
-      if (tracked.includes(UNDECODED)) {
-        return yield* new NoRelease({ reason: "a tracked path is not UTF-8" })
-      }
-      yield* read(
-        ["update-index", "-z", "--index-info"],
-        Stream.make(new TextEncoder().encode(tracked)),
-      )
-      // No entry holds a stat yet: git hashes each working file against its
-      // entry's object and keeps the stat it read when they match, so `add -A`
-      // rehashes, and writes, every other entry. A conflict fails here.
-      yield* read(["update-index", "-q", "--refresh"])
-      yield* write(["add", "-A"])
-      // The objects of unchanged entries stay in the repository, unseen here.
-      const tree = (yield* write(["write-tree", "--missing-ok"])).stdout.trim()
-      const entries = (yield* read([
-        "ls-tree",
-        "-r",
-        "-z",
-        "--format=%(objectmode) %(path)",
-        tree,
-      ])).stdout.split("\0")
-      if (entries.some((entry) => entry.startsWith(`${GITLINK_MODE} `))) {
-        return yield* new NoRelease({ reason: "the tree holds a nested repository" })
-      }
-      if (!entries.some((entry) => LOCK_ENTRIES.has(entry))) {
-        return yield* new NoRelease({ reason: "bun.lock is not a file of the tree" })
-      }
-      return { commit, tree, bun: Bun.version }
-    }).pipe(
-      Effect.catchTag("PlatformError", (error) =>
-        Effect.fail(new NoRelease({ reason: `file system: ${error.message}` })),
-      ),
-    ),
-  ).pipe(
-    Effect.timeoutOrElse({
-      duration: RELEASE_TIMEOUT,
-      orElse: () => Effect.fail(new NoRelease({ reason: "release capture exceeded 10 seconds" })),
-    }),
-  )
+export const captureRelease = Effect.fn("GentPlatform.captureRelease")(
+  function* (directory: string) {
+    const checkout = (yield* releaseGit(directory, ["rev-parse", "--show-toplevel"])).replace(
+      /\n$/,
+      "",
+    )
+    const commit = (yield* releaseGit(directory, ["rev-parse", "HEAD"])).trim()
+    const status = yield* releaseGit(directory, [
+      "--no-optional-locks",
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=normal",
+    ])
+    return yield* Schema.decodeEffect(GentReleaseFacts)({
+      commit,
+      clean: status.length === 0,
+      checkout,
+    }).pipe(Effect.mapError((error) => new NoRelease({ reason: error.message })))
+  },
+  Effect.timeoutOrElse({
+    duration: RELEASE_TIMEOUT,
+    orElse: () => Effect.fail(new NoRelease({ reason: "release capture exceeded 10 seconds" })),
+  }),
+)
 
-/**
- * The release a source run from `directory` runs: its checkout's
- * (`captureRelease`), or this process's `Unreleased` id when it names none.
- */
-export const sourceRelease = (
-  directory: string,
-): Effect.Effect<
-  GentRelease,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
-> =>
+/** Read once by the platform, so the release and its checkout always agree. */
+const sourceFacts = (directory: string) =>
   captureRelease(directory).pipe(
-    Effect.map((facts) => GentRelease.cases.Released.make(facts)),
-    Effect.catchTag("NoRelease", (error) =>
+    Effect.tapError((error) =>
       Effect.logInfo("this source run names no release: its links stay incompatible").pipe(
         Effect.annotateLogs({ directory, reason: error.reason }),
-        Effect.as(unreleased),
       ),
     ),
+    Effect.option,
   )
 
-/**
- * The release this process runs: the one the compiled build embedded
- * (`Unreleased` when it embedded none), or the checkout `Bun.main` runs from.
- */
-const thisRelease: Effect.Effect<
-  GentRelease,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
-> = Option.match(compiledDefine, {
-  onNone: () => sourceRelease(path.dirname(Bun.main)),
-  onSome: (define) =>
-    Effect.succeed(
-      Option.match(Option.fromUndefinedOr(define.release), {
-        onNone: () => unreleased,
-        onSome: (facts) => GentRelease.cases.Released.make(facts),
-      }),
-    ),
+const releaseOf = (facts: Option.Option<typeof GentReleaseFacts.Type>): GentRelease =>
+  Option.match(facts, {
+    onNone: () => unreleased,
+    onSome: ({ commit, clean }) => GentRelease.cases.Released.make({ commit, clean }),
+  })
+
+/** A source run's release, or this process's id when git names none. */
+export const sourceRelease = (directory: string) =>
+  sourceFacts(directory).pipe(Effect.map(releaseOf))
+
+/** The embedded facts, or the repository holding the source entry point. */
+const thisRelease = Option.match(compiledDefine, {
+  onNone: () => sourceFacts(path.dirname(Bun.main)),
+  onSome: (define) => Effect.succeed(Option.fromUndefinedOr(define.release)),
 })
 
 /**
@@ -606,7 +374,7 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.effect(
     const services = yield* Effect.context<
       ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
     >()
-    const source = yield* Effect.cached(Effect.provideContext(thisRelease, services))
+    const facts = yield* Effect.cached(Effect.provideContext(thisRelease, services))
     return GentPlatform.of({
       bindModules: bindBunModules,
 
@@ -631,7 +399,12 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.effect(
 
       build: Effect.succeed(thisBuild),
 
-      source,
+      source: Effect.map(facts, releaseOf),
+      checkout: Effect.map(
+        facts,
+        Option.map((release) => release.checkout),
+      ),
+      processId: Effect.succeed(unreleased.process),
 
       homeDirectory: Effect.sync(() => os.homedir()),
 

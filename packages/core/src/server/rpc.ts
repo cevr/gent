@@ -38,6 +38,7 @@ import {
   ProviderAuthError,
 } from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
+import { GentRelease } from "../runtime/gent-platform.js"
 import { ExtensionScope, ExtensionStatusPhase } from "../domain/extension.js"
 import { RequestReply } from "../domain/capability.js"
 import { SessionRuntimeError } from "../runtime/session.js"
@@ -744,6 +745,8 @@ export class LinkHello extends Schema.Class<LinkHello, { readonly brand: unique 
 )({
   machine: Schema.String,
   contract: Schema.String,
+  release: GentRelease,
+  checkout: Schema.optionalKey(Schema.NonEmptyString),
 }) {}
 
 /** `link.machines`: this server's machine name and each link it runs. */

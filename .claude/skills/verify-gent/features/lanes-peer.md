@@ -1,6 +1,17 @@
 # Lanes peer
 
-With a peer link (`link.machines`: a server on another machine that spends from the same accounts), the last lanes row in `/status` is the peer. The band under the status row shows it only while the peer changes what this server does: the peer fell silent while its last runs still count (`· <n> runs held`: the server keeps to half the pace), or a link went down while the peer was heard inside the 30-minute hold. A live peer's runs, an idle peer, a link that never brought a line and a peer silent past the hold are `/status` only. The rows: `⇄ peer <host> <n> runs · <age>` while its lines come (its runs on this server's accounts, the age of its last line), `⇄ peer <host> unread <age>` after 90 s with no line (`· <n> runs held` while its last runs still count), and `⇄ peer unread` before its first line. A link that brought no line for 90 s marks the row `peer!` and names it: `· own link down` (this server's link), `· peer link down` (the peer's, once it was heard), `· links down`. While this server links to the peer, the host is the link's machine name and its state replaces the link down: `· silent` (no frame for 90 s), `· incompatible` (another build's RPC contract). A narrow row keeps the facts in rank: the held runs, the link down, the age, then the host. The row goes 30 minutes after the peer turned silent when this server runs no link of its own. `gent ctl lanes` holds `peer`, and `--line` prints the row last.
+With `link.machines`, `/status` ends with each peer's lanes rows.
+The band shows a peer only while it acts on this server: its last runs still
+count in the 30-minute hold, or its link went down while heard in that hold.
+Live, idle, never-heard and forgotten peers are `/status` detail. A row reads
+`⇄ peer <machine> <n> runs · <age>`, or `unread <age>` while silent
+(90 s without a line), with `<n> runs held` while those runs count.
+`peer!` names a link down: `own link down`, `peer link down`, `links down`.
+This server's link state replaces that label with `silent` or `incompatible`.
+An incompatibility wraps its reason in `/status`; the band points there for the full command.
+`gent ctl lanes --line` keeps it on one line. Narrow rows without a reason
+keep held runs, link down, age, then machine. With no local link, a silent
+peer leaves after its hold. See `apps/tui/docs/cli.md` for the full wire shape.
 
 ## Sub-features
 
@@ -10,7 +21,7 @@ With a peer link (`link.machines`: a server on another machine that spends from 
 - `peer-held`: a peer stopped during a run reads `⇄ peer! <host> unread 1m · 1 run held · peer link down` on the band, and A's provider row in `/status` keeps `1 running`.
 - `peer-forgotten`: 30 minutes after the peer turned silent (31.5 minutes after its last line), the row leaves the band. It goes from a server that runs no link, and `gent ctl lanes` has no `peer`; a server with its own command keeps `⇄ peer! <host> unread <age> · …` in `/status` only.
 - `link-silent`: a link whose command prints nothing reads `⇄ peer <machine> unread`, then `⇄ peer! <machine> unread · silent` at 90 s, in `/status` only (the peer was never heard, so it changes nothing).
-- `link-incompatible`: a peer on another build reads `⇄ peer! <machine> unread · incompatible`; `gent ctl link` relays, and only `link.hello` runs.
+- `link-incompatible`: a peer on another release reads `⇄ peer! <machine> unread · incompatible`, followed by its actionable reason: both short commits with the side to update, or a dev checkout to commit/stash, or no release. The command uses the local checkout or the configured ssh prefix and a quoted far checkout. Long reasons wrap at normal and narrow widths; `gent ctl lanes --line` keeps the full reason on one line. `gent ctl link` relays, and only `link.hello` runs.
 - `peer-narrow`: with a 21-letter host, `/status` at 26 columns shows the row with runs as `⇄ peer 1 run · 6s` (the host goes, the age stays). The held row on the band is `⇄ peer! unread 1m · 1 run held · peer link down` at 60 and 50, `⇄ peer! unread 1m · 1 run held` at 44 and 34, and `⇄ peer! unread 1m` at 26.
 - `ctl-peer`: `gent ctl lanes` holds `peer` (`heard` with `host` and `at`, `runs`, `silent`, `down`, `counted`: the peer's facts still count inside the hold, `link` with `machine` and `state`); `--line` prints the row text last.
 
@@ -20,7 +31,7 @@ With a peer link (`link.machines`: a server on another machine that spends from 
 
 ## Driving it
 
-- **Preconditions:** two runs launched with `--link` naming each other: `verify:launch` writes `link.machines` before the server starts, and a machine added while a server runs takes a restart.
+- **Preconditions:** connected cases need a clean checkout. Launch two runs with `--link` naming each other: `verify:launch` writes `link.machines` before the server starts; adding a machine later takes a restart.
 - **States:** default (heard), loading (`peer unread` before the first line), error (`peer!`, a link down). Empty is no peer: no row. Focus and open are `n/a`.
 - **Regression:** `apps/tui/tests/extensions/machines.client.test.tsx` (the peer row), `packages/core/tests/runtime/provider.test.ts` (`the peer`), `packages/core/tests/server/rpc.test.ts` (`notePeer`), `packages/core/tests/server/link.test.ts` (the link states; `generated sequences`: 150 seeded sequences against a reference model of the states, the waits and the hello, with the far end's bytes cut anywhere and parts of frames that only a whole frame ends), `apps/tui/tests/ctl.test.ts` (`pool`, `link`), `apps/tui/integration/link.test.ts` (two servers).
 
@@ -39,6 +50,19 @@ Recipe (one Mac, two runs; 2026-11-02):
 - Stop the run loop before B: a headless `gent` on B that finds no server can start one, and that server links to A again. Count the `ready on` lines in B's `server.log` after the stop.
 - A's own entry in `link.machines` never runs: the run's `GENT_MACHINE` is its directory's last part.
 - A silent peer's last runs still count for 30 minutes, so A's provider row keeps `1 running` after B stops.
-- A peer on another build reads `incompatible`: its `link.hello` names another contract, or it has none. The contract names the release (commit, git's tree of the working state, `bun.lock` in it, Bun): two source runs match on one commit with one working tree (bytes, exec bits, link targets), clean or dirty, and one `.git/info/exclude`. A FIFO, socket or device at a tracked path, a nested repository, a `core.worktree` elsewhere, a non-file `bun.lock`, a failed git call or a capture past 10 s leaves the link incompatible. A run outside a git repository matches no other process.
+- A peer on another release reads `incompatible`. The release is its commit and clean flag; only two clean builds of one commit and the same codecs link. Dirty and unreleased builds use a process id, so two source runs of one dirty checkout are incompatible too. Git config is trusted; the capture does not hash a working tree. A failed git read or the 10-second deadline leaves it unreleased. The reason names the checkout and exact update command; no update runs automatically.
 - The idle and the live peer rows are on `/status` only: a `waitFor peer <host> \d+ runs?` on the bare screen never matches.
-- Steps 1, 2 and 4 and the run loop of step 3 ran on 2026-11-02, read with `gent ctl lanes --line` on A: `peer B 5 runs · 0s` during the loop, `peer! B unread 1m · links down` 73 s after B stopped (the link `connecting`), `peer! B unread 1m · silent` at 93 s. The band steps last ran on 2026-11-01, with `pool.peer`, before the band kept the peer row only while it acts on the server. The band rule is pinned by `apps/tui/tests/extensions/machines.client.test.tsx` (`the peer row shows on the band only while`) and `packages/core/tests/runtime/provider.test.ts` (`the peer`, its `counted` field).
+
+## Incompatible release drive
+
+Use two isolated runs from this checkout while it has uncommitted changes,
+or two clean checkouts of different commits. Launch both with reciprocal
+`--link` arguments. Before driving, run `verify:doctor` on each. Read
+`gent ctl lanes` and `gent ctl lanes --line`: `link.state` must be
+`incompatible`, `reason` must name the dev checkout or both commits,
+and the update command must survive spaces in a checkout. Open `/status`,
+scroll to `peer!`, and capture at 120×40, 60×20 and after a live resize.
+The reason and command wrap into existing rows, without clipped words.
+Only a previously heard peer that acts on this server appears on the band;
+an incompatible peer that never sent facts stays in `/status`.
+Keep the drive, captures, ctl replies and stop receipts with the round request.

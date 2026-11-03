@@ -11,6 +11,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import type { LaneReport } from "@gent/core/protocol"
+import { GentReleaseFacts } from "@gent/core/host"
 import { makeTempDirectoryScoped, serveModelCatalogFixture } from "@gent/core/test-utils"
 import { Gent } from "@gent/sdk"
 import { Effect, FileSystem, Option, Path, Predicate, Schedule, Schema, Stream } from "effect"
@@ -21,12 +22,40 @@ const appDirectory = Effect.flatMap(Path.Path, (path) =>
   Effect.map(path.fromFileUrl(new URL("..", import.meta.url)), (dir) => path.resolve(dir)),
 )
 
-/** `main.tsx` from this checkout, run as the dev build runs it. */
-const mainOf = Effect.map(appDirectory, (appDir) => [
-  "--preload",
-  `${appDir}/scripts/dev-preload-boundary.ts`,
-  `${appDir}/src/main.tsx`,
-])
+const encodeBuild = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: Schema.String,
+      version: Schema.String,
+      release: GentReleaseFacts,
+    }),
+  ),
+)
+
+/**
+ * The process boundary supplies one clean build's metadata. These tests
+ * exercise transport and shutdown even when the checkout running them is
+ * dirty; source capture and dev-build refusal have their own link tests.
+ */
+const mainOf = Effect.gen(function* () {
+  const appDir = yield* appDirectory
+  const path = yield* Path.Path
+  return [
+    "--define",
+    `__GENT_BUILD__:${encodeBuild({
+      id: "link-integration",
+      version: "0.0.0",
+      release: {
+        commit: "link-integration-commit",
+        clean: true,
+        checkout: path.resolve(appDir, "../.."),
+      },
+    })}`,
+    "--preload",
+    `${appDir}/scripts/dev-preload-boundary.ts`,
+    `${appDir}/src/main.tsx`,
+  ]
+})
 
 const READY_PREFIX = "Gent server ready on "
 

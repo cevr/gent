@@ -5,7 +5,7 @@
  * compiled define's when the run defines one). `checkout <directory>` prints
  * the contract of the release the checkout at `directory` holds
  * (`sourceRelease`: this process's own id when it holds none). `release`
- * reads its arguments three at a time, a commit, a tree and a Bun,
+ * reads its arguments two at a time, a commit and clean/dirty,
  * and prints the contract of each release, one line each.
  */
 import { BunRuntime, BunServices } from "@effect/platform-bun"
@@ -26,7 +26,7 @@ const contractOf = (release: GentRelease) =>
     ),
   )
 
-const FACTS = 3
+const FACTS = 2
 
 BunRuntime.runMain(
   Effect.gen(function* () {
@@ -43,8 +43,7 @@ BunRuntime.runMain(
     for (let at = 0; at + FACTS <= rest.length; at += FACTS) {
       const release = GentRelease.cases.Released.make({
         commit: rest[at] ?? "",
-        tree: rest[at + 1] ?? "",
-        bun: rest[at + 2] ?? "",
+        clean: rest[at + 1] === "clean",
       })
       yield* Console.log(yield* contractOf(release))
     }

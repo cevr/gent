@@ -674,6 +674,40 @@ describe("the lanes band rows", () => {
     )
   })
 
+  test("an incompatible peer keeps its actionable reason and command at normal and narrow widths", () => {
+    const reason =
+      "workbox runs abcdef12; this machine runs 12345678. Update workbox: ssh workbox 'cd /gent && git pull --ff-only && bun install --frozen-lockfile && bun run install:global'"
+    const peer: LanePeer = {
+      ...holding,
+      link: { machine: "workbox", state: "incompatible", reason },
+    }
+    for (const width of [120, 60, 26]) {
+      const rows = laneRows(withPeer(peer), NOW, width, utc).filter(
+        (row) => row.state === "unlinked",
+      )
+      expect(rows.map((row) => row.text).join(" ")).toContain(reason)
+      expect(rows[0]?.text).toStartWith("peer! workbox")
+      for (const row of rows) expect(row.text.length).toBeLessThanOrEqual(width)
+    }
+    const full = laneRows(withPeer(peer), NOW, Number.MAX_SAFE_INTEGER, utc).at(-1)?.text
+    expect(full).toContain(reason)
+  })
+
+  test("the band bounds a long incompatible reason and points to the full update command in /status", () => {
+    const reason = `workbox runs a dev build (uncommitted changes in /${"long-checkout/".repeat(40)}); commit or stash there, then: cd /gent && bun run install:global`
+    const report = withPeer({
+      ...holding,
+      link: { machine: "workbox", state: "incompatible", reason },
+    })
+    const rows = bandRows({ lanes: Option.some(report), runs: [] }, NOW, 60)
+    expect(rows.length).toBeLessThanOrEqual(3)
+    expect(rows.map((row) => row.text).join(" ")).toContain("/status")
+    expect(rows.map((row) => row.text).join(" ")).toContain("runs a dev build")
+    const narrow = bandRows({ lanes: Option.some(report), runs: [] }, NOW, 26)
+    expect(narrow.length).toBeLessThanOrEqual(5)
+    expect(narrow.map((row) => row.text).join(" ")).toContain("/status")
+  })
+
   test("a silent peer's held runs show on its row: they outlive the link down, the age and the host", () => {
     const row = (peer: LanePeer, width = 120) => laneRows(withPeer(peer), NOW, width, utc)[1]?.text
     // In the hold: silent, its two last runs still count against this pool.

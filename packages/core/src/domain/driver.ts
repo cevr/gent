@@ -919,7 +919,11 @@ export type PeerLink = typeof PeerLink.Type
 const LinkState = Schema.Literals(["connecting", "connected", "silent", "incompatible"])
 
 /** One link of `link.machines`: the machine it reaches and its state. */
-export const LinkView = Schema.Struct({ machine: Schema.String, state: LinkState })
+export const LinkView = Schema.Struct({
+  machine: Schema.String,
+  state: LinkState,
+  reason: Schema.optionalKey(Schema.String),
+})
 export type LinkView = typeof LinkView.Type
 
 /**
