@@ -5692,17 +5692,15 @@ describe("loop inbox", () => {
     const places = ["follow-up", "steer"] as const
     const retries = ["follow-up", "steer"] as const
     const cases = places.flatMap((place) =>
-      retries
-        .filter((retry) => retry === "follow-up" || place === "steer")
-        .flatMap((retry) =>
-          [false, true].flatMap((held) =>
-            [false, true].flatMap((grant) => {
-              // The steer verb asks no placement: its retry holds no grant.
-              if (retry === "steer" && grant) return []
-              return [{ place, retry, held, grant }]
-            }),
-          ),
+      retries.flatMap((retry) =>
+        [false, true].flatMap((held) =>
+          [false, true].flatMap((grant) => {
+            // The steer verb asks no placement: its retry holds no grant.
+            if (retry === "steer" && grant) return []
+            return [{ place, retry, held, grant }]
+          }),
         ),
+      ),
     )
     const expectedLane = (each: (typeof cases)[number]): Option.Option<TurnLane> => {
       if (each.grant) return Option.some(grantLane)
@@ -5771,13 +5769,11 @@ describe("loop inbox", () => {
   describe("a held item retried under its own id keeps its acknowledged wake", () => {
     const places = ["follow-up", "steer"] as const
     const cases = places.flatMap((place) =>
-      (["follow-up", "steer"] as const)
-        .filter((retry) => retry === "follow-up" || place === "steer")
-        .flatMap((retry) =>
-          [false, true].flatMap((heldWake) =>
-            [false, true].map((retryWake) => ({ place, retry, heldWake, retryWake })),
-          ),
+      (["follow-up", "steer"] as const).flatMap((retry) =>
+        [false, true].flatMap((heldWake) =>
+          [false, true].map((retryWake) => ({ place, retry, heldWake, retryWake })),
         ),
+      ),
     )
     const withOrNo = { true: "with", false: "no" } as const
     for (const each of cases) {

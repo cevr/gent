@@ -382,17 +382,25 @@ const appendFollowUpItem = (
 }
 
 /**
- * A retry of a waiting steer's id, by either verb, leaves the steer as it
- * is, with the lane the retry's own grant admits it to and the wake the
- * retry asked for (`keepRetryPromises`). Returns the same queue when the
- * retry promises nothing new, so the caller stores only a change.
+ * A retry of a queued id keeps the first send's decision. A retry that
+ * leaves the held item as it is (a waiting steer's id by either verb, a
+ * queued follow-up's id by the steer verb) gives it the lane the retry's
+ * own grant admits it to and the wake the retry asked for
+ * (`keepRetryPromises`). Returns the same queue when the retry promises
+ * nothing new, so the caller stores only a change.
  */
-const promisesOntoWaitingSteer = (queue: LoopQueueState, retry: QueuedTurnItem): LoopQueueState => {
-  const held = queue.steering.find((queued) => queued.message.id === retry.message.id)
-  if (Predicate.isUndefined(held)) return queue
-  const kept = keepRetryPromises(held, held, retry)
-  if (kept.lane === held.lane && kept.wake === held.wake) return queue
-  return { ...queue, steering: queue.steering.with(queue.steering.indexOf(held), kept) }
+const promisesOntoHeldItem = (queue: LoopQueueState, retry: QueuedTurnItem): LoopQueueState => {
+  const keep = (items: ReadonlyArray<QueuedTurnItem>): ReadonlyArray<QueuedTurnItem> => {
+    const held = items.find((queued) => queued.message.id === retry.message.id)
+    if (Predicate.isUndefined(held)) return items
+    const kept = keepRetryPromises(held, held, retry)
+    if (kept.lane === held.lane && kept.wake === held.wake) return items
+    return items.with(items.indexOf(held), kept)
+  }
+  const steering = keep(queue.steering)
+  const followUp = keep(queue.followUp)
+  if (steering === queue.steering && followUp === queue.followUp) return queue
+  return { ...queue, steering, followUp }
 }
 
 const toQueueEntry = (
@@ -464,8 +472,11 @@ const removeQueuedFollowUp = (queue: LoopQueueState, messageId: MessageId): Loop
 const appendSteeringItem = (queue: LoopQueueState, item: QueuedTurnItem): LoopQueueState => {
   const inFlight = Option.fromUndefinedOr(queue.inFlight)
   if (Option.isSome(inFlight) && inFlight.value.message.id === item.message.id) return queue
-  if (queue.steering.some((existing) => existing.message.id === item.message.id)) {
-    return promisesOntoWaitingSteer(queue, item)
+  // A steer under a held id (a waiting steer's, or a queued follow-up's)
+  // keeps the held item where it waits (`promisesOntoHeldItem`).
+  const sameId = (existing: QueuedTurnItem) => existing.message.id === item.message.id
+  if (queue.steering.some(sameId) || queue.followUp.some(sameId)) {
+    return promisesOntoHeldItem(queue, item)
   }
   return {
     ...queue,
@@ -995,7 +1006,7 @@ export const makeLoopInbox = (
         // (`keepRetryPromises`).
         const sameId = (queued: QueuedTurnItem) => queued.message.id === item.message.id
         if (current.queue.steering.some(sameId)) {
-          const queue = promisesOntoWaitingSteer(current.queue, item)
+          const queue = promisesOntoHeldItem(current.queue, item)
           if (queue === current.queue) {
             return { value: Option.none(), next: current, persist: false }
           }
