@@ -1,59 +1,82 @@
 /**
  * Two real servers linked as two machines are: A's `link.machines` names B,
  * and A runs B's `gent ctl link` from this checkout, as `ssh <b> gent ctl
- * link` runs it on the other machine. Each server runs in this process on its
- * own scratch home and its own machine name (`GENT_MACHINE`); the link's
- * command is a real child process that finds B's server through B's data
- * directory. No network and no ssh: the link crosses stdio and loopback.
+ * link` runs it on the other machine. Each server is its own `gent server
+ * start` process from this checkout's `main.tsx`, on its own scratch home,
+ * data directory and machine name (`GENT_MACHINE`), so the link joins the
+ * program to itself, as two machines on one build do. The link's command is
+ * a real child process that finds B's server through B's data directory. No
+ * network and no ssh: the link crosses stdio and loopback.
  */
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { BuiltinExtensions } from "@gent/extensions"
 import type { LaneReport } from "@gent/core/protocol"
 import { makeTempDirectoryScoped, serveModelCatalogFixture } from "@gent/core/test-utils"
 import { Gent } from "@gent/sdk"
-import {
-  ConfigProvider,
-  Effect,
-  FileSystem,
-  Path,
-  Predicate,
-  Schedule,
-  Schema,
-  Stream,
-} from "effect"
+import { Effect, FileSystem, Option, Path, Predicate, Schedule, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/process"
 
-/** A server on a scratch home named `machine`, with `config` as its user file. */
+/** This checkout's apps/tui. */
+const appDirectory = Effect.flatMap(Path.Path, (path) =>
+  Effect.map(path.fromFileUrl(new URL("..", import.meta.url)), (dir) => path.resolve(dir)),
+)
+
+/** `main.tsx` from this checkout, run as the dev build runs it. */
+const mainOf = Effect.map(appDirectory, (appDir) => [
+  "--preload",
+  `${appDir}/scripts/dev-preload-boundary.ts`,
+  `${appDir}/src/main.tsx`,
+])
+
+const READY_PREFIX = "Gent server ready on "
+
+/**
+ * `gent server start --mock` on a scratch home named `machine`, with `config`
+ * as its user file: the process, its home and data directory, and a client of
+ * it. The server and its client belong to the caller's scope.
+ */
 const serveMachine = (machine: string, config: Schema.Json) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const home = yield* makeTempDirectoryScoped(`gent-link-${machine}-`)
+    const dataDir = `${home}/data`
     yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
     yield* fs.writeFileString(
       `${home}/.gent/config.json`,
       yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(config),
     )
-    const server = yield* Gent.server({
-      cwd: home,
-      state: Gent.state.sqlite({ home }),
-      provider: Gent.provider.mock(),
-      extensions: BuiltinExtensions,
-    }).pipe(
-      Effect.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: {
-              HOME: home,
-              GENT_MACHINE: machine,
-              GENT_MODEL_CATALOG_URL: yield* serveModelCatalogFixture,
-            },
-          }),
-        ),
-      ),
+    const server = yield* ChildProcess.make(
+      process.execPath,
+      [...(yield* mainOf), "server", "start", "--mock", "--port", "0"],
+      {
+        cwd: home,
+        env: {
+          HOME: home,
+          GENT_DATA_DIR: dataDir,
+          GENT_MACHINE: machine,
+          GENT_MODEL_CATALOG_URL: yield* serveModelCatalogFixture,
+        },
+        extendEnv: true,
+        stdout: "pipe",
+        stderr: "ignore",
+        forceKillAfter: "2 seconds",
+      },
     )
-    const { client } = yield* Gent.client(server, { cwd: home })
-    return { home, client }
+    const url = yield* server.stdout.pipe(
+      Stream.decodeText,
+      Stream.splitLines,
+      Stream.filter((line) => line.startsWith(READY_PREFIX)),
+      Stream.runHead,
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.die(`${machine}'s server closed its stdout before it was ready`),
+          onSome: (line) => Effect.succeed(line.slice(READY_PREFIX.length).trim()),
+        }),
+      ),
+      Effect.timeout("20 seconds"),
+    )
+    const { client } = yield* Gent.client(`${url}/rpc`, { cwd: home })
+    return { home, dataDir, server, client }
   })
 
 /** Reads `read` until `done` holds, at most 20 s: a link's child starts from source. */
@@ -63,77 +86,32 @@ const until = <A, E, R>(read: Effect.Effect<A, E, R>, done: (value: A) => boolea
     Effect.timeout("20 seconds"),
   )
 
-/** This checkout's apps/tui. */
-const appDirectory = Effect.flatMap(Path.Path, (path) =>
-  Effect.map(path.fromFileUrl(new URL("..", import.meta.url)), (dir) => path.resolve(dir)),
-)
-
 /** B's `gent ctl link` from this checkout, as `ssh <b> gent ctl link` runs it there. */
-const ctlLinkOf = (home: string) =>
-  Effect.gen(function* () {
-    const appDir = yield* appDirectory
-    return [
-      "env",
-      `HOME=${home}`,
-      process.execPath,
-      "--preload",
-      `${appDir}/scripts/dev-preload-boundary.ts`,
-      `${appDir}/src/main.tsx`,
-      "ctl",
-      "link",
-    ]
-  })
+const ctlLinkOf = (b: { readonly home: string; readonly dataDir: string }) =>
+  Effect.map(mainOf, (main) => [
+    "env",
+    `HOME=${b.home}`,
+    `GENT_DATA_DIR=${b.dataDir}`,
+    process.execPath,
+    ...main,
+    "ctl",
+    "link",
+  ])
 
 describe("linked machines", () => {
-  // B is its own process here, killed with no shutdown: no stream of its
-  // ends and no close frame goes out, so only the relay's own end of its
-  // socket ends A's run.
+  // B is killed with no shutdown: no stream of its ends and no close frame
+  // goes out, so only the relay's own end of its socket ends A's run.
   it.live(
     "a linked server killed while its relay's stdin stays open ends the link's run at once",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
-          const bHome = yield* makeTempDirectoryScoped("gent-link-b-")
-          yield* fs.makeDirectory(`${bHome}/.gent`, { recursive: true })
-          const appDir = yield* appDirectory
-          const b = yield* ChildProcess.make(
-            process.execPath,
-            [
-              "--preload",
-              `${appDir}/scripts/dev-preload-boundary.ts`,
-              `${appDir}/src/main.tsx`,
-              "server",
-              "start",
-              "--mock",
-              "--port",
-              "0",
-            ],
-            {
-              cwd: bHome,
-              env: {
-                HOME: bHome,
-                GENT_MACHINE: "b",
-                GENT_MODEL_CATALOG_URL: yield* serveModelCatalogFixture,
-              },
-              extendEnv: true,
-              stdout: "pipe",
-              stderr: "ignore",
-              forceKillAfter: "2 seconds",
-            },
-          )
-          yield* b.stdout.pipe(
-            Stream.decodeText,
-            Stream.splitLines,
-            Stream.takeUntil((line) => line.startsWith("Gent server ready")),
-            Stream.runDrain,
-            Effect.timeout("20 seconds"),
-          )
-          const a = yield* serveMachine("a", { link: { machines: { b: yield* ctlLinkOf(bHome) } } })
+          const b = yield* serveMachine("b", {})
+          const a = yield* serveMachine("a", { link: { machines: { b: yield* ctlLinkOf(b) } } })
           yield* until(a.client.link.machines(), (machines) =>
             machines.links.some((link) => link.state === "connected"),
           )
-          yield* b.kill({ killSignal: "SIGKILL" })
+          yield* b.server.kill({ killSignal: "SIGKILL" })
           // B's relay ends with its socket and A's run with it: well before
           // the 60 s past a ping that a relay still running would take.
           const view = yield* a.client.link.machines().pipe(
@@ -160,7 +138,7 @@ describe("linked machines", () => {
             link: {
               machines: {
                 a: ["false"],
-                b: yield* ctlLinkOf(b.home),
+                b: yield* ctlLinkOf(b),
               },
             },
           })
@@ -185,7 +163,7 @@ describe("linked machines", () => {
           expect(bPeer.peers).toMatchObject([{ machine: "a", silent: false }])
           expect(bPeer.peers?.[0]?.link).toBeUndefined()
           expect((yield* b.client.link.machines()).machine).toBe("b")
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("40 seconds")),
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("50 seconds")),
       ),
     60_000,
   )
