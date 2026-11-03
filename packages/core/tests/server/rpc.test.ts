@@ -4683,6 +4683,8 @@ describe("session profile lookup", () => {
         "it writes the peer server's facts on the server's accounts, which no session owns",
       "extension.serverRequest": "a server request answers the server, with no session",
       "review.window": "it reads every workspace's sessions in a time window",
+      "link.hello": "a link's first call names the server's machine and contract, no session",
+      "link.machines": "it reads the server's links, which no session owns",
     }
     const exempt = { ...serverScoped, ...namesItsSessionElsewhere }
     const requiresSession = (payload: Schema.Top): boolean => {

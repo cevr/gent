@@ -29,7 +29,6 @@ import {
   Struct,
 } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
-import { ChildProcess } from "effect/process"
 import { ModelCatalogSnapshotStorage, type TurnLane } from "../storage/storage.js"
 import { type ExtensionModelsService, ExtensionServiceError } from "../domain/extension.js"
 import {
@@ -91,7 +90,7 @@ import {
   type LaneWindow,
   type LoginLossReason,
   type PeerLink,
-  PoolFacts,
+  type PoolFacts,
   type ProviderLanes,
   type QuotaReading,
   liveResets,
@@ -103,9 +102,8 @@ import {
   type StoredOAuthCredentials,
   type VirtualModel,
 } from "../domain/driver.js"
-import { GentPlatform, resolveDataDir, writeFileAtomic } from "./gent-platform.js"
+import { GentPlatform, machineName, resolveDataDir, writeFileAtomic } from "./gent-platform.js"
 import {
-  ConfigService,
   type ProviderConfig,
   type ProviderConfigEntry,
   RuntimeEnvironment,
@@ -3760,8 +3758,6 @@ const PEER_SILENT_MS = 90_000
  * this server keeps its own load under half the capacity. A guess.
  */
 const PEER_HOLD_MS = 30 * 60_000
-/** The name `PoolFacts.host` gives a machine whose host name is empty. */
-const UNNAMED_HOST = "unnamed"
 /** How long a segment closed on an account the peer shares waits for its next line: two heartbeats. */
 const PEER_PENDING_MS = 60_000
 /**
@@ -4183,9 +4179,9 @@ interface CredentialPlacementService {
    */
   readonly notePeer: (facts: PoolFacts, scopeOf: LaneScopeOf, link: PeerLink) => Effect.Effect<void>
   /**
-   * This server's own peer link runs while the scope is open
-   * (`followPoolPeer`): the lanes report the peer, and the link down when
-   * no line came on it for 90 s.
+   * This server's own link to the peer runs while the scope is open
+   * (`Links`, server/link.ts): the lanes report the peer, and the link down
+   * when no facts came on it for 90 s.
    */
   readonly runsLink: Effect.Effect<void, never, Scope.Scope>
   /**
@@ -4301,7 +4297,7 @@ interface PlacementFuel {
  * The accounts a provider's unpinned run spends from: its pool, else the
  * first of its order. None when the sign-in's order cannot be read.
  */
-type LaneScopeOf = (provider: string) => Effect.Effect<Option.Option<LaneScope>>
+export type LaneScopeOf = (provider: string) => Effect.Effect<Option.Option<LaneScope>>
 
 /**
  * Whether a refusal holds its account for the refused model alone: a
@@ -5800,9 +5796,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   /**
    * The peer as the lanes report it (`LaneReport.peer`): none while this
    * server runs no link of its own and the peer's facts do not count (before
-   * its first line, or once its hold ended: an owner who removed the peer's
-   * `pool.peer` sees the band forget it). While this server runs its own
-   * link, the peer stays, so the band names that link down. Its runs are
+   * its first line, or once its hold ended: an owner who removed the
+   * peer's `link.machines` entry sees the band forget it). While this
+   * server runs its own link, the peer stays, so the band names that link
+   * down. Its runs are
    * those that hold a label of this server's pools, while its facts count.
    * A link is down when it brought no line for 90 s: this server's own
    * while it runs (counted from its start before its first line), the
@@ -6232,16 +6229,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   ]
     .map((part) => part.toString(16).padStart(8, "0"))
     .join("")
-  /**
-   * The peer's band names this machine by it: the host name up to its first
-   * dot, or `unnamed` when that is empty (no host name, or one that starts
-   * with a dot), so the band never prints an empty name.
-   */
-  const { hostname } = yield* (yield* GentPlatform).osInfo
-  const host = Option.getOrElse(
-    Option.liftPredicate(hostname.split(".")[0] ?? "", (name) => name.length > 0),
-    () => UNNAMED_HOST,
-  )
+  /** The peer's band names this machine by it (`machineName`). */
+  const host = yield* machineName
   let facts: PoolFacts = { boot, host, seq: 0, providers: [] }
   /**
    * Each reader's pending facts: one slot, the newest, so a reader that
@@ -8490,156 +8479,6 @@ export const sweepPoolQuotas = <E>(
     Effect.repeat(Schedule.spaced(POOL_QUOTA_SWEEP_INTERVAL)),
     Effect.asVoid,
   )
-
-// ── pool peer link ──────────────────────────────────────────────────────────
-
-/** The wait after the peer command's first failure; each failure with no line between doubles it. */
-const PEER_RETRY_FIRST = Duration.seconds(1)
-/** The longest wait between two runs of the peer command. */
-const PEER_RETRY_MAX = Duration.minutes(5)
-/** How long a stopped peer command has after SIGTERM before SIGKILL. */
-const PEER_FORCE_KILL_AFTER = Duration.seconds(2)
-/** How much of the command's stderr a failure log keeps: its last characters. */
-const PEER_STDERR_TAIL = 2_000
-/**
- * A run whose stdout prints no line this long is stopped: the peer sends a
- * heartbeat each `POOL_FACTS_HEARTBEAT`, so a quiet link is a dead one (a
- * machine asleep, a route gone, an ssh waiting on a socket with no reset).
- */
-const PEER_IDLE = Duration.millis(PEER_SILENT_MS)
-/** A run that noted a line and lived this long starts the wait over. */
-const PEER_STEADY_MS = 60_000
-/**
- * After the command's stdout ends: how long its exit is awaited. A command
- * that outlives its stdout holds no run past it. (Its stderr ends with it:
- * the spawner closes the pipe at the exit, even while a child of the
- * command still holds it.)
- */
-const PEER_END_GRACE = Duration.seconds(1)
-
-/** The peer command printed no line for `PEER_IDLE`. */
-class PoolPeerIdle extends Schema.TaggedError<PoolPeerIdle, { readonly brand: unique symbol }>()(
-  "PoolPeerIdle",
-  { message: Schema.String },
-) {}
-
-const PoolFactsLine = Schema.fromJsonString(PoolFacts)
-const encodePoolFactsLine = Schema.encodeSync(PoolFactsLine)
-const decodePoolFactsLine = Schema.decodeEffect(PoolFactsLine)
-
-/**
- * One run of the peer command: its stdin gets this server's own pool facts
- * (`CredentialPlacement.pool`), one JSON line each, and each line of its
- * stdout is noted as the peer's facts (`notePeer`). It ends when the
- * command's stdout ends, with the exit code (awaited for `PEER_END_GRACE`)
- * and the end of its stderr, or fails at a line that does not decode or after `PEER_IDLE`
- * with no line. Scoped: the command stops with it. `heard` turns true at the
- * first line noted.
- */
-const runPoolPeer = (
-  command: readonly [string, ...Array<string>],
-  scopeOf: LaneScopeOf,
-  heard: Ref.Ref<boolean>,
-) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const placement = yield* CredentialPlacement
-      const encoder = new TextEncoder()
-      const handle = yield* ChildProcess.make(command[0], command.slice(1), {
-        stdin: placement.pool.pipe(
-          Stream.map((facts) => encoder.encode(`${encodePoolFactsLine(facts)}\n`)),
-        ),
-        stdout: "pipe",
-        stderr: "pipe",
-        forceKillAfter: PEER_FORCE_KILL_AFTER,
-      })
-      // A run that does not succeed stops the command before its stdin feed,
-      // as `runProcess` does: a command that stopped reading holds a full pipe
-      // the feed's stop would wait on for good (Effect-TS/effect#10314).
-      yield* Effect.addFinalizer((exit) => {
-        if (Exit.isSuccess(exit)) return Effect.void
-        return Effect.ignore(handle.kill({ forceKillAfter: PEER_FORCE_KILL_AFTER }))
-      })
-      const lines = handle.stdout.pipe(
-        Stream.decodeText,
-        Stream.splitLines,
-        Stream.filter((line) => line.trim().length > 0),
-        Stream.timeoutOrElse({
-          duration: PEER_IDLE,
-          orElse: () =>
-            Stream.fail(
-              new PoolPeerIdle({
-                message: `the command printed no line in ${Duration.format(PEER_IDLE)}`,
-              }),
-            ),
-        }),
-        Stream.runForEach((line) =>
-          decodePoolFactsLine(line).pipe(
-            Effect.flatMap((facts) => placement.notePeer(facts, scopeOf, "own")),
-            Effect.andThen(Ref.set(heard, true)),
-          ),
-        ),
-      )
-      const tail = yield* Ref.make("")
-      const stderr = yield* handle.stderr.pipe(
-        Stream.decodeText,
-        Stream.runForEach((text) =>
-          Ref.update(tail, (kept) => (kept + text).slice(-PEER_STDERR_TAIL)),
-        ),
-        Effect.forkScoped,
-      )
-      yield* lines
-      const exitCode = yield* handle.exitCode.pipe(Effect.timeoutOption(PEER_END_GRACE))
-      // Its stderr ends at the exit; a command still running keeps it open.
-      if (Option.isSome(exitCode)) yield* Fiber.join(stderr)
-      const code = Option.match(exitCode, { onNone: () => "none (it still ran)", onSome: String })
-      return `the command closed its stdout, exit code ${code}: ${(yield* Ref.get(tail)).trim()}`
-    }),
-  )
-
-/**
- * The server's peer link (`pool.peer` in the user file, `PoolConfig`): runs
- * the command (`runPoolPeer`) and runs it again each time it ends or fails,
- * after a wait that starts at `PEER_RETRY_FIRST`, doubles up to
- * `PEER_RETRY_MAX`, and starts over once a run noted a line and lived
- * `PEER_STEADY_MS` (a run that dies at its first stdin line, as on a peer
- * server too old for `accounts.notePeer`, keeps doubling). Each end is
- * logged (`credential-placement.peer.failed`). The command is read from the
- * config at each run; with none, the link stops. `scopeOf` names each
- * provider's pool accounts, as `notePeer` reads them.
- */
-export const followPoolPeer = Effect.fn("CredentialPlacement.followPoolPeer")(function* (
-  scopeOf: LaneScopeOf,
-) {
-  const config = yield* ConfigService
-  const placement = yield* CredentialPlacement
-  if (Option.isNone(yield* config.poolPeer)) return
-  // The link is this server's own while it runs, through each retry wait:
-  // the lanes mark it down when it brings no line (`runsLink`).
-  yield* Effect.scoped(
-    Effect.gen(function* () {
-      yield* placement.runsLink
-      let wait = PEER_RETRY_FIRST
-      while (true) {
-        const command = yield* config.poolPeer
-        if (Option.isNone(command)) return
-        const heard = yield* Ref.make(false)
-        const started = yield* Clock.currentTimeMillis
-        const reason = yield* runPoolPeer(command.value, scopeOf, heard).pipe(
-          Effect.catch((error) => Effect.succeed(error.message)),
-          Effect.catchDefect((defect) => Effect.succeed(causeMessage(defect))),
-        )
-        yield* Effect.logWarning("credential-placement.peer.failed").pipe(
-          Effect.annotateLogs({ command: command.value[0], error: reason }),
-        )
-        const lived = (yield* Clock.currentTimeMillis) - started
-        if ((yield* Ref.get(heard)) && lived >= PEER_STEADY_MS) wait = PEER_RETRY_FIRST
-        yield* Effect.sleep(wait)
-        wait = Duration.min(Duration.times(wait, 2), PEER_RETRY_MAX)
-      }
-    }),
-  )
-})
 
 // ── decision-model-resolver ─────────────────────────────────────────────────
 

@@ -648,6 +648,29 @@ const stagingName = (basename: string, suffix: string): string => {
   return `.${clipped}${STAGING_TAG}${suffix}`
 }
 
+// ── machine-name ────────────────────────────────────────────────────────────
+
+/** The name of a machine whose host name is empty, so no view prints an empty name. */
+const UNNAMED_MACHINE = "unnamed"
+
+/**
+ * This machine's name: its key in `link.machines` and the `host` its pool
+ * facts carry. `GENT_MACHINE` when set (two servers on one host need it),
+ * else the host name up to its first dot, else `unnamed` (no host name, or
+ * one that starts with a dot).
+ */
+export const machineName: Effect.Effect<string, never, GentPlatform> = Effect.gen(function* () {
+  const named = yield* Config.option(Config.NonEmptyString("GENT_MACHINE")).pipe(
+    Effect.orElseSucceed(() => Option.none<string>()),
+  )
+  if (Option.isSome(named)) return named.value
+  const { hostname } = yield* (yield* GentPlatform).osInfo
+  return Option.getOrElse(
+    Option.liftPredicate(hostname.split(".")[0] ?? "", (name) => name.length > 0),
+    () => UNNAMED_MACHINE,
+  )
+})
+
 // ── data-directory ──────────────────────────────────────────────────────────
 
 /**

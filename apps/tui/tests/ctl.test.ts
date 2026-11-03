@@ -4,7 +4,7 @@
  * call finds that server through the data directory's lock, as a shell does.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { BunServices } from "@effect/platform-bun"
+import { BunServices, BunSocket } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
 import { ReviewRound } from "@gent/extensions/client"
 import {
@@ -21,6 +21,7 @@ import {
   ReviewMessage,
   ReviewSession,
 } from "@gent/core/protocol"
+import { workspaceHeadersForCwd } from "@gent/core/host"
 import {
   BunGentPlatformLive,
   makeTempDirectoryScoped,
@@ -34,7 +35,6 @@ import {
   ConfigProvider,
   Effect,
   Exit,
-  Fiber,
   FileSystem,
   Layer,
   Option,
@@ -43,7 +43,6 @@ import {
   Runtime,
   Schedule,
   Schema,
-  Scope,
   Sink,
   Stdio,
   Stream,
@@ -64,7 +63,7 @@ interface CtlRun {
  * `home`; collect its exit code and streams. `brokenStdout` makes a write to
  * stdout die, as a closed pipe can. `stdout` lets a test read stdout while
  * the call still runs. `stdin` is what the call reads on its stdin, which
- * then closes; none by default. `clock` is the call's own clock, not the
+ * then closes (`holdStdin`: stays open); none by default. `clock` is the call's own clock, not the
  * server's; the wall clock by default. `tracer` takes the call's spans, one
  * per RPC it sends. `env` adds variables to the call's environment.
  */
@@ -75,6 +74,7 @@ const runCtl = (
     readonly brokenStdout?: boolean
     readonly stdout?: Ref.Ref<string>
     readonly stdin?: string
+    readonly holdStdin?: boolean
     readonly clock?: Clock.Clock
     readonly tracer?: Tracer.Tracer
     readonly env?: Readonly<Record<string, string>>
@@ -93,10 +93,13 @@ const runCtl = (
       onNone: () => clocked,
       onSome: (tracer) => clocked.pipe(Effect.withTracer(tracer)),
     })
+    let stdin = Stream.make(new TextEncoder().encode(options.stdin ?? ""))
+    if (options.holdStdin === true) stdin = Stream.concat(stdin, Stream.never)
     const exit = yield* cli.pipe(
       Effect.provide(
         Layer.mergeAll(
           BunServices.layer,
+          BunSocket.layerWebSocketConstructor,
           BunGentPlatformLive,
           Stdio.layerTest({
             stdout: () => {
@@ -104,7 +107,7 @@ const runCtl = (
               return capture(out)
             },
             stderr: () => capture(err),
-            stdin: Stream.make(new TextEncoder().encode(options.stdin ?? "")),
+            stdin,
           }),
           ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ...options.env, HOME: home } })),
         ),
@@ -146,8 +149,55 @@ const SKEWS = [
 ] as const
 
 const decodeResult = Schema.decodeEffect(Schema.fromJsonString(CtlResult))
-const decodePoolLine = Schema.decodeEffect(Schema.fromJsonString(PoolFacts))
-const encodePoolLine = Schema.encodeEffect(Schema.fromJsonString(PoolFacts))
+
+// ── link frames ─────────────────────────────────────────────────────────────
+
+const encodeHeaders = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(Schema.Tuple([Schema.String, Schema.String]))),
+)
+
+/** An RPC request frame for `gent ctl link`'s stdin, in `home`'s workspace. */
+const requestFrame = (id: string, tag: string, home: string, payload: string) =>
+  `{"_tag":"Request","id":"${id}","tag":"${tag}","payload":${payload},"headers":${encodeHeaders(Object.entries(workspaceHeadersForCwd(home)))}}`
+
+/** `link.hello`: its payload is void, which the wire carries as null. */
+const helloFrame = (id: string, home: string) => requestFrame(id, "link.hello", home, "null")
+
+/** `accounts.notePeer` with `facts`, as a peer server's link pushes them. */
+const notePeerFrame = (id: string, home: string, facts: PoolFacts) =>
+  Effect.map(Schema.encodeEffect(Schema.fromJsonString(PoolFacts))(facts), (payload) =>
+    requestFrame(id, "accounts.notePeer", home, payload),
+  )
+
+/** A frame the relay printed: a request's successful end, its value. */
+const ExitFrame = Schema.fromJsonString(
+  Schema.TaggedStruct("Exit", {
+    requestId: Schema.String,
+    exit: Schema.TaggedStruct("Success", { value: Schema.Unknown }),
+  }),
+)
+const decodeExitFrame = Schema.decodeUnknownOption(ExitFrame)
+
+/** `link.hello`'s value. */
+const Hello = Schema.Struct({ machine: Schema.String, contract: Schema.String })
+
+/** The value of each request the relay in `out` ended, by id, once `count` have ended. */
+const repliesUntil = (out: Ref.Ref<string>, count: number) =>
+  Ref.get(out).pipe(
+    Effect.map((text) => {
+      const replies = new Map<string, unknown>()
+      for (const line of text.split("\n")) {
+        const frame = decodeExitFrame(line)
+        if (Option.isSome(frame)) replies.set(frame.value.requestId, frame.value.exit.value)
+      }
+      return replies
+    }),
+    Effect.repeat({
+      until: (replies) => replies.size >= count,
+      schedule: Schedule.spaced("20 millis"),
+    }),
+    Effect.timeout("10 seconds"),
+  )
 
 /** The one JSON value a successful call printed, decoded as the result `tag` names. */
 const resultAs =
@@ -820,95 +870,51 @@ describe("gent ctl against a running server", () => {
     30_000,
   )
 
-  it.live(
-    "pool needs no session: one Pool value and exit 0, or with --follow bare PoolFacts lines until the server stops",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          // A ledger with the account's weekly reading: its reset is the account's `week`.
-          const now = yield* Clock.currentTimeMillis
-          const weekEnd = now + 100 * 3_600_000
-          const serverScope = yield* Scope.make()
-          const seeded = yield* serveScratchHomeWith({
-            ledger: {
-              buckets: [],
-              readings: [
-                {
-                  provider: "anthropic",
-                  slot: "default",
-                  window: "7d",
-                  utilization: 0.3,
-                  resetAt: weekEnd,
-                  readAt: now - 60_000,
-                  rejected: false,
-                },
-              ],
-            },
-          }).pipe(Scope.provide(serverScope))
-          const printed = yield* runCtl(seeded.home, ["pool"])
-          // One JSON value, its providers one record per line.
-          expect(printed.stdout.split("\n").filter((row) => row.length > 0)).toHaveLength(3)
-          const facts = yield* resultAs("Pool")(printed)
-          expect(facts.server).toBe(seeded.server.url)
-          expect(facts.boot).toMatch(/^[0-9a-f]{16}$/)
-          // The host's name up to its first dot: the peer's band names this server by it.
-          expect(facts.host).toMatch(/^[^.]+$/)
-          expect(facts.providers).toEqual([
-            {
-              provider: "anthropic",
-              runs: [],
-              accounts: [
-                { slot: CredentialSlot.make("default"), live: [], spend: [], week: weekEnd },
-              ],
-            },
-          ])
-
-          // --follow: the same facts as one bare PoolFacts line, and the call runs on.
-          const out = yield* Ref.make("")
-          const follow = yield* runCtl(seeded.home, ["pool", "--follow"], { stdout: out }).pipe(
-            Effect.forkScoped,
-          )
-          const first = yield* Ref.get(out).pipe(
-            Effect.repeat({
-              until: (text) => text.includes("\n"),
-              schedule: Schedule.spaced("20 millis"),
-            }),
-            Effect.timeout("5 seconds"),
-          )
-          const line = first.slice(0, first.indexOf("\n"))
-          const decoded = yield* decodePoolLine(line)
-          expect(decoded).toEqual({
-            boot: facts.boot,
-            host: facts.host,
-            seq: facts.seq,
-            providers: facts.providers,
-          })
-          // No `_tag`, no server, no spaces: the line is the facts' own compact JSON.
-          expect(yield* encodePoolLine(decoded)).toBe(line)
-          expect(follow.pollUnsafe()).toBeUndefined()
-
-          // A reader that hung up: the write fails, and the call ends in one error line and exit 1.
-          const hungUp = yield* runCtl(seeded.home, ["pool", "--follow"], { brokenStdout: true })
-          expect(hungUp.code).toBe(CTL_EXIT.failed)
-          expect((yield* errorOf(hungUp))._tag).toBe("CtlFailed")
-
-          // The server stops: it ends the stream before its listener drains, so
-          // neither waits on the other, and the call ends in one error line and exit 1.
-          yield* Scope.close(serverScope, Exit.void).pipe(Effect.timeout("5 seconds"))
-          const ended = yield* Fiber.join(follow).pipe(Effect.timeout("5 seconds"))
-          expect(ended.stdout).toBe(first)
-          expect(ended.code).toBe(CTL_EXIT.failed)
-          expect(ended.stderr.trimEnd().split("\n")).toHaveLength(1)
-          const stopped = yield* Schema.decodeEffect(Schema.fromJsonString(ErrorLine))(ended.stderr)
-          expect(stopped._tag).toBe("CtlFailed")
-          expect(stopped.message).toBe("the server stopped")
-        }).pipe(Effect.timeout("25 seconds")),
-      ),
-    30_000,
+  it.live("pool needs no session: one Pool value and exit 0", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // A ledger with the account's weekly reading: its reset is the account's `week`.
+        const now = yield* Clock.currentTimeMillis
+        const weekEnd = now + 100 * 3_600_000
+        const seeded = yield* serveScratchHomeWith({
+          ledger: {
+            buckets: [],
+            readings: [
+              {
+                provider: "anthropic",
+                slot: "default",
+                window: "7d",
+                utilization: 0.3,
+                resetAt: weekEnd,
+                readAt: now - 60_000,
+                rejected: false,
+              },
+            ],
+          },
+        })
+        const printed = yield* runCtl(seeded.home, ["pool"])
+        // One JSON value, its providers one record per line.
+        expect(printed.stdout.split("\n").filter((row) => row.length > 0)).toHaveLength(3)
+        const facts = yield* resultAs("Pool")(printed)
+        expect(facts.server).toBe(seeded.server.url)
+        expect(facts.boot).toMatch(/^[0-9a-f]{16}$/)
+        // The machine's name: the host name up to its first dot, as the peer's band names it.
+        expect(facts.host).toMatch(/^[^.]+$/)
+        expect(facts.providers).toEqual([
+          {
+            provider: "anthropic",
+            runs: [],
+            accounts: [
+              { slot: CredentialSlot.make("default"), live: [], spend: [], week: weekEnd },
+            ],
+          },
+        ])
+      }).pipe(Effect.timeout("25 seconds")),
+    ),
   )
 
   it.live(
-    "pool --follow sends each PoolFacts line of its stdin to the server, and a line it cannot read fails it",
+    "link relays the server's RPC frames over stdio: a hello names the machine and contract, a pushed notePeer names the peer",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -929,8 +935,8 @@ describe("gent ctl against a running server", () => {
               ],
             },
           })
-          // The peer's line, as its server's link writes it: two runs on default.
-          const peerLine = yield* encodePoolLine({
+          // The peer's facts, as its server's link pushes them: two runs on default.
+          const notePeer = yield* notePeerFrame("2", seeded.home, {
             boot: "peer",
             host: "peer-host",
             seq: 1,
@@ -943,24 +949,19 @@ describe("gent ctl against a running server", () => {
             ],
           })
           const out = yield* Ref.make("")
-          const follow = yield* runCtl(seeded.home, ["pool", "--follow"], {
+          const relay = yield* runCtl(seeded.home, ["link"], {
             stdout: out,
-            stdin: `${peerLine}\n`,
+            stdin: `${helloFrame("1", seeded.home)}\n${notePeer}\n`,
+            holdStdin: true,
           }).pipe(Effect.forkScoped)
-          const loadOf = Effect.map(
-            Effect.flatMap(runCtl(seeded.home, ["lanes"]), resultAs("Lanes")),
-            (lanes) => lanes.providers.find((lanes) => lanes.provider === "anthropic")?.load,
-          )
-          const load = yield* loadOf.pipe(
-            Effect.repeat({
-              until: (found) => found === 2,
-              schedule: Schedule.spaced("20 millis"),
-            }),
-            Effect.timeout("5 seconds"),
-          )
-          expect(load).toBe(2)
+          const replies = yield* repliesUntil(out, 2)
+          const hello = yield* Schema.decodeUnknownEffect(Hello)(replies.get("1"))
+          expect(hello.machine).toMatch(/^[^.]+$/)
+          expect(hello.contract).toMatch(/^[0-9a-f]{64}$/)
+          expect(replies.get("2")).toBeNull()
           // The lanes name the peer: its record in the JSON, its row last in --line.
           const lanes = yield* Effect.flatMap(runCtl(seeded.home, ["lanes"]), resultAs("Lanes"))
+          expect(lanes.providers.find((lane) => lane.provider === "anthropic")?.load).toBe(2)
           expect(lanes.peer).toMatchObject({
             heard: { host: "peer-host" },
             runs: 2,
@@ -970,32 +971,24 @@ describe("gent ctl against a running server", () => {
           })
           const line = yield* runCtl(seeded.home, ["lanes", "--line"])
           expect(line.stdout.trimEnd().split("\n").at(-1)).toMatch(/^peer peer-host 2 runs · \d+s$/)
-          // Its stdin closed: the forwarding ended, and the stream still prints.
-          yield* Ref.get(out).pipe(
-            Effect.repeat({
-              until: (text) => text.includes("\n"),
-              schedule: Schedule.spaced("20 millis"),
-            }),
-            Effect.timeout("5 seconds"),
-          )
-          expect(follow.pollUnsafe()).toBeUndefined()
+          // The relay runs while its stdin stays open.
+          expect(relay.pollUnsafe()).toBeUndefined()
 
-          // A line that is no PoolFacts: one CtlFailed line and exit 1, so the link restarts.
-          const unread = yield* runCtl(seeded.home, ["pool", "--follow"], {
-            stdin: "not facts\n",
+          // At its stdin's end the relay ends, exit 0.
+          const ended = yield* runCtl(seeded.home, ["link"], {
+            stdin: `${helloFrame("1", seeded.home)}\n`,
           }).pipe(Effect.timeout("5 seconds"))
-          expect(unread.code).toBe(CTL_EXIT.failed)
-          expect(unread.stderr.trimEnd().split("\n")).toHaveLength(1)
-          const failed = yield* Schema.decodeEffect(Schema.fromJsonString(ErrorLine))(unread.stderr)
-          expect(failed._tag).toBe("CtlFailed")
-          expect(failed.message).toMatch(/^input decode: /)
+          expect({ code: ended.code, stderr: ended.stderr }).toEqual({
+            code: CTL_EXIT.ok,
+            stderr: "",
+          })
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
   )
 
-  // The peer's last line is dated on the server's clock: `lanes --line`
-  // reads its age against the server's now the report carries.
+  // The peer's facts are dated on the server's clock: `lanes --line`
+  // reads their age against the server's now the report carries.
   for (const [where, skewMs] of SKEWS) {
     it.live(
       `lanes --line on a ctl ${where} the server reads the peer's age on the server's clock`,
@@ -1003,16 +996,16 @@ describe("gent ctl against a running server", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const { home } = yield* serveScratchHome
-            const peerLine = yield* encodePoolLine({
+            const notePeer = yield* notePeerFrame("1", home, {
               boot: "peer",
               host: "peer-host",
               seq: 1,
               providers: [],
             })
-            yield* runCtl(home, ["pool", "--follow"], { stdin: `${peerLine}\n` }).pipe(
+            yield* runCtl(home, ["link"], { stdin: `${notePeer}\n`, holdStdin: true }).pipe(
               Effect.forkScoped,
             )
-            // Seconds since the line, read until a whole second has passed: a
+            // Seconds since the facts, read until a whole second has passed: a
             // client behind the server would read 0s, one ahead of it 2m.
             const aged = /^peer peer-host 0 runs · [1-9]\d?s$/
             const peerRow = runCtl(home, ["lanes", "--line"], { clock: skewedClock(skewMs) }).pipe(
@@ -1053,7 +1046,7 @@ describe("gent ctl against a running server", () => {
     ),
   )
 
-  it.live("with no server for the data directory a call exits 3 and starts none", () =>
+  it.live("with no server for the data directory a call or a link exits 3 and starts none", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const home = yield* makeTempDirectoryScoped("gent-ctl-empty-")
@@ -1061,7 +1054,11 @@ describe("gent ctl against a running server", () => {
         expect(run.code).toBe(CTL_EXIT.noServer)
         const error = yield* errorOf(run)
         expect(error._tag).toBe("CtlNoServer")
-        // The call started no server: the data directory holds no lock entry.
+        // A link's far end finds no server either: exit 3, and it starts none.
+        const link = yield* runCtl(home, ["link"], { holdStdin: true })
+        expect(link.code).toBe(CTL_EXIT.noServer)
+        expect((yield* errorOf(link))._tag).toBe("CtlNoServer")
+        // The calls started no server: the data directory holds no lock entry.
         const fs = yield* FileSystem.FileSystem
         expect(yield* fs.exists(`${home}/.gent/server.lock`)).toBe(false)
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),

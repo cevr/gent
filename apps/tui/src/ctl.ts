@@ -66,6 +66,7 @@ import {
   Stream,
 } from "effect"
 import { Argument, CliError, Command, Flag } from "effect/cli"
+import { Socket } from "effect/socket"
 import { builtinClientModules } from "./extensions/builtins"
 import type { CtlProjection, CtlReview } from "./extensions/client-facets"
 import { connectFlag, readHome } from "./ops"
@@ -458,32 +459,12 @@ interface CtlConnection {
 }
 
 /**
- * Attach to the server `connect` names, or the one the data directory's lock
- * names. A call never starts a server: with none, it fails `CtlNoServer`.
+ * The url of the server `connect` names, or of the one the data directory's
+ * lock names, alive and answering. Never starts a server: with none, it fails
+ * `CtlNoServer`.
  */
-const connectCtl = Effect.fn("Ctl.connect")(function* (options: {
-  readonly connect: Option.Option<string>
-  readonly cwd: string
-}) {
-  const attach = (url: string) =>
-    Effect.gen(function* () {
-      const bundle = yield* Gent.client(url, { cwd: options.cwd })
-      yield* bundle.runtime.lifecycle.waitForReady
-      return { client: bundle.client, server: url } satisfies CtlConnection
-    }).pipe(
-      Effect.timeoutOrElse({
-        duration: CONNECT_TIMEOUT,
-        orElse: () =>
-          Effect.fail(
-            new CtlFailed({ message: `no answer within ${CONNECT_TIMEOUT} from ${url}` }),
-          ),
-      }),
-      Effect.mapError((error) => {
-        if (error._tag === "CtlFailed") return error
-        return new CtlFailed({ message: error.message })
-      }),
-    )
-  if (Option.isSome(options.connect)) return yield* attach(options.connect.value)
+const serverUrl = Effect.fn("Ctl.serverUrl")(function* (connect: Option.Option<string>) {
+  if (Option.isSome(connect)) return connect.value
   const home = yield* readHome.pipe(
     Effect.mapError((error) => new CtlFailed({ message: `HOME: ${error.message}` })),
   )
@@ -508,7 +489,34 @@ const connectCtl = Effect.fn("Ctl.connect")(function* (options: {
       message: `PID ${status.entry.pid} holds the lock but does not answer at ${status.entry.rpcUrl}`,
     })
   }
-  return yield* attach(status.entry.rpcUrl)
+  return status.entry.rpcUrl
+})
+
+/**
+ * Attach to the server `connect` names, or the one the data directory's lock
+ * names (`serverUrl`). A call never starts a server: with none, it fails
+ * `CtlNoServer`.
+ */
+const connectCtl = Effect.fn("Ctl.connect")(function* (options: {
+  readonly connect: Option.Option<string>
+  readonly cwd: string
+}) {
+  const url = yield* serverUrl(options.connect)
+  return yield* Effect.gen(function* () {
+    const bundle = yield* Gent.client(url, { cwd: options.cwd })
+    yield* bundle.runtime.lifecycle.waitForReady
+    return { client: bundle.client, server: url } satisfies CtlConnection
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: CONNECT_TIMEOUT,
+      orElse: () =>
+        Effect.fail(new CtlFailed({ message: `no answer within ${CONNECT_TIMEOUT} from ${url}` })),
+    }),
+    Effect.mapError((error) => {
+      if (error._tag === "CtlFailed") return error
+      return new CtlFailed({ message: error.message })
+    }),
+  )
 })
 
 /** The session and branch a call names: `--session`, else the newest conversation in `cwd`. */
@@ -1759,98 +1767,72 @@ const lanes = Command.make(
   ]),
 )
 
-const encodePoolLine = Schema.encodeEffect(Schema.fromJsonString(PoolFacts))
-const decodePoolLine = Schema.decodeEffect(Schema.fromJsonString(PoolFacts))
-
-const pool = Command.make(
-  "pool",
-  {
-    connect: connectFlag,
-    follow: Flag.Boolean("follow").pipe(
-      Flag.withDescription(
-        "Print the facts as JSON lines until the server stops: now, at each change, and again every 30 s. Each line on stdin is the peer server's facts, sent to this server",
+const pool = Command.make("pool", { connect: connectFlag }, (input) =>
+  Effect.scoped(
+    ctlCall({ connect: input.connect, cwd: Option.none() }, (connection) =>
+      connection.client.accounts.pool().pipe(
+        Stream.runHead,
+        Effect.mapError(rpcFailure),
+        Effect.flatMap((first) =>
+          Effect.fromOption(first).pipe(
+            Effect.mapError(() => new CtlFailed({ message: "the server sent no pool facts" })),
+          ),
+        ),
+        Effect.map((facts) => CtlResult.cases.Pool.make({ server: connection.server, ...facts })),
       ),
-      Flag.withDefault(false),
     ),
-  },
-  (input) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const flags = { connect: input.connect, cwd: Option.none<string>() }
-        if (!input.follow) {
-          return yield* ctlCall(flags, (connection) =>
-            connection.client.accounts.pool().pipe(
-              Stream.runHead,
-              Effect.mapError(rpcFailure),
-              Effect.flatMap((first) =>
-                Effect.fromOption(first).pipe(
-                  Effect.mapError(
-                    () => new CtlFailed({ message: "the server sent no pool facts" }),
-                  ),
-                ),
-              ),
-              Effect.map((facts) =>
-                CtlResult.cases.Pool.make({ server: connection.server, ...facts }),
-              ),
-            ),
-          )
-        }
-        // One whole facts value per line, as the server sends it: a reader keeps the last.
-        const connection = yield* connectCtl({ connect: input.connect, cwd: cwdOf(flags) })
-        const stdio = yield* Stdio.Stdio
-        // The peer's link writes its server's facts to stdin, one line each:
-        // each goes to this server (`accounts.notePeer`). A closed stdin ends
-        // the forwarding alone; a line that does not decode fails the command,
-        // so the link restarts. A terminal is not a link.
-        const forward = Effect.gen(function* () {
-          if (yield* stdio.stdinIsTerminal) return
-          yield* stdio.stdin.pipe(
-            Stream.decodeText,
-            Stream.splitLines,
-            Stream.filter((line) => line.trim().length > 0),
-            Stream.mapError((error) => new CtlFailed({ message: `input: ${error.message}` })),
-            Stream.runForEach((line) =>
-              decodePoolLine(line).pipe(
-                Effect.mapError(
-                  (error) => new CtlFailed({ message: `input decode: ${error.message}` }),
-                ),
-                Effect.flatMap((facts) =>
-                  connection.client.accounts.notePeer(facts).pipe(Effect.mapError(rpcFailure)),
-                ),
-              ),
-            ),
-          )
-        })
-        yield* connection.client.accounts.pool().pipe(
-          Stream.mapError(rpcFailure),
-          Stream.mapEffect((facts) =>
-            encodePoolLine(facts).pipe(
-              Effect.mapError(
-                (error) => new CtlFailed({ message: `output encode: ${error.message}` }),
-              ),
-            ),
-          ),
-          Stream.map((line) => `${line}\n`),
-          Stream.run(stdio.stdout()),
-          Effect.catchIf(
-            (error) => !Schema.is(CtlError)(error),
-            (error) => Effect.fail(new CtlFailed({ message: `output: ${String(error)}` })),
-          ),
-          // The stream outlives a forwarding that ended; a failed one ends it.
-          Effect.raceFirst(Effect.andThen(forward, Effect.never)),
-        )
-        // The server ends the stream as it stops.
-        return yield* new CtlFailed({ message: "the server stopped" })
-      }),
-    ),
+  ),
 ).pipe(
   Command.withDescription(
     "Print the server's own pool facts: per provider its runs, per account its warm sessions, spend since start and weekly reset",
   ),
+)
+
+const toWsUrl = (httpUrl: string): string => httpUrl.replace(/^http(s?):\/\//, "ws$1://")
+
+/**
+ * `gent ctl link`, the far end of a linked machine's link: the other
+ * machine's server runs it (over ssh) and speaks RPC through it. It relays
+ * the local server's RPC socket and its own stdio, frame for line: each
+ * stdin line goes to the server as one frame, each frame comes out as one
+ * stdout line. It decodes neither; JSON frames hold no raw newline. It ends
+ * at stdin's end, and fails as the server closes the socket.
+ */
+const link = Command.make("link", { connect: connectFlag }, (input) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const url = yield* serverUrl(input.connect)
+      const stdio = yield* Stdio.Stdio
+      const socket = yield* Socket.makeWebSocket(toWsUrl(url))
+      const writer = yield* socket.writer
+      const pull = yield* Socket.readerString(socket).pipe(
+        Effect.mapError((error) => new CtlFailed({ message: `link: ${error.message}` })),
+      )
+      const toServer = stdio.stdin.pipe(
+        Stream.decodeText,
+        Stream.splitLines,
+        Stream.filter((line) => line.length > 0),
+        Stream.runForEach(writer.write),
+        Effect.mapError((error) => new CtlFailed({ message: `link input: ${error.message}` })),
+      )
+      const fromServer = Stream.fromEffectRepeat(pull).pipe(
+        Stream.flattenIterable,
+        Stream.map((frame) => `${frame}\n`),
+        Stream.run(stdio.stdout()),
+        Effect.mapError((error) => new CtlFailed({ message: `link output: ${error.message}` })),
+        Effect.andThen(Effect.fail(new CtlFailed({ message: "the server closed the link" }))),
+      )
+      yield* Effect.raceFirst(toServer, fromServer)
+    }),
+  ),
+).pipe(
+  Command.withDescription(
+    "Relay the local server's RPC socket over stdio, one frame per line, for a linked machine's server (`link.machines`); ends at stdin's end",
+  ),
   Command.withExamples([
     {
-      command: "gent ctl pool --follow",
-      description: "One JSON line now, one at each change, and one every 30 s",
+      command: "ssh workbox gent ctl link",
+      description: "What the other machine's server runs to reach this one",
     },
   ]),
 )
@@ -1893,14 +1875,25 @@ export const ctl = Command.make("ctl", {}, () =>
   Effect.gen(function* () {
     const stdio = yield* Stdio.Stdio
     yield* Stream.make(
-      "Usage: gent ctl <send|events|wait|snapshot|status|request|lanes|pool|review> --help\n",
+      "Usage: gent ctl <send|events|wait|snapshot|status|request|lanes|pool|link|review> --help\n",
     ).pipe(Stream.run(stdio.stderr()))
   }),
 ).pipe(
   Command.withDescription(
     "Drive a running gent server: one JSON value per call; exit 3 no server, 4 not found, 124 wait timed out",
   ),
-  Command.withSubcommands([send, events, wait, snapshot, status, request, lanes, pool, review]),
+  Command.withSubcommands([
+    send,
+    events,
+    wait,
+    snapshot,
+    status,
+    request,
+    lanes,
+    pool,
+    link,
+    review,
+  ]),
 )
 
 // ── the process boundary ────────────────────────────────────────────────────

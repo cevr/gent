@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Context, Effect, Option, Schema } from "effect"
 import { Headers } from "effect/http"
 import { RpcMiddleware } from "effect/rpc"
 import { StorageError } from "../domain/errors.js"
@@ -75,6 +75,25 @@ export const provideWorkspaceIdHeader =
         ),
     })
 
+/** The header a link's requests carry: the machine of the server that sent them (server/link.ts). */
+export const LINK_ORIGIN_HEADER = "x-gent-link"
+
+/**
+ * The machine a request came from over a link (`LINK_ORIGIN_HEADER`), none
+ * for a local client's. A server serves such a request itself and never
+ * sends it on over a link of its own: that stops a loop A → B → A.
+ */
+export const CurrentLinkOrigin = Context.Reference<Option.Option<string>>(
+  "@gent/core/src/server/workspace-rpc/CurrentLinkOrigin",
+  { defaultValue: () => Option.none() },
+)
+
+/** Provides `CurrentLinkOrigin` from a request's headers. */
+export const provideLinkOrigin =
+  (headers: Headers.Headers) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    Effect.provideService(effect, CurrentLinkOrigin, Headers.get(headers, LINK_ORIGIN_HEADER))
+
 const decodeSessionField = Schema.decodeUnknownOption(Schema.Struct({ sessionId: SessionId }))
 const decodeCommandField = Schema.decodeUnknownOption(
   Schema.Struct({ command: Schema.Struct({ sessionId: SessionId }) }),
@@ -103,7 +122,8 @@ export const sessionNamedBy = (request: { readonly payload: unknown }): Option.O
  * Provides `CurrentWorkspaceId` to every RPC handler. The header names the
  * client's workspace; a call that names a stored session runs in the
  * workspace that session is stored under instead, so a client in any
- * directory reaches the one loop of the session. The server composes the
+ * directory reaches the one loop of the session. It provides
+ * `CurrentLinkOrigin` too. The server composes the
  * layer (`RpcHandlersLive`), because it reads the session store.
  */
 export class WorkspaceRpcMiddleware extends RpcMiddleware.Service<WorkspaceRpcMiddleware>()(

@@ -91,6 +91,8 @@ import {
   GentRpcs,
   type GetSessionSnapshotInput,
   InvalidStateError,
+  LinkHello,
+  LinkMachinesView,
   type ListAuthProvidersPayload,
   NotFoundError,
   type QueueDrainInput,
@@ -131,6 +133,7 @@ import {
 import {
   extensionPlatformServicesLive,
   GentPlatform,
+  machineName,
   pathWithin,
   resolveLinks,
 } from "../runtime/gent-platform.js"
@@ -148,7 +151,10 @@ import {
   SessionRuntime,
   type SessionRuntimeError,
 } from "../runtime/session.js"
+import { Links } from "./link.js"
 import {
+  CurrentLinkOrigin,
+  provideLinkOrigin,
   provideWorkspaceIdHeader,
   sessionNamedBy,
   workspaceIdForCwd,
@@ -169,7 +175,6 @@ import {
   listCatalogProviders,
   makeExtensionModels,
   sweepPoolQuotas,
-  followPoolPeer,
   removeSignIn,
   renameSignIn,
   signInEntries,
@@ -1918,6 +1923,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const profileCache = yield* SessionProfileCache
     const permits = yield* Permits
     const placement = yield* CredentialPlacement
+    const links = yield* Links
     const modelRegistry = yield* ModelRegistry
     const modelResolver = yield* ModelResolver
     const sessionStorage = yield* SessionStorage
@@ -2323,13 +2329,18 @@ const RpcHandlers = GentRpcs.toLayer(
 
       // The accounts are the server's: each provider's lanes run over the
       // pool its unpinned runs share, as the launch profile's config names it.
+      // The peer row names this server's own link to it: the first of
+      // `link.machines` (the pool shares with one peer).
       "accounts.lanes": () =>
         Effect.gen(function* () {
           const profile = yield* profileForCwd(Option.none())
-          return yield* placement.lanes(
+          const report = yield* placement.lanes(
             poolScopeOf(profile.registryService, modelRegistry),
             yield* configService.sabbath,
           )
+          const link = Option.fromUndefinedOr((yield* links.view)[0])
+          if (Predicate.isUndefined(report.peer) || Option.isNone(link)) return report
+          return { ...report, peer: { ...report.peer, link: link.value } }
         }).pipe(Effect.scoped),
 
       // Own state alone: a server on another machine reads it to share the pool.
@@ -2345,8 +2356,8 @@ const RpcHandlers = GentRpcs.toLayer(
           Stream.provideService(EventStorage, eventStorage),
         ),
 
-      // A link the peer server runs sends its facts in here (`gent ctl pool
-      // --follow` on its stdin): counted as this server's own link counts them.
+      // The peer server's link pushes its facts in here: counted as this
+      // server's own link counts them.
       "accounts.notePeer": (facts) =>
         Effect.gen(function* () {
           const profile = yield* profileForCwd(Option.none())
@@ -2356,6 +2367,25 @@ const RpcHandlers = GentRpcs.toLayer(
             "peer",
           )
         }).pipe(Effect.scoped),
+
+      // A link's first call: what it checks before anything else runs over it.
+      "link.hello": () =>
+        Effect.gen(function* () {
+          const origin = yield* CurrentLinkOrigin
+          const hello = new LinkHello({
+            machine: yield* machineName,
+            contract: yield* links.contract,
+          })
+          yield* Effect.logInfo("link.hello").pipe(
+            Effect.annotateLogs({ origin: Option.getOrElse(origin, () => "none") }),
+          )
+          return hello
+        }),
+
+      "link.machines": () =>
+        Effect.gen(function* () {
+          return new LinkMachinesView({ machine: yield* machineName, links: yield* links.view })
+        }),
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
@@ -2630,6 +2660,7 @@ const WorkspaceRpcMiddlewareLive = Layer.effect(
           }),
         ),
         provideWorkspaceIdHeader(options.headers),
+        provideLinkOrigin(options.headers),
       ),
     )
   }),
@@ -2857,22 +2888,21 @@ export const createDependencies = (config: DependenciesConfig) => {
     }),
   )
 
-  // The pool's peer link (`pool.peer` in the user file) on its own fiber:
-  // each line the command prints counts as the peer's facts, each pool
-  // account read through the launch cwd's profile as the line arrives.
-  const poolPeerLive = Layer.effectDiscard(
+  // The links to the other machines (`link.machines` in the user file), each
+  // on its own fiber: the peer's pool facts count as this server's own link
+  // brings them, each pool account read through the launch cwd's profile as
+  // they arrive.
+  const linksLive = Layer.unwrap(
     Effect.gen(function* () {
       const cache = yield* SessionProfileCache
       const modelRegistry = yield* ModelRegistry
-      yield* Effect.forkScoped(
-        followPoolPeer((provider) =>
-          cache.resolve(config.cwd).pipe(
-            Effect.flatMap((profile) =>
-              poolScopeOf(profile.registryService, modelRegistry)(provider),
-            ),
-            Effect.scoped,
-            Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(config.cwd)),
+      return Links.Live((provider) =>
+        cache.resolve(config.cwd).pipe(
+          Effect.flatMap((profile) =>
+            poolScopeOf(profile.registryService, modelRegistry)(provider),
           ),
+          Effect.scoped,
+          Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(config.cwd)),
         ),
       )
     }),
@@ -2940,7 +2970,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Every cluster id fits what the client reads back: a client without
   // 64-bit reads (a Durable Object's) gets ids under 2^53.
   return Layer.provideMerge(
-    Layer.mergeAll(interactionRecoveryLive, branchWakeClockLive, poolQuotaSweepLive, poolPeerLive),
+    Layer.mergeAll(interactionRecoveryLive, branchWakeClockLive, poolQuotaSweepLive, linksLive),
     actor,
   ).pipe(withClusterIdSpace)
 }

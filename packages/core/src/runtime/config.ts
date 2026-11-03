@@ -198,16 +198,18 @@ export const Sabbath = Schema.Struct({
 export type Sabbath = typeof Sabbath.Type
 
 /**
- * The pool this server shares with one peer server on another machine
- * (`pool` in the user file). `peer` is a command, an argv array, that
- * prints the peer's pool facts one line each and reads this server's on
- * its stdin: `["ssh", "<host>", "gent", "ctl", "pool", "--follow"]`. The
- * server runs it and restarts it when it ends (`followPoolPeer`). It runs
- * code, so only the user file's counts. With no `peer`, no link runs; a peer
- * that links in still counts (`accounts.notePeer`).
+ * The other machines this server links to (`link` in the user file).
+ * `machines` maps each machine's name to the command, an argv array, that
+ * reaches its server's `gent ctl link`: `{ "workbox": ["ssh", "workbox",
+ * "gent", "ctl", "link"] }`. One file serves every machine: a server runs
+ * every entry but its own (`machineName`), and runs it again when it ends
+ * (`Links`, server/link.ts). It runs code, so only the user file's counts.
  */
-const PoolConfig = Schema.Struct({
-  peer: Schema.optional(Schema.NonEmptyArray(Schema.String)),
+const LinkMachines = Schema.Record(Schema.String, Schema.NonEmptyArray(Schema.String))
+export type LinkMachines = typeof LinkMachines.Type
+
+const LinkConfig = Schema.Struct({
+  machines: Schema.optional(LinkMachines),
 })
 
 export class UserConfig extends Schema.Class<UserConfig, { readonly brand: unique symbol }>(
@@ -266,8 +268,8 @@ export class UserConfig extends Schema.Class<UserConfig, { readonly brand: uniqu
   roles: Schema.optional(Schema.Record(Schema.String, ModelRoleConfig)),
   /** The owner's Sabbath (`Sabbath`). Only the user file's counts. */
   sabbath: Schema.optional(Sabbath),
-  /** The pool's peer server (`PoolConfig`). Only the user file's counts. */
-  pool: Schema.optional(PoolConfig),
+  /** The machines this server links to (`LinkConfig`). Only the user file's counts. */
+  link: Schema.optional(LinkConfig),
 }) {}
 
 /** The provider settings of a config: what the generic providers read. */
@@ -809,8 +811,8 @@ interface ConfigServiceService {
   readonly extraUsage: (owner: string) => Effect.Effect<boolean>
   /** The user file's Sabbath (`Sabbath`); none keeps every hour open. */
   readonly sabbath: Effect.Effect<Option.Option<Sabbath>>
-  /** The user file's peer command (`PoolConfig.peer`); none runs no link. */
-  readonly poolPeer: Effect.Effect<Option.Option<readonly [string, ...Array<string>]>>
+  /** The user file's `link.machines` (`LinkConfig`): each machine's command by its name. */
+  readonly linkMachines: Effect.Effect<LinkMachines>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
    *  The write starts from the user config on disk now, so a hand edit
    *  made while gent runs survives. Fails with
@@ -1145,7 +1147,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         Effect.gen(function* () {
           const fields: Array<string> = []
           if (Predicate.isNotUndefined(project.sabbath)) fields.push("sabbath")
-          if (Predicate.isNotUndefined(project.pool?.peer)) fields.push("pool.peer")
+          if (Predicate.isNotUndefined(project.link?.machines)) fields.push("link.machines")
           for (const [owner, entry] of Object.entries(project.providers ?? {}))
             if (Predicate.isNotUndefined(entry.extraUsage))
               fields.push(`providers.${owner}.extraUsage`)
@@ -1427,7 +1429,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
 
         sabbath: Effect.map(readUser, ({ user }) => Option.fromUndefinedOr(user.sabbath)),
 
-        poolPeer: Effect.map(readUser, ({ user }) => Option.fromUndefinedOr(user.pool?.peer)),
+        linkMachines: Effect.map(readUser, ({ user }) => user.link?.machines ?? {}),
 
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
           yield* mutateUserConfig((current) => ({
@@ -1536,8 +1538,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           sabbath: Effect.map(SynchronizedRef.get(userConfigRef), (user) =>
             Option.fromUndefinedOr(user.sabbath),
           ),
-          poolPeer: Effect.map(SynchronizedRef.get(userConfigRef), (user) =>
-            Option.fromUndefinedOr(user.pool?.peer),
+          linkMachines: Effect.map(
+            SynchronizedRef.get(userConfigRef),
+            (user) => user.link?.machines ?? {},
           ),
           setDriverOverride: (agent, driver) =>
             SynchronizedRef.update(userConfigRef, (current) =>

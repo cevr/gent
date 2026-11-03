@@ -626,6 +626,44 @@ describe("the lanes band rows", () => {
     }
   })
 
+  test("this server's link names the peer row: its machine as the host, and silent or incompatible as its reason", () => {
+    const row = (peer: NonNullable<LaneReport["peer"]>, width = 120) =>
+      laneRows(withPeer(peer), NOW, width, utc)[1]
+    // Connected: the link's machine name, not the host the facts name.
+    expect(row({ ...linked, link: { machine: "bite-cristian", state: "connected" } })?.text).toBe(
+      "peer bite-cristian 2 runs · 12s",
+    )
+    // Silent: no frame for 90 s, and the link is down.
+    const silent = {
+      ...linked,
+      heard: { host: "workbox", at: NOW - 3 * MINUTE },
+      runs: 0,
+      silent: true,
+      counted: false,
+      down: ["own" as const],
+    }
+    expect(row({ ...silent, link: { machine: "workbox", state: "silent" } })).toEqual({
+      text: "peer! workbox unread 3m · silent",
+      provider: Option.none(),
+      state: "unlinked",
+    })
+    // Incompatible: the peer runs another contract, and no facts crossed.
+    const unheard = { runs: 0, silent: true, counted: false, down: ["own" as const] }
+    expect(row({ ...unheard, link: { machine: "workbox", state: "incompatible" } })).toEqual({
+      text: "peer! workbox unread · incompatible",
+      provider: Option.none(),
+      state: "unlinked",
+    })
+    // Incompatible over a silent run: the contract is the cause to fix first.
+    expect(row({ ...silent, link: { machine: "workbox", state: "incompatible" } })?.text).toBe(
+      "peer! workbox unread 3m · incompatible",
+    )
+    // Narrow: the reason outlives the age and the host.
+    expect(row({ ...unheard, link: { machine: "workbox", state: "incompatible" } }, 27)?.text).toBe(
+      "peer! unread · incompatible",
+    )
+  })
+
   test("a silent peer's held runs show on its row: they outlive the link down, the age and the host", () => {
     const row = (peer: NonNullable<LaneReport["peer"]>, width = 120) =>
       laneRows(withPeer(peer), NOW, width, utc)[1]?.text

@@ -903,11 +903,24 @@ export const ProviderLanes = Schema.Struct({
 
 /**
  * A peer link, as this server sees it: `own`, the link this server runs
- * (`pool.peer`, its command's stdout); `peer`, the link the peer runs (its
- * lines through `accounts.notePeer`).
+ * (`link.machines`, the peer's `accounts.pool` facts); `peer`, the link the
+ * peer runs (its facts through `accounts.notePeer`).
  */
 const PeerLink = Schema.Literals(["own", "peer"])
 export type PeerLink = typeof PeerLink.Type
+
+/**
+ * A link's state (server/link.ts): `connecting` until the peer's
+ * `link.hello` names this server's contract, then `connected`; `silent` once
+ * no frame came for 90 s (since the link started, before its first);
+ * `incompatible` while the peer's last hello named another contract, when
+ * nothing else runs over it.
+ */
+const LinkState = Schema.Literals(["connecting", "connected", "silent", "incompatible"])
+
+/** One link of `link.machines`: the machine it reaches and its state. */
+export const LinkView = Schema.Struct({ machine: Schema.String, state: LinkState })
+export type LinkView = typeof LinkView.Type
 
 /**
  * The server on the other machine that shares the pool (`notePeer`), as this
@@ -918,7 +931,8 @@ export type PeerLink = typeof PeerLink.Type
  * 90 s of its last line or in the 30-minute hold after it, so it changes
  * this server's pace and lanes. `down`: each link that runs or ran and
  * brought no line for 90 s: `own` while this server runs its link, `peer`
- * once the peer's link sent a line.
+ * once the peer's link sent a line. `link`: this server's own link to the
+ * peer (`link.machines`), absent while it runs none.
  */
 const LanePeer = Schema.Struct({
   heard: Schema.optionalKey(Schema.Struct({ host: Schema.String, at: Schema.Finite })),
@@ -926,6 +940,7 @@ const LanePeer = Schema.Struct({
   silent: Schema.Boolean,
   counted: Schema.Boolean,
   down: Schema.Array(PeerLink),
+  link: Schema.optionalKey(LinkView),
 })
 
 /**

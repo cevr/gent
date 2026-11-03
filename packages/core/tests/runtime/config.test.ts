@@ -29,6 +29,7 @@ import {
 import {
   ConfigService,
   isProjectExtensionDirectoryTrusted,
+  type LinkMachines,
   type ProviderConfig,
   readDisabledExtensions,
   RuntimeEnvironment,
@@ -431,7 +432,7 @@ describe("user configuration", () => {
         )
       }).pipe(Effect.provide(BunServices.layer)),
     )
-    it.scopedLive("pool.peer counts only in the user file, and an empty command fails it", () =>
+    it.scopedLive("link.machines counts only in the user file, and an empty command fails it", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
@@ -444,17 +445,12 @@ describe("user configuration", () => {
         // A project file that names a command: it would run code from a checkout.
         yield* fs.writeFileString(
           projectConfigPath,
-          encodeJson({ pool: { peer: ["sh", "-c", "echo project"] } }),
+          encodeJson({ link: { machines: { project: ["sh", "-c", "echo project"] } } }),
         )
-        const peer: readonly [string, ...Array<string>] = [
-          "ssh",
-          "bite-workbox",
-          "gent",
-          "ctl",
-          "pool",
-          "--follow",
-        ]
-        yield* fs.writeFileString(userConfigPath, encodeJson({ pool: { peer } }))
+        const machines: LinkMachines = {
+          "bite-cristian": ["ssh", "bite-workbox", "gent", "ctl", "link"],
+        }
+        yield* fs.writeFileString(userConfigPath, encodeJson({ link: { machines } }))
         const warnings: Array<string> = []
         const captureLogger = Logger.make(({ message, fiber }) => {
           let rendered = String(message)
@@ -469,16 +465,19 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           yield* cfg.get(cwd)
-          expect(warnings).toEqual(["pool.peer"])
-          expect(yield* cfg.poolPeer).toEqual(Option.some(peer))
+          expect(warnings).toEqual(["link.machines"])
+          expect(yield* cfg.linkMachines).toEqual(machines)
           // An empty command fails the whole file; the last good one holds.
-          yield* fs.writeFileString(userConfigPath, encodeJson({ pool: { peer: [] } }))
+          yield* fs.writeFileString(
+            userConfigPath,
+            encodeJson({ link: { machines: { "bite-cristian": [] } } }),
+          )
           const fresh = yield* cfg.getFresh(cwd)
           expect(fresh.failures.map((failure) => failure.path)).toEqual([userConfigPath])
-          expect(yield* cfg.poolPeer).toEqual(Option.some(peer))
-          // No `pool`: no link.
+          expect(yield* cfg.linkMachines).toEqual(machines)
+          // No `link`: no machine.
           yield* fs.writeFileString(userConfigPath, encodeJson({}))
-          expect(yield* cfg.poolPeer).toEqual(Option.none())
+          expect(yield* cfg.linkMachines).toEqual({})
         }).pipe(
           Effect.provide(
             Layer.provideMerge(

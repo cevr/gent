@@ -370,6 +370,8 @@ const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
  */
 const runEnv = (paths: Layout, catalog: string) => ({
   HOME: paths.home,
+  // Its link name (`link.machines`): runs on one host link as machines of their own.
+  GENT_MACHINE: machineOf(paths.dir),
   GENT_DATA_DIR: paths.data,
   GENT_AUTH_DIRECTORY: paths.auth,
   GENT_MODEL_CATALOG_URL: catalog,
@@ -402,8 +404,26 @@ const wrapperText = (root: string, bun: string, env: Record<string, string>) => 
   ].join("\n")
 }
 
+/** A run's machine name: its directory's last part. */
+const machineOf = (dir: string) => dir.split("/").at(-1) ?? dir
+
+const encodeConfigJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+
+/**
+ * The user config a run starts on: the scripted model's id, and with
+ * linked runs (`--link`) a `link.machines` the same on each, naming every
+ * run by its machine name with its wrapper's `gent ctl link`.
+ */
+const userConfigText = (paths: Layout, links: ReadonlyArray<string>) => {
+  if (links.length === 0) return `{"model":"${TEST_MODEL_ID}"}\n`
+  const machines = Object.fromEntries(
+    [paths.dir, ...links].map((dir) => [machineOf(dir), [layout(dir).gent, "ctl", "link"]]),
+  )
+  return `${encodeConfigJson({ model: TEST_MODEL_ID, link: { machines } })}\n`
+}
+
 /** A fresh scratch run: home, data, keys, cache, workspace. Refuses a directory with files in it. */
-const seed = (paths: Layout) =>
+const seed = (paths: Layout, links: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     // A directory that does not exist yet has no entries.
@@ -426,7 +446,7 @@ const seed = (paths: Layout) =>
     yield* Effect.gen(function* () {
       for (const each of dirs) yield* fs.makeDirectory(each, { recursive: true })
       // A session needs a model: the user config names the scripted model's id.
-      yield* fs.writeFileString(`${paths.home}/.gent/config.json`, `{"model":"${TEST_MODEL_ID}"}\n`)
+      yield* fs.writeFileString(`${paths.home}/.gent/config.json`, userConfigText(paths, links))
       yield* seedAuthKeys(paths.auth)
     }).pipe(Effect.mapError(failed("seed")))
   })
@@ -548,13 +568,18 @@ const launch = Effect.fn("Verify.launch")(function* (
   port: number,
   seconds: number,
   data: Option.Option<string>,
+  link: ReadonlyArray<string>,
 ) {
   const paths = yield* scratchDir(dir)
   const source = yield* Option.match(data, {
     onNone: () => Effect.succeedNone,
     onSome: (file) => dataSource(paths, file).pipe(Effect.asSome),
   })
-  yield* seed(paths)
+  // The other runs as the file system names them; each may not exist yet.
+  const links = yield* Effect.forEach(link, (other) =>
+    Effect.map(scratchDir(other), (named) => named.dir),
+  )
+  yield* seed(paths, links)
   // A fixture of server state, read as the server starts: a copy, so the run never writes the original.
   if (Option.isSome(source)) {
     const fs = yield* FileSystem.FileSystem
@@ -1109,9 +1134,15 @@ const launchCommand = Command.make(
       ),
       Flag.optional,
     ),
+    link: Flag.String("link").pipe(
+      Flag.withDescription(
+        "Another run's directory: both name each other in link.machines (pass the same on the other run)",
+      ),
+      Flag.atLeast(0),
+    ),
   },
-  ({ dir, port, timeout, data }) =>
-    Effect.scoped(command(Launched, launch(dir, port, timeout, data))),
+  ({ dir, port, timeout, data, link }) =>
+    Effect.scoped(command(Launched, launch(dir, port, timeout, data, link))),
 ).pipe(Command.withDescription("Seed a scratch run, start its server, print it once it answers"))
 
 const serveCommand = Command.make("serve", { dir: dirFlag, port: portFlag }, ({ dir, port }) =>

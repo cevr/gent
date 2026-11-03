@@ -723,14 +723,21 @@ const keepChoices = (count: number): ReadonlyArray<ReadonlyArray<boolean>> => {
  * <host> unread 3m` once it is silent (`· 2 runs held` while its last runs
  * still count in the hold), `peer unread` before its first line. A link
  * down marks it `peer!` and names the link: `own link down` (this server's
- * command), `peer link down` (the peer's), `links down`. Each width shows
- * the most useful facts that fit, in rank: the held runs, then the link
- * down, then the age, then the host. The mark and the runs or `unread`
- * always stay, and a row narrower than those truncates.
+ * command), `peer link down` (the peer's), `links down`; this server's
+ * link names its own state first: `incompatible` (the peer runs another
+ * contract), `silent` (no frame for 90 s). The host is the link's machine
+ * name, else the host the facts name. Each width shows the most useful
+ * facts that fit, in rank: the held runs, then the link down, then the age,
+ * then the host. The mark and the runs or `unread` always stay, and a row
+ * narrower than those truncates.
  */
 const peerRow = (peer: NonNullable<LaneReport["peer"]>, now: number, width: number): LaneRow => {
   let reason = Option.map(Option.fromUndefinedOr(peer.down[0]), (link) => `${link} link down`)
   if (peer.down.length > 1) reason = Option.some("links down")
+  const link = Option.fromUndefinedOr(peer.link)
+  if (Option.exists(link, (own) => own.state === "silent")) reason = Option.some("silent")
+  if (Option.exists(link, (own) => own.state === "incompatible"))
+    reason = Option.some("incompatible")
   let mark = "peer"
   if (Option.isSome(reason)) mark = "peer!"
   let runs = `${peer.runs} runs`
@@ -741,7 +748,10 @@ const peerRow = (peer: NonNullable<LaneReport["peer"]>, now: number, width: numb
     () => `${runs} held`,
   )
   const age = Option.map(heard, (last) => formatAge(now - last.at))
-  const host = Option.map(heard, (last) => last.host)
+  const host = Option.orElse(
+    Option.map(link, (own) => own.machine),
+    () => Option.map(heard, (last) => last.host),
+  )
   const kept = (fact: Option.Option<string>, keep: boolean) => Option.filter(fact, () => keep)
   const forms = keepChoices(4).map(
     ([keepHeld = false, keepReason = false, keepAge = false, keepHost = false]) => {

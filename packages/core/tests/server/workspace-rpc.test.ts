@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Layer, Logger, Option, References } from "effect"
 import { RpcClient, RpcTest } from "effect/rpc"
 import { Headers } from "effect/http"
 import { textStep } from "../../src/runtime/provider"
@@ -7,7 +7,12 @@ import { createE2ELayer, LanguageModelLayers, waitFor } from "../../src/test-uti
 import { ExtensionStatusScope, GentRpcs } from "../../src/server/rpc"
 import { SteerCommand } from "../../src/domain/message"
 import { RpcHandlersLive } from "../../src/server/server"
+import { linkContract } from "../../src/server/link"
+import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
+  CurrentLinkOrigin,
+  LINK_ORIGIN_HEADER,
+  provideLinkOrigin,
   WORKSPACE_ID_HEADER,
   provideWorkspaceIdHeader,
   sessionNamedBy,
@@ -31,6 +36,57 @@ describe("workspace RPC middleware", () => {
       const invalid = yield* Effect.exit(observe("not-a-workspace"))
       expect(invalid._tag).toBe("Failure")
     }),
+  )
+
+  it.live("publishes the x-gent-link origin to request scope, none without the header", () =>
+    Effect.gen(function* () {
+      const read = (headers: Headers.Headers) =>
+        Effect.service(CurrentLinkOrigin).pipe(provideLinkOrigin(headers))
+      expect(yield* read(Headers.fromInput({ [LINK_ORIGIN_HEADER]: "far" }))).toEqual(
+        Option.some("far"),
+      )
+      expect(yield* read(Headers.empty)).toEqual(Option.none())
+    }),
+  )
+
+  it.live("link.hello reads the caller's x-gent-link and names this machine and its contract", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const origins: Array<string> = []
+        const logger = Logger.make(({ message, fiber }) => {
+          let text = String(message)
+          if (Array.isArray(message)) text = message.map((part) => String(part)).join(" ")
+          if (text !== "link.hello") return
+          origins.push(String(fiber.getRef(References.CurrentLogAnnotations)["origin"]))
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        // The handlers run on the context they were built in: the logger and its level go there.
+        const context = yield* Layer.build(
+          Layer.provide(
+            RpcHandlersLive,
+            Layer.mergeAll(
+              createE2ELayer({ ...e2ePreset, providerLayer }),
+              Logger.layer([logger]),
+              Layer.succeed(References.MinimumLogLevel, "Info"),
+            ),
+          ),
+        )
+        const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
+        const hello = yield* client["link.hello"]().pipe(
+          RpcClient.withHeaders({
+            [WORKSPACE_ID_HEADER]: validWorkspaceId,
+            [LINK_ORIGIN_HEADER]: "far",
+          }),
+        )
+        // The contract is this build's: the hash of its RPC schemas, as a far end on this build reads it.
+        expect(hello.contract).toBe(yield* linkContract.pipe(Effect.provide(BunGentPlatformLive)))
+        expect(hello.machine.length).toBeGreaterThan(0)
+        yield* client["link.hello"]().pipe(
+          RpcClient.withHeaders({ [WORKSPACE_ID_HEADER]: validWorkspaceId }),
+        )
+        expect(origins).toEqual(["far", "none"])
+      }),
+    ),
   )
 
   it.live("rejects raw RPC calls without workspace header", () =>

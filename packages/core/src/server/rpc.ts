@@ -33,6 +33,7 @@ import {
   CredentialOrder,
   DriverError,
   LaneReport,
+  LinkView,
   PoolFacts,
   ProviderAuthError,
 } from "../domain/driver.js"
@@ -724,12 +725,47 @@ class AccountsRpcs extends RpcGroup.make(
     stream: true,
     error: GentRpcError,
   }),
-  // The peer server's pool facts, one line its link sent in: counted as its own link's are.
+  // The peer server's pool facts, pushed over its link: counted as this server's own link's are.
   Rpc.make("notePeer", {
     payload: PoolFacts.fields,
     error: GentRpcError,
   }),
 ).prefix("accounts.") {}
+
+// ── link rpcs ───────────────────────────────────────────────────────────────
+
+/**
+ * What a server answers a link first (`link.hello`): its machine name and the
+ * hash of its RPC contract. A link runs nothing else unless the contract is
+ * the linking server's own.
+ */
+export class LinkHello extends Schema.Class<LinkHello, { readonly brand: unique symbol }>(
+  "LinkHello",
+)({
+  machine: Schema.String,
+  contract: Schema.String,
+}) {}
+
+/** `link.machines`: this server's machine name and each link it runs. */
+export class LinkMachinesView extends Schema.Class<
+  LinkMachinesView,
+  { readonly brand: unique symbol }
+>("LinkMachinesView")({
+  machine: Schema.String,
+  links: Schema.Array(LinkView),
+}) {}
+
+/** The links between machines (server/link.ts). */
+class LinkRpcs extends RpcGroup.make(
+  Rpc.make("hello", {
+    success: LinkHello,
+    error: GentRpcError,
+  }),
+  Rpc.make("machines", {
+    success: LinkMachinesView,
+    error: GentRpcError,
+  }),
+).prefix("link.") {}
 
 // ── review rpcs ─────────────────────────────────────────────────────────────
 
@@ -915,7 +951,7 @@ class ExtensionRpcs extends RpcGroup.make(
 // ── rpc group ───────────────────────────────────────────────────────────────
 
 export class GentRpcs extends RpcGroup.make()
-  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, AccountsRpcs, ReviewRpcs)
+  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, AccountsRpcs, LinkRpcs, ReviewRpcs)
   .middleware(WorkspaceRpcMiddleware) {}
 
 // ── rpc client types ────────────────────────────────────────────────────────

@@ -24,6 +24,7 @@ It prints one `Launched` line: `dir`, `work`, `gent`, `url`, `build`, `superviso
 - `$RUN/bin/gent`: runs this checkout's `apps/tui/src/main.tsx` with the run's environment and nothing of the caller's.
 - `$RUN/pids.json`: the receipt `stop` reads, written as each process starts. `$RUN/run.json`: the record, written once the server answers.
 - With `--data <file>`: a copy of the file in `$RUN/data`, there before the server starts. It seeds server state the scripted model cannot make, such as the account ledger `credential-usage.json` ([lanes](features/lanes.md)).
+- With `--link <other run>` (repeatable): `link.machines` in the config names each run by its directory's last part (`GENT_MACHINE`) with its wrapper's `gent ctl link`, so two runs on one Mac link as two machines ([lanes peer](features/lanes-peer.md)). Pass the same on the other run.
 - `$RUN/server.log`, `$RUN/serve.log`: the server and supervisor output. `$RUN/verify.log`: the whole cause of a helper defect.
 
 The server is `gent server start --mock`: the scripted model. A message that holds a debug phrase plays a scenario (`DEBUG_SCENARIOS` in `packages/core/src/runtime/provider.ts`): `debug tools` (six tool steps, the last fails), `debug ask` (a background question, then a 20 s bash step), `debug think` (a reasoning heading, one bash step, the answer `Both chrome paths draw once.`), `debug threads`, `debug delegate`, `debug handoff`, `debug machine` (starts the `soak` machine: one 45 s command), `debug rounds` (starts the `rounds` machine: a writer round at low effort, then a reviewer round, for `gent ctl review`), `debug usage limit`. Any other message gets `gent debug response. Latest user message: …`.
@@ -94,12 +95,12 @@ It reads the receipt `$RUN/pids.json`, so a run whose launch died before its ser
 
 ## Helpers
 
-| Command                                                                                         | Prints                         |
-| ----------------------------------------------------------------------------------------------- | ------------------------------ |
-| `bun run --silent verify:launch --dir <run> [--port 0] [--timeout 90] [--data <file>]`          | `Launched`                     |
-| `bun run --silent verify:doctor --dir <run>`                                                    | `Healthy`, else `DoctorFailed` |
-| `bun run --silent verify:drive --dir <run> --script <file> --out <dir> [--print] [--no-record]` | `Driven`, else `DriveFailed`   |
-| `bun run --silent verify:stop --dir <run> [--remove]`                                           | `Stopped`, else `StopFailed`   |
+| Command                                                                                               | Prints                         |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `bun run --silent verify:launch --dir <run> [--port 0] [--timeout 90] [--data <file>] [--link <run>]` | `Launched`                     |
+| `bun run --silent verify:doctor --dir <run>`                                                          | `Healthy`, else `DoctorFailed` |
+| `bun run --silent verify:drive --dir <run> --script <file> --out <dir> [--print] [--no-record]`       | `Driven`, else `DriveFailed`   |
+| `bun run --silent verify:stop --dir <run> [--remove]`                                                 | `Stopped`, else `StopFailed`   |
 
 All four are `packages/e2e/src/verify.ts`, tested by `packages/e2e/tests/verify.test.ts` (in `bun run test:e2e`). A helper failure is one tagged JSON line on stderr and exit 1: `VerifyFailed` (`step`, `message`), `DoctorFailed`, `DriveFailed` or `StopFailed`. A flag the parser refuses is `VerifyUsage` and exit 2. A defect is `VerifyFailed` with `step: "defect"`; its whole cause is in `$RUN/verify.log`. `bun packages/e2e/src/drive.ts <script> [--no-record] [--print]` runs a script with no run around it, when a check needs no server.
 

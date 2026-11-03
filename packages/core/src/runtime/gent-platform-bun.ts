@@ -38,7 +38,7 @@ import { SqlClient } from "effect/sql"
 import { causeMessage } from "../domain/guards.js"
 import { storageError, type StorageError } from "../domain/errors.js"
 import * as EffectPlatformBun from "@effect/platform-bun"
-import { BunCrypto, BunHttpServer, BunServices } from "@effect/platform-bun"
+import { BunCrypto, BunHttpServer, BunServices, BunSocket } from "@effect/platform-bun"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { AuthError, ProviderLock } from "./provider.js"
 import { FetchHttpClient } from "effect/http"
@@ -477,7 +477,7 @@ export const BunSqlite = {
 
 /**
  * The complete Bun-runtime platform stack: `@effect/platform-bun`
- * (FileSystem, Path, ChildProcessSpawner, …) and the fetch `HttpClient`,
+ * (FileSystem, Path, ChildProcessSpawner, the WebSocket constructor, …) and the fetch `HttpClient`,
  * bundled with the gent-owned `BunGentPlatformLive` and the provider lock
  * file. Production wiring and test harnesses both yield this single Layer so
  * they can't drift on which BunService stack they pull in.
@@ -487,6 +487,7 @@ export const BunSqlite = {
  */
 export const BunPlatformLive = Layer.mergeAll(
   BunServices.layer,
+  BunSocket.layerWebSocketConstructor,
   BunCrypto.layerDigest,
   BunCrypto.layerSecureRandom,
   // Fresh: `FetchHttpClient.layer` captures the `Fetch` of the context it is

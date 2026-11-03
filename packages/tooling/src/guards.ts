@@ -2177,6 +2177,7 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_AUTH_DIRECTORY", "the operator names the auth directory"],
   ["GENT_COMPILE_TARGET", "the release build names the Bun runtime each platform embeds"],
   ["GENT_LOGIN_ALERT_COMMAND", "the owner names the command a lost login runs"],
+  ["GENT_MACHINE", "the owner names a machine whose hostname is not its link name"],
 ])
 
 /**

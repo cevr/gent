@@ -131,7 +131,7 @@ gent ctl request --extension @gent/machines --id run-status --input '{"run":"run
 gent ctl lanes                              # the server's account lanes, no session
 gent ctl lanes --line                       # lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%
 gent ctl pool                               # this server's own pool facts, no session
-gent ctl pool --follow                      # the same facts as JSON lines until the server stops; stdin lines are the peer's facts
+gent ctl link                               # relay the server's RPC over stdio, for another machine's server
 gent ctl review --since 7d --out /tmp/gent-review   # every workspace's sessions of the last week, for review
 ```
 
@@ -224,26 +224,30 @@ credential), then a row `resets <provider> <slot> <count>, … · next lapses
 <clock>` when its accounts hold banked resets (Claude's reset grants,
 Codex's reset credits; a lapsed grant counts none, an account with none or
 out of the provider's `scope` is not named, and a count goes 30 minutes
-after the read that listed it). With a peer link (`pool.peer`, below) the last
+after the read that listed it). With a peer (`link.machines`, below) the last
 row is the peer: `peer <host> <n> runs · <age>` while its lines come (its runs
 on this server's accounts, the age of its last line), `peer <host> unread
 <age>` after 90 s with no line (with `· <n> runs held` while its last runs
 still count, for 30 minutes), and `peer unread` before its first line. It
-reads `peer! … · own link down` when this server's command printed no line
-for 90 s, `· peer link down` when the peer's command was heard and then went
-quiet 90 s, and `· links down` for both. A narrow row keeps the held runs,
-then the link down, then the age, then the host. With no command of this
-server's own, the row goes 30 minutes after the peer went silent. The JSON
-holds it as `peer`: `heard` (`host`, `at`, epoch ms), `runs`, `silent` and
-`down` (`own`, `peer`) and `counted` (its facts still count, inside the
-30-minute hold), and `serverNow` (epoch ms) is the server's clock as
+reads `peer! … · own link down` when this server's link brought no facts
+for 90 s, `· peer link down` when the peer's link was heard and then went
+quiet 90 s, and `· links down` for both. While this server links to the
+peer, the row names the link's machine as the host, and its state in place
+of the link down: `· silent` (no frame for 90 s) or `· incompatible` (the
+peer runs another build's RPC contract; no facts cross). A narrow row keeps
+the held runs, then the link down, then the age, then the host. With no link
+of this server's own, the row goes 30 minutes after the peer went silent. The
+JSON holds it as `peer`: `heard` (`host`, `at`, epoch ms), `runs`, `silent`,
+`down` (`own`, `peer`), `counted` (its facts still count, inside the
+30-minute hold) and `link` (`machine`, `state`: `connecting`, `connected`,
+`silent`, `incompatible`), and `serverNow` (epoch ms) is the server's clock as
 it built the report. No free lane is data, not a failure: the call exits 0.
 
 `pool` names no session either. It prints `Pool`: the server's own pool
 facts (`accounts.pool`), the part of its lanes another machine on the same
 accounts reads (`plans/cross-machine-pool.md`). `boot` names this server
-start, `host` its machine (the hostname to its first dot, `unnamed` when that
-is empty, which the peer's band shows), `seq` rises at each change, and each provider holds its `runs` (the
+start, `host` its machine name (`GENT_MACHINE`, else the hostname to its first
+dot, which the peer's band shows), `seq` rises at each change, and each provider holds its `runs` (the
 admitted runs and reserving grants, as `{ accounts, model?, count }`) and its
 `accounts`: per account its warm sessions per model (`live`), the fuel and the
 unpriced steps each model spent since `boot` (`spend`), and the reset of its
@@ -256,71 +260,35 @@ time of this machine's clock.
 ]}
 ```
 
-`pool --follow` prints the facts as JSON lines on stdout: one now, one at each
-change, and the same facts again after 30 s with no line. A line is one
-whole `PoolFacts` value with no `_tag` and no `server`, so a reader keeps the
-last line and needs no earlier one; a reader that falls behind gets the newest
-facts next and skips the ones between. It runs until the server stops (the
-stream ends as the stop begins, so the stop does not wait on it) or the
-connection drops, then prints one `CtlFailed` line on stderr and exits 1; a
-write to a closed stdout ends it the same way.
-
-`pool --follow` also reads its stdin, when stdin is not a terminal: each
-non-empty line is the peer server's `PoolFacts`, sent to this server
-(`accounts.notePeer`), which counts the peer's runs and fuel in its lanes
-(docs/architecture/lanes.md). A closed stdin ends the forwarding alone, and the
-stream keeps printing. A line that does not decode prints one `CtlFailed` line
-(`input decode: …`) and exits 1, so the link that runs the call starts it
-again. The peer link is this call through ssh: `pool.peer` in the user file
-`~/.gent/config.json` (a project file cannot set it) names the command, an argv
-array, by the other machine's Tailscale name. On the Mac:
+`link` is the far end of a link between two machines' servers. It relays the
+local server's RPC socket over its stdio: each stdin line goes to the server
+as one frame, each frame comes out as one stdout line, and it decodes
+neither. It ends with exit 0 at its stdin's end, and with one `CtlFailed`
+line and exit 1 when the server closes the socket. With no server it exits 3
+and starts none. The other machine's server runs it through ssh: `link.machines`
+in the user file `~/.gent/config.json` (a project file cannot set it) maps
+each machine's name to the command that reaches it, an argv array. One file
+serves every machine; each server runs every entry but its own name
+(`GENT_MACHINE`, else the hostname to its first dot):
 
 ```json
 {
-  "pool": {
-    "peer": [
-      "ssh",
-      "-o",
-      "ServerAliveInterval=15",
-      "-o",
-      "ServerAliveCountMax=3",
-      "bite-workbox",
-      "gent",
-      "ctl",
-      "pool",
-      "--follow"
-    ]
+  "link": {
+    "machines": {
+      "bite-cristian": ["ssh", "bite-workbox", "gent", "ctl", "link"],
+      "Cristians-MacBook-Pro": ["ssh", "cvr@cristians-macbook-pro", "gent", "ctl", "link"]
+    }
   }
 }
 ```
 
-On the workbox:
-
-```json
-{
-  "pool": {
-    "peer": [
-      "ssh",
-      "-o",
-      "ServerAliveInterval=15",
-      "-o",
-      "ServerAliveCountMax=3",
-      "cvr@cristians-macbook-pro",
-      "gent",
-      "ctl",
-      "pool",
-      "--follow"
-    ]
-  }
-}
-```
-
-With both entries set, each server runs a link and both feed one cache of the
-peer's facts: either link alone keeps both servers informed. The server reads
-`pool.peer` at each run of the command; one added while the server runs takes a
-server restart. The ssh options end a link whose route died within a minute;
-the server also stops a run that prints no line for 90 s (the peer sends a
-heartbeat each 30 s) and runs it again.
+Each run asks the far server's `link.hello` first: its machine name and its
+RPC contract. A build with another contract makes the link `incompatible` and
+nothing else runs. Over a connected link the pool's facts cross both ways
+(docs/architecture/lanes.md, docs/architecture/server.md). A run that ends, or
+that brings no frame for 90 s, runs again after 1 s, the wait doubling to 5
+minutes. The server reads the machines at start (a new one takes a server
+restart) and each command at each run.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 
