@@ -56,6 +56,7 @@ import {
   BranchId,
   CredentialSlot,
   DEFAULT_CREDENTIAL_SLOT,
+  DefaultWorkspaceId,
   MessageId,
   SessionId,
   ToolCallId,
@@ -170,6 +171,8 @@ import {
   makeLayer,
   makeLayerWithEvents,
   makeMessage,
+  queueAgentLoop,
+  removeFollowUpAgentLoop,
   runAgentLoop,
   steerAgentLoop,
   stopAgentLoopMessage,
@@ -7216,6 +7219,618 @@ describe("credential order", () => {
         25_000,
       )
     }
+
+    // Seeded histories over one store: sends of item x or y (a follow-up or
+    // a steer, with or without a lane grant and a wake), busy turns held on a
+    // gate, their release, take-backs, and restarts. What a send was told
+    // back is a promise every later process keeps: a woken item runs; an
+    // acknowledged item runs or stays held, never both; a taken-back item
+    // does neither; an item granted a lane before its first take runs
+    // counted on it in whichever process takes it, and one never granted is
+    // never counted. After every operation the stored queue holds each id in
+    // one place. An operation that does not return in its wait (a cold
+    // caller held behind a recovered turn) is left out of the oracle. Known
+    // gap: a granted steer that joins a running turn opens no lane, and
+    // nothing is asserted of it.
+    describe("admission histories", () => {
+      const ITEMS = ["x", "y"] as const
+      const LABELS: ReadonlyArray<string> = [
+        ...ITEMS.map((item) => `item ${item}`),
+        "busy 1",
+        "busy 2",
+      ]
+      const OP_WAIT = "2 seconds"
+      const LENGTH = 8
+      const SEEDS = 24
+      /** Park-Miller: one seed draws the same history on every run. */
+      const drawsFrom = (seed: number) => {
+        let state = seed
+        return () => {
+          state = (state * 16_807) % 2_147_483_647
+          return (state - 1) / 2_147_483_646
+        }
+      }
+      const pick = { true: "x", false: "y" } as const
+      /**
+       * One history as tokens: `xf` sends x as a follow-up and `xs` as a
+       * steer, `g` adds a lane grant and `w` a wake; `B` starts a busy turn,
+       * `R` releases the process's busy turns, `-x` takes x back, and `K`
+       * restarts the process. A steer's request id is its item's, so the
+       * cluster answers a second one from its reply: each item steers once.
+       * A fixed history may also hold `C`, which waits until a busy turn
+       * calls the model in this process.
+       */
+      const historyOf = (seed: number): ReadonlyArray<string> => {
+        const draw = drawsFrom(seed)
+        const steered = new Set<string>()
+        let busy = 0
+        const tokens: Array<string> = []
+        while (tokens.length < LENGTH) {
+          const roll = draw()
+          const item = pick[`${draw() < 0.5}`]
+          if (roll >= 0.5 && roll < 0.62 && busy < 2) {
+            busy += 1
+            tokens.push("B")
+            continue
+          }
+          if (roll >= 0.62 && roll < 0.75) {
+            tokens.push("R")
+            continue
+          }
+          if (roll >= 0.75 && roll < 0.85) {
+            tokens.push(`-${item}`)
+            continue
+          }
+          if (roll >= 0.85) {
+            tokens.push("K")
+            continue
+          }
+          let token: string = item
+          if (!steered.has(item) && draw() < 0.25) {
+            steered.add(item)
+            token += "s"
+          } else {
+            token += "f"
+            if (draw() < 0.4) token += "g"
+          }
+          if (draw() < 0.4) token += "w"
+          tokens.push(token)
+        }
+        return tokens
+      }
+      const labelOfText = (message: Prompt.Message) => {
+        if (message.role !== "user") return ""
+        const text = message.content
+          .flatMap((part) => {
+            if (part.type !== "text") return []
+            return [part.text]
+          })
+          .join("\n")
+        return LABELS.find((label) => text.includes(label)) ?? text
+      }
+      /** The history label a model call answers: its last user message's. */
+      const labelOf = (prompt: Prompt.Prompt) => {
+        const last = prompt.content.filter((message) => message.role === "user").at(-1)
+        if (Predicate.isUndefined(last)) return ""
+        return labelOfText(last)
+      }
+      /**
+       * The labels a model call's turn brings: its user messages since the
+       * last answer, so a turn a steer joined holds both.
+       */
+      const freshOf = (prompt: Prompt.Prompt) => {
+        const answered = prompt.content.findLastIndex((message) => message.role === "assistant")
+        return prompt.content
+          .slice(answered + 1)
+          .filter((message) => message.role === "user")
+          .map(labelOfText)
+      }
+      /** What the test was told about one item, since its last take-back. */
+      interface ItemLedger {
+        readonly acked: boolean
+        readonly woken: boolean
+        /** The order at which the epoch's first send with a grant came back. */
+        readonly grantAt: number
+        readonly everGranted: boolean
+        /** The order of the last take-back that answered true. */
+        readonly epochAt: number
+        readonly withdrawnLast: boolean
+        /** A send or take-back of the item did not come back in its wait. */
+        readonly uncertain: boolean
+      }
+      const FRESH: ItemLedger = {
+        acked: false,
+        woken: false,
+        grantAt: Number.POSITIVE_INFINITY,
+        everGranted: false,
+        epochAt: 0,
+        withdrawnLast: false,
+        uncertain: false,
+      }
+
+      const runHistory = (name: string, history: ReadonlyArray<string>, joined?: string) =>
+        Effect.gen(function* () {
+          // One database outlives every process.
+          const shared = yield* Layer.build(testSqliteStorage)
+          const records = Context.get(shared, TurnRecordStorage)
+          const queues = Context.get(shared, AgentLoopQueueStorage)
+          const messageStorage = Context.get(shared, MessageStorage)
+          // A steer's request id holds the session and branch ids in at most
+          // 128 characters, so a history's name is short.
+          const ids = credentialRoot({ name, stored: [], replies: {} })
+          const target = { sessionId: ids.sessionId, branchId: ids.branchId }
+          const idOf = (item: string) =>
+            followUpMessageIdForSource({
+              workspaceId: DefaultWorkspaceId,
+              ...target,
+              sourceId: `${item}:interjection`,
+            })
+          const busyMessageOf = (text: string) =>
+            makeMessage(target.sessionId, target.branchId, text)
+
+          // The order of what the test saw: grants coming back, takes, take-backs.
+          let order = 0
+          const next = () => {
+            order += 1
+            return order
+          }
+          const calls: Array<{
+            readonly process: number
+            readonly label: string
+            readonly fresh: ReadonlyArray<string>
+          }> = []
+          const openings: Array<{ readonly key: string; readonly counted: boolean }> = []
+          const takes: Array<{ readonly id: string; readonly at: number }> = []
+          let flying = ""
+          let settling = false
+          const ledgers = new Map<string, ItemLedger>()
+          const ledgerOf = (item: string) => ledgers.get(item) ?? FRESH
+          const note = (item: string, change: Partial<ItemLedger>) =>
+            Effect.sync(() => ledgers.set(item, { ...ledgerOf(item), ...change }))
+          const busySent: Array<{ readonly text: string; readonly certain: boolean }> = []
+
+          const startProcess = (process: number) =>
+            Effect.gen(function* () {
+              const placement = yield* freshPlacement
+              const gates = new Map<string, Deferred.Deferred<void>>()
+              const gateOf = (label: string) => {
+                const found = gates.get(label)
+                if (Predicate.isNotUndefined(found)) return found
+                const gate = Deferred.makeUnsafe<void>()
+                gates.set(label, gate)
+                return gate
+              }
+              const openGates = (all: ReadonlyArray<Deferred.Deferred<void>>) =>
+                Effect.forEach(all, (gate) => Deferred.succeed(gate, void 0), { discard: true })
+              // A take is the in-flight slot naming a new id, once stored.
+              const processQueues: AgentLoopQueueStorage["Service"] = {
+                ...queues,
+                putQueueState: (sessionId, branchId, queue) =>
+                  queues.putQueueState(sessionId, branchId, queue).pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        const id = String(queue.inFlight?.message.id ?? "")
+                        if (id !== "" && id !== flying) takes.push({ id, at: next() })
+                        flying = id
+                      }),
+                    ),
+                  ),
+              }
+              const processPlacement: CredentialPlacement["Service"] = {
+                ...placement,
+                openLane: (lane) =>
+                  placement
+                    .openLane(lane)
+                    .pipe(
+                      Effect.tap((answer) =>
+                        Effect.sync(() =>
+                          openings.push({ key: String(lane.key), counted: Option.isSome(answer) }),
+                        ),
+                      ),
+                    ),
+              }
+              const root = credentialRoot({
+                name,
+                order: [a],
+                stored: signIn,
+                replies: {},
+                storage: Layer.succeedContext(
+                  Context.add(shared, AgentLoopQueueStorage, processQueues),
+                ),
+                placement: processPlacement,
+                // A busy turn's model call waits on its gate in this process,
+                // until a release or the settle opens it.
+                respond: (_credential, prompt) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      const label = labelOf(prompt)
+                      const fresh = freshOf(prompt)
+                      // A busy turn waits, also with a steer joined into it.
+                      const gate = yield* Effect.sync(() => {
+                        calls.push({ process, label, fresh })
+                        return Option.map(
+                          Option.filter(
+                            Option.fromUndefinedOr(fresh.find((each) => each.startsWith("busy"))),
+                            () => !settling,
+                          ),
+                          gateOf,
+                        )
+                      })
+                      if (Option.isSome(gate)) yield* Deferred.await(gate.value)
+                      return answer("ok")(0)
+                    }),
+                  ),
+              })
+              const scope = yield* Scope.make()
+              const context = yield* Layer.buildWithScope(root.layer, scope)
+              return {
+                process,
+                root,
+                placement,
+                scope,
+                context,
+                gateOf,
+                release: Effect.suspend(() => openGates([...gates.values()])),
+                // The settle's release: no later busy call waits.
+                releaseForGood: Effect.sync(() => {
+                  settling = true
+                  return [...gates.values()]
+                }).pipe(Effect.flatMap(openGates)),
+              }
+            })
+
+          let proc = yield* startProcess(1)
+          yield* proc.root.seed.pipe(Effect.provide(proc.context))
+
+          /** Runs one operation in the process; none when it did not come back in its wait. */
+          const perform = <A, E>(op: Effect.Effect<A, E>) =>
+            Effect.gen(function* () {
+              const fiber = yield* op.pipe(Effect.forkIn(proc.scope))
+              const exit = yield* Fiber.await(fiber).pipe(Effect.timeoutOption(OP_WAIT))
+              if (Option.isNone(exit)) return Option.none<A>()
+              return Option.some(yield* exit.value)
+            })
+
+          const send = (token: string) =>
+            Effect.gen(function* () {
+              const item = token.charAt(0)
+              const id = idOf(item)
+              const grant = token.includes("g")
+              const wake = token.includes("w")
+              // A lane another start holds queues the admission: this send
+              // holds no grant, though the placement may serve one later.
+              let granted = false
+              if (grant) {
+                const admission = yield* proc.placement.admitLane({
+                  provider: FALLBACK,
+                  scope: [{ provider: fallbackProvider, slot: a }],
+                  key: id,
+                  asker: Option.none(),
+                  model: Option.some(fallbackModel),
+                  sabbath: Option.none(),
+                })
+                yield* note(item, { everGranted: true })
+                granted = admission._tag === "Admitted"
+                if (granted) expect(yield* proc.placement.awaitLane(id)).toBe(true)
+              }
+              const text = `item ${item}`
+              let sent = Option.none<void>()
+              if (token.charAt(1) === "s") {
+                sent = yield* perform(
+                  steerAgentLoop(
+                    SteerCommand.cases.Interject.make({
+                      ...target,
+                      requestId: followUpMessageIdForSource({
+                        workspaceId: DefaultWorkspaceId,
+                        ...target,
+                        sourceId: item,
+                      }),
+                      message: text,
+                      wake,
+                    }),
+                  ).pipe(Effect.provide(proc.context)),
+                )
+              }
+              if (token.charAt(1) === "f") {
+                sent = yield* perform(
+                  queueAgentLoop(
+                    Message.cases.regular.make({
+                      id,
+                      ...target,
+                      role: "user",
+                      parts: [Prompt.textPart({ text })],
+                      createdAt: dateFromMillis(1_767_225_600_000),
+                    }),
+                    wake,
+                  ).pipe(Effect.provide(proc.context)),
+                )
+              }
+              if (Option.isNone(sent)) return yield* note(item, { uncertain: true })
+              const ledger = ledgerOf(item)
+              let grantAt = ledger.grantAt
+              if (granted) grantAt = Math.min(grantAt, next())
+              yield* note(item, {
+                acked: true,
+                woken: ledger.woken || wake,
+                grantAt,
+                withdrawnLast: false,
+              })
+            })
+
+          let withdrawals = 0
+          const withdraw = (item: string) =>
+            Effect.gen(function* () {
+              withdrawals += 1
+              const answered = yield* perform(
+                removeFollowUpAgentLoop({
+                  ...target,
+                  messageId: idOf(item),
+                  requestId: `withdraw-${name}-${withdrawals}`,
+                }).pipe(Effect.provide(proc.context)),
+              )
+              if (Option.isNone(answered)) return yield* note(item, { uncertain: true })
+              if (!answered.value) return
+              // A new epoch: what the item was promised went with it.
+              const ledger = ledgerOf(item)
+              yield* note(item, {
+                ...FRESH,
+                everGranted: ledger.everGranted,
+                uncertain: ledger.uncertain,
+                epochAt: next(),
+                withdrawnLast: true,
+              })
+            })
+
+          const busy = Effect.gen(function* () {
+            const text = `busy ${busySent.length + 1}`
+            // The gate exists before the turn, so a release right after opens it.
+            yield* Effect.sync(() => proc.gateOf(text))
+            const acked = yield* perform(
+              submitAgentLoop(busyMessageOf(text), proc.root.admission).pipe(
+                Effect.provide(proc.context),
+              ),
+            )
+            busySent.push({ text, certain: Option.isSome(acked) })
+          })
+
+          let processes = 1
+          const restart = Effect.gen(function* () {
+            yield* Scope.close(proc.scope, Exit.void)
+            processes += 1
+            proc = yield* startProcess(processes)
+          })
+
+          const busyCalled = Effect.suspend(() =>
+            waitFor(
+              Effect.sync(() =>
+                calls.some(
+                  (call) =>
+                    call.process === processes &&
+                    call.fresh.some((each) => each.startsWith("busy")),
+                ),
+              ),
+              Boolean,
+              5_000,
+              `a busy turn called the model in process ${processes}`,
+            ),
+          )
+
+          const apply = (token: string) => {
+            if (token === "K") return restart
+            if (token === "R") return proc.release
+            if (token === "B") return busy
+            if (token === "C") return busyCalled
+            if (token.startsWith("-")) return withdraw(token.slice(1))
+            return send(token)
+          }
+
+          const heldIn = Effect.gen(function* () {
+            const row = yield* queues.getQueueState(target.sessionId, target.branchId)
+            return {
+              held: [
+                ...row.steering,
+                ...row.followUp,
+                ...Option.toArray(Option.fromUndefinedOr(row.inFlight)),
+              ].map((item) => String(item.message.id)),
+              inFlight: String(row.inFlight?.message.id ?? ""),
+            }
+          })
+
+          for (const token of history) {
+            yield* apply(token)
+            // The stored queue holds each id in one place.
+            const { held } = yield* heldIn
+            expect({ after: token, held }).toEqual({ after: token, held: [...new Set(held)] })
+          }
+
+          // Settle: open every gate, open the loop, and wait until two looks
+          // apart agree, the loop is idle, and what must have run has.
+          yield* proc.releaseForGood
+          const agentLoop = yield* makeAgentLoopService.pipe(Effect.provide(proc.context))
+          const ranIds = [
+            ...ITEMS.map(idOf),
+            ...busySent.map((each) => busyMessageOf(each.text).id),
+          ]
+          const look = Effect.gen(function* () {
+            const state = yield* agentLoop.getState(target).pipe(Effect.provide(proc.context))
+            const { held, inFlight } = yield* heldIn
+            const ran = yield* Effect.forEach(ranIds, (id) =>
+              messageStorage.getMessage(id).pipe(Effect.map(Predicate.isNotUndefined)),
+            )
+            return {
+              phase: state._tag,
+              held,
+              inFlight,
+              ran: ranIds.flatMap((id, index) => {
+                if (ran[index] !== true) return []
+                return [String(id)]
+              }),
+              calls: calls.length,
+              openings: openings.length,
+            }
+          })
+          const done = (seen: Effect.Success<typeof look>) =>
+            seen.phase === "Idle" &&
+            seen.inFlight === "" &&
+            ITEMS.every(
+              (item) =>
+                !ledgerOf(item).woken ||
+                ledgerOf(item).uncertain ||
+                seen.ran.includes(String(idOf(item))),
+            ) &&
+            busySent.every(
+              (each) => !each.certain || seen.ran.includes(String(busyMessageOf(each.text).id)),
+            )
+          const keyOf = (each: Effect.Success<typeof look>) =>
+            [
+              each.phase,
+              each.inFlight,
+              each.held.join(","),
+              each.ran.join(","),
+              each.calls,
+              each.openings,
+            ].join("|")
+          // Twenty polls in a row see the same loop. A loop that never
+          // settles falls through to the checks, which name what is missing.
+          let previous = ""
+          let same = 0
+          const seen = yield* waitFor(
+            look,
+            (now) => {
+              const key = keyOf(now)
+              same += 1
+              if (key !== previous) same = 0
+              previous = key
+              return same >= 20 && done(now)
+            },
+            10_000,
+            "the loop settled",
+          ).pipe(Effect.catch(() => look))
+          expect({ phase: seen.phase, inFlight: seen.inFlight }).toEqual({
+            phase: "Idle",
+            inFlight: "",
+          })
+
+          // Each label reaches the model at most once in a process.
+          const callCounts = new Map<string, number>()
+          for (const call of calls) {
+            if (!LABELS.includes(call.label)) continue
+            const key = `process ${call.process}: ${call.label}`
+            callCounts.set(key, (callCounts.get(key) ?? 0) + 1)
+          }
+          expect([...callCounts].filter(([, count]) => count > 1)).toEqual([])
+
+          const countedFor = (key: string) =>
+            openings.flatMap((each) => {
+              if (each.key !== key) return []
+              return [each.counted]
+            })
+
+          const checkItem = (item: string) =>
+            Effect.gen(function* () {
+              const ledger = ledgerOf(item)
+              if (ledger.uncertain) return
+              const id = String(idOf(item))
+              const ran = seen.ran.includes(id)
+              const held = seen.held.includes(id)
+              if (ledger.withdrawnLast)
+                expect({ item, ran, held }).toEqual({ item, ran: false, held: false })
+              if (ledger.acked)
+                expect({ item, once: Number(ran) + Number(held) }).toEqual({ item, once: 1 })
+              if (ledger.woken) expect({ item, ran }).toEqual({ item, ran: true })
+              const firstTake =
+                takes.find((take) => take.id === id && take.at > ledger.epochAt)?.at ??
+                Number.POSITIVE_INFINITY
+              const counted = countedFor(id)
+              const record = yield* records.get({ ...target, messageId: idOf(item) })
+              const laned = Predicate.isNotUndefined(record.lane)
+              if (ledger.grantAt < firstTake)
+                expect({ item, counted, laned }).toEqual({
+                  item,
+                  counted: counted.map(() => true),
+                  laned: counted.length > 0,
+                })
+              if (!ledger.everGranted)
+                expect({ item, counted, laned }).toEqual({
+                  item,
+                  counted: counted.map(() => false),
+                  laned: false,
+                })
+            })
+          yield* Effect.forEach(ITEMS, checkItem, { discard: true })
+
+          // A busy turn ran once acknowledged, never counted on a lane.
+          for (const each of busySent) {
+            const id = String(busyMessageOf(each.text).id)
+            const counted = countedFor(id)
+            expect({ busy: each.text, counted }).toEqual({
+              busy: each.text,
+              counted: counted.map(() => false),
+            })
+            if (each.certain)
+              expect({ busy: each.text, ran: seen.ran.includes(id) }).toEqual({
+                busy: each.text,
+                ran: true,
+              })
+          }
+
+          // A steer that joined a turn a kill then took is answered by that
+          // turn's recovery, whose prompt carries it, and by no other turn.
+          const checkJoined = (item: string) =>
+            Effect.gen(function* () {
+              const stored = yield* messageStorage.getMessage(idOf(item))
+              const label = `item ${item}`
+              const carried = calls.filter((call) => call.fresh.includes(label))
+              expect({
+                item,
+                mark: stored?.metadata?.joinedTurn,
+                killed: carried.some((call) => call.process < processes),
+                answered: carried.flatMap((call) => {
+                  if (call.process !== processes) return []
+                  return [call.fresh.some((each) => each.startsWith("busy"))]
+                }),
+              }).toEqual({ item, mark: true, killed: true, answered: [true] })
+            })
+          yield* Effect.forEach(Option.toArray(Option.fromUndefinedOr(joined)), checkJoined, {
+            discard: true,
+          })
+          yield* Scope.close(proc.scope, Exit.void)
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds"))
+
+      // Each history the reviews found, then the seeded ones.
+      const found: ReadonlyArray<{
+        readonly why: string
+        readonly tokens: ReadonlyArray<string>
+        /** The item whose steer joins a turn the history then kills. */
+        readonly joined?: string
+      }> = [
+        {
+          why: "a retry with no grant keeps a queued run's lane across a restart",
+          tokens: ["B", "xfg", "xf", "K"],
+        },
+        {
+          why: "a woken retry onto a waiting steer starts after a restart",
+          tokens: ["xs", "xfw", "K"],
+        },
+        { why: "a steer under a held follow-up's id is held once", tokens: ["B", "xf", "xs"] },
+        {
+          why: "a resend of a steer that joined a killed turn runs nothing",
+          tokens: ["B", "xs", "K", "yf", "C", "K", "xf", "K"],
+          joined: "x",
+        },
+      ]
+      for (const each of found) {
+        it.live(
+          `${each.why}: ${each.tokens.join(" ")}`,
+          () => runHistory(`f${found.indexOf(each)}`, each.tokens, each.joined),
+          35_000,
+        )
+      }
+      for (let seed = 1; seed <= SEEDS; seed++) {
+        const tokens = historyOf(seed * 7_919)
+        it.live(`seed ${seed}: ${tokens.join(" ")}`, () => runHistory(`h${seed}`, tokens), 35_000)
+      }
+    })
   })
 })
 
