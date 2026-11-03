@@ -89,6 +89,16 @@ Shape:
   and fires again after 5 s, twice as long each time, at most 10 minutes
   later (`retry`, guarded the same way). A record whose fire still runs is
   not fired again, and at most 8 fires run at once.
+- Durable admission: an admission that reserves a turn's start
+  (`LoopInbox.admit`) stores the item in the queue row's in-flight slot in
+  the same queue transaction, before it returns. Its caller may reply at
+  once (`SubmitDurable` stores its reply, and the cluster never delivers it
+  again), so the reply never names a turn that only memory holds. The turn
+  stores its message, with its turn record's lane in the same transaction,
+  then clears the slot. A kill between the admission and the message leaves
+  the slot, and a stored queue with an item in flight always wakes on
+  recovery (`wantsWakeOnRecovery`), so the next build runs the item once. A
+  turn run from the slot opens no lane: its start's grant was in memory.
 - Deferred recovery: the open of a loop starts no turn. The loop is built
   with `recoveryDeferred` set when it finds work a restart left (a user turn
   in the history with no completion, or a stored queue that wakes on

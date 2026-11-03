@@ -1360,14 +1360,21 @@ const commitWithEvent = Effect.fn("TurnHelpers.commitWithEvent")(function* <A, E
   return committed.result
 })
 
+/**
+ * Store a received message and its event once. `with` is a write that must
+ * land in the same transaction as the message, stored or not before: a kill
+ * then leaves both or neither.
+ */
 export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageReceived")(
-  function* (params: { message: Message }) {
+  function* (params: { message: Message; with?: Effect.Effect<void> }) {
     const messageStorage = yield* MessageStorage
     const eventStore = yield* EventStore
+    const alongside = Option.getOrElse(Option.fromUndefinedOr(params.with), () => Effect.void)
     return yield* commitWithEvent(
       Effect.gen(function* () {
         const existing = yield* messageStorage.getMessage(params.message.id)
         if (!Predicate.isUndefined(existing)) {
+          yield* alongside
           const envelope = yield* findPersistedEvent({
             sessionId: params.message.sessionId,
             branchId: params.message.branchId,
@@ -1382,6 +1389,7 @@ export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageRecei
         }
 
         yield* messageStorage.createMessageIfAbsent(params.message)
+        yield* alongside
         const envelope = yield* eventStore.append(
           MessageReceived.make({
             message: params.message,
@@ -7554,15 +7562,22 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             ),
           ),
         )
-        yield* persistMessageReceived({ message: state.message })
         // The turn keeps the admitted lane it opened on: a restart opens it
         // again on no grant, and it counts as a run and stops in its Sabbath.
-        // A restart must find it, so a failed write fails the turn.
-        if (Option.isSome(lane) && Option.isNone(kept))
-          yield* writeTurnRecord(state.message.id, () => ({ lane: lane.value }), {
-            onFailure: "die",
-            base: record,
-          })
+        // A restart that finds the message must find the lane too, so the
+        // two are one transaction, and a failed write fails the turn.
+        const keepLane = Option.match(
+          Option.filter(lane, () => Option.isNone(kept)),
+          {
+            onNone: () => Effect.void,
+            onSome: (opened) =>
+              writeTurnRecord(state.message.id, () => ({ lane: opened }), {
+                onFailure: "die",
+                base: record,
+              }),
+          },
+        )
+        yield* persistMessageReceived({ message: state.message, with: keepLane })
         yield* scope.inbox.settle(state.message.id)
 
         const resumed = yield* resumeTurn({

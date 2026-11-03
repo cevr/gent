@@ -294,8 +294,11 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * Should a loop rebuilt over this stored queue take a turn straight away?
  *
  * Startup has a queue and no loop yet, so it cannot ask the inbox. A recovered
- * queue with nothing in it never wakes; one holding an explicit wake request
- * always does. Everything else defers to whether the branch has history.
+ * queue with nothing in it never wakes. One with an item in flight always
+ * does: that item was admitted, and its caller may have its reply already
+ * (`LoopInbox.admit`), while a first turn that never stored its message
+ * leaves no history. One holding an explicit wake request always does too.
+ * Everything else defers to whether the branch has history.
  */
 export const wantsWakeOnRecovery = (
   queue: LoopQueueState,
@@ -306,9 +309,9 @@ export const wantsWakeOnRecovery = (
     queue.followUp.length > 0
   if (!hasItems) return Option.none()
   const unconditional =
+    Predicate.isNotUndefined(queue.inFlight) ||
     queue.followUp.some((item) => item.wake === true) ||
-    queue.steering.some((item) => item.wake === true) ||
-    queue.inFlight?.wake === true
+    queue.steering.some((item) => item.wake === true)
   return Option.some({ unconditional })
 }
 
@@ -690,9 +693,11 @@ export type LoopInbox = {
    * newest step (`latestStep`). A turn writes its opener before it leaves
    * the phase, and every phase move takes this permit, so no send lands
    * between the test and the reservation, and none overtakes the item later.
-   * An admitted item is a promise: the same transaction stores it in the
-   * in-flight slot, so a restart before its turn stores the message runs it
-   * once, with no new test of `ifLatest`.
+   *
+   * Every `Some` is a promise: the same transaction stores the item in the
+   * in-flight slot before admission returns, so a kill before its turn stores
+   * the message leaves what the next build runs once (with no new test of
+   * `ifLatest`). The caller may reply as soon as this returns.
    */
   readonly admit: (
     item: QueuedTurnItem,
@@ -844,7 +849,8 @@ export const makeLoopInbox = (
      * the queue: every caller has already run its `commitQueueTransaction`,
      * which wrote the row when — and only when — the queue actually changed.
      * So this is a memory write. Dropping `startingState` is the point: the
-     * reservation this phase consumed is spent, and it was never durable.
+     * reservation this phase consumed is spent. It was never durable: the
+     * in-flight slot written with it is, until the turn stores its message.
      */
     const moveToPhase = (state: LoopState): Effect.Effect<void> =>
       TxSubscriptionRef.update(scope.loopRef, (current) => {
@@ -885,21 +891,16 @@ export const makeLoopInbox = (
         if (turnAdmitted(current, item.message.id)) {
           return { value: Option.none(), next: current, persist: false }
         }
-        if (Option.isSome(condition)) {
-          if (
-            !canStartTurnNow(current) ||
-            !queueIsEmpty(current.queue) ||
-            !Option.contains(latest, condition.value)
-          ) {
-            return { value: Option.none(), next: current, persist: false }
-          }
-          // An accepted line is a promise. Its caller may forget its own
-          // record (an alarm row) once this returns, and the start may wait
-          // for the side-mutation permit, so the item is stored in the
-          // in-flight slot before admission returns. A restart then runs it
-          // once from that slot, without a new check of `ifLatest`; the
-          // reservation still orders it ahead of every later admission, and
-          // its turn clears the slot when it stores the message.
+        // An admitted item is a promise. Its caller replies once this returns
+        // (a durable request's reply is stored, so the cluster never delivers
+        // it again), and its caller may forget its own record (an alarm row),
+        // while the turn stores the message only later. So the reservation
+        // and the in-flight slot are one stored transaction: a kill before
+        // the turn stores the message leaves the slot, and the next build
+        // runs the item from it once (`wantsWakeOnRecovery`). The reservation
+        // orders it ahead of every later admission, and its turn clears the
+        // slot when it stores the message.
+        const reserveInFlight = () => {
           const reserved = buildRunningState(item, { startedAtMs })
           return {
             value: Option.some(reserved),
@@ -910,6 +911,17 @@ export const makeLoopInbox = (
             },
             persist: true,
           }
+        }
+        if (Option.isSome(condition)) {
+          if (
+            !canStartTurnNow(current) ||
+            !queueIsEmpty(current.queue) ||
+            !Option.contains(latest, condition.value)
+          ) {
+            return { value: Option.none(), next: current, persist: false }
+          }
+          // A restart runs an accepted line without a new check of `ifLatest`.
+          return reserveInFlight()
         }
         // Build the next queue first: a retry of a queued id replaces in
         // place, so only an admission that grows the queue past the cap fails.
@@ -941,12 +953,7 @@ export const makeLoopInbox = (
           }
         }
 
-        const reservedRunningState = buildRunningState(item, { startedAtMs })
-        return {
-          value: Option.some(reservedRunningState),
-          next: { ...current, startingState: reservedRunningState },
-          persist: false,
-        }
+        return reserveInFlight()
       })
       if (Schema.is(FollowUpQueueFull)(decided)) return yield* decided
       return decided

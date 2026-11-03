@@ -146,6 +146,7 @@ import {
   SessionOperationStorage,
   SessionStorage,
   ToolCallBindingStorage,
+  TurnRecordStorage,
 } from "../../src/storage/storage"
 import {
   actorTestRoot,
@@ -219,7 +220,7 @@ import * as AiError from "effect/ai/AiError"
 import { StorageError } from "../../src/domain/errors"
 import type { LanguageModel } from "effect/ai"
 import { SingleRunner } from "effect/cluster"
-import { SessionRuntime } from "../../src/runtime/session"
+import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
 import { SqlClient } from "effect/sql"
 import {
@@ -7309,21 +7310,24 @@ describe("a failed turn", () => {
   )
 })
 
+/** The text of each user message a model request carries, in order. */
+const promptUserTexts = (prompt: Parameters<typeof Prompt.make>[0]): ReadonlyArray<string> =>
+  Prompt.make(prompt).content.flatMap((message) => {
+    if (message.role !== "user") return []
+    return [
+      message.content
+        .flatMap((part) => {
+          if (part.type !== "text") return []
+          return [part.text]
+        })
+        .join(""),
+    ]
+  })
+
+const lastUserPromptText = (prompt: Parameters<typeof Prompt.make>[0]): string =>
+  Option.getOrElse(Option.fromUndefinedOr(promptUserTexts(prompt).at(-1)), () => "")
+
 describe("queued follow-ups", () => {
-  const lastUserPromptText = (prompt: Parameters<typeof Prompt.make>[0]): string => {
-    const userTexts = Prompt.make(prompt).content.flatMap((message) => {
-      if (message.role !== "user") return []
-      return [
-        message.content
-          .flatMap((part) => {
-            if (part.type !== "text") return []
-            return [part.text]
-          })
-          .join(""),
-      ]
-    })
-    return Option.getOrElse(Option.fromUndefinedOr(userTexts.at(-1)), () => "")
-  }
   const openQueuedFollowUps = (params: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -9200,4 +9204,174 @@ describe("deferred recovery", () => {
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )
+})
+
+// ── an admitted turn across a kill ──────────────────────────────────────────
+//
+// The admission protocol of `ci-repair-model/admission.qnt`, against the real
+// loop over one store: a submit returns once the loop admitted its turn, and
+// its caller replies then (a durable request's reply is stored, so it is not
+// delivered again). Each case submits, kills the process at one point of one
+// turn, starts a new process over the same store, and so on. The oracle is
+// the model's `repliedIsRecoverable`: every submit that returned runs to its
+// end in the last process.
+
+describe("an admitted turn across a kill", () => {
+  /**
+   * Where a process dies: in the admitted turn before it stores its message
+   * (`turn-start`, the turn's first read), inside its model call after it
+   * stored it (`model-call`), or after every turn ended (`none`).
+   */
+  type KillPoint = "turn-start" | "model-call" | "none"
+
+  interface KillCase {
+    /** The messages the first process submits, in order. */
+    readonly texts: ReadonlyArray<string>
+    /** The message whose turn each killed process dies in. */
+    readonly cut: number
+    readonly point: KillPoint
+    /** The processes that die at `point` before one runs to the end. */
+    readonly kills: number
+  }
+
+  const answer = () =>
+    Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })])
+
+  const runKillCase = (name: string, killCase: KillCase) =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make(`kill-${name}`)
+      const branchId = BranchId.make(`kill-${name}-branch`)
+      const messages = killCase.texts.map((text) => makeMessage(sessionId, branchId, text))
+      const cutMessage = messages[killCase.cut]
+      if (Predicate.isUndefined(cutMessage)) return yield* Effect.die("no message to cut")
+      const cutText = killCase.texts[killCase.cut]
+      // One database outlives every process.
+      const storage = yield* Layer.build(testSqliteStorage)
+      const records = Context.get(storage, TurnRecordStorage)
+      const messageStorage = Context.get(storage, MessageStorage)
+      const ran = (message: Message) =>
+        messageStorage
+          .getMessage(message.id)
+          .pipe(
+            Effect.map(
+              (row) =>
+                Predicate.isNotUndefined(row) && Predicate.isNotUndefined(row.turnDurationMs),
+            ),
+          )
+      // A process over the store. One that dies stops in the cut turn at the
+      // kill point and signals `reached`; a clean one never stops.
+      const processLayer = (dies: Option.Option<Deferred.Deferred<void>>) => {
+        const stopAt = (point: KillPoint) => Option.filter(dies, () => killCase.point === point)
+        const stop = (reached: Deferred.Deferred<void>) =>
+          Deferred.succeed(reached, void 0).pipe(Effect.andThen(Effect.never))
+        const processRecords: typeof records = {
+          ...records,
+          get: (key) => {
+            const atTurnStart = stopAt("turn-start")
+            if (key.messageId === cutMessage.id && Option.isSome(atTurnStart)) {
+              return stop(atTurnStart.value)
+            }
+            return records.get(key)
+          },
+        }
+        const provider = LanguageModelLayers.testStream((options) => {
+          const atModelCall = stopAt("model-call")
+          if (
+            Option.isSome(atModelCall) &&
+            promptUserTexts(options.prompt).some((text) => text === cutText)
+          ) {
+            return stop(atModelCall.value)
+          }
+          return Effect.succeed(answer())
+        })
+        const processStorage = Layer.succeedContext(
+          Context.add(storage, TurnRecordStorage, processRecords),
+        )
+        // The event log is stored, as a server's is: recovery reads it.
+        return actorTestRoot({
+          provider,
+          storage: processStorage,
+          eventStore: Layer.provide(EventStoreLive, processStorage),
+        })
+      }
+
+      // The first process: every submit returns (its caller replied), then
+      // the process dies at the kill point.
+      const firstReached = yield* Deferred.make<void>()
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          for (const message of messages) yield* submitAgentLoop(message)
+          if (killCase.point === "none") {
+            for (const message of messages) {
+              yield* waitFor(ran(message), (done) => done, 5_000, `${message.id} ran`)
+            }
+            return
+          }
+          yield* Deferred.await(firstReached)
+        }).pipe(Effect.provide(processLayer(Option.some(firstReached)))),
+      )
+      // The kill lands where the case says: before the cut turn stored its
+      // message, or after.
+      const storedAtKill = Predicate.isNotUndefined(yield* messageStorage.getMessage(cutMessage.id))
+      expect(storedAtKill).toBe(killCase.point !== "turn-start")
+
+      // Each later process that dies opens the loop, which runs the work
+      // the kill left, and dies in the cut turn again.
+      for (let kill = 1; kill < killCase.kills; kill++) {
+        const reached = yield* Deferred.make<void>()
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId, branchId })
+            yield* Deferred.await(reached)
+          }).pipe(Effect.provide(processLayer(Option.some(reached)))),
+        )
+      }
+
+      // The last process runs to the end: every submit that returned ran once.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          yield* agentLoop.getState({ sessionId, branchId })
+          for (const message of messages) {
+            yield* waitFor(ran(message), (done) => done, 5_000, `${message.id} ran after the kill`)
+          }
+          yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+          const users = (yield* messageStorage.listMessages(branchId)).filter((row) =>
+            messages.some((message) => message.id === row.id),
+          )
+          expect(users.map((row) => messagePartsText(row.parts))).toEqual([...killCase.texts])
+        }).pipe(Effect.provide(processLayer(Option.none()))),
+      )
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds"))
+
+  it.live(
+    "a turn admitted and killed before it stores its message runs in the next process",
+    () => runKillCase("admitted", { texts: ["a"], cut: 0, point: "turn-start", kills: 1 }),
+    25_000,
+  )
+
+  // Every case up to two messages and two kills: each message cut at each
+  // kill point, once or twice. A process that lets every turn end dies once.
+  const killCounts: Record<KillPoint, ReadonlyArray<number>> = {
+    "turn-start": [1, 2],
+    "model-call": [1, 2],
+    none: [1],
+  }
+  const cases: ReadonlyArray<KillCase> = [1, 2].flatMap((count) => {
+    const texts = ["a", "b"].slice(0, count)
+    return texts.flatMap((_, cut) =>
+      (["turn-start", "model-call", "none"] as const).flatMap((point) =>
+        killCounts[point].map((kills) => ({ texts, cut, point, kills })),
+      ),
+    )
+  })
+  for (const killCase of cases) {
+    const name = `${killCase.texts.join("")}-${killCase.cut}-${killCase.point}-${killCase.kills}`
+    it.live(
+      `submits ${killCase.texts.join(", ")}; message ${killCase.cut} cut at ${killCase.point}, ${killCase.kills} kill(s): every admitted turn runs`,
+      () => runKillCase(name, killCase),
+      25_000,
+    )
+  }
 })
