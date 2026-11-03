@@ -157,6 +157,7 @@ import {
   makeLayerWithEventStore,
   makeLayerWithEvents,
   makeMessage,
+  queueAgentLoop,
   respondAgentLoopInteraction,
   runAgentLoop,
   steerAgentLoop,
@@ -6081,6 +6082,94 @@ describe("queued follow-ups drain", () => {
             // id makes a no-op; the other order loses input the branch accepted.
             expect(yield* Ref.get(transcriptHeldAtDrop)).toStrictEqual(Option.some(true))
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
+        )
+      }),
+    15000,
+  )
+
+  // A steer that joined a running turn is answered by that turn and gets no
+  // receipt of its own. A follow-up resent under its id later is settled: a
+  // turn for it would add no message and call the model on nothing new.
+  it.live(
+    "a follow-up resent under a joined steer's id opens no turn",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-joined-steer-resend")
+        const branchId = BranchId.make("branch-joined-steer-resend")
+        const echoTool = tool({
+          id: "echo",
+          description: "Echoes input",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.Struct({ text: Schema.String }),
+          execute: (params) => Effect.succeed({ text: params.text }),
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+          textStep("Done after steering."),
+          textStep("Next answered."),
+        ])
+        const layer = actorTestRoot({
+          provider: providerLayer,
+          storage: testSqliteStorage,
+          registry: makeExtRegistry([echoTool]),
+        })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            const messageStorage = yield* MessageStorage
+            const requestId = RequestId.make("req-joined-steer-resend")
+            const steerId = interjectionMessageId(requestId)
+            const fiber = yield* Effect.forkChild(
+              submitAgentLoop(makeMessage(sessionId, branchId, "run a tool")).pipe(Effect.ignore),
+            )
+            yield* controls.waitForCall(0)
+            yield* steerAgentLoop(
+              SteerCommand.cases.Interject.make({
+                sessionId,
+                branchId,
+                requestId,
+                message: "answer this too",
+              }),
+            )
+            yield* controls.emitAll(0)
+            yield* Fiber.join(fiber).pipe(Effect.ignore)
+            yield* waitFor(
+              messageStorage.getMessage(steerId),
+              (message) => message?.metadata?.joinedTurn === true,
+              4_000,
+              "the steer joined the turn",
+            )
+            yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+            expect(yield* controls.callCount).toBe(2)
+            yield* queueAgentLoop(
+              Message.cases.regular.make({
+                id: steerId,
+                sessionId,
+                branchId,
+                role: "user",
+                parts: [Prompt.textPart({ text: "answer this too" })],
+                createdAt: dateFromMillis(1_767_225_600_000),
+              }),
+              true,
+            )
+            // The loop runs one turn at a time, and a wrongly admitted resend
+            // is held before its send returns: a turn sent next runs after it.
+            const next = makeMessage(sessionId, branchId, "next")
+            yield* submitAgentLoop(next)
+            yield* waitFor(
+              messageStorage.getMessage(next.id),
+              (message) => Predicate.isNotUndefined(message?.turnDurationMs),
+              4_000,
+              "the next turn settled",
+            )
+            yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+            const queue = yield* agentLoop.getQueue({ sessionId, branchId })
+            expect({
+              calls: yield* controls.callCount,
+              held: [...queue.steering, ...queue.followUp].length,
+            }).toEqual({ calls: 3, held: 0 })
+            yield* controls.assertDone
+          }).pipe(Effect.timeout("8 seconds"), Effect.provide(layer)),
         )
       }),
     15000,

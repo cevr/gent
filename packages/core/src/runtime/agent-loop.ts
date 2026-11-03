@@ -699,7 +699,11 @@ type LoopInboxContext = {
   readonly queuePersistenceSemaphore: Semaphore.Semaphore
   readonly persistenceFailures: TxSubscriptionRef.TxSubscriptionRef<PersistenceFailureMark>
   readonly startedRef: Ref.Ref<boolean>
-  /** Whether this message's turn already has its receipt (a stored duration). */
+  /**
+   * Whether this message is answered: its turn has its receipt (a stored
+   * duration), or it is a steer that joined another turn, which answers it
+   * and, killed, recovers with the steer already in its prompt.
+   */
   readonly turnSettled: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   /**
    * Whether a steering item needs no queueing: its message is stored (it
@@ -2707,7 +2711,11 @@ const makeAgentLoopBehavior = (
       startedRef,
       turnSettled: (messageId) =>
         messageStorage.getMessage(messageId).pipe(
-          Effect.map((message) => Predicate.isNotUndefined(message?.turnDurationMs)),
+          Effect.map(
+            (message) =>
+              Predicate.isNotUndefined(message?.turnDurationMs) ||
+              message?.metadata?.joinedTurn === true,
+          ),
           asAgentLoopError("Cannot read submitted message"),
         ),
       steerDecided: (messageId) =>

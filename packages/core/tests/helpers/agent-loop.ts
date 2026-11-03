@@ -202,6 +202,23 @@ export const submitAgentLoop = (
       }),
     ),
   )
+/** Queue a follow-up under its own id, as a source's queued send does. */
+export const queueAgentLoop = (message: Message, wake: boolean, ifLatest?: MessageId) =>
+  Effect.gen(function* () {
+    yield* ensureAgentLoopStorageParents(message)
+    const actorClientFactory = yield* AgentLoopActor.Context
+    const ref = yield* actorClientFactory(
+      entityIdOf(DefaultWorkspaceId, message.sessionId, message.branchId),
+    )
+    yield* ref.execute(
+      AgentLoopActor.QueueFollowUp.make({
+        workspaceId: DefaultWorkspaceId,
+        message,
+        wake,
+        ifLatest,
+      }),
+    )
+  })
 /** `sender` is the other branch an `Interject` came from; a client's steer names none. */
 export const steerAgentLoop = (command: SteerCommand, sender?: RequesterBranch) =>
   Effect.gen(function* () {
