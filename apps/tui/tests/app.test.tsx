@@ -53,6 +53,7 @@ import {
   EventEnvelope,
   ExtensionHealthSnapshot,
   type GentClientRpcError,
+  type LaneReport,
   QueueEntryInfo,
   QueueSnapshot,
   userMessageIdForRequest,
@@ -2580,15 +2581,18 @@ describe("App status and activity rows", () => {
               // A linked peer that holds no run: `/status` names it, the band does not.
               accounts: {
                 lanes: () =>
-                  Effect.succeed({
+                  Effect.succeed<LaneReport>({
                     providers: [],
-                    peer: {
-                      heard: { host: "workbox", at: 0 },
-                      runs: 0,
-                      silent: false,
-                      counted: true,
-                      down: [],
-                    },
+                    peers: [
+                      {
+                        machine: "workbox",
+                        heardAt: 0,
+                        runs: 0,
+                        silent: false,
+                        counted: true,
+                        down: [],
+                      },
+                    ],
                   }),
               },
               auth: {
@@ -7942,18 +7946,21 @@ describe("TUI renderer surfaces", () => {
       () =>
         Effect.gen(function* () {
           const lanes = () =>
-            Effect.sync(() => {
+            Effect.sync((): LaneReport => {
               const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + skewMs
               return {
                 providers: [],
                 // Silent 5 min, inside the hold: its two last runs still count here.
-                peer: {
-                  heard: { host: "workbox", at: serverNow - 5 * 60_000 },
-                  runs: 2,
-                  silent: true,
-                  counted: true,
-                  down: [],
-                },
+                peers: [
+                  {
+                    machine: "workbox",
+                    heardAt: serverNow - 5 * 60_000,
+                    runs: 2,
+                    silent: true,
+                    counted: true,
+                    down: [],
+                  },
+                ],
                 serverNow,
               }
             })
