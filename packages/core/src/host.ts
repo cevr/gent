@@ -7,6 +7,7 @@
  */
 export {
   GentPlatform,
+  GentReleaseFacts,
   resolveDataDir,
   type RuntimeModuleSource,
   writeFileAtomic,

@@ -14,6 +14,7 @@ import {
   Logger,
   Option,
   Path,
+  type PlatformError,
   Predicate,
   Queue,
   References,
@@ -31,8 +32,18 @@ import {
   RuntimeEnvironment,
   UserConfig,
 } from "../../src/runtime/config"
-import { GentPlatform, runProcess } from "../../src/runtime/gent-platform"
-import { BunGentPlatformLive, programSource } from "../../src/runtime/gent-platform-bun"
+import {
+  GentPlatform,
+  GentRelease,
+  GentReleaseFacts,
+  runProcess,
+} from "../../src/runtime/gent-platform"
+import {
+  BunGentPlatformLive,
+  CLEAN_TREE,
+  captureRelease,
+  sourceRelease,
+} from "../../src/runtime/gent-platform-bun"
 import { type LaneReport, PoolFacts } from "../../src/domain/driver"
 import { ProviderId } from "../../src/domain/agent"
 import { CredentialSlot } from "../../src/domain/ids"
@@ -1237,13 +1248,13 @@ const payloadContract = (payload: Schema.Top) =>
 const decodes = (schema: PlainCodec, value: Schema.Json) =>
   Exit.isSuccess(Schema.decodeExit(Schema.toCodecJson(schema))(value))
 
-/** The test platform with `source` as its source: a checkout's name, or none. */
-const withSource = (source: Option.Option<string>) =>
+/** The test platform with `release` as its source. */
+const withRelease = (release: GentRelease) =>
   Effect.provideServiceEffect(
     GentPlatform,
     Effect.gen(function* () {
       const platform = yield* GentPlatform
-      return GentPlatform.of({ ...platform, source: Effect.succeed(source) })
+      return GentPlatform.of({ ...platform, source: Effect.succeed(release) })
     }),
   )
 
@@ -1285,137 +1296,61 @@ describe("the link's contract", () => {
       }
     }).pipe(Effect.provide(platformLayer)),
   )
-
-  it.effect(
-    "code in a codec binds the contract to the source; with no source it matches no other",
-    () =>
-      Effect.gen(function* () {
-        // A transformation is code: only the source names it.
-        const coded = Schema.Struct({ count: Schema.FiniteFromString })
-        const atA = yield* payloadContract(coded).pipe(withSource(Option.some("a")))
-        const atAAgain = yield* payloadContract(coded).pipe(withSource(Option.some("a")))
-        const atB = yield* payloadContract(coded).pipe(withSource(Option.some("b")))
-        expect(atA).toBe(atAAgain)
-        expect(atA).not.toBe(atB)
-        const unnamed = yield* payloadContract(coded).pipe(withSource(Option.none()))
-        const unnamedAgain = yield* payloadContract(coded).pipe(withSource(Option.none()))
-        expect(unnamed).not.toBe(unnamedAgain)
-        // Every RPC holds code (its exit, its defect): a payload of data names no source either.
-        const data = Schema.Struct({ count: Schema.Number.check(Schema.isInt()) })
-        expect(yield* payloadContract(data).pipe(withSource(Option.none()))).not.toBe(
-          yield* payloadContract(data).pipe(withSource(Option.none())),
-        )
-        // A check Effect does not name is code too.
-        const custom = Schema.String.check(Schema.makeFilter((text: string) => text.length > 1))
-        expect(yield* payloadContract(custom).pipe(withSource(Option.some("a")))).not.toBe(
-          yield* payloadContract(custom).pipe(withSource(Option.some("b"))),
-        )
-      }).pipe(Effect.provide(platformLayer)),
-  )
-
-  it.live(
-    "two fresh processes of one program compute one contract; this test's program has another",
-    () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path
-        const script = yield* path.fromFileUrl(new URL("./link-contract.ts", import.meta.url))
-        const own = yield* linkContract.pipe(Effect.provide(BunGentPlatformLive))
-        const fresh = yield* Effect.forEach(
-          [1, 2],
-          () =>
-            runProcess(process.execPath, [script]).pipe(
-              Effect.map(({ stdout, exitCode }) => ({ contract: stdout.trim(), exitCode })),
-            ),
-          { concurrency: 2 },
-        )
-        expect(fresh[0]).toEqual(fresh[1])
-        expect(fresh[0]?.exitCode).toBe(0)
-        expect(fresh[0]?.contract).not.toBe(own)
-      }).pipe(Effect.provide(BunTestServices)),
-    30_000,
-  )
 })
 
-// ── the program a contract names ────────────────────────────────────────────
-
-/** A check of a generated program: a pattern, its flags, a bound. */
-interface ProgramRule {
-  readonly pattern: string
-  readonly flags: string
-  readonly min: number
-}
-
-/**
- * A generated program. `rules` are the checks of its own modules, `table` a
- * generated module that git ignores and the program imports, `installed` the
- * check of an installed package it imports. `docs` (tracked) and `cache`
- * (ignored) are files the program does not import. `configured` sets git
- * options that change how git prints a diff.
- */
-interface ProgramParts {
-  readonly rules: ReadonlyArray<ProgramRule>
-  readonly table: string
-  readonly installed: ProgramRule
-  readonly docs: string
-  readonly cache: string
-  readonly configured: boolean
-}
+// ── the release a contract names ────────────────────────────────────────────
 
 type Random = (below: number) => number
+type ReleaseFacts = typeof GentReleaseFacts.Type
 
-const PROGRAM_FLAGS = ["", "i", "m", "s", "u"]
-const PROGRAM_WORDS = ["alpha", "beta", "gamma", "delta", "omega"]
-const programWord = (random: Random) =>
-  `${PROGRAM_WORDS[random(PROGRAM_WORDS.length)] ?? "alpha"}${String(random(1000))}`
-const programRule = (random: Random): ProgramRule => ({
-  pattern: programWord(random),
-  flags: PROGRAM_FLAGS[random(PROGRAM_FLAGS.length)] ?? "",
-  min: random(100),
-})
-/** A flag set other than `flags`. */
-const otherFlags = (flags: string, random: Random) => {
-  const others = PROGRAM_FLAGS.filter((flag) => flag !== flags)
-  return others[random(others.length)] ?? "g"
-}
+const HEX = "0123456789abcdef"
+const hex = (random: Random, length: number) =>
+  Array.from({ length }, () => HEX[random(HEX.length)] ?? "0").join("")
 
-const generateProgram = (random: Random): ProgramParts => ({
-  rules: Array.from({ length: 1 + random(4) }, () => programRule(random)),
-  table: programWord(random),
-  installed: programRule(random),
-  docs: programWord(random),
-  cache: programWord(random),
-  configured: false,
+/** A generated release: a commit, a tree (clean or a hash), a lockfile hash and a Bun version. */
+const generateRelease = (random: Random): ReleaseFacts => ({
+  commit: hex(random, 40),
+  tree: [CLEAN_TREE, hex(random, 64)][random(2)] ?? CLEAN_TREE,
+  lock: hex(random, 64),
+  bun: `1.${String(random(10))}.${String(random(20))}`,
 })
 
-const ruleText = (rule: ProgramRule) =>
-  `export const rule = { pattern: /${rule.pattern}/${rule.flags}, min: ${String(rule.min)} }\n`
+const RELEASE_FACTS = ["commit", "tree", "lock", "bun"] as const
 
-/** The files of `parts`, each path under the program's directory with its text. */
-const programFiles = (parts: ProgramParts): ReadonlyArray<readonly [string, string]> => [
-  [".gitignore", "node_modules/\ngen/\nignored/\n"],
-  ["package.json", '{ "name": "fixture", "private": true }\n'],
-  ...parts.rules.map((rule, index) => [`src/rule-${String(index)}.ts`, ruleText(rule)] as const),
-  [
-    "src/main.ts",
-    [
-      ...parts.rules.map(
-        (_, index) => `import { rule as rule${String(index)} } from "./rule-${String(index)}.ts"`,
-      ),
-      'import { table } from "../gen/table.ts"',
-      'import { rule as installed } from "@fixture/checks"',
-      `console.log([${parts.rules.map((_, index) => `rule${String(index)}`).join(", ")}], table, installed)`,
-      "",
-    ].join("\n"),
-  ],
-  ["gen/table.ts", `export const table = "${parts.table}"\n`],
-  [
-    "node_modules/@fixture/checks/package.json",
-    '{ "name": "@fixture/checks", "version": "1.0.0", "main": "index.js" }\n',
-  ],
-  ["node_modules/@fixture/checks/index.js", ruleText(parts.installed)],
-  ["docs/notes.md", `# ${parts.docs}\n`],
-  ["ignored/cache.txt", `${parts.cache}\n`],
-]
+const releasedOf = (facts: ReleaseFacts) => GentRelease.cases.Released.make({ ...facts })
+
+/** A compiled build's define, as `apps/tui/scripts/build.ts` encodes it. */
+const encodeDefine = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: Schema.String,
+      version: Schema.String,
+      release: Schema.optionalKey(GentReleaseFacts),
+    }),
+  ),
+)
+
+/** The contract in a process of its own (`link-contract.ts`): one line per contract it prints. */
+const contractsInProcess = (
+  args: ReadonlyArray<string>,
+  env: Record<string, string> = {},
+  defined: Option.Option<string> = Option.none(),
+) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const script = yield* path.fromFileUrl(new URL("./link-contract.ts", import.meta.url))
+    const define = Option.match(defined, {
+      onNone: () => [],
+      onSome: (value) => ["--define", `__GENT_BUILD__:${value}`],
+    })
+    const { stdout, stderr, exitCode } = yield* runProcess(
+      process.execPath,
+      [...define, script, ...args],
+      { env, extendEnv: true },
+    )
+    expect(exitCode, stderr).toBe(0)
+    return stdout.trim().split("\n")
+  })
 
 /** Git with no user or system config, and one fixed date: one tree, one commit. */
 const fixtureGit = (directory: string, args: ReadonlyArray<string>) =>
@@ -1431,317 +1366,325 @@ const fixtureGit = (directory: string, args: ReadonlyArray<string>) =>
     stdout: "ignore",
   }).pipe(Effect.map(({ exitCode }) => expect(exitCode).toBe(0)))
 
-/** Writes `parts` into `directory` over what is there. */
-const writeProgram = (directory: string, parts: ProgramParts) =>
+/** The source file of a fixture checkout, holding `text`. */
+const sourceText = (text: string) =>
+  ["const first = 1", "", `console.log(${encodeText(text)})`, "", "const last = 2", ""].join("\n")
+
+/**
+ * A clean checkout at `directory`: a lockfile, a `.gitignore` naming
+ * `cache/`, one source file holding `text`, and a file `old.ts` git can see
+ * renamed, committed.
+ */
+const checkout = (directory: string, text: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    for (const [file, text] of programFiles(parts)) {
-      yield* fs.makeDirectory(path.dirname(path.join(directory, file)), { recursive: true })
-      yield* fs.writeFileString(path.join(directory, file), text)
-    }
-    if (parts.configured) {
-      yield* fixtureGit(directory, ["config", "diff.noprefix", "true"])
-      yield* fixtureGit(directory, ["config", "diff.mnemonicPrefix", "true"])
-      yield* fixtureGit(directory, ["config", "core.quotePath", "false"])
-    }
-  })
-
-/** A checkout of `parts` at `directory`, committed; `dirty` leaves a change to it uncommitted. */
-const checkoutProgram = (directory: string, parts: ProgramParts, dirty: boolean) =>
-  Effect.gen(function* () {
-    yield* writeProgram(directory, parts)
+    yield* fs.makeDirectory(`${directory}/src`, { recursive: true })
+    yield* fs.writeFileString(`${directory}/bun.lock`, '{ "lockfileVersion": 1 }\n')
+    yield* fs.writeFileString(`${directory}/.gitignore`, "cache/\n")
+    yield* fs.writeFileString(`${directory}/src/main.ts`, sourceText(text))
+    yield* fs.writeFileString(`${directory}/src/old.ts`, `${sourceText("old").repeat(4)}`)
     yield* fixtureGit(directory, ["init", "-q"])
     yield* fixtureGit(directory, ["add", "-A"])
     yield* fixtureGit(directory, ["commit", "-q", "--no-verify", "-m", "fixture"])
-    if (!dirty) return parts
-    const [first, ...rest] = parts.rules
-    const working = { ...parts, rules: [{ ...first!, min: first!.min + 1000 }, ...rest] }
-    yield* writeProgram(directory, working)
-    return working
   })
 
-/** A change to a program; `same` when the changed program loads the same code. */
-interface ProgramChange {
-  readonly name: string
-  readonly same: boolean
-  readonly apply: (parts: ProgramParts, random: Random) => ProgramParts
-}
-
-/** `parts` with its rule at a generated index changed by `change`. */
-const changeRule = (
-  parts: ProgramParts,
-  random: Random,
-  change: (rule: ProgramRule) => ProgramRule,
-) => {
-  const at = random(parts.rules.length)
-  const rules = [...parts.rules]
-  rules[at] = change(parts.rules[at]!)
-  return { ...parts, rules }
-}
-
-const PROGRAM_CHANGES: ReadonlyArray<ProgramChange> = [
-  {
-    name: "a schema's check",
-    same: false,
-    apply: (parts, random) =>
-      changeRule(parts, random, (rule) => ({ ...rule, flags: otherFlags(rule.flags, random) })),
-  },
-  {
-    name: "a tracked file",
-    same: false,
-    apply: (parts, random) => changeRule(parts, random, (rule) => ({ ...rule, min: rule.min + 1 })),
-  },
-  {
-    name: "a bundled file git ignores",
-    same: false,
-    apply: (parts) => ({ ...parts, table: `${parts.table}x` }),
-  },
-  {
-    name: "an installed package's contents",
-    same: false,
-    apply: (parts, random) => ({
-      ...parts,
-      installed: { ...parts.installed, flags: otherFlags(parts.installed.flags, random) },
-    }),
-  },
-  {
-    name: "an ignored file",
-    same: true,
-    apply: (parts) => ({ ...parts, cache: `${parts.cache}x` }),
-  },
-  {
-    name: "a doc outside the bundle",
-    same: true,
-    apply: (parts) => ({ ...parts, docs: `${parts.docs}x` }),
-  },
-  {
-    name: "the git config",
-    same: true,
-    apply: (parts) => ({ ...parts, configured: true }),
-  },
-]
-
-const PROGRAMS = 40
-const PROGRAM_SEED = 20_261_104
-
-/** The contract of the program at `directory`, run from `src/main.ts`; its source must be named. */
-const programContract = (directory: string) =>
-  Effect.gen(function* () {
-    const source = yield* programSource(`${directory}/src/main.ts`)
-    expect(Option.isSome(source), directory).toBe(true)
-    return yield* linkContract.pipe(withSource(source))
-  })
-
-/**
- * Two copies of one generated program, at two paths: `changes` applied to
- * the second. Each case is a checkout at the first path, copied to the
- * second, and changed there.
- */
-const comparePrograms = (
-  parts: ProgramParts,
-  dirty: boolean,
-  changes: ReadonlyArray<ProgramChange>,
-  random: Random,
-) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const root = yield* makeTempDirectoryScoped("gent-program-")
-      const first = `${root}/first`
-      const second = `${root}/second/at/another/depth`
-      const working = yield* checkoutProgram(first, parts, dirty)
-      yield* fs.makeDirectory(second, { recursive: true })
-      yield* fs.copy(first, second, { overwrite: true })
-      yield* writeProgram(
-        second,
-        changes.reduce((changed, change) => change.apply(changed, random), working),
-      )
-      return [yield* programContract(first), yield* programContract(second)] as const
-    }),
-  )
-
-/** Writes the module `main` imports, `local.ts` beside it, holding `text`. */
-const writeLocal = (main: string, text: string) =>
-  Effect.flatMap(Path.Path, (path) =>
-    Effect.flatMap(FileSystem.FileSystem, (fs) =>
-      fs.writeFileString(
-        path.join(path.dirname(main), "local.ts"),
-        `export const local = "${text}"\n`,
-      ),
-    ),
-  )
-
-/**
- * A program in a scratch directory: a `main.ts` that imports its `local.ts`
- * and runs `link-contract.ts`, so the contract it prints names it. Its path.
- */
-const contractProgram = (local: string) =>
+/** `directory`'s source file now holds `text`, committed. */
+const commitText = (directory: string, text: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const directory = yield* makeTempDirectoryScoped("gent-loaded-")
-    const helper = yield* path.fromFileUrl(new URL("./link-contract.ts", import.meta.url))
-    const main = path.join(directory, "main.ts")
-    yield* fs.writeFileString(
-      main,
-      `export { local } from "./local.ts"\nimport ${encodeText(helper)}\n`,
-    )
-    yield* writeLocal(main, local)
-    return main
+    yield* fs.writeFileString(`${directory}/src/main.ts`, sourceText(text))
+    yield* fixtureGit(directory, ["commit", "-q", "--no-verify", "-a", "-m", text])
   })
 
-/** `main` running in `mode` (`link-contract.ts`): its next line, and a line sent to it. */
-const runContractProgram = (main: string, mode: string) =>
+/** The tree a checkout holds now. */
+const treeOf = (directory: string) => captureRelease(directory).pipe(Effect.map(({ tree }) => tree))
+
+/**
+ * Local git options that change how git prints a diff: prefixes, color, an
+ * external diff, renames, the algorithm, the context, the file order, path
+ * quoting. The tree must not see them.
+ */
+const PRINT_CONFIG: ReadonlyArray<readonly [string, string]> = [
+  ["diff.noprefix", "true"],
+  ["diff.mnemonicPrefix", "true"],
+  ["color.ui", "always"],
+  ["color.diff", "always"],
+  ["diff.external", "/nonexistent/loop-probe-x"],
+  ["diff.renames", "copies"],
+  ["diff.algorithm", "histogram"],
+  ["diff.indentHeuristic", "false"],
+  ["diff.context", "9"],
+  ["diff.interHunkContext", "5"],
+  ["diff.orderFile", "/nonexistent/loop-probe-x"],
+  ["diff.suppressBlankEmpty", "true"],
+  ["diff.relative", "true"],
+  ["core.quotePath", "false"],
+]
+
+/**
+ * The same edits in a checkout: a tracked change, a rename, a deletion, a
+ * mode change, a binary file and an untracked file with a name git quotes.
+ */
+const editCheckout = (directory: string) =>
   Effect.gen(function* () {
-    const input = yield* Queue.unbounded<Uint8Array>()
-    const lines = yield* Queue.unbounded<string>()
-    const child = yield* ChildProcess.make(process.execPath, [main, mode], {
-      stdin: Stream.fromQueue(input),
-      stdout: "pipe",
-      stderr: "ignore",
-      forceKillAfter: "2 seconds",
-    })
-    yield* child.stdout.pipe(
-      Stream.decodeText,
-      Stream.splitLines,
-      Stream.runForEach((line) => Queue.offer(lines, line)),
-      Effect.forkScoped,
-    )
-    return {
-      line: Queue.take(lines).pipe(Effect.timeout("20 seconds")),
-      send: Queue.offer(input, new TextEncoder().encode("go\n")),
-    }
+    const fs = yield* FileSystem.FileSystem
+    yield* fs.writeFileString(`${directory}/src/main.ts`, sourceText("edited"))
+    yield* fixtureGit(directory, ["mv", "src/old.ts", "src/new.ts"])
+    yield* fs.writeFile(`${directory}/src/blob.bin`, new Uint8Array([0, 1, 2, 255, 0, 7]))
+    yield* fixtureGit(directory, ["add", "src/blob.bin"])
+    yield* fs.chmod(`${directory}/bun.lock`, 0o755)
+    yield* fs.writeFileString(`${directory}/src/naïve.ts`, "export {}\n")
   })
 
-/** The contracts two fresh processes of `main` print. */
-const freshContracts = (main: string) =>
-  Effect.forEach(
-    [1, 2],
-    () => Effect.map(runProcess(process.execPath, [main]), ({ stdout }) => stdout.trim()),
-    { concurrency: 2 },
-  )
+const RELEASES = 200
+const RELEASE_SEED = 20_261_105
+/** How many of the generated releases a process of its own computes too. */
+const RELEASES_IN_PROCESS = 20
 
-describe("the program a contract names", () => {
+/** The Bun platform: its `hash` is the real SHA-256 a process of its own runs. */
+const bunPlatformLayer = Layer.mergeAll(BunTestServices, BunGentPlatformLive)
+
+describe("the release a contract names", () => {
   it.live(
-    `${PROGRAMS} generated programs (seed ${PROGRAM_SEED}): a change to the loaded code changes the contract, any other change does not`,
+    `${RELEASES} generated releases (seed ${RELEASE_SEED}): one release and one codec give one contract in any process; another commit, tree, lock, Bun or codec gives another`,
     () =>
       Effect.gen(function* () {
-        const random = seeded(PROGRAM_SEED)
-        const reached = new Set<string>()
-        const same = PROGRAM_CHANGES.filter((change) => change.same)
-        const different = PROGRAM_CHANGES.filter((change) => !change.same)
-        for (let program = 0; program < PROGRAMS; program++) {
-          const parts = generateProgram(random)
-          const changes = Array.from(
-            { length: random(3) },
-            () => same[random(same.length)] ?? same[0]!,
-          )
-          if (random(2) === 1) changes.push(different[random(different.length)] ?? different[0]!)
-          const names = changes.map((change) => change.name)
-          for (const name of names) reached.add(name)
-          const [first, second] = yield* comparePrograms(parts, random(2) === 1, changes, random)
-          expect(first === second, `program ${String(program)}: ${names.join(", ")}`).toBe(
-            changes.every((change) => change.same),
-          )
+        const random = seeded(RELEASE_SEED)
+        const changed = new Set<string>()
+        const sample: Array<ReleaseFacts> = []
+        const contracts: Array<string> = []
+        for (let at = 0; at < RELEASES; at++) {
+          const facts = generateRelease(random)
+          const contract = yield* linkContract.pipe(withRelease(releasedOf(facts)))
+          // The same facts, built again: one contract.
+          expect(yield* linkContract.pipe(withRelease(releasedOf({ ...facts })))).toBe(contract)
+          const fact = RELEASE_FACTS[random(RELEASE_FACTS.length)] ?? "commit"
+          changed.add(fact)
+          const other = { ...facts, [fact]: `${facts[fact]}1` }
+          expect(yield* linkContract.pipe(withRelease(releasedOf(other))), fact).not.toBe(contract)
+          // One release, a codec that decodes a value another way: another contract.
+          const change = generateChange(random)
+          expect(
+            yield* payloadContract(change.before).pipe(withRelease(releasedOf(facts))),
+            change.name,
+          ).not.toBe(yield* payloadContract(change.after).pipe(withRelease(releasedOf(facts))))
+          if (sample.length < RELEASES_IN_PROCESS) {
+            sample.push(facts)
+            contracts.push(contract)
+          }
         }
-        expect([...reached].sort()).toEqual(PROGRAM_CHANGES.map((change) => change.name).sort())
-      }).pipe(Effect.provide(Layer.mergeAll(BunTestServices, BunGentPlatformLive))),
-    120_000,
+        expect([...changed].sort()).toEqual([...RELEASE_FACTS].sort())
+        // Two processes of their own compute the contracts this one did.
+        const args = [
+          "release",
+          ...sample.flatMap(({ commit, tree, lock, bun }) => [commit, tree, lock, bun]),
+        ]
+        const [first, second] = yield* Effect.all(
+          [contractsInProcess(args), contractsInProcess(args)],
+          { concurrency: 2 },
+        )
+        expect(first).toEqual(contracts)
+        expect(second).toEqual(contracts)
+      }).pipe(Effect.provide(bunPlatformLayer)),
+    60_000,
   )
 
   it.live(
-    "an installed package whose check differs by a regex flag, on one commit, changes the contract",
+    "two checkouts of one commit at two paths name one release and one contract in two processes; a new commit names another",
     () =>
-      Effect.gen(function* () {
-        const parts = generateProgram(seeded(PROGRAM_SEED))
-        const flagged: ProgramChange = {
-          name: "the installed check's flag",
-          same: false,
-          apply: () => ({
-            ...parts,
-            installed: { ...parts.installed, flags: otherFlags(parts.installed.flags, seeded(1)) },
-          }),
-        }
-        const [first, second] = yield* comparePrograms(parts, false, [flagged], seeded(1))
-        expect(first).not.toBe(second)
-      }).pipe(Effect.provide(Layer.mergeAll(BunTestServices, BunGentPlatformLive))),
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = yield* makeTempDirectoryScoped("gent-release-")
+          const near = `${root}/near`
+          const far = `${root}/far/at/another/depth`
+          yield* checkout(near, "one")
+          yield* checkout(far, "one")
+          const release = yield* captureRelease(near)
+          expect(release.tree).toBe(CLEAN_TREE)
+          expect(yield* captureRelease(far)).toEqual(release)
+          // A checkout read from a directory inside it names the same release.
+          expect(yield* captureRelease(`${far}/src`)).toEqual(release)
+          const contract = yield* linkContract.pipe(withRelease(releasedOf(release)))
+          const [atNear, atFar] = yield* Effect.all(
+            [contractsInProcess(["checkout", near]), contractsInProcess(["checkout", far])],
+            { concurrency: 2 },
+          )
+          expect(atNear).toEqual([contract])
+          expect(atFar).toEqual([contract])
+          yield* commitText(far, "two")
+          const next = yield* captureRelease(far)
+          expect(next.commit).not.toBe(release.commit)
+          expect(yield* contractsInProcess(["checkout", far])).not.toEqual([contract])
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
     30_000,
   )
 
   it.live(
-    "a package built for one platform is no part of the program; a portable one is",
+    "a dirty tree names its edits: one tree in any process and at any path, whatever git prints a diff with; another edit names another, an ignored file none",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
-          const root = yield* makeTempDirectoryScoped("gent-platform-package-")
-          /** A program that imports one package, whose `package.json` names `os`. */
-          const nativeProgram = (directory: string, os: string, body: string) =>
-            Effect.gen(function* () {
-              const native = `${directory}/node_modules/@fixture/native`
-              yield* fs.makeDirectory(native, { recursive: true })
-              yield* fs.writeFileString(
-                `${directory}/main.ts`,
-                'import { body } from "@fixture/native"\nconsole.log(body)\n',
-              )
-              yield* fs.writeFileString(
-                `${native}/package.json`,
-                `{ "name": "@fixture/native", "version": "1.0.0", "main": "index.js", "os": ${os} }\n`,
-              )
-              yield* fs.writeFileString(`${native}/index.js`, `export const body = "${body}"\n`)
-              return yield* programSource(`${directory}/main.ts`)
-            })
-          const one = '["darwin"]'
-          const two = '["darwin", "linux"]'
-          const darwin = yield* nativeProgram(`${root}/a`, one, "darwin build")
-          expect(Option.isSome(darwin)).toBe(true)
-          expect(yield* nativeProgram(`${root}/b`, one, "linux build")).toEqual(darwin)
-          expect(yield* nativeProgram(`${root}/c`, two, "one build")).not.toEqual(
-            yield* nativeProgram(`${root}/d`, two, "another build"),
+          const root = yield* makeTempDirectoryScoped("gent-release-")
+          const plain = `${root}/plain`
+          const configured = `${root}/configured/at/depth`
+          yield* checkout(plain, "one")
+          yield* checkout(configured, "one")
+          const clean = yield* captureRelease(plain)
+          for (const [key, value] of PRINT_CONFIG) {
+            yield* fixtureGit(configured, ["config", key, value])
+          }
+          // The config is the repository's, not its tree: still clean.
+          expect(yield* treeOf(configured)).toBe(CLEAN_TREE)
+          yield* editCheckout(plain)
+          yield* editCheckout(configured)
+          const dirty = yield* captureRelease(plain)
+          expect(dirty.commit).toBe(clean.commit)
+          expect(dirty.tree).toMatch(/^[0-9a-f]{64}$/)
+          expect(yield* captureRelease(configured)).toEqual(dirty)
+          // Two processes of their own, of either checkout, name one contract.
+          const contract = yield* linkContract.pipe(withRelease(releasedOf(dirty)))
+          expect(contract).not.toBe(yield* linkContract.pipe(withRelease(releasedOf(clean))))
+          const [atPlain, atConfigured] = yield* Effect.all(
+            [contractsInProcess(["checkout", plain]), contractsInProcess(["checkout", configured])],
+            { concurrency: 2 },
           )
+          expect(atPlain).toEqual([contract])
+          expect(atConfigured).toEqual([contract])
+          // An ignored file is no edit.
+          yield* fs.makeDirectory(`${plain}/cache`)
+          yield* fs.writeFileString(`${plain}/cache/built.js`, "ignored\n")
+          expect(yield* treeOf(plain)).toBe(dirty.tree)
+          // Each further edit names another tree.
+          const seen = new Set([CLEAN_TREE, dirty.tree])
+          const edits: ReadonlyArray<
+            readonly [string, Effect.Effect<void, PlatformError.PlatformError>]
+          > = [
+            ["a tracked file", fs.writeFileString(`${plain}/src/main.ts`, sourceText("again"))],
+            [
+              "an untracked file's bytes",
+              fs.writeFileString(`${plain}/src/naïve.ts`, "export {} \n"),
+            ],
+            ["a new untracked file", fs.writeFileString(`${plain}/src/added.ts`, "export {}\n")],
+            [
+              "an untracked file's name",
+              fs.rename(`${plain}/src/added.ts`, `${plain}/src/other.ts`),
+            ],
+            ["an untracked file gone", fs.remove(`${plain}/src/naïve.ts`)],
+          ]
+          for (const [edit, apply] of edits) {
+            yield* apply
+            const tree = yield* treeOf(plain)
+            expect(seen.has(tree), edit).toBe(false)
+            seen.add(tree)
+          }
         }),
-      ).pipe(Effect.provide(BunTestServices)),
+      ).pipe(Effect.provide(bunPlatformLayer)),
     30_000,
   )
 
   it.live(
-    "a process names the program it loaded: an edit after it started moves a fresh process's contract, not its own",
+    "with no git, or outside a repository, a process names no release: its contract matches no other process's",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const main = yield* contractProgram("loaded")
-          const held = yield* runContractProgram(main, "hold")
-          const loaded = yield* held.line
-          yield* writeLocal(main, "edited")
-          yield* held.send
-          expect(yield* held.line).toBe(loaded)
-          const fresh = yield* freshContracts(main)
-          expect(fresh[0]).toBe(fresh[1])
-          expect(fresh[0]).not.toBe(loaded)
+          const root = yield* makeTempDirectoryScoped("gent-release-")
+          const outside = yield* captureRelease(root).pipe(Effect.flip)
+          expect(outside.reason).toStartWith("git rev-parse")
+          yield* checkout(`${root}/clean`, "one")
+          const clean = yield* captureRelease(`${root}/clean`)
+          // The same clean checkout, read by processes whose PATH holds no git.
+          const noGit = { PATH: "/nonexistent/loop-probe-x" }
+          const [first, second] = yield* Effect.all(
+            [
+              contractsInProcess(["checkout", `${root}/clean`], noGit),
+              contractsInProcess(["checkout", `${root}/clean`], noGit),
+            ],
+            { concurrency: 2 },
+          )
+          const released = yield* linkContract.pipe(withRelease(releasedOf(clean)))
+          expect(new Set([released, ...first, ...second]).size).toBe(3)
+          const [outsideFirst, outsideSecond] = yield* Effect.all(
+            [contractsInProcess(["checkout", root]), contractsInProcess(["checkout", root])],
+            { concurrency: 2 },
+          )
+          expect(new Set([...outsideFirst, ...outsideSecond]).size).toBe(2)
         }),
-      ).pipe(Effect.provide(BunTestServices)),
-    60_000,
+      ).pipe(Effect.provide(bunPlatformLayer)),
+    30_000,
   )
 
   it.live(
-    "a process that reads its program after an edit names none: it matches neither program",
+    "a source run reads its release as the server starts: an edit and a commit made after the start do not change its contract",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const main = yield* contractProgram("loaded")
-          const before = yield* freshContracts(main)
-          const lazy = yield* runContractProgram(main, "lazy")
-          expect(yield* lazy.line).toBe("started")
-          yield* writeLocal(main, "edited")
-          yield* lazy.send
-          const answered = yield* lazy.line
-          const after = yield* freshContracts(main)
-          expect(before[0]).toBe(before[1])
-          expect(after[0]).toBe(after[1])
-          expect([before[0], after[0]]).not.toContain(answered)
+          const fs = yield* FileSystem.FileSystem
+          const root = yield* makeTempDirectoryScoped("gent-release-")
+          yield* checkout(root, "one")
+          const started = yield* captureRelease(root)
+          const read = yield* Deferred.make<boolean>()
+          const source = yield* Effect.cached(
+            sourceRelease(root).pipe(
+              Effect.tap(() => Deferred.succeed(read, true)),
+              Effect.provideContext(
+                yield* Effect.context<
+                  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+                >(),
+              ),
+            ),
+          )
+          const { links } = yield* linksOver({}).pipe(
+            Effect.provideServiceEffect(
+              GentPlatform,
+              Effect.gen(function* () {
+                const platform = yield* GentPlatform
+                return GentPlatform.of({ ...platform, source })
+              }),
+            ),
+          )
+          // Nothing asked for the contract: the start read the release.
+          yield* Deferred.await(read).pipe(Effect.timeout("10 seconds"))
+          yield* fs.writeFileString(`${root}/src/main.ts`, sourceText("edited"))
+          expect((yield* captureRelease(root)).tree).not.toBe(started.tree)
+          yield* commitText(root, "two")
+          expect((yield* captureRelease(root)).commit).not.toBe(started.commit)
+          expect(yield* links.contract).toBe(
+            yield* linkContract.pipe(withRelease(releasedOf(started))),
+          )
         }),
-      ).pipe(Effect.provide(BunTestServices)),
-    60_000,
+      ).pipe(Effect.provide(bunPlatformLayer)),
+    30_000,
+  )
+
+  it.live(
+    "a compiled gent names the release its build embedded; a build that embedded none names an id of its own process",
+    () =>
+      Effect.gen(function* () {
+        const facts = generateRelease(seeded(RELEASE_SEED))
+        const build = (release: Option.Option<ReleaseFacts>) =>
+          encodeDefine({
+            id: "build-id",
+            version: "1.0.0",
+            ...Option.match(release, {
+              onNone: () => ({}),
+              onSome: (value) => ({ release: value }),
+            }),
+          })
+        const embedded = yield* contractsInProcess(
+          ["platform"],
+          {},
+          Option.some(build(Option.some(facts))),
+        )
+        expect(embedded).toEqual([yield* linkContract.pipe(withRelease(releasedOf(facts)))])
+        const none = Option.some(build(Option.none()))
+        const [first, second] = yield* Effect.all(
+          [contractsInProcess(["platform"], {}, none), contractsInProcess(["platform"], {}, none)],
+          { concurrency: 2 },
+        )
+        expect(new Set([...first, ...second, ...embedded]).size).toBe(3)
+      }).pipe(Effect.provide(bunPlatformLayer)),
+    30_000,
   )
 })

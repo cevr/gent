@@ -16,6 +16,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   MutableRef,
   Option,
@@ -35,7 +36,7 @@ import { Socket } from "effect/socket"
 import type { LinkView } from "../domain/driver.js"
 import { causeMessage } from "../domain/guards.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
-import { GentPlatform, machineName } from "../runtime/gent-platform.js"
+import { GentPlatform, GentRelease, machineName } from "../runtime/gent-platform.js"
 import { CredentialPlacement, type LaneScopeOf } from "../runtime/provider.js"
 import { GentRpcs, makeNamespacedClient } from "./rpc.js"
 import { LINK_ORIGIN_HEADER, workspaceHeadersForCwd } from "./workspace-rpc.js"
@@ -59,7 +60,7 @@ interface CodecWalk {
 
 /**
  * A fact that is code, not data: a declaration's parser, a transformation, a
- * check Effect does not name, a value that is no JSON. Only the source that
+ * check Effect does not name, a value that is no JSON. Only the release that
  * holds the code names it (`linkContract`).
  */
 const opaqueFact = (what: string): CodecFact => ["opaque", what]
@@ -255,35 +256,45 @@ const rpcFacts = (rpc: ContractRpc) => {
   return encodeFacts([roots, walk.nodes])
 }
 
+/** The contract's own version: another way to compute it names another. */
+const CONTRACT_VERSION = "gent link 2"
+
 /**
- * The contract of `rpcs`: what each RPC's codecs decode, sorted by tag, and
- * the source that holds their code, hashed. Two servers whose contracts
- * match decode each other's frames the same way.
+ * The release a contract names, as one line: its four facts, or the id of
+ * a process that has none.
+ */
+const releaseFact = GentRelease.match({
+  Released: ({ commit, tree, lock, bun }) => encodeFacts(["release", commit, tree, lock, bun]),
+  Unreleased: ({ process }) => encodeFacts(["process", process]),
+})
+
+/**
+ * The contract of `rpcs`: the release this process runs and what each RPC's
+ * codecs decode, sorted by tag, hashed. Two servers whose contracts match
+ * run one release and decode each other's frames the same way.
  *
- * Data is described as data: every node's kind, each literal, key, optional
- * and mutable mark, union mode, element and rest, and every check Effect
- * names, with its payload (a pattern's source and flags). Code is not data: a
- * declaration's parser and a transformation are functions, and a function's
- * text does not name what it closes over. Every RPC's codec holds code (its
- * exit is a declaration, its defect a transformation), and most of that code
- * is in installed packages, so the contract names the program that holds it
- * (`GentPlatform.source`: the hash of every file the program loads, the
- * installed packages' too, fixed when it is built, or on first use in a
- * source run). The codec facts are a second factor, never the only one. With no
- * program to name, the contract names a value fresh to this process, and no
- * other machine matches it: the link stays incompatible rather than connect
- * two programs whose codecs may differ.
+ * The release (`GentPlatform.source`) is the commit gent was built from, its
+ * tree against that commit, the hash of its `bun.lock` and the Bun that runs
+ * it. It guards the skew the owner's machines can have: another commit,
+ * another edit to the tree, another lockfile, another Bun (docs/architecture/server.md, Machine
+ * Links). A codec holds code no walk reads (an exit is a declaration, a
+ * defect a transformation); the release names that code, and the codec
+ * facts are a second factor. Data is described as data: every node's kind,
+ * each literal, key, optional and mutable mark, union mode, element and
+ * rest, and every check Effect names, with its payload (a pattern's source
+ * and flags). With no release, the contract names an id drawn for this
+ * process, and no other process matches it: the link stays incompatible.
  */
 export const rpcContract = (
   rpcs: ReadonlyArray<ContractRpc>,
 ): Effect.Effect<string, never, GentPlatform> =>
   Effect.gen(function* () {
     const platform = yield* GentPlatform
-    const source = yield* Option.match(yield* platform.source, {
-      onNone: () => platform.randomId.pipe(Effect.map((id) => `process ${id}`)),
-      onSome: (name) => Effect.succeed(`source ${name}`),
-    })
-    return platform.hash("sha256", [source, ...rpcs.map(rpcFacts).sort()].join("\n"))
+    const release = releaseFact(yield* platform.source)
+    return platform.hash(
+      "sha256",
+      [CONTRACT_VERSION, release, ...rpcs.map(rpcFacts).sort()].join("\n"),
+    )
   })
 
 /** This server's contract: `GentRpcs`'s. `Links` computes it once. */
@@ -470,12 +481,13 @@ export class Links extends Context.Service<
         const placement = yield* CredentialPlacement
         const environment = yield* RuntimeEnvironment
         const own = yield* machineName
-        // Read on first use, a hello asked or answered, so a server that
-        // never links names no program. It names the code this server
-        // loaded: a file changed since the start names none.
-        const contract = yield* Effect.cached(
+        // Read as the server starts, on its own fiber, so the start waits
+        // for no git: a source run names the release it started on, and a
+        // commit made later names another. A hello waits for it.
+        const reading = yield* Effect.forkScoped(
           linkContract.pipe(Effect.provideService(GentPlatform, yield* GentPlatform)),
         )
+        const contract = Fiber.join(reading)
         const started = yield* Clock.currentTimeMillis
         const records = new Map<string, MutableRef.MutableRef<LinkRecord>>()
         for (const machine of Object.keys(yield* config.linkMachines)) {

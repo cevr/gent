@@ -93,6 +93,34 @@ export const GentBuild = Schema.TaggedUnion({
 })
 export type GentBuild = typeof GentBuild.Type
 
+/**
+ * What names a release of gent: the commit it was built from, its tree
+ * against that commit (`clean`, or the hash of the tracked diff and the
+ * untracked files), the SHA-256 of the checkout's `bun.lock`, and the Bun
+ * that runs it.
+ */
+const releaseFields = {
+  commit: Schema.NonEmptyString,
+  tree: Schema.NonEmptyString,
+  lock: Schema.NonEmptyString,
+  bun: Schema.NonEmptyString,
+}
+
+/** A release's four facts, as the compiled build embeds them. */
+export const GentReleaseFacts = Schema.Struct(releaseFields)
+
+/**
+ * The release this process runs: `Released` with its four facts, or
+ * `Unreleased` (no git, no repository, a build that embedded none) with an
+ * id drawn once for this process, so it matches no other process. A link's
+ * contract names it.
+ */
+export const GentRelease = Schema.TaggedUnion({
+  Released: releaseFields,
+  Unreleased: { process: Schema.NonEmptyString },
+})
+export type GentRelease = typeof GentRelease.Type
+
 type GentPlatformHashAlgorithm = "sha256"
 
 /**
@@ -181,12 +209,12 @@ interface GentPlatformApi {
   /** The build this process runs: `Compiled` with its id and version, or `Source`. */
   readonly build: Effect.Effect<GentBuild>
   /**
-   * The program this process runs, named by the code it loaded (on Bun,
-   * `programSource`): the compiled gent carries the name its build fixed, a
-   * source run names its own program once, from the files its entry loads.
-   * None when neither names it. A link's contract names its code by it.
+   * The release this process runs (on Bun, `captureRelease`): the compiled
+   * gent carries the one its build embedded, a source run reads its own
+   * checkout once. `Unreleased` when neither names one. A link's contract
+   * names its code by it.
    */
-  readonly source: Effect.Effect<Option.Option<string>>
+  readonly source: Effect.Effect<GentRelease>
   readonly homeDirectory: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
@@ -243,7 +271,14 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
           build: Effect.succeed(GentBuild.cases.Source.make({})),
-          source: Effect.succeedSome("test-source"),
+          source: Effect.succeed(
+            GentRelease.cases.Released.make({
+              commit: "test-commit",
+              tree: "clean",
+              lock: "test-lock",
+              bun: "test-bun",
+            }),
+          ),
           homeDirectory: Effect.succeed("/nonexistent/gent-test-home"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.

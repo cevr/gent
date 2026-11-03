@@ -16,7 +16,7 @@
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter resolves its own executable once, before any Effect runs, and a served module's real path inside a sync plugin step
 import { realpathSync } from "node:fs"
 import * as os from "node:os"
-// oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter reads Bun's build record, whose paths are relative to the process's directory
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter reads Bun's build record, whose paths are relative to the process's directory, and the directory of the entry a source run starts from
 import * as path from "node:path"
 import { Database } from "bun:sqlite"
 import {
@@ -33,8 +33,10 @@ import {
   Schedule,
   Schema,
   Scope,
+  Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
+import { ChildProcess, type ChildProcessSpawner } from "effect/process"
 import { causeMessage } from "../domain/guards.js"
 import { storageError, type StorageError } from "../domain/errors.js"
 import * as EffectPlatformBun from "@effect/platform-bun"
@@ -45,17 +47,20 @@ import { FetchHttpClient } from "effect/http"
 import {
   GentBuild,
   GentPlatform,
+  GentRelease,
+  GentReleaseFacts,
   ImageCodecError,
   type ImageTranscode,
   type ModuleBundle,
   ModuleBundleError,
   type RuntimeModuleSource,
   SERVED_MODULE_QUERY,
+  runProcess,
   SignalError,
 } from "./gent-platform.js"
 
 /**
- * The compiled build defines this symbol as `{ id, version }`
+ * The compiled build defines this symbol as `{ id, version, release? }`
  * (`apps/tui/scripts/build.ts`); a source run leaves it undeclared. The
  * builtin extensions read its `id` too, as their artifact identity
  * (`packages/extensions/src/index.ts`).
@@ -63,8 +68,8 @@ import {
 declare const __GENT_BUILD__: unknown
 
 /**
- * The compiled build's define: its id, its version, and the name of the
- * program it compiled (`programSource`, fixed as it built). An undeclared
+ * The compiled build's define: its id, its version, and the release it was
+ * built from (`captureRelease`, none with no git). An undeclared
  * symbol throws a ReferenceError: a source run.
  */
 const compiledDefine = Result.try(() => __GENT_BUILD__).pipe(
@@ -74,7 +79,7 @@ const compiledDefine = Result.try(() => __GENT_BUILD__).pipe(
       Schema.Struct({
         id: Schema.NonEmptyString,
         version: Schema.NonEmptyString,
-        source: Schema.optionalKey(Schema.NonEmptyString),
+        release: Schema.optionalKey(GentReleaseFacts),
       }),
     ),
   ),
@@ -85,191 +90,229 @@ const thisBuild: GentBuild = Option.match(compiledDefine, {
   onSome: ({ id, version }) => GentBuild.cases.Compiled.make({ id, version }),
 })
 
-// ── program source ──────────────────────────────────────────────────────────
+// ── release ─────────────────────────────────────────────────────────────────
+
+/** Why a checkout names no release: no git, no repository, a file or a lock that does not read. */
+class NoRelease extends Schema.TaggedError<NoRelease, { readonly brand: unique symbol }>()(
+  "NoRelease",
+  { reason: Schema.String },
+) {}
+
+/** How long one git call may take before the checkout names no release. */
+const GIT_TIMEOUT = Duration.seconds(10)
+
+/** How long a stopped git may take before it is killed. */
+const GIT_FORCE_KILL_AFTER = Duration.seconds(2)
 
 /**
- * An installed package's manifest, as a program's name for the package's
- * files reads it. A package whose `os` names one system is built for one
- * platform.
+ * The tracked changes against `HEAD`, as git prints them with every option
+ * that shapes the print fixed on the command line, so a machine's git config
+ * (an external diff, a textconv, color, prefixes, renames, the diff
+ * algorithm, the context, the file order, path quoting) prints the same
+ * bytes.
  */
-const PackageManifest = Schema.fromJsonString(
-  Schema.Struct({
-    name: Schema.NonEmptyString,
-    version: Schema.optionalKey(Schema.String),
-    os: Schema.optionalKey(Schema.Array(Schema.String)),
-  }),
-)
+const TRACKED_DIFF = [
+  "-c",
+  "core.quotePath=true",
+  "-c",
+  "diff.orderFile=/dev/null",
+  "-c",
+  "diff.suppressBlankEmpty=false",
+  "-c",
+  "diff.relative=false",
+  "diff",
+  "HEAD",
+  "--binary",
+  "--full-index",
+  "--no-ext-diff",
+  "--no-textconv",
+  "--no-color",
+  "--no-renames",
+  "--diff-algorithm=myers",
+  "--indent-heuristic",
+  "--unified=3",
+  "--inter-hunk-context=0",
+  "--ignore-submodules=none",
+  "--submodule=short",
+  "--src-prefix=a/",
+  "--dst-prefix=b/",
+]
+
+/** The tree of a checkout with no change against `HEAD` and no untracked file. */
+export const CLEAN_TREE = "clean"
+
+const sha256 = (input: Uint8Array | string) =>
+  new Bun.CryptoHasher("sha256").update(input).digest("hex")
 
 /**
- * A bare import that resolves nowhere stays external: a package installed
- * only on another platform, which the program imports when it runs there.
+ * Git at `directory`, its exit checked, its output in `NoRelease`'s terms:
+ * no git, or the command git refused.
  */
-const keepUnresolvedExternal: Bun.BunPlugin = {
-  name: "gent-program-unresolved-external",
-  setup: (builder) => {
-    builder.onResolve({ filter: /^[^./]/ }, (args) => {
-      if (Result.isSuccess(Result.try(() => Bun.resolveSync(args.path, args.resolveDir)))) return
-      return { path: args.path, external: true }
-    })
-  },
-}
-
-const NODE_MODULES = "/node_modules/"
-
-/** The installed package that holds `file`: its root, and the file's path in it. */
-const installedAt = (file: string) => {
-  const at = file.lastIndexOf(NODE_MODULES)
-  if (at < 0) return Option.none<{ readonly root: string; readonly inPackage: string }>()
-  const parts = file.slice(at + NODE_MODULES.length).split("/")
-  let depth = 1
-  if (parts[0]?.startsWith("@")) depth = 2
-  return Option.some({
-    root: file.slice(0, at + NODE_MODULES.length) + parts.slice(0, depth).join("/"),
-    inPackage: parts.slice(depth).join("/"),
-  })
-}
-
-/** The deepest directory that holds every one of `files`. */
-const sharedDirectory = (files: ReadonlyArray<string>): string => {
-  let shared = path.dirname(files[0] ?? "/").split("/")
-  for (const file of files) {
-    const parts = path.dirname(file).split("/")
-    let same = 0
-    while (same < shared.length && shared[same] === parts[same]) same += 1
-    shared = shared.slice(0, same)
-  }
-  return shared.join("/") || "/"
-}
-
-/**
- * The name of the program `entry` runs, from the code it loads now: every file
- * of its bundle (Bun's own record of the build's inputs, installed packages
- * among them), each by its path and its content's hash, and the Bun that
- * runs it. The name does not move with the program's place: a file of an
- * installed package goes by the package's name, version and its path in it
- * (the install's layout aside), any other by its path from the directory
- * that holds them all. A package built for one platform (its `os` names one
- * system) is left out, so one program has one name on each platform. An
- * import that resolves nowhere is no part of the bundle.
- *
- * None when the build fails or a file does not read. A compiled build names
- * its program as it builds (`apps/tui/scripts/build.ts`); a source run names
- * the program it loaded once (`loadedProgramSource`).
- */
-export const programSource = (
-  entry: string,
-): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem> =>
-  nameProgram(entry, Option.none())
-
-/**
- * The name of the program `entry` runs, as this process loaded it: none when
- * a file of it changed after this process started, since the files would not
- * be the code this process loaded.
- */
-const loadedProgramSource = (
-  entry: string,
-): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem> =>
-  nameProgram(entry, Option.some(performance.timeOrigin))
-
-/** `programSource`; with `loadedAt`, none when a file changed after that time. */
-const nameProgram = (
-  entry: string,
-  loadedAt: Option.Option<number>,
-): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const result = yield* Effect.tryPromise({
-      try: () =>
-        Bun.build({
-          entrypoints: [entry],
-          target: "bun",
-          format: "esm",
-          metafile: true,
-          throw: false,
-          plugins: [keepUnresolvedExternal],
-        }),
-      catch: (cause) => new ModuleBundleError({ entry, message: causeMessage(cause) }),
-    })
-    const metafile = Option.fromNullishOr(result.metafile)
-    if (!result.success || Option.isNone(metafile)) {
-      const message = result.logs.map(buildLogLine).join("\n") || "the build recorded no inputs"
-      return yield* new ModuleBundleError({ entry, message })
-    }
-    const files = Object.keys(metafile.value.inputs).map((input) =>
-      path.resolve(process.cwd(), input),
-    )
-    const roots = new Set(
-      files.flatMap((file) => Option.toArray(installedAt(file))).map((at) => at.root),
-    )
-    const manifests = new Map(
-      yield* Effect.forEach(
-        roots,
-        (root) =>
-          fs.readFileString(path.join(root, "package.json")).pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(PackageManifest)),
-            Effect.map((manifest) => [root, manifest] as const),
-          ),
-        { concurrency: 32 },
-      ),
-    )
-    const base = sharedDirectory(files.filter((file) => Option.isNone(installedAt(file))))
-    const named = yield* Effect.forEach(
-      files,
-      (file) =>
-        Effect.gen(function* () {
-          let name = path.relative(base, file)
-          const installed = installedAt(file)
-          if (Option.isSome(installed)) {
-            const manifest = manifests.get(installed.value.root)
-            if (manifest?.os?.length === 1) return Option.none<string>()
-            name = `${manifest?.name ?? ""}@${manifest?.version ?? ""}/${installed.value.inPackage}`
-          }
-          // Read, then check the time: a change after the read moved the time too.
-          const bytes = yield* fs.readFile(file)
-          if (Option.isSome(loadedAt)) {
-            const changed = (yield* fs.stat(file)).mtime.pipe(
-              Option.match({
-                onNone: () => true,
-                onSome: (time) => time.getTime() > loadedAt.value,
-              }),
-            )
-            if (changed) {
-              return yield* new ModuleBundleError({
-                entry,
-                message: `${file} changed after this process started`,
-              })
-            }
-          }
-          return Option.some(
-            `${name}\0${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`,
-          )
-        }),
-      { concurrency: 32 },
-    )
-    const hasher = new Bun.CryptoHasher("sha256").update(`gent program 1\nbun ${Bun.version}\n`)
-    for (const line of named.flatMap(Option.toArray).sort()) hasher.update(`${line}\n`)
-    return Option.some(hasher.digest("hex"))
+const releaseGit = (directory: string, args: ReadonlyArray<string>) =>
+  runProcess("git", ["--no-optional-locks", "-C", directory, ...args], {
+    timeout: GIT_TIMEOUT,
   }).pipe(
-    Effect.tapError((error) =>
-      Effect.logWarning("the program this process runs is not named").pipe(
-        Effect.annotateLogs({ entry, error: String(error) }),
-      ),
-    ),
-    Effect.orElseSucceed(() => Option.none<string>()),
+    Effect.mapError((error) => new NoRelease({ reason: `no git: ${error.message}` })),
+    Effect.flatMap(({ exitCode, stdout, stderr }) => {
+      if (exitCode === 0) return Effect.succeed(stdout)
+      return Effect.fail(new NoRelease({ reason: `git ${args[0]}: ${stderr.trim()}` }))
+    }),
   )
 
 /**
- * The program this process runs: the compiled build's embedded name, or the
- * name of the program `Bun.main` runs. A compiled build with no embedded
- * name has none.
+ * The tracked diff's bytes, fed to `hasher` as git prints them: decoded to
+ * text, a byte no UTF-8 names would hash as any other.
  */
-const thisSource: Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem> = Option.match(
-  compiledDefine,
-  {
-    onNone: () => loadedProgramSource(Bun.main),
-    onSome: (define) => Effect.succeed(Option.fromUndefinedOr(define.source)),
-  },
-)
+const hashTrackedDiff = (top: string, hasher: Bun.CryptoHasher) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* ChildProcess.make(
+        "git",
+        ["--no-optional-locks", "-C", top, ...TRACKED_DIFF],
+        { stdout: "pipe", stderr: "ignore", forceKillAfter: GIT_FORCE_KILL_AFTER },
+      )
+      const [exitCode, size] = yield* Effect.all(
+        [
+          handle.exitCode,
+          Stream.runFold(
+            handle.stdout,
+            () => 0,
+            (bytes, chunk) => {
+              hasher.update(chunk)
+              return bytes + chunk.length
+            },
+          ),
+        ],
+        { concurrency: "unbounded" },
+      )
+      if (Number(exitCode) !== 0) {
+        return yield* new NoRelease({ reason: `git diff exited ${String(exitCode)}` })
+      }
+      return size
+    }),
+  ).pipe(
+    Effect.timeoutOrElse({
+      duration: GIT_TIMEOUT,
+      orElse: () => Effect.fail(new NoRelease({ reason: "git diff timed out" })),
+    }),
+    Effect.catchTag("PlatformError", (error) =>
+      Effect.fail(new NoRelease({ reason: `no git: ${error.message}` })),
+    ),
+  )
+
+/**
+ * The tree of the checkout at `top` against `HEAD`: `CLEAN_TREE` when git
+ * prints no tracked diff and no untracked file, else the SHA-256 of the
+ * tracked diff and of each untracked file git does not ignore, named by its
+ * path and the SHA-256 of its bytes. Gent reads those bytes itself, so no
+ * git filter changes them. With `--binary` no NUL is in the diff, so NUL
+ * separates its parts.
+ */
+const captureTree = (top: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const hasher = new Bun.CryptoHasher("sha256")
+    const diffBytes = yield* hashTrackedDiff(top, hasher)
+    const untracked = (yield* releaseGit(top, ["ls-files", "--others", "--exclude-standard", "-z"]))
+      .split("\0")
+      .filter((file) => file.length > 0)
+    for (const file of untracked) {
+      const bytes = yield* fs
+        .readFile(`${top}/${file}`)
+        .pipe(Effect.mapError((error) => new NoRelease({ reason: `${file}: ${error.message}` })))
+      hasher.update(`\0${file}\0${sha256(bytes)}`)
+    }
+    if (diffBytes === 0 && untracked.length === 0) return CLEAN_TREE
+    return hasher.digest("hex")
+  })
+
+/**
+ * This process's release when it has none: an id drawn once as the module
+ * loads, so every layer of this process names the same one and no other
+ * process names it.
+ */
+const unreleased = GentRelease.cases.Unreleased.make({
+  // oxlint-disable-next-line effect/noGlobals -- the platform adapter owns Bun's UUIDv7; this id is fixed for the process, before any Effect runs
+  process: Bun.randomUUIDv7(),
+})
+
+/**
+ * The release the checkout at `directory` holds: the commit at `HEAD`, the
+ * tree against it (`captureTree`: `CLEAN_TREE`, or the hash of its tracked
+ * diff and untracked files), the SHA-256 of `bun.lock` at the checkout's
+ * top, and the Bun this process runs. `HEAD` is read again after the tree,
+ * and a commit made meanwhile fails. Fails with `NoRelease` with no git or
+ * no repository, or a file or a lock that does not read. The build embeds
+ * what it returns; a source run reads its own checkout with it once.
+ */
+export const captureRelease = (
+  directory: string,
+): Effect.Effect<
+  typeof GentReleaseFacts.Type,
+  NoRelease,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const [top = "", commit = ""] = (yield* releaseGit(directory, [
+      "rev-parse",
+      "--show-toplevel",
+      "HEAD",
+    ]))
+      .trim()
+      .split("\n")
+    if (top.length === 0 || commit.length === 0) {
+      return yield* new NoRelease({ reason: "git names no checkout" })
+    }
+    const tree = yield* captureTree(top)
+    if ((yield* releaseGit(top, ["rev-parse", "HEAD"])).trim() !== commit) {
+      return yield* new NoRelease({ reason: "the commit moved while it was read" })
+    }
+    const lock = yield* fs
+      .readFile(`${top}/bun.lock`)
+      .pipe(Effect.mapError((error) => new NoRelease({ reason: `no bun.lock: ${error.message}` })))
+    return { commit, tree, lock: sha256(lock), bun: Bun.version }
+  })
+
+/**
+ * The release a source run from `directory` runs: its checkout's
+ * (`captureRelease`), or this process's `Unreleased` id when it names none.
+ */
+export const sourceRelease = (
+  directory: string,
+): Effect.Effect<
+  GentRelease,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+> =>
+  captureRelease(directory).pipe(
+    Effect.map((facts) => GentRelease.cases.Released.make(facts)),
+    Effect.catchTag("NoRelease", (error) =>
+      Effect.logInfo("this source run names no release: its links stay incompatible").pipe(
+        Effect.annotateLogs({ directory, reason: error.reason }),
+        Effect.as(unreleased),
+      ),
+    ),
+  )
+
+/**
+ * The release this process runs: the one the compiled build embedded
+ * (`Unreleased` when it embedded none), or the checkout `Bun.main` runs from.
+ */
+const thisRelease: Effect.Effect<
+  GentRelease,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+> = Option.match(compiledDefine, {
+  onNone: () => sourceRelease(path.dirname(Bun.main)),
+  onSome: (define) =>
+    Effect.succeed(
+      Option.match(Option.fromUndefinedOr(define.release), {
+        onNone: () => unreleased,
+        onSome: (facts) => GentRelease.cases.Released.make(facts),
+      }),
+    ),
+})
 
 /**
  * The real path of the running executable, resolved once as the process
@@ -462,9 +505,11 @@ const transcodeBunImage = (bytes: Uint8Array, options: ImageTranscode) =>
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.effect(
   GentPlatform,
   Effect.gen(function* () {
-    // The services the layer was built with: the program is named on the first ask, once.
-    const services = yield* Effect.context<FileSystem.FileSystem>()
-    const source = yield* Effect.cached(Effect.provideContext(thisSource, services))
+    // The services the layer was built with: the release is read on the first ask, once.
+    const services = yield* Effect.context<
+      ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+    >()
+    const source = yield* Effect.cached(Effect.provideContext(thisRelease, services))
     return GentPlatform.of({
       bindModules: bindBunModules,
 

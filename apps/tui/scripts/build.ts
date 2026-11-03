@@ -1,8 +1,9 @@
 import { BunCrypto, BunRuntime, BunServices } from "@effect/platform-bun"
 import solidTransformPlugin from "@opentui/solid/bun-plugin"
-import { Config, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { Config, Effect, FileSystem, Layer, Option, Path, Result, Schema } from "effect"
 import { SecureRandom } from "effect/crypto"
-import { programSource } from "@gent/core/host-bun"
+import { GentReleaseFacts } from "@gent/core/host"
+import { captureRelease } from "@gent/core/host-bun"
 
 class BuildError extends Schema.TaggedError<BuildError, { readonly brand: unique symbol }>()(
   "BuildError",
@@ -57,35 +58,26 @@ const namedWsReexports: Bun.BunPlugin = {
 
 /**
  * `__GENT_BUILD__`: an object literal the bundler puts where the source
- * names it. `source` names the program the build compiles (`programName`);
- * a link's contract names its code by it.
+ * names it. `release` names the release the build compiles
+ * (`captureRelease`): a link's contract names its code by it. A build from
+ * a dirty tree embeds its tree's hash; a build with no git embeds none.
  */
 const encodeBuildDefine = Schema.encodeSync(
   Schema.fromJsonString(
     Schema.Struct({
       id: Schema.String,
       version: Schema.String,
-      source: Schema.String,
+      release: Schema.optionalKey(GentReleaseFacts),
     }),
   ),
 )
 
-/**
- * The name of the program this build compiles: the code `main` loads and
- * the code that builds it (this script, its plugins and their packages),
- * each named by `programSource`. The same files give the same name in any
- * directory, on any platform; none when either is not named.
- */
-const programName = (main: string) =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path
-    const program = yield* programSource(main)
-    const builder = yield* programSource(yield* path.fromFileUrl(new URL(import.meta.url)))
-    return Option.map(Option.all([program, builder]), (names) =>
-      // oxlint-disable-next-line effect/noGlobals -- the build script is its own process entry, and Bun's hasher has no Effect service
-      new Bun.CryptoHasher("sha256").update(`gent build 1\n${names.join("\n")}\n`).digest("hex"),
-    )
-  })
+/** Whether two reads of the checkout name one release, fact by fact. */
+const sameRelease = (one: typeof GentReleaseFacts.Type, other: typeof GentReleaseFacts.Type) =>
+  one.commit === other.commit &&
+  one.tree === other.tree &&
+  one.lock === other.lock &&
+  one.bun === other.bun
 
 const build = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -118,21 +110,19 @@ const build = Effect.gen(function* () {
   const { version } = yield* fs
     .readFileString(path.join(rootDir, "package.json"))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageVersion)))
-  // The program's name is fixed here, from the files the build reads: a gent
-  // that cannot name its code would match no other machine's link.
+  // The release is read here, from the checkout the build compiles: a dirty
+  // tree is named by its hash; with no git the build embeds none, and its
+  // links match no other machine.
   const main = path.join(rootDir, "src/main.tsx")
-  const source = yield* programName(main).pipe(
-    Effect.flatMap(
-      Option.match({
-        onNone: () =>
-          Effect.fail(
-            new BuildError({ message: "The program has no name: see the warning above." }),
-          ),
-        onSome: Effect.succeed,
-      }),
-    ),
+  const captured = yield* Effect.result(captureRelease(rootDir))
+  yield* Effect.log(
+    Result.match(captured, {
+      onFailure: ({ reason }) => `Release: none (${reason})`,
+      onSuccess: ({ commit, tree, lock, bun }) =>
+        `Release: ${commit} ${tree.slice(0, 8)} ${lock.slice(0, 8)} ${bun}`,
+    }),
   )
-  yield* Effect.log(`Program: ${source}`)
+  const release = Result.getSuccess(captured)
   const target = yield* compileTarget
   yield* Effect.log(`Compile target: ${Option.getOrElse(target, () => "this host")}`)
   const buildResult = yield* Effect.promise(() =>
@@ -147,7 +137,11 @@ const build = Effect.gen(function* () {
       plugins: [namedWsReexports, solidTransformPlugin],
       minify: false,
       define: {
-        __GENT_BUILD__: encodeBuildDefine({ id, version, source }),
+        __GENT_BUILD__: encodeBuildDefine({
+          id,
+          version,
+          ...Option.match(release, { onNone: () => ({}), onSome: (facts) => ({ release: facts }) }),
+        }),
       },
       compile: {
         ...Option.match(target, { onNone: () => ({}), onSome: (name) => ({ target: name }) }),
@@ -172,10 +166,15 @@ const build = Effect.gen(function* () {
       message: ["Build failed:", ...buildResult.logs.map(String)].join("\n"),
     })
   }
-  // A file changed while the build ran: the binary may hold code the name does not.
-  if (!Option.exists(yield* programName(main), (name) => name === source)) {
+  // The checkout changed while the build ran: the binary may hold code its release does not.
+  const after = Result.getSuccess(yield* Effect.result(captureRelease(rootDir)))
+  const moved = Option.exists(
+    release,
+    (before) => !Option.exists(after, (now) => sameRelease(now, before)),
+  )
+  if (moved) {
     return yield* new BuildError({
-      message: "A file of the program changed while it built. Build again.",
+      message: "The checkout changed while gent built. Build again.",
     })
   }
   yield* Effect.log(`Binary built: ${outfile}`)
