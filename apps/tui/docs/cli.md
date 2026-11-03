@@ -285,14 +285,16 @@ serves every machine; each server runs every entry but its own name
 
 Each run asks the far server's `link.hello` first: its machine name and its
 RPC contract: its codecs and the release that holds their code (the commit,
-the tree against it, the hash of `bun.lock` and the Bun version, read as gent
-is built, or as the server starts in a source run). Two machines match on the
-same commit from a clean tree, the same lockfile and the same Bun: two
-`bun run install:global` runs of one commit, which install the lockfile's
-packages before they build. A dirty tree is a release of its own: two machines
-match on it only with byte-identical dirty trees and the same ignore rules (a
-global `core.excludesFile` that ignores a file on one machine only splits
-them). A process with no release (no git, no repository) names a contract no
+the tree, the hash of `bun.lock` and the Bun version, read as gent is built,
+or as the server starts in a source run). The tree is the content of the
+working files: git lists the tracked files and the untracked files it does
+not ignore, and gent hashes each one's bytes itself, so no git filter, diff
+driver or line-ending setting changes it. Two machines match on the same
+commit with byte-identical working files, the same lockfile and the same Bun:
+two `bun run install:global` runs of one commit, which install the
+lockfile's packages before they build. An edit is a release of its own, and
+two machines match on it only with the same ignore rules too (a global
+`core.excludesFile` that ignores a file on one machine only splits them). A process with no release (no git, no repository) names a contract no
 other process names. A build with another contract makes the link
 `incompatible` and nothing else runs. Over a connected link the pool's facts cross both ways
 (docs/architecture/lanes.md, docs/architecture/server.md). A run that ends, or
