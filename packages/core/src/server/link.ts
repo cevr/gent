@@ -483,8 +483,11 @@ export class Links extends Context.Service<
         const own = yield* machineName
         // Read as the server starts, on its own fiber, so the start waits
         // for no git: a source run names the release it started on, and a
-        // commit made later names another. A hello waits for it.
-        const reading = yield* Effect.forkScoped(
+        // commit made later names another. A hello waits for it. The read
+        // is detached: it ends by itself (each git call is bounded), and a
+        // server that stops while it runs stops at once, not after its git
+        // children exit.
+        const reading = yield* Effect.forkDetach(
           linkContract.pipe(Effect.provideService(GentPlatform, yield* GentPlatform)),
         )
         const contract = Fiber.join(reading)

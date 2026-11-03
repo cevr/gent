@@ -1249,14 +1249,17 @@ const decodes = (schema: PlainCodec, value: Schema.Json) =>
   Exit.isSuccess(Schema.decodeExit(Schema.toCodecJson(schema))(value))
 
 /** The test platform with `release` as its source. */
-const withRelease = (release: GentRelease) =>
+/** The platform whose `source` reads the release with `source`. */
+const withSource = (source: Effect.Effect<GentRelease>) =>
   Effect.provideServiceEffect(
     GentPlatform,
     Effect.gen(function* () {
       const platform = yield* GentPlatform
-      return GentPlatform.of({ ...platform, source: Effect.succeed(release) })
+      return GentPlatform.of({ ...platform, source })
     }),
   )
+
+const withRelease = (release: GentRelease) => Effect.succeed(release).pipe(withSource)
 
 const CONTRACT_PAIRS = 400
 const CONTRACT_SEED = 20_261_103
@@ -1635,15 +1638,7 @@ describe("the release a contract names", () => {
               ),
             ),
           )
-          const { links } = yield* linksOver({}).pipe(
-            Effect.provideServiceEffect(
-              GentPlatform,
-              Effect.gen(function* () {
-                const platform = yield* GentPlatform
-                return GentPlatform.of({ ...platform, source })
-              }),
-            ),
-          )
+          const { links } = yield* linksOver({}).pipe(withSource(source))
           // Nothing asked for the contract: the start read the release.
           yield* Deferred.await(read).pipe(Effect.timeout("10 seconds"))
           yield* fs.writeFileString(`${root}/src/main.ts`, sourceText("edited"))
@@ -1655,6 +1650,34 @@ describe("the release a contract names", () => {
           )
         }),
       ).pipe(Effect.provide(bunPlatformLayer)),
+    30_000,
+  )
+
+  it.live(
+    "a server that stops while its release is read stops at once: its close never waits for the read",
+    () =>
+      Effect.gen(function* () {
+        const reading = yield* Deferred.make<boolean>()
+        const done = yield* Deferred.make<boolean>()
+        // A read the server cannot cut short, as a git child that exits only
+        // some time after its stop: it ends when the test lets it.
+        const held = Effect.uninterruptible(
+          Deferred.succeed(reading, true).pipe(
+            Effect.andThen(Deferred.await(done)),
+            Effect.as(releasedOf(generateRelease(seeded(RELEASE_SEED)))),
+          ),
+        )
+        const server = yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* linksOver({}).pipe(withSource(held))
+            yield* Deferred.await(reading).pipe(Effect.timeout("10 seconds"))
+          }),
+        ).pipe(Effect.forkChild)
+        // The server closed while the read still runs.
+        const closed = yield* Fiber.await(server).pipe(Effect.timeout("5 seconds"), Effect.option)
+        yield* Deferred.succeed(done, true)
+        expect(Option.map(closed, Exit.isSuccess)).toEqual(Option.some(true))
+      }).pipe(Effect.provide(bunPlatformLayer)),
     30_000,
   )
 
