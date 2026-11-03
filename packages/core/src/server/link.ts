@@ -265,12 +265,14 @@ const rpcFacts = (rpc: ContractRpc) => {
  * names, with its payload (a pattern's source and flags). Code is not data: a
  * declaration's parser and a transformation are functions, and a function's
  * text does not name what it closes over. Every RPC's codec holds code (its
- * exit is a declaration, its defect a transformation), so the contract names
- * that code by the source that holds it (`GentPlatform.source`: the
- * checkout's commit and its uncommitted changes, or the one a compiled build
- * embeds). With no source to name it, the contract names a value fresh to
- * this process, and no other machine matches it: the link stays incompatible
- * rather than connect two builds whose codecs may differ.
+ * exit is a declaration, its defect a transformation), and most of that code
+ * is in installed packages, so the contract names the program that holds it
+ * (`GentPlatform.source`: the hash of every file the program loads, the
+ * installed packages' too, fixed when it is built or as a source run
+ * starts). The codec facts are a second factor, never the only one. With no
+ * program to name, the contract names a value fresh to this process, and no
+ * other machine matches it: the link stays incompatible rather than connect
+ * two programs whose codecs may differ.
  */
 export const rpcContract = (
   rpcs: ReadonlyArray<ContractRpc>,
@@ -471,6 +473,9 @@ export class Links extends Context.Service<
         const contract = yield* Effect.cached(
           linkContract.pipe(Effect.provideService(GentPlatform, yield* GentPlatform)),
         )
+        // The contract names the code this server loaded: it is read as the
+        // server starts, not at the first hello, after an edit to the files.
+        yield* Effect.forkScoped(contract)
         const started = yield* Clock.currentTimeMillis
         const records = new Map<string, MutableRef.MutableRef<LinkRecord>>()
         for (const machine of Object.keys(yield* config.linkMachines)) {

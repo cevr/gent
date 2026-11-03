@@ -34,7 +34,6 @@ import {
   Schema,
   Scope,
 } from "effect"
-import type { ChildProcessSpawner } from "effect/process"
 import { SqlClient } from "effect/sql"
 import { causeMessage } from "../domain/guards.js"
 import { storageError, type StorageError } from "../domain/errors.js"
@@ -44,7 +43,6 @@ import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { AuthError, ProviderLock } from "./provider.js"
 import { FetchHttpClient } from "effect/http"
 import {
-  checkoutSource,
   GentBuild,
   GentPlatform,
   ImageCodecError,
@@ -66,8 +64,8 @@ declare const __GENT_BUILD__: unknown
 
 /**
  * The compiled build's define: its id, its version, and the name of the
- * checkout it was built from (`checkoutSource`) when the build had one. An
- * undeclared symbol throws a ReferenceError: a source run.
+ * program it compiled (`programSource`, fixed as it built). An undeclared
+ * symbol throws a ReferenceError: a source run.
  */
 const compiledDefine = Result.try(() => __GENT_BUILD__).pipe(
   Result.getSuccess,
@@ -87,23 +85,191 @@ const thisBuild: GentBuild = Option.match(compiledDefine, {
   onSome: ({ id, version }) => GentBuild.cases.Compiled.make({ id, version }),
 })
 
+// ── program source ──────────────────────────────────────────────────────────
+
 /**
- * The source this process runs: the compiled build's embedded name, or the
- * name of the checkout this file sits in, read once. A compiled build with
- * no embedded name has none: its embedded file path is no checkout.
+ * An installed package's manifest, as a program's name for the package's
+ * files reads it. A package whose `os` names one system is built for one
+ * platform.
  */
-const thisSource: Effect.Effect<
-  Option.Option<string>,
-  never,
-  Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> = Option.match(compiledDefine, {
-  onNone: () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path
-      return yield* checkoutSource(yield* path.fromFileUrl(new URL(".", import.meta.url)))
-    }).pipe(Effect.orElseSucceed(() => Option.none<string>())),
-  onSome: (define) => Effect.succeed(Option.fromUndefinedOr(define.source)),
-})
+const PackageManifest = Schema.fromJsonString(
+  Schema.Struct({
+    name: Schema.NonEmptyString,
+    version: Schema.optionalKey(Schema.String),
+    os: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
+)
+
+/**
+ * A bare import that resolves nowhere stays external: a package installed
+ * only on another platform, which the program imports when it runs there.
+ */
+const keepUnresolvedExternal: Bun.BunPlugin = {
+  name: "gent-program-unresolved-external",
+  setup: (builder) => {
+    builder.onResolve({ filter: /^[^./]/ }, (args) => {
+      if (Result.isSuccess(Result.try(() => Bun.resolveSync(args.path, args.resolveDir)))) return
+      return { path: args.path, external: true }
+    })
+  },
+}
+
+const NODE_MODULES = "/node_modules/"
+
+/** The installed package that holds `file`: its root, and the file's path in it. */
+const installedAt = (file: string) => {
+  const at = file.lastIndexOf(NODE_MODULES)
+  if (at < 0) return Option.none<{ readonly root: string; readonly inPackage: string }>()
+  const parts = file.slice(at + NODE_MODULES.length).split("/")
+  let depth = 1
+  if (parts[0]?.startsWith("@")) depth = 2
+  return Option.some({
+    root: file.slice(0, at + NODE_MODULES.length) + parts.slice(0, depth).join("/"),
+    inPackage: parts.slice(depth).join("/"),
+  })
+}
+
+/** The deepest directory that holds every one of `files`. */
+const sharedDirectory = (files: ReadonlyArray<string>): string => {
+  let shared = path.dirname(files[0] ?? "/").split("/")
+  for (const file of files) {
+    const parts = path.dirname(file).split("/")
+    let same = 0
+    while (same < shared.length && shared[same] === parts[same]) same += 1
+    shared = shared.slice(0, same)
+  }
+  return shared.join("/") || "/"
+}
+
+/**
+ * The name of the program `entry` runs, from the code it loads now: every file
+ * of its bundle (Bun's own record of the build's inputs, installed packages
+ * among them), each by its path and its content's hash, and the Bun that
+ * runs it. The name does not move with the program's place: a file of an
+ * installed package goes by the package's name, version and its path in it
+ * (the install's layout aside), any other by its path from the directory
+ * that holds them all. A package built for one platform (its `os` names one
+ * system) is left out, so one program has one name on each platform. An
+ * import that resolves nowhere is no part of the bundle.
+ *
+ * None when the build fails or a file does not read. A compiled build names
+ * its program as it builds (`apps/tui/scripts/build.ts`); a source run names
+ * the program it loaded once (`loadedProgramSource`).
+ */
+export const programSource = (
+  entry: string,
+): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem> =>
+  nameProgram(entry, Option.none())
+
+/**
+ * The name of the program `entry` runs, as this process loaded it: none when
+ * a file of it changed after this process started, since the files would not
+ * be the code this process loaded.
+ */
+const loadedProgramSource = (
+  entry: string,
+): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem> =>
+  nameProgram(entry, Option.some(performance.timeOrigin))
+
+/** `programSource`; with `loadedAt`, none when a file changed after that time. */
+const nameProgram = (
+  entry: string,
+  loadedAt: Option.Option<number>,
+): Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        Bun.build({
+          entrypoints: [entry],
+          target: "bun",
+          format: "esm",
+          metafile: true,
+          throw: false,
+          plugins: [keepUnresolvedExternal],
+        }),
+      catch: (cause) => new ModuleBundleError({ entry, message: causeMessage(cause) }),
+    })
+    const metafile = Option.fromNullishOr(result.metafile)
+    if (!result.success || Option.isNone(metafile)) {
+      const message = result.logs.map(buildLogLine).join("\n") || "the build recorded no inputs"
+      return yield* new ModuleBundleError({ entry, message })
+    }
+    const files = Object.keys(metafile.value.inputs).map((input) =>
+      path.resolve(process.cwd(), input),
+    )
+    const roots = new Set(
+      files.flatMap((file) => Option.toArray(installedAt(file))).map((at) => at.root),
+    )
+    const manifests = new Map(
+      yield* Effect.forEach(
+        roots,
+        (root) =>
+          fs.readFileString(path.join(root, "package.json")).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(PackageManifest)),
+            Effect.map((manifest) => [root, manifest] as const),
+          ),
+        { concurrency: 32 },
+      ),
+    )
+    const base = sharedDirectory(files.filter((file) => Option.isNone(installedAt(file))))
+    const named = yield* Effect.forEach(
+      files,
+      (file) =>
+        Effect.gen(function* () {
+          let name = path.relative(base, file)
+          const installed = installedAt(file)
+          if (Option.isSome(installed)) {
+            const manifest = manifests.get(installed.value.root)
+            if (manifest?.os?.length === 1) return Option.none<string>()
+            name = `${manifest?.name ?? ""}@${manifest?.version ?? ""}/${installed.value.inPackage}`
+          }
+          // Read, then check the time: a change after the read moved the time too.
+          const bytes = yield* fs.readFile(file)
+          if (Option.isSome(loadedAt)) {
+            const changed = (yield* fs.stat(file)).mtime.pipe(
+              Option.match({
+                onNone: () => true,
+                onSome: (time) => time.getTime() > loadedAt.value,
+              }),
+            )
+            if (changed) {
+              return yield* new ModuleBundleError({
+                entry,
+                message: `${file} changed after this process started`,
+              })
+            }
+          }
+          return Option.some(
+            `${name}\0${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`,
+          )
+        }),
+      { concurrency: 32 },
+    )
+    const hasher = new Bun.CryptoHasher("sha256").update(`gent program 1\nbun ${Bun.version}\n`)
+    for (const line of named.flatMap(Option.toArray).sort()) hasher.update(`${line}\n`)
+    return Option.some(hasher.digest("hex"))
+  }).pipe(
+    Effect.tapError((error) =>
+      Effect.logWarning("the program this process runs is not named").pipe(
+        Effect.annotateLogs({ entry, error: String(error) }),
+      ),
+    ),
+    Effect.orElseSucceed(() => Option.none<string>()),
+  )
+
+/**
+ * The program this process runs: the compiled build's embedded name, or the
+ * name of the program `Bun.main` runs. A compiled build with no embedded
+ * name has none.
+ */
+const thisSource: Effect.Effect<Option.Option<string>, never, FileSystem.FileSystem> = Option.match(
+  compiledDefine,
+  {
+    onNone: () => loadedProgramSource(Bun.main),
+    onSome: (define) => Effect.succeed(Option.fromUndefinedOr(define.source)),
+  },
+)
 
 /**
  * The real path of the running executable, resolved once as the process
@@ -296,8 +462,8 @@ const transcodeBunImage = (bytes: Uint8Array, options: ImageTranscode) =>
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.effect(
   GentPlatform,
   Effect.gen(function* () {
-    // The services the layer was built with: the source is read on the first ask.
-    const services = yield* Effect.context<Path.Path | ChildProcessSpawner.ChildProcessSpawner>()
+    // The services the layer was built with: the program is named on the first ask, once.
+    const services = yield* Effect.context<FileSystem.FileSystem>()
     const source = yield* Effect.cached(Effect.provideContext(thisSource, services))
     return GentPlatform.of({
       bindModules: bindBunModules,

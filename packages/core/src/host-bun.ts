@@ -2,8 +2,9 @@
  * The Bun host: what a process on Bun adds to `host` to compose and run gent.
  * Its platform (`BunPlatformLive`: Bun's services, the fetch client,
  * `GentPlatform` and the provider lock file), its SQLite clients
- * (`BunSqlite`), its module binding (`bindBunModules`, `BunHostModules`).
- * Everything else a host composes is portable and lives in `host`, which a
+ * (`BunSqlite`), its module binding (`bindBunModules`, `BunHostModules`),
+ * and the name of the program an entry runs (`programSource`), which the
+ * build embeds. Everything else a host composes is portable and lives in `host`, which a
  * Worker or a Durable Object root loads without Bun.
  */
 export {
@@ -11,4 +12,5 @@ export {
   BunHostModules,
   BunPlatformLive,
   BunSqlite,
+  programSource,
 } from "./runtime/gent-platform-bun.js"

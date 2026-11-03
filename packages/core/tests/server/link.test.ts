@@ -32,7 +32,7 @@ import {
   UserConfig,
 } from "../../src/runtime/config"
 import { GentPlatform, runProcess } from "../../src/runtime/gent-platform"
-import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { BunGentPlatformLive, programSource } from "../../src/runtime/gent-platform-bun"
 import { type LaneReport, PoolFacts } from "../../src/domain/driver"
 import { ProviderId } from "../../src/domain/agent"
 import { CredentialSlot } from "../../src/domain/ids"
@@ -53,6 +53,8 @@ import { e2ePreset } from "../helpers/test-preset"
 /** The test platform's host name: this server's machine name. */
 const OWN = "test-host"
 const encodeFacts = Schema.encodeSync(Schema.fromJsonString(PoolFacts))
+/** A string as a quoted JSON (and TypeScript) literal. */
+const encodeText = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 const FAR_FACTS = encodeFacts({ boot: "far-boot", host: "far", seq: 0, providers: [] })
 
 /**
@@ -459,13 +461,19 @@ describe("linked machines", () => {
             }),
           ),
         })
+        // Wait for both links to settle: each link answers on its own time.
         const linked = (report: LaneReport) =>
-          report.peers?.some(
+          (report.peers?.some(
             (peer) =>
               peer.machine === "b" &&
               Predicate.isNotUndefined(peer.heardAt) &&
               peer.link?.state === "connected",
-          ) ?? false
+          ) ??
+            false) &&
+          (report.peers?.some(
+            (peer) => peer.machine === "c" && peer.link?.state === "incompatible",
+          ) ??
+            false)
         let report = yield* client.accounts.lanes()
         for (let tries = 0; tries < 400 && !linked(report); tries++) {
           yield* wallSleep(20)
@@ -1306,7 +1314,7 @@ describe("the link's contract", () => {
   )
 
   it.live(
-    "two fresh processes of this checkout compute this process's contract",
+    "two fresh processes of one program compute one contract; this test's program has another",
     () =>
       Effect.gen(function* () {
         const path = yield* Path.Path
@@ -1320,11 +1328,441 @@ describe("the link's contract", () => {
             ),
           { concurrency: 2 },
         )
-        expect(fresh).toEqual([
-          { contract: own, exitCode: 0 },
-          { contract: own, exitCode: 0 },
-        ])
+        expect(fresh[0]).toEqual(fresh[1])
+        expect(fresh[0]?.exitCode).toBe(0)
+        expect(fresh[0]?.contract).not.toBe(own)
       }).pipe(Effect.provide(BunTestServices)),
     30_000,
+  )
+})
+
+// ── the program a contract names ────────────────────────────────────────────
+
+/** A check of a generated program: a pattern, its flags, a bound. */
+interface ProgramRule {
+  readonly pattern: string
+  readonly flags: string
+  readonly min: number
+}
+
+/**
+ * A generated program. `rules` are the checks of its own modules, `table` a
+ * generated module that git ignores and the program imports, `installed` the
+ * check of an installed package it imports. `docs` (tracked) and `cache`
+ * (ignored) are files the program does not import. `configured` sets git
+ * options that change how git prints a diff.
+ */
+interface ProgramParts {
+  readonly rules: ReadonlyArray<ProgramRule>
+  readonly table: string
+  readonly installed: ProgramRule
+  readonly docs: string
+  readonly cache: string
+  readonly configured: boolean
+}
+
+type Random = (below: number) => number
+
+const PROGRAM_FLAGS = ["", "i", "m", "s", "u"]
+const PROGRAM_WORDS = ["alpha", "beta", "gamma", "delta", "omega"]
+const programWord = (random: Random) =>
+  `${PROGRAM_WORDS[random(PROGRAM_WORDS.length)] ?? "alpha"}${String(random(1000))}`
+const programRule = (random: Random): ProgramRule => ({
+  pattern: programWord(random),
+  flags: PROGRAM_FLAGS[random(PROGRAM_FLAGS.length)] ?? "",
+  min: random(100),
+})
+/** A flag set other than `flags`. */
+const otherFlags = (flags: string, random: Random) => {
+  const others = PROGRAM_FLAGS.filter((flag) => flag !== flags)
+  return others[random(others.length)] ?? "g"
+}
+
+const generateProgram = (random: Random): ProgramParts => ({
+  rules: Array.from({ length: 1 + random(4) }, () => programRule(random)),
+  table: programWord(random),
+  installed: programRule(random),
+  docs: programWord(random),
+  cache: programWord(random),
+  configured: false,
+})
+
+const ruleText = (rule: ProgramRule) =>
+  `export const rule = { pattern: /${rule.pattern}/${rule.flags}, min: ${String(rule.min)} }\n`
+
+/** The files of `parts`, each path under the program's directory with its text. */
+const programFiles = (parts: ProgramParts): ReadonlyArray<readonly [string, string]> => [
+  [".gitignore", "node_modules/\ngen/\nignored/\n"],
+  ["package.json", '{ "name": "fixture", "private": true }\n'],
+  ...parts.rules.map((rule, index) => [`src/rule-${String(index)}.ts`, ruleText(rule)] as const),
+  [
+    "src/main.ts",
+    [
+      ...parts.rules.map(
+        (_, index) => `import { rule as rule${String(index)} } from "./rule-${String(index)}.ts"`,
+      ),
+      'import { table } from "../gen/table.ts"',
+      'import { rule as installed } from "@fixture/checks"',
+      `console.log([${parts.rules.map((_, index) => `rule${String(index)}`).join(", ")}], table, installed)`,
+      "",
+    ].join("\n"),
+  ],
+  ["gen/table.ts", `export const table = "${parts.table}"\n`],
+  [
+    "node_modules/@fixture/checks/package.json",
+    '{ "name": "@fixture/checks", "version": "1.0.0", "main": "index.js" }\n',
+  ],
+  ["node_modules/@fixture/checks/index.js", ruleText(parts.installed)],
+  ["docs/notes.md", `# ${parts.docs}\n`],
+  ["ignored/cache.txt", `${parts.cache}\n`],
+]
+
+/** Git with no user or system config, and one fixed date: one tree, one commit. */
+const fixtureGit = (directory: string, args: ReadonlyArray<string>) =>
+  runProcess("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.com", ...args], {
+    cwd: directory,
+    env: {
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_DATE: "2026-11-03T00:00:00Z",
+      GIT_COMMITTER_DATE: "2026-11-03T00:00:00Z",
+    },
+    extendEnv: true,
+    stdout: "ignore",
+  }).pipe(Effect.flatMap(({ exitCode }) => Effect.succeed(expect(exitCode).toBe(0))))
+
+/** Writes `parts` into `directory` over what is there. */
+const writeProgram = (directory: string, parts: ProgramParts) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    for (const [file, text] of programFiles(parts)) {
+      yield* fs.makeDirectory(path.dirname(path.join(directory, file)), { recursive: true })
+      yield* fs.writeFileString(path.join(directory, file), text)
+    }
+    if (parts.configured) {
+      yield* fixtureGit(directory, ["config", "diff.noprefix", "true"])
+      yield* fixtureGit(directory, ["config", "diff.mnemonicPrefix", "true"])
+      yield* fixtureGit(directory, ["config", "core.quotePath", "false"])
+    }
+  })
+
+/** A checkout of `parts` at `directory`, committed; `dirty` leaves a change to it uncommitted. */
+const checkoutProgram = (directory: string, parts: ProgramParts, dirty: boolean) =>
+  Effect.gen(function* () {
+    yield* writeProgram(directory, parts)
+    yield* fixtureGit(directory, ["init", "-q"])
+    yield* fixtureGit(directory, ["add", "-A"])
+    yield* fixtureGit(directory, ["commit", "-q", "--no-verify", "-m", "fixture"])
+    if (!dirty) return parts
+    const [first, ...rest] = parts.rules
+    const working = { ...parts, rules: [{ ...first!, min: first!.min + 1000 }, ...rest] }
+    yield* writeProgram(directory, working)
+    return working
+  })
+
+/** A change to a program; `same` when the changed program loads the same code. */
+interface ProgramChange {
+  readonly name: string
+  readonly same: boolean
+  readonly apply: (parts: ProgramParts, random: Random) => ProgramParts
+}
+
+/** `parts` with its rule at a generated index changed by `change`. */
+const changeRule = (
+  parts: ProgramParts,
+  random: Random,
+  change: (rule: ProgramRule) => ProgramRule,
+) => {
+  const at = random(parts.rules.length)
+  const rules = [...parts.rules]
+  rules[at] = change(parts.rules[at]!)
+  return { ...parts, rules }
+}
+
+const PROGRAM_CHANGES: ReadonlyArray<ProgramChange> = [
+  {
+    name: "a schema's check",
+    same: false,
+    apply: (parts, random) =>
+      changeRule(parts, random, (rule) => ({ ...rule, flags: otherFlags(rule.flags, random) })),
+  },
+  {
+    name: "a tracked file",
+    same: false,
+    apply: (parts, random) => changeRule(parts, random, (rule) => ({ ...rule, min: rule.min + 1 })),
+  },
+  {
+    name: "a bundled file git ignores",
+    same: false,
+    apply: (parts) => ({ ...parts, table: `${parts.table}x` }),
+  },
+  {
+    name: "an installed package's contents",
+    same: false,
+    apply: (parts, random) => ({
+      ...parts,
+      installed: { ...parts.installed, flags: otherFlags(parts.installed.flags, random) },
+    }),
+  },
+  {
+    name: "an ignored file",
+    same: true,
+    apply: (parts) => ({ ...parts, cache: `${parts.cache}x` }),
+  },
+  {
+    name: "a doc outside the bundle",
+    same: true,
+    apply: (parts) => ({ ...parts, docs: `${parts.docs}x` }),
+  },
+  {
+    name: "the git config",
+    same: true,
+    apply: (parts) => ({ ...parts, configured: true }),
+  },
+]
+
+const PROGRAMS = 40
+const PROGRAM_SEED = 20_261_104
+
+/** The contract of the program at `directory`, run from `src/main.ts`; its source must be named. */
+const programContract = (directory: string) =>
+  Effect.gen(function* () {
+    const source = yield* programSource(`${directory}/src/main.ts`)
+    expect(Option.isSome(source), directory).toBe(true)
+    return yield* linkContract.pipe(withSource(source))
+  })
+
+/**
+ * Two copies of one generated program, at two paths: `changes` applied to
+ * the second. Each case is a checkout at the first path, copied to the
+ * second, and changed there.
+ */
+const comparePrograms = (
+  parts: ProgramParts,
+  dirty: boolean,
+  changes: ReadonlyArray<ProgramChange>,
+  random: Random,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* makeTempDirectoryScoped("gent-program-")
+      const first = `${root}/first`
+      const second = `${root}/second/at/another/depth`
+      const working = yield* checkoutProgram(first, parts, dirty)
+      yield* fs.makeDirectory(second, { recursive: true })
+      yield* fs.copy(first, second, { overwrite: true })
+      yield* writeProgram(
+        second,
+        changes.reduce((changed, change) => change.apply(changed, random), working),
+      )
+      return [yield* programContract(first), yield* programContract(second)] as const
+    }),
+  )
+
+/** Writes the module `main` imports, `local.ts` beside it, holding `text`. */
+const writeLocal = (main: string, text: string) =>
+  Effect.flatMap(Path.Path, (path) =>
+    Effect.flatMap(FileSystem.FileSystem, (fs) =>
+      fs.writeFileString(
+        path.join(path.dirname(main), "local.ts"),
+        `export const local = "${text}"\n`,
+      ),
+    ),
+  )
+
+/**
+ * A program in a scratch directory: a `main.ts` that imports its `local.ts`
+ * and runs `link-contract.ts`, so the contract it prints names it. Its path.
+ */
+const contractProgram = (local: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const directory = yield* makeTempDirectoryScoped("gent-loaded-")
+    const helper = yield* path.fromFileUrl(new URL("./link-contract.ts", import.meta.url))
+    const main = path.join(directory, "main.ts")
+    yield* fs.writeFileString(
+      main,
+      `export { local } from "./local.ts"\nimport ${encodeText(helper)}\n`,
+    )
+    yield* writeLocal(main, local)
+    return main
+  })
+
+/** `main` running in `mode` (`link-contract.ts`): its next line, and a line sent to it. */
+const runContractProgram = (main: string, mode: string) =>
+  Effect.gen(function* () {
+    const input = yield* Queue.unbounded<Uint8Array>()
+    const lines = yield* Queue.unbounded<string>()
+    const child = yield* ChildProcess.make(process.execPath, [main, mode], {
+      stdin: Stream.fromQueue(input),
+      stdout: "pipe",
+      stderr: "ignore",
+      forceKillAfter: "2 seconds",
+    })
+    yield* child.stdout.pipe(
+      Stream.decodeText,
+      Stream.splitLines,
+      Stream.runForEach((line) => Queue.offer(lines, line)),
+      Effect.forkScoped,
+    )
+    return {
+      line: Queue.take(lines).pipe(Effect.timeout("20 seconds")),
+      send: Queue.offer(input, new TextEncoder().encode("go\n")),
+    }
+  })
+
+/** The contracts two fresh processes of `main` print. */
+const freshContracts = (main: string) =>
+  Effect.forEach(
+    [1, 2],
+    () => Effect.map(runProcess(process.execPath, [main]), ({ stdout }) => stdout.trim()),
+    { concurrency: 2 },
+  )
+
+describe("the program a contract names", () => {
+  it.live(
+    `${PROGRAMS} generated programs (seed ${PROGRAM_SEED}): a change to the loaded code changes the contract, any other change does not`,
+    () =>
+      Effect.gen(function* () {
+        const random = seeded(PROGRAM_SEED)
+        const reached = new Set<string>()
+        const same = PROGRAM_CHANGES.filter((change) => change.same)
+        const different = PROGRAM_CHANGES.filter((change) => !change.same)
+        for (let program = 0; program < PROGRAMS; program++) {
+          const parts = generateProgram(random)
+          const changes = Array.from(
+            { length: random(3) },
+            () => same[random(same.length)] ?? same[0]!,
+          )
+          if (random(2) === 1) changes.push(different[random(different.length)] ?? different[0]!)
+          const names = changes.map((change) => change.name)
+          for (const name of names) reached.add(name)
+          const [first, second] = yield* comparePrograms(parts, random(2) === 1, changes, random)
+          expect(first === second, `program ${String(program)}: ${names.join(", ")}`).toBe(
+            changes.every((change) => change.same),
+          )
+        }
+        expect([...reached].sort()).toEqual(PROGRAM_CHANGES.map((change) => change.name).sort())
+      }).pipe(Effect.provide(Layer.mergeAll(BunTestServices, BunGentPlatformLive))),
+    120_000,
+  )
+
+  it.live(
+    "an installed package whose check differs by a regex flag, on one commit, changes the contract",
+    () =>
+      Effect.gen(function* () {
+        const parts = generateProgram(seeded(PROGRAM_SEED))
+        const flagged: ProgramChange = {
+          name: "the installed check's flag",
+          same: false,
+          apply: () => ({
+            ...parts,
+            installed: { ...parts.installed, flags: otherFlags(parts.installed.flags, seeded(1)) },
+          }),
+        }
+        const [first, second] = yield* comparePrograms(parts, false, [flagged], seeded(1))
+        expect(first).not.toBe(second)
+      }).pipe(Effect.provide(Layer.mergeAll(BunTestServices, BunGentPlatformLive))),
+    30_000,
+  )
+
+  it.live(
+    "a package built for one platform is no part of the program; a portable one is",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const root = yield* makeTempDirectoryScoped("gent-platform-package-")
+          /** A program that imports one package, whose `package.json` names `os`. */
+          const nativeProgram = (directory: string, os: string, body: string) =>
+            Effect.gen(function* () {
+              const native = `${directory}/node_modules/@fixture/native`
+              yield* fs.makeDirectory(native, { recursive: true })
+              yield* fs.writeFileString(
+                `${directory}/main.ts`,
+                'import { body } from "@fixture/native"\nconsole.log(body)\n',
+              )
+              yield* fs.writeFileString(
+                `${native}/package.json`,
+                `{ "name": "@fixture/native", "version": "1.0.0", "main": "index.js", "os": ${os} }\n`,
+              )
+              yield* fs.writeFileString(`${native}/index.js`, `export const body = "${body}"\n`)
+              return yield* programSource(`${directory}/main.ts`)
+            })
+          const one = '["darwin"]'
+          const two = '["darwin", "linux"]'
+          const darwin = yield* nativeProgram(`${root}/a`, one, "darwin build")
+          expect(Option.isSome(darwin)).toBe(true)
+          expect(yield* nativeProgram(`${root}/b`, one, "linux build")).toEqual(darwin)
+          expect(yield* nativeProgram(`${root}/c`, two, "one build")).not.toEqual(
+            yield* nativeProgram(`${root}/d`, two, "another build"),
+          )
+        }),
+      ).pipe(Effect.provide(BunTestServices)),
+    30_000,
+  )
+
+  it.live(
+    "a process names the program it loaded: an edit after it started moves a fresh process's contract, not its own",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const main = yield* contractProgram("loaded")
+          const held = yield* runContractProgram(main, "hold")
+          const loaded = yield* held.line
+          yield* writeLocal(main, "edited")
+          yield* held.send
+          expect(yield* held.line).toBe(loaded)
+          const fresh = yield* freshContracts(main)
+          expect(fresh[0]).toBe(fresh[1])
+          expect(fresh[0]).not.toBe(loaded)
+        }),
+      ).pipe(Effect.provide(BunTestServices)),
+    60_000,
+  )
+
+  it.live(
+    "a process that reads its program after an edit names none: it matches neither program",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const main = yield* contractProgram("loaded")
+          const before = yield* freshContracts(main)
+          const lazy = yield* runContractProgram(main, "lazy")
+          expect(yield* lazy.line).toBe("started")
+          yield* writeLocal(main, "edited")
+          yield* lazy.send
+          const answered = yield* lazy.line
+          const after = yield* freshContracts(main)
+          expect(before[0]).toBe(before[1])
+          expect(after[0]).toBe(after[1])
+          expect([before[0], after[0]]).not.toContain(answered)
+        }),
+      ).pipe(Effect.provide(BunTestServices)),
+    60_000,
+  )
+
+  it.live("the links read the program's name as the server starts, before any hello", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const read = yield* Deferred.make<boolean>()
+        yield* linksOver({}).pipe(
+          Effect.provideServiceEffect(
+            GentPlatform,
+            Effect.gen(function* () {
+              const platform = yield* GentPlatform
+              return GentPlatform.of({
+                ...platform,
+                source: Effect.as(Deferred.succeed(read, true), Option.some("program")),
+              })
+            }),
+          ),
+        )
+        expect(yield* Deferred.await(read).pipe(Effect.timeout("5 seconds"))).toBe(true)
+      }),
+    ).pipe(Effect.provide(platformLayer)),
   )
 })
