@@ -926,6 +926,16 @@ export const makeLoopInbox = (
         // Build the next queue first: a retry of a queued id replaces in
         // place, so only an admission that grows the queue past the cap fails.
         const nextQueue = appendFollowUpQueueState(current.queue, item)
+        // A retry of a queued id keeps the first send's decision: the loop
+        // holds the id in one place, and the queue starts it. A queued
+        // follow-up takes the retry in place; a waiting steer stays as it is.
+        const sameId = (queued: QueuedTurnItem) => queued.message.id === item.message.id
+        if (current.queue.steering.some(sameId)) {
+          return { value: Option.none(), next: current, persist: false }
+        }
+        if (current.queue.followUp.some(sameId)) {
+          return { value: Option.none(), next: { ...current, queue: nextQueue }, persist: true }
+        }
         if (
           nextQueue.followUp.length > current.queue.followUp.length &&
           nextQueue.followUp.length > FOLLOW_UP_QUEUE_MAX
@@ -1396,8 +1406,10 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
    * Drops a turn that was admitted as the next run but has not started. It
    * takes no side-mutation permit: a re-entrant caller (an extension request
    * or hook) already holds it, and the `RemoveFollowUp` handler holds none.
-   * The admission gate serializes it against the worker's claim, and the
-   * in-flight marker proves the turn is only queued. The next queued item (if
+   * The admission gate serializes it against the worker's claim. The
+   * in-flight marker means "admitted, message not stored": a queue take sets
+   * it, and so does a direct admission (`admit`), so a direct admission whose
+   * worker has not yet claimed it can be withdrawn too. The next queued item (if
    * any) takes its place under the interrupt permit, as every other hand-over
    * does, so an interrupt latched for the withdrawn turn never stops it.
    */

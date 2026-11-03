@@ -5600,6 +5600,54 @@ describe("loop inbox", () => {
     ),
   )
 
+  // A send queued on a cold loop, then retried once the loop is warm and idle:
+  // the retry keeps the first send's decision. Held twice (queued and in
+  // flight), a take-back of the queued copy would leave a start to withdraw.
+  it.effect("a retried queued follow-up is held once", () =>
+    withInbox(
+      ({ inbox, loopRef }) =>
+        Effect.gen(function* () {
+          yield* inbox.admit({ message: queuedMessage("retried", "first") }, { queueOnly: true })
+          const retry = yield* inbox.admit(
+            { message: queuedMessage("retried", "first (retry)") },
+            { queueOnly: false },
+          )
+          expect(retry).toEqual(Option.none())
+          const state = yield* TxSubscriptionRef.get(loopRef)
+          expect(state.queue.inFlight).toBeUndefined()
+          expect(state.startingState).toBeUndefined()
+          expect(state.state._tag).toBe("Idle")
+          expect(
+            state.queue.followUp.map((item) => [
+              String(item.message.id),
+              messagePartsText(item.message.parts),
+            ]),
+          ).toEqual([["retried", "first (retry)"]])
+        }),
+      buildInitialAgentLoopState({ state: buildIdleState() }),
+    ),
+  )
+
+  it.effect("a follow-up that repeats a waiting steer's id is held once", () =>
+    withInbox(
+      ({ inbox, loopRef }) =>
+        Effect.gen(function* () {
+          yield* inbox.steer({ message: queuedMessage("steered", "steer") })
+          const repeat = yield* inbox.admit(
+            { message: queuedMessage("steered", "steer (as follow-up)") },
+            { queueOnly: false },
+          )
+          expect(repeat).toEqual(Option.none())
+          const state = yield* TxSubscriptionRef.get(loopRef)
+          expect(state.queue.inFlight).toBeUndefined()
+          expect(state.startingState).toBeUndefined()
+          expect(state.queue.followUp).toEqual([])
+          expect(state.queue.steering.map((item) => String(item.message.id))).toEqual(["steered"])
+        }),
+      buildInitialAgentLoopState({ state: buildIdleState() }),
+    ),
+  )
+
   // The work a restart left starts before anything queued while recovery was
   // deferred: the promotion reserves its start as it ends the deferral, so
   // an admission or a take that runs before that start is forked finds the
