@@ -2501,6 +2501,27 @@ describe("the tree a release names", () => {
       ).pipe(Effect.provide(bunPlatformLayer)),
   )
 
+  it.live("a tracked path whose bytes are not UTF-8 names no release", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const directory = yield* treeDirectory
+        yield* checkout(directory, "one")
+        // The index holds any bytes as a path, whatever the file system allows.
+        const entry = Buffer.concat([
+          Buffer.from("100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391\tcaf"),
+          Uint8Array.of(0xe9, 0x2e, 0x74, 0x73, 0),
+        ])
+        const staged = yield* runProcess(
+          "git",
+          ["-C", directory, "update-index", "-z", "--index-info"],
+          { stdin: Stream.make(entry) },
+        )
+        expect(staged.exitCode).toBe(0)
+        expect((yield* noRelease(directory)).reason).toContain("not UTF-8")
+      }),
+    ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
   it.live(
     "a user's global ignore hides nothing from the tree: an untracked file it lists still moves the tree, whatever HOME, XDG_CONFIG_HOME or GIT_CONFIG_GLOBAL name",
     () =>

@@ -111,6 +111,9 @@ const GITLINK_MODE = "160000"
 /** The tree entries a regular `bun.lock` can be: a file, executable or not. */
 const LOCK_ENTRIES = new Set(["100644 bun.lock", "100755 bun.lock"])
 
+/** What the UTF-8 decoder writes for bytes it cannot decode: a path holding it was not read whole. */
+const UNDECODED = String.fromCodePoint(0xfffd)
+
 /**
  * What every capture call pins, whatever the repository or the user
  * configures: attributes from the empty tree (no filter, diff driver,
@@ -287,7 +290,7 @@ export const captureRelease = (
       // `add -A` rereads every one from the working tree.
       const tracked = (yield* releaseGit(root, ["ls-files", "--stage", "-z"], isolated, pins))
         .stdout
-      if (tracked.includes("�")) {
+      if (tracked.includes(UNDECODED)) {
         return yield* new NoRelease({ reason: "a tracked path is not UTF-8" })
       }
       yield* releaseGit(
