@@ -2224,17 +2224,39 @@ const userEnvironment = (values: Readonly<Record<string, string>>) =>
       }),
   )
 
-/** What the repository holds: its object counts, its index's bytes and the time it was written. */
-const repositoryState = (directory: string) =>
+/** Every entry of a git directory, itself first: its relative path, then its bytes' hash (a file) or its kind, then the time it was written. */
+const gitDirectoryState = (gitDirectory: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const counted = yield* runProcess("git", ["-C", directory, "count-objects", "-v"])
-    const written = (yield* fs.stat(`${directory}/.git/index`)).mtime
-    return {
-      objects: counted.stdout,
-      index: sha256Hex(yield* fs.readFile(`${directory}/.git/index`)),
-      written: Option.map(written, (date) => date.getTime()),
+    const entries = (yield* fs.readDirectory(gitDirectory, { recursive: true })).toSorted()
+    const state: Array<string> = []
+    for (const entry of ["", ...entries]) {
+      const at = `${gitDirectory}/${entry}`
+      const info = yield* fs.stat(at)
+      let content: string = info.type
+      if (info.type === "File") content = sha256Hex(yield* fs.readFile(at))
+      const written = Option.map(info.mtime, (date) => date.getTime())
+      state.push(`${entry} ${content} ${String(Option.getOrElse(written, () => 0))}`)
     }
+    return state
+  })
+
+/**
+ * `effect` writes nothing under `gitDirectory`: every entry is set to a time
+ * in the past first, so a rewrite of the same bytes, a freshened file and a
+ * file made and removed in a directory (which moves the directory's time)
+ * still show, and no entry comes or goes.
+ */
+const leavesGitDirectory = <A, E, R>(gitDirectory: string, effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const entries = yield* fs.readDirectory(gitDirectory, { recursive: true })
+    for (const entry of ["", ...entries]) yield* fs.utimes(`${gitDirectory}/${entry}`, 1_000, 1_000)
+    const before = yield* gitDirectoryState(gitDirectory)
+    expect(before.length).toBeGreaterThan(10)
+    const result = yield* effect
+    expect(yield* gitDirectoryState(gitDirectory), `${gitDirectory} as it was`).toEqual(before)
+    return result
   })
 
 /** One case per edit, so each one starts a case. */
@@ -2314,16 +2336,15 @@ describe("the tree a release names", () => {
   )
 
   it.live(
-    "a capture writes nothing into the repository: its objects and its index stay as they were, byte for byte and in time, clean or dirty",
+    "a capture writes nothing into the repository: every entry of its git directory stays as it was, byte for byte and in time, clean or dirty",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
           const directory = yield* treeDirectory
+          const gitDirectory = `${directory}/.git`
           yield* checkout(directory, "one")
-          const clean = yield* repositoryState(directory)
-          yield* captureRelease(directory)
-          expect(yield* repositoryState(directory)).toEqual(clean)
+          yield* leavesGitDirectory(gitDirectory, captureRelease(directory))
           // An index a capture would rewrite if it refreshed it: staged,
           // force-added, intended-to-add and flagged entries whose stats
           // no longer match the working files.
@@ -2336,16 +2357,67 @@ describe("the tree a release names", () => {
           yield* fs.writeFileString(`${directory}/src/old.ts`, "export const old = 2\n")
           yield* fs.writeFileString(`${directory}/cache/staged.ts`, "export const staged = 2\n")
           yield* fs.writeFileString(`${directory}/src/added.ts`, "export const added = 1\n")
-          // Written in the past (seconds since the epoch), so a rewrite of the
-          // same bytes still shows.
-          yield* fs.utimes(`${directory}/.git/index`, 1_000, 1_000)
-          const before = yield* repositoryState(directory)
-          const dirty = yield* captureRelease(directory)
+          const dirty = yield* leavesGitDirectory(gitDirectory, captureRelease(directory))
           expect(dirty.tree).not.toBe(yield* headTree(directory))
-          expect(yield* repositoryState(directory)).toEqual(before)
           // The tree the capture named is not in the repository either.
           const asked = yield* runProcess("git", ["-C", directory, "cat-file", "-e", dirty.tree])
           expect(asked.exitCode).not.toBe(0)
+        }),
+      ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live(
+    "a capture over a split index, an untracked cache or a linked worktree writes nothing into either git directory, and names the working bytes of every path the index tracks; a split index whose shared file is gone names no release",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          // A split index: git freshens its shared file whenever it reads it.
+          const split = yield* treeDirectory
+          yield* checkout(split, "one")
+          const clean = yield* treeOf(split)
+          yield* fixtureGit(split, ["update-index", "--split-index"])
+          yield* writeBytes(split, "cache/staged.ts", utf8("export const staged = 1\n"))
+          yield* fixtureGit(split, ["add", "-f", "cache/staged.ts"])
+          const shared = (yield* fs.readDirectory(`${split}/.git`)).filter((name) =>
+            name.startsWith("sharedindex."),
+          )
+          expect(shared.length).toBeGreaterThan(0)
+          const staged = yield* leavesGitDirectory(`${split}/.git`, treeOf(split))
+          expect(staged).not.toBe(clean)
+          yield* fs.writeFileString(`${split}/cache/staged.ts`, "export const staged = 2\n")
+          const edited = yield* leavesGitDirectory(`${split}/.git`, treeOf(split))
+          expect(edited).not.toBe(staged)
+          // The shared file gone: the index cannot be read whole, so no release.
+          for (const name of shared) yield* fs.remove(`${split}/.git/${name}`)
+          const missing = yield* leavesGitDirectory(`${split}/.git`, noRelease(split))
+          expect(missing.reason).toContain("sharedindex.")
+          // An untracked cache in the index, filled by a status.
+          const cached = yield* treeDirectory
+          yield* checkout(cached, "one")
+          yield* fixtureGit(cached, ["config", "core.untrackedCache", "true"])
+          yield* fixtureGit(cached, ["update-index", "--untracked-cache"])
+          yield* fs.writeFileString(`${cached}/src/added.ts`, "export const added = 1\n")
+          yield* fixtureGit(cached, ["status", "--porcelain"])
+          const untracked = yield* leavesGitDirectory(`${cached}/.git`, treeOf(cached))
+          yield* fs.writeFileString(`${cached}/src/added.ts`, "export const added = 2\n")
+          const moved = yield* leavesGitDirectory(`${cached}/.git`, treeOf(cached))
+          expect(moved).not.toBe(untracked)
+          // A linked worktree with its own split index: its per-worktree git
+          // directory lives inside the common one, so one walk covers both.
+          const main = yield* treeDirectory
+          const other = yield* treeDirectory
+          const linked = `${other}/linked`
+          yield* checkout(main, "one")
+          yield* fixtureGit(main, ["worktree", "add", "-q", "--detach", linked, "HEAD"])
+          yield* fixtureGit(linked, ["update-index", "--split-index"])
+          yield* writeBytes(linked, "cache/staged.ts", utf8("export const staged = 1\n"))
+          yield* fixtureGit(linked, ["add", "-f", "cache/staged.ts"])
+          const own = yield* leavesGitDirectory(`${main}/.git`, treeOf(linked))
+          yield* fs.writeFileString(`${linked}/cache/staged.ts`, "export const staged = 2\n")
+          const ownEdited = yield* leavesGitDirectory(`${main}/.git`, treeOf(linked))
+          expect(ownEdited).not.toBe(own)
+          expect(yield* leavesGitDirectory(`${main}/.git`, treeOf(main))).toBe(clean)
         }),
       ).pipe(Effect.provide(bunPlatformLayer)),
   )
@@ -2519,6 +2591,24 @@ describe("the tree a release names", () => {
         )
         expect(staged.exitCode).toBe(0)
         expect((yield* noRelease(directory)).reason).toContain("not UTF-8")
+      }),
+    ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
+  it.live("an index holding a conflict names no release and writes nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const directory = yield* treeDirectory
+        yield* checkout(directory, "one")
+        // Stages 1 to 3 of one path: a merge left unresolved.
+        const blob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        const stages = [1, 2, 3].map((stage) => `100644 ${blob} ${stage}\tsrc/main.ts\n`)
+        const staged = yield* runProcess("git", ["-C", directory, "update-index", "--index-info"], {
+          stdin: Stream.make(utf8(stages.join(""))),
+        })
+        expect(staged.exitCode).toBe(0)
+        const refused = yield* leavesGitDirectory(`${directory}/.git`, noRelease(directory))
+        expect(refused.reason).toContain("git update-index")
       }),
     ).pipe(Effect.provide(bunPlatformLayer)),
   )

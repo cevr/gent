@@ -189,29 +189,37 @@ const unreleased = GentRelease.cases.Unreleased.make({
  * of its working state, written by git: `HEAD`'s entries and the real
  * index's read into a throwaway index (paths and modes only: the real
  * index's stats and its assume-unchanged, skip-worktree and intent-to-add
- * bits never reach it), every one of them and every untracked, unignored
- * entry added from the working tree, the tree written. Gent never reads a
- * working entry itself; git's object model names each file's bytes and exec
- * bit and each link's target bytes, and git refuses any other kind of
- * tracked entry.
+ * bits never reach it), each entry whose working bytes git hashes to its
+ * object kept with the stat git just read, every other one and every
+ * untracked, unignored entry added from the working tree, the tree written.
+ * Gent never reads a working entry itself; git's object model names each
+ * file's bytes and exec bit and each link's target bytes, and git refuses
+ * any other kind of tracked entry.
  *
- * The index, the git directory and every object written live in a scoped
- * temporary directory; the repository's objects are reached as an
- * alternate, and its index is only read, so nothing is written into the
- * repository. The throwaway git directory holds no config and no
+ * Nothing is written into the repository, since git writes as a side effect
+ * of reading (it freshens a split index's shared file as it reads the
+ * index, and an object it is asked to write and finds stored, an
+ * alternate's too). So the only git run with the repository's git
+ * directory is the `rev-parse` that finds it, which reads no index and
+ * writes no object. The index, the git directory and every object written
+ * live in a scoped temporary directory; the repository's index (with a
+ * split index's shared files) is copied there; its objects are an
+ * alternate only of the calls that read objects, never of `add` or
+ * `write-tree`. The throwaway git directory holds no config and no
  * `info/attributes`, the environment holds no user or system config, and
- * `pinnedGit` turns every conversion off, so the repository's or the user's
- * config changes no tree. The repository's config can still move the
- * working tree git reads (`core.worktree`), so that names no release.
+ * `pinnedGit` turns every conversion off, so the repository's or the
+ * user's config changes no tree. The repository's config can still move
+ * the working tree git reads (`core.worktree`), so that names no release.
  *
  * Fails with `NoRelease` with no git, no repository or no commit; when the
  * repository's config moves its working tree off the physical checkout;
- * when a tracked path is not UTF-8; when git refuses an entry (a FIFO, a
- * socket or a device at a tracked path); when the tree holds a gitlink (a
- * nested repository); when `bun.lock` is not a regular file of the tree;
- * and when the capture takes longer than `RELEASE_TIMEOUT`. Each git child
- * is stopped on that deadline. The build embeds what it returns; a source
- * run reads its own checkout with it once.
+ * when a split index's shared file is missing; when the index holds a
+ * conflict; when a tracked path is not UTF-8; when git refuses an entry (a
+ * FIFO, a socket or a device at a tracked path); when the tree holds a
+ * gitlink (a nested repository); when `bun.lock` is not a regular file of
+ * the tree; and when the capture takes longer than `RELEASE_TIMEOUT`. Each
+ * git child is stopped on that deadline. The build embeds what it returns;
+ * a source run reads its own checkout with it once.
  */
 export const captureRelease = (
   directory: string,
@@ -254,13 +262,15 @@ export const captureRelease = (
           "objects",
           "--git-path",
           "info/exclude",
+          "--git-path",
+          "index",
           "HEAD",
         ],
         isolated,
       )).stdout.split("\n")
-      const [top = "", objects = "", exclude = "", commit = "", end = ""] = found
+      const [top = "", objects = "", exclude = "", index = "", commit = "", end = ""] = found
       // A path with a newline in it would shift the lines: no release.
-      if (found.length !== 5 || end.length > 0 || commit.length === 0) {
+      if (found.length !== 6 || end.length > 0 || commit.length === 0) {
         return yield* new NoRelease({ reason: "git names no checkout" })
       }
       // `core.worktree` (set, included or conditional) moves the entries git
@@ -270,39 +280,72 @@ export const captureRelease = (
           reason: "the repository's configuration moves its working tree",
         })
       }
+      // Git writes as it reads: it freshens a split index's shared file as it
+      // reads the index, and an object it is asked to write and finds stored,
+      // an alternate's too. So the git directory, the index and the objects
+      // are throwaway, and the repository's objects are an alternate only of
+      // the calls that read objects (`read`), never of those that write them
+      // (`write`: `add` and `write-tree` store each object here, beside none).
       const gitDirectory = `${scratch}/git`
-      yield* fs.makeDirectory(`${gitDirectory}/objects/info`, { recursive: true })
+      const reader = `${scratch}/read`
+      yield* fs.makeDirectory(`${gitDirectory}/objects`, { recursive: true })
       yield* fs.makeDirectory(`${gitDirectory}/refs`)
+      yield* fs.makeDirectory(`${reader}/info`, { recursive: true })
       yield* fs.writeFileString(`${gitDirectory}/HEAD`, `${commit}\n`)
-      yield* fs.writeFileString(`${gitDirectory}/objects/info/alternates`, `${objects}\n`)
-      const env = {
+      yield* fs.writeFileString(
+        `${reader}/info/alternates`,
+        `${objects}\n${gitDirectory}/objects\n`,
+      )
+      const writing = {
         ...isolated,
         GIT_DIR: gitDirectory,
         GIT_WORK_TREE: root,
         GIT_INDEX_FILE: `${scratch}/index`,
       }
+      const reading = { ...writing, GIT_OBJECT_DIRECTORY: reader }
       const pins = pinnedGit(exclude)
-      const git = (args: ReadonlyArray<string>) => releaseGit(root, args, env, pins)
-      yield* git(["read-tree", commit])
+      const read = (
+        args: ReadonlyArray<string>,
+        stdin?: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
+      ) => releaseGit(root, args, reading, pins, stdin)
+      const write = (args: ReadonlyArray<string>) => releaseGit(root, args, writing, pins)
+      yield* read(["read-tree", commit])
       // The real index's entries too: a path it tracks that HEAD lacks (staged,
-      // force-added under an ignore rule, intent to add) is named. Read only:
-      // `ls-files` never refreshes the index. Each entry carries no stat, so
-      // `add -A` rereads every one from the working tree.
-      const tracked = (yield* releaseGit(root, ["ls-files", "--stage", "-z"], isolated, pins))
-        .stdout
+      // force-added under an ignore rule, intent to add) is named. Its bytes,
+      // and every split index's shared file beside it, are copied into the
+      // throwaway git directory, where git looks for the shared file and fails
+      // when it is missing.
+      const copied = `${gitDirectory}/index`
+      if (yield* fs.exists(index)) {
+        yield* fs.copyFile(index, copied)
+        const beside = path.dirname(index)
+        for (const name of yield* fs.readDirectory(beside)) {
+          if (name.startsWith("sharedindex.")) {
+            yield* fs.copyFile(`${beside}/${name}`, `${gitDirectory}/${name}`)
+          }
+        }
+      }
+      const tracked = (yield* releaseGit(
+        root,
+        ["ls-files", "--stage", "-z"],
+        { ...reading, GIT_INDEX_FILE: copied },
+        pins,
+      )).stdout
       if (tracked.includes(UNDECODED)) {
         return yield* new NoRelease({ reason: "a tracked path is not UTF-8" })
       }
-      yield* releaseGit(
-        root,
+      yield* read(
         ["update-index", "-z", "--index-info"],
-        env,
-        pins,
         Stream.make(new TextEncoder().encode(tracked)),
       )
-      yield* git(["add", "-A"])
-      const tree = (yield* git(["write-tree"])).stdout.trim()
-      const entries = (yield* git([
+      // No entry holds a stat yet: git hashes each working file against its
+      // entry's object and keeps the stat it read when they match, so `add -A`
+      // rehashes, and writes, every other entry. A conflict fails here.
+      yield* read(["update-index", "-q", "--refresh"])
+      yield* write(["add", "-A"])
+      // The objects of unchanged entries stay in the repository, unseen here.
+      const tree = (yield* write(["write-tree", "--missing-ok"])).stdout.trim()
+      const entries = (yield* read([
         "ls-tree",
         "-r",
         "-z",
