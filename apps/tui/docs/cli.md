@@ -285,20 +285,20 @@ serves every machine; each server runs every entry but its own name
 
 Each run asks the far server's `link.hello` first: its machine name and its
 RPC contract: its codecs and the release that holds their code (the commit,
-the tree, the hash of `bun.lock` and the Bun version, read as gent is built,
-or as the server starts in a source run). Git lists tracked entries and the
-untracked entries it does not ignore. Gent streams regular files' bytes and
-reads links' targets without following them; missing tracked entries count
-as deleted. Two machines match on one commit with identical listed working
-entries: the same bytes for files and the same targets for links, the same
-lockfile and the same Bun. No git filter, diff driver or line-ending setting
-changes this. Any other listed type (directory or gitlink, FIFO, socket or
-device), an invalid UTF-8 path, or a capture exceeding 10 seconds makes the
-release unknown and the link incompatible. For an install, matching means
-two `bun run install:global` runs of one commit, which install the
-lockfile's packages before they build. An edit is a release of its own, and
-two machines match on it only with the same ignore rules too (a global
-`core.excludesFile` that ignores a file on one machine only splits them). A process with no release (no git, no repository) names a contract no
+the tree and the Bun version, read as gent is built, or as the server
+starts in a source run). The tree is git's own tree id of the working
+state, written into a throwaway index and object directory with every git
+conversion off: each file's bytes and exec bit and each link's target
+bytes, tracked or untracked and not ignored, `bun.lock` among them. Two
+machines match on one commit with one working tree and the same Bun. No
+git filter, diff driver, line-ending or case setting changes this. A FIFO,
+socket or device at a tracked path, a nested repository, a `bun.lock` that
+is not a regular file, or a capture exceeding 10 seconds makes the release
+unknown and the link incompatible. For an install, matching means two
+`bun run install:global` runs of one commit, which install the lockfile's
+packages before they build. An edit is a release of its own, and two
+machines match on it only with the same `.git/info/exclude` too (the
+user's global `core.excludesFile` is not read). A process with no release (no git, no repository) names a contract no
 other process names. A build with another contract makes the link
 `incompatible` and nothing else runs. Over a connected link the pool's facts cross both ways
 (docs/architecture/lanes.md, docs/architecture/server.md). A run that ends, or
