@@ -3465,12 +3465,18 @@ const agentLoopActorHandlers = Effect.gen(function* () {
   ) {
     const wasAlreadyWarm = yield* markWrite
     const item = yield* buildFollowUpItem(input)
-    yield* handle
+    const started = yield* handle
       .admitAndStart(item, { queueOnly: !wasAlreadyWarm, ifLatest: input.ifLatest })
       .pipe(orCleanup(handle))
-    if (!wasAlreadyWarm && (yield* shouldWake(handle, input))) {
-      yield* startNextQueuedTurnIfIdle(handle)
+    if (!wasAlreadyWarm) {
+      if (yield* shouldWake(handle, input)) yield* startNextQueuedTurnIfIdle(handle)
+      return
     }
+    // A warm loop starts a new item at its admission. A retry of an id the
+    // loop already holds starts nothing there, so its explicit wake asks the
+    // actor to take the held item once the permit is free: the take finds
+    // nothing while a turn runs, and the caller never waits behind one.
+    if (input.wake === true && Option.isNone(started)) yield* wakeAfterPermit(handle)
   })
 
   /**
