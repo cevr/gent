@@ -7805,8 +7805,10 @@ describe("credential order", () => {
         readonly joined?: string
       }> = [
         {
-          why: "a retry with no grant keeps a queued run's lane across a restart",
-          tokens: ["B", "xfg", "xf", "K"],
+          // The restart drops the placement's memory of the grant, so only
+          // the held item still holds the lane when the retry replaces it.
+          why: "a retry with no grant after a restart keeps a queued run's lane",
+          tokens: ["B", "xfg", "K", "xf"],
         },
         {
           why: "a woken retry onto a waiting steer starts after a restart",
