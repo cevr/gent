@@ -1744,25 +1744,4 @@ describe("the program a contract names", () => {
       ).pipe(Effect.provide(BunTestServices)),
     60_000,
   )
-
-  it.live("the links read the program's name as the server starts, before any hello", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const read = yield* Deferred.make<boolean>()
-        yield* linksOver({}).pipe(
-          Effect.provideServiceEffect(
-            GentPlatform,
-            Effect.gen(function* () {
-              const platform = yield* GentPlatform
-              return GentPlatform.of({
-                ...platform,
-                source: Effect.as(Deferred.succeed(read, true), Option.some("program")),
-              })
-            }),
-          ),
-        )
-        expect(yield* Deferred.await(read).pipe(Effect.timeout("5 seconds"))).toBe(true)
-      }),
-    ).pipe(Effect.provide(platformLayer)),
-  )
 })

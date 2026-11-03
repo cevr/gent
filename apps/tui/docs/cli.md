@@ -286,7 +286,7 @@ serves every machine; each server runs every entry but its own name
 Each run asks the far server's `link.hello` first: its machine name and its
 RPC contract: its codecs and the program that holds their code (the hash of
 every file the program loads, installed packages included, fixed as gent is
-built or as a source run starts). Two machines match when they run the same
+built, or on first use in a source run). Two machines match when they run the same
 files on the same Bun: two builds of one checkout after one `bun install`. A
 build with another contract makes the link
 `incompatible` and nothing else runs. Over a connected link the pool's facts cross both ways
