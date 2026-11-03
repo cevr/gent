@@ -289,11 +289,13 @@ the tree and the Bun version, read as gent is built, or as the server
 starts in a source run). The tree is git's own tree id of the working
 state, written into a throwaway index and object directory with every git
 conversion off: each file's bytes and exec bit and each link's target
-bytes, tracked or untracked and not ignored, `bun.lock` among them. Two
-machines match on one commit with one working tree and the same Bun. No
-git filter, diff driver, line-ending or case setting changes this. A FIFO,
-socket or device at a tracked path, a nested repository, a `bun.lock` that
-is not a regular file, or a capture exceeding 10 seconds makes the release
+bytes, tracked (by `HEAD` or the index) or untracked and not ignored,
+`bun.lock` among them. Two machines match on one commit with one working
+tree and the same Bun. No git filter, diff driver, line-ending or case
+setting, and no index flag or staged edit, changes this. A FIFO, socket or
+device at a tracked path, a nested repository, a `core.worktree` that moves
+the working tree elsewhere, a `bun.lock` that is not a regular file, or a
+capture exceeding 10 seconds makes the release
 unknown and the link incompatible. For an install, matching means two
 `bun run install:global` runs of one commit, which install the lockfile's
 packages before they build. An edit is a release of its own, and two
