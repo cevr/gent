@@ -76,6 +76,29 @@ const encodeBuildDefine = Schema.encodeSync(
 const sameRelease = (one: typeof GentReleaseFacts.Type, other: typeof GentReleaseFacts.Type) =>
   one.commit === other.commit && one.clean === other.clean && one.checkout === other.checkout
 
+/** Capture, report and embed the release in one build step. */
+export const buildRelease = Effect.fn("Build.release")(function* (
+  directory: string,
+  identity: { readonly id: string; readonly version: string },
+) {
+  const captured = yield* Effect.result(captureRelease(directory))
+  yield* Effect.log(
+    Result.match(captured, {
+      onFailure: ({ reason }) => `Release: none (${reason})`,
+      onSuccess: ({ commit, clean }) => {
+        if (clean) return `Release: ${commit} clean`
+        return `Release: ${commit} dirty`
+      },
+    }),
+  )
+  const release = Result.getSuccess(captured)
+  const define = encodeBuildDefine({
+    ...identity,
+    ...Option.match(release, { onNone: () => ({}), onSome: (facts) => ({ release: facts }) }),
+  })
+  return { release, define }
+})
+
 const build = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -110,17 +133,7 @@ const build = Effect.gen(function* () {
   // The release is read here, from the checkout the build compiles; with no git the build embeds none,
   // and its links match no other machine.
   const main = path.join(rootDir, "src/main.tsx")
-  const captured = yield* Effect.result(captureRelease(rootDir))
-  yield* Effect.log(
-    Result.match(captured, {
-      onFailure: ({ reason }) => `Release: none (${reason})`,
-      onSuccess: ({ commit, clean }) => {
-        if (clean) return `Release: ${commit} clean`
-        return `Release: ${commit} dirty`
-      },
-    }),
-  )
-  const release = Result.getSuccess(captured)
+  const { release, define } = yield* buildRelease(rootDir, { id, version })
   const target = yield* compileTarget
   yield* Effect.log(`Compile target: ${Option.getOrElse(target, () => "this host")}`)
   const buildResult = yield* Effect.promise(() =>
@@ -135,11 +148,7 @@ const build = Effect.gen(function* () {
       plugins: [namedWsReexports, solidTransformPlugin],
       minify: false,
       define: {
-        __GENT_BUILD__: encodeBuildDefine({
-          id,
-          version,
-          ...Option.match(release, { onNone: () => ({}), onSome: (facts) => ({ release: facts }) }),
-        }),
+        __GENT_BUILD__: define,
       },
       compile: {
         ...Option.match(target, { onNone: () => ({}), onSome: (name) => ({ target: name }) }),
@@ -179,12 +188,14 @@ const build = Effect.gen(function* () {
 })
 
 // The layer runs the build once as it is built; the scope closes after it.
-BunRuntime.runMain(
-  Effect.scoped(
-    Layer.build(
-      Layer.effectDiscard(build).pipe(
-        Layer.provide(Layer.merge(BunServices.layer, BunCrypto.layerSecureRandom)),
+if (import.meta.main) {
+  BunRuntime.runMain(
+    Effect.scoped(
+      Layer.build(
+        Layer.effectDiscard(build).pipe(
+          Layer.provide(Layer.merge(BunServices.layer, BunCrypto.layerSecureRandom)),
+        ),
       ),
     ),
-  ),
-)
+  )
+}

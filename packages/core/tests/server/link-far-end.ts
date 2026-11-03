@@ -23,6 +23,7 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Option, Runtime, Schema, Stdio, Stream } from "effect"
 import { GentRelease } from "../../src/runtime/gent-platform"
+import { LinkHello } from "../../src/server/rpc"
 
 /** A request id: the client numbers its requests, and a reply names the same value. */
 const RequestId = Schema.Union([Schema.String, Schema.Finite])
@@ -77,7 +78,9 @@ const say = (...lines: ReadonlyArray<string>): Answer => ({ lines, exit: false }
 const main = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const stdio = yield* Stdio.Stdio
-  const [contract = "", mode = "serve", log = "/dev/null", factsText = "{}"] = yield* stdio.args
+  const [contract = "", mode = "serve", log = "/dev/null", factsText = "{}", helloText = ""] =
+    yield* stdio.args
+  const suppliedHello = Schema.decodeOption(Schema.fromJsonString(LinkHello))(helloText)
   const facts = yield* Schema.decodeEffect(Json)(factsText)
   const machine = Option.match(decodeHost(facts), {
     onNone: () => "far",
@@ -108,12 +111,13 @@ const main = Effect.gen(function* () {
         if (mode === "nohello")
           return say(exitOf(id, Failure.make({ cause: [Die.make({ defect: "no link.hello" })] })))
         if (mode === "garbage") return say("not a frame")
-        let value: Schema.Json = {
+        let value: typeof Success.Type.value = {
           machine,
           contract,
           release: GentRelease.cases.Released.make({ commit: "test-commit", clean: true }),
           checkout: "/nonexistent/gent-test-checkout",
         }
+        if (Option.isSome(suppliedHello)) value = suppliedHello.value
         if (mode === "oldrelease") value = { machine, contract }
         const hello = exitOf(id, Success.make({ value }))
         return { lines: [hello], exit: mode === "exit" }

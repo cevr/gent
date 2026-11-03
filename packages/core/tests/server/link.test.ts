@@ -67,12 +67,19 @@ const encodeFacts = Schema.encodeSync(Schema.fromJsonString(PoolFacts))
 /** A string as a quoted JSON (and TypeScript) literal. */
 const encodeText = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 const FAR_FACTS = encodeFacts({ boot: "far-boot", host: "far", seq: 0, providers: [] })
+const encodeHello = Schema.encodeSync(Schema.fromJsonString(LinkHello))
 
 /**
  * The far end's argv: this bun running the fixture, as `gent ctl link` would
  * be run; its hello names the machine `facts` name.
  */
-const farEnd = (contract: string, mode: string, log: string, facts = FAR_FACTS) =>
+const farEnd = (
+  contract: string,
+  mode: string,
+  log: string,
+  facts = FAR_FACTS,
+  hello: Option.Option<LinkHello> = Option.none(),
+) =>
   Effect.map(
     Effect.flatMap(Path.Path, (path) =>
       path.fromFileUrl(new URL("./link-far-end.ts", import.meta.url)),
@@ -84,6 +91,7 @@ const farEnd = (contract: string, mode: string, log: string, facts = FAR_FACTS) 
       mode,
       log,
       facts,
+      ...Option.match(hello, { onNone: () => [], onSome: (value) => [encodeHello(value)] }),
     ],
   )
 
@@ -1884,6 +1892,60 @@ describe("release mismatch messages", () => {
         expect(cases.size).toBe(10)
       }).pipe(Effect.provide(bunPlatformLayer)),
     30_000,
+  )
+
+  it.live(
+    "wired hellos keep both checkout commands and resolve the update side from local ancestry",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeTempDirectoryScoped("gent-link-release-")
+        const repo = `${root}/local checkout`
+        yield* checkout(repo, "one")
+        const local = yield* captureRelease(repo)
+        yield* commitText(repo, "two")
+        const next = yield* captureRelease(repo)
+        const platform = yield* GentPlatform
+        const localPlatform = GentPlatform.of({
+          ...platform,
+          source: Effect.succeed(releasedOf(local)),
+          checkout: Effect.succeedSome(local.checkout),
+        })
+        const farCheckout = "/nonexistent/far checkout"
+        for (const { name, commit } of [
+          { name: "both", commit: local.commit },
+          { name: "behind", commit: next.commit },
+        ]) {
+          yield* Effect.gen(function* () {
+            const far = helloOf("far", cleanRelease(commit), farCheckout)
+            const command = yield* farEnd(
+              far.contract,
+              "serve",
+              `${root}/${name}.log`,
+              FAR_FACTS,
+              Option.some(far),
+            )
+            const { links } = yield* linksOver({ far: command })
+            const view = yield* viewUntil(links, (view) => view[0]?.state === "incompatible")
+            const reason = view[0]?.reason ?? ""
+            if (name === "both") {
+              expect(reason).toContain("reinstall both:")
+              const [here = "", there = ""] = reason.split("reinstall both: ")[1]?.split("; ") ?? []
+              assertUpdate(here, local.checkout, false)
+              // The configured command really runs the fixture, so that is also
+              // the prefix the displayed far update must preserve.
+              const argv = wordsOf(there)
+              expect(argv.slice(0, -1)).toEqual([...command])
+              assertUpdate(argv.at(-1) ?? "", farCheckout, false)
+            } else {
+              expect(reason).toContain("Update this machine:")
+              expect(reason).toContain(local.commit.slice(0, 8))
+              expect(reason).toContain(next.commit.slice(0, 8))
+              assertUpdate(reason.split("Update this machine: ")[1] ?? "", local.checkout, false)
+            }
+          }).pipe(Effect.scoped, Effect.provideService(GentPlatform, localPlatform))
+        }
+      }).pipe(Effect.scoped, Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
+    20_000,
   )
 
   it.live(

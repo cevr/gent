@@ -79,7 +79,7 @@ directory: the loop resolves it once per branch with `sessionWorkingDirectory`
 the cell kernel Resource reads. The TUI
 build names itself with one define, `__GENT_BUILD__` (`{ id, version,
 release? }`: a fresh id per build, the version of `apps/tui/package.json`, and
-the release the build compiled, `captureRelease`'s commit, tree and Bun,
+the release the build compiled, `captureRelease`'s commit, clean flag and checkout,
 absent when the checkout names none). Its readers: `GentPlatform.build`
 (`Compiled` with the id and version, else `Source`), by which the cell picks
 its worker and discovery names the build, `GentPlatform.source`, which names
