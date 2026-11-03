@@ -4310,6 +4310,34 @@ describe("a session's workspace", () => {
       yield* controls.assertDone
     }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
   )
+
+  it.live("a child made from another cwd lives in its parent's workspace", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+      const context = yield* Layer.build(
+        Layer.provideMerge(RpcHandlersLive, createE2ELayer({ ...e2ePreset, providerLayer })),
+      )
+      const { cwd } = Context.get(context, RuntimeEnvironment)
+      const home = yield* makeInProcessClient(context, workspaceHeadersForCwd(cwd))
+      const elsewhere = yield* makeInProcessClient(
+        context,
+        workspaceHeadersForCwd("/nonexistent/gent-other-cwd"),
+      )
+      const parent = yield* home.session.create({ cwd })
+
+      // A handoff from a client that opened the parent in another cwd.
+      const child = yield* elsewhere.session.create({
+        cwd,
+        parentSessionId: parent.sessionId,
+        continueThread: true,
+      })
+      const stored = yield* Effect.gen(function* () {
+        const storage = yield* SessionStorage
+        return yield* storage.workspaceOf(child.sessionId)
+      }).pipe(Effect.provideContext(context))
+      expect(stored).toEqual(Option.some(workspaceIdForCwd(cwd)))
+    }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+  )
 })
 
 describe("message.list", () => {

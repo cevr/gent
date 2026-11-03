@@ -30,7 +30,7 @@ Auth is out of scope. `~/.gent/auth/` stays per machine. Nothing in this design 
 
 - `SessionId` is a branded string (`packages/core/src/domain/ids.ts:5`), made from `platform.randomId` (`server.ts:890`) [m]. The `Session` class has no machine field (`packages/core/src/domain/message.ts:592`) [m].
 - `session.list` reads the local store only (`server.ts:2130`) [m]. The agents view lists sessions through the host facade `listSessions` (`packages/core/src/runtime/extension-host.ts:4751`; `packages/extensions/src/agents-view.ts:802`) [m]. It shows them in a pane docked below the input (`apps/tui/src/extensions/agents.client.tsx:2352-2366`) [m].
-- The actor entity id is `workspace:session:branch` (`packages/core/src/domain/agent-loop.ts:449-454`) [m]. The workspace comes from the request header, not from the session's stored cwd (`packages/core/src/runtime/session.ts:295-296,321-322`) [m]. So a call for one session from two different cwds addresses two entity ids [i]. That is two actors for one session, against rule 2 [i]. A remote client always has a different cwd, so the link makes this latent gap certain [i].
+- The actor entity id is `workspace:session:branch` (`packages/core/src/domain/agent-loop.ts:449-454`) [m]. The workspace comes from the request header, not from the session's stored workspace (`packages/core/src/runtime/session.ts:295-296,321-322`) [m]. A call for a session from another cwd fails as not found: `requireSessionBranch` reads the header's workspace, so rule 2 holds but the session is unreachable [m, U1 review]. A remote client always has a different cwd, so the link makes this certain [i].
 - Some client features act on the client's own machine: shell mode runs `bash -c` locally (`apps/tui/src/composer.tsx:255-262`), file completion reads the local disk (`apps/tui/src/autocomplete.ts`), the git widget runs local git (`apps/tui/src/extensions/git.client.tsx:328-356`) [m]. For a session on the other machine each one would act on the wrong machine [i].
 
 **Config and extensions reload without a watcher.**
@@ -62,7 +62,7 @@ One link per peer, generalized from the pool peer. It carries RPC, and RPC carri
 
 - **Address by lookup, not by id.** A session id does not carry its machine. The server routes each session-scoped call: the local store has the id → serve locally; else ask each connected peer `link.locate({ sessionId })` in parallel, keep the answer in a memo, forward the call. Random ids make a clash negligible [i]. The id needs no format change, no schema bump and no rewrite at the proxy [i].
 - **Forwarding.** The forward calls the same RPC tag with the same payload on the peer's typed client [i]. Streams (`session.events`) forward as streams.
-- **Workspace from the session.** For a session-scoped call the owning server takes the workspace from the session's stored cwd, not from the header. One session then has one entity id from every client and every machine (rule 2) [i]. This fix also holds for two cwds on one machine [i].
+- **Workspace from the session.** For a session-scoped call the owning server takes the workspace the session is stored under (`sessions.workspace_id`, which keys every storage row; it can differ from the hash of `session.cwd`), not from the header. One session then has one entity id from every client and every machine (rule 2) [i]. This fix also holds for two cwds on one machine [i].
 - **`message.list`** gets `sessionId` (owner rule) [i].
 - **New error.** `MachineUnreachable { machine, sessionId }`, a `Schema.TaggedError`, joins the error union of each session-scoped RPC.
 - **Server-scoped calls stay local.** `session.list` stays local, so a peer never recurses. New `link.machines` → each machine with its state. New `link.sessions` → the local list plus each connected peer's `session.list`, each row tagged with its machine. A silent peer shows as one row with its state and no sessions.
@@ -118,7 +118,7 @@ Each unit compiles and passes `bun run gate` alone, in this order. No test reach
 ### U1. One entity per session, and `message.list` names its session
 
 - **Files.** `packages/core/src/server/rpc.ts` (`message.list` input), `packages/core/src/server/server.ts`, `packages/core/src/runtime/session.ts` (workspace from the session's cwd), `packages/sdk/src/client.ts` and its callers in `apps/tui/src`, `docs/architecture/server.md`.
-- **Tests.** Through the SDK client: create a session from cwd A, send from a client with cwd B, read the state from A. One entity serves both; one turn runs. Red today: the B send starts a second entity [i]. `message.list` with a `sessionId` of another session's branch is refused.
+- **Tests.** Through the SDK client: create a session from cwd A, send from a client with cwd B, read the state from A. One entity serves both; one turn runs. Red today: the B send fails as not found [m, U1 review]. `message.list` with a `sessionId` of another session's branch is refused.
 - **Live check.** verify-gent: start a turn in the TUI, `gent ctl -s <id> send` from another cwd, the TUI shows the reply in the same transcript.
 
 ### U2. The link replaces the pool peer

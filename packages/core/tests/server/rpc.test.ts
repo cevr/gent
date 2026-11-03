@@ -31,6 +31,7 @@ import {
   SlashCommandInfo,
 } from "../../src/server/rpc"
 import {
+  sessionNamedBy,
   WorkspaceRpcMiddleware,
   WORKSPACE_ID_HEADER,
   workspaceHeadersForCwd,
@@ -4649,13 +4650,31 @@ describe("session profile lookup", () => {
   // read here without a list to update; one that names no session is either
   // on this list, with its reason, or red.
   test("every RPC payload requires sessionId, unless it names why not", () => {
-    const exempt = {
-      "session.create": "it makes the session",
+    // An RPC that names its session elsewhere in its payload, with a sample of
+    // that shape: `sessionNamedBy` (workspace-rpc.ts) must read each sample, so
+    // the call runs in its session's workspace. A new shape fails here.
+    const sessionId = SessionId.make("session-named-elsewhere")
+    const namesItsSessionElsewhere = {
+      "session.create": {
+        reason: "it makes the session; a child names its parent, a root names none",
+        sample: { cwd: "/nonexistent/gent-child-create", parentSessionId: sessionId },
+      },
+      "steer.command": {
+        reason: "the session is inside the command",
+        sample: { command: { sessionId } },
+      },
+      "extension.listStatus": {
+        reason: "its scope names the session or the launch",
+        sample: { scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }) },
+      },
+    }
+    for (const [tag, { sample }] of Object.entries(namesItsSessionElsewhere))
+      expect({ tag, named: sessionNamedBy({ payload: sample }) }).toEqual({
+        tag,
+        named: Option.some(sessionId),
+      })
+    const serverScoped = {
       "session.list": "it lists every session",
-      // The two below name their session inside the payload; `sessionNamedBy`
-      // (workspace-rpc.ts) reads both, so each runs in its session's workspace.
-      "steer.command": "the session is inside the command",
-      "extension.listStatus": "its scope names the session or the launch",
       "driver.clear": "it writes the user config, which no session owns",
       "permits.list": "it reads server-wide permits, which no session owns",
       "accounts.lanes": "it reads the server's accounts, which no session owns",
@@ -4665,6 +4684,7 @@ describe("session profile lookup", () => {
       "extension.serverRequest": "a server request answers the server, with no session",
       "review.window": "it reads every workspace's sessions in a time window",
     }
+    const exempt = { ...serverScoped, ...namesItsSessionElsewhere }
     const requiresSession = (payload: Schema.Top): boolean => {
       const ast = payload.ast
       if (!SchemaAST.isObjects(ast)) return false

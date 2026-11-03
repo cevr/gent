@@ -82,19 +82,21 @@ const decodeCommandField = Schema.decodeUnknownOption(
 const decodeSessionScope = Schema.decodeUnknownOption(
   Schema.Struct({ scope: Schema.TaggedStruct("Session", { id: SessionId }) }),
 )
+const decodeParentField = Schema.decodeUnknownOption(Schema.Struct({ parentSessionId: SessionId }))
 
 /**
- * The session an RPC request names, in the three shapes the contract uses: a
- * `sessionId` field, a steer command's `sessionId`, or a `Session` status
- * scope. None for a server-scoped call (`session.create`, `session.list`, the
- * pool and auth-store calls); `session.create`'s `parentSessionId` names the
- * parent, not the session the call runs in.
+ * The session an RPC request names, in the four shapes the contract uses: a
+ * `sessionId` field, a steer command's `sessionId`, a `Session` status
+ * scope, or a child create's `parentSessionId` (a child lives in its parent's
+ * workspace, where every thread query finds it). None for a server-scoped call
+ * (a root `session.create`, `session.list`, the pool and auth-store calls).
  */
 export const sessionNamedBy = (request: { readonly payload: unknown }): Option.Option<SessionId> =>
   Option.firstSomeOf([
     decodeSessionField(request.payload).pipe(Option.map(({ sessionId }) => sessionId)),
     decodeCommandField(request.payload).pipe(Option.map(({ command }) => command.sessionId)),
     decodeSessionScope(request.payload).pipe(Option.map(({ scope }) => scope.id)),
+    decodeParentField(request.payload).pipe(Option.map(({ parentSessionId }) => parentSessionId)),
   ])
 
 /**

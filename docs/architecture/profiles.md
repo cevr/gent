@@ -244,9 +244,10 @@ The production server uses one live profile owner:
   error at the call site and a decode failure on the wire; no handler has a
   launch-profile branch for a missing session. The call runs in the workspace
   the session is stored under, not the caller's, so its profile key is the
-  session's workspace and cwd from any client, the key its loop's turns read. `extension.listStatus` takes an
-  explicit `scope` (`ExtensionStatusScope`: `Session { id }` or `Launch`);
-  only `gent doctor`, which has no session, asks for `Launch`. Its tags carry
+  session's workspace and cwd from any client, the key its loop's turns read.
+  `extension.listStatus` takes an explicit `scope` (`ExtensionStatusScope`:
+  `Session { id }` or `Launch`); only `gent doctor`, which has no session,
+  asks for `Launch`. Its tags carry
   no constructor default (plain `Schema.Literal`, not `TaggedStruct`): the RPC
   client builds each payload with the schema's constructor, so a defaulted tag
   would read `{ scope: {} }` as `Launch`. A session that

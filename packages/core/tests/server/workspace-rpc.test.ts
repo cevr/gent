@@ -91,8 +91,11 @@ describe("workspace RPC middleware", () => {
       // Server-scoped calls name no session: the header's workspace stands.
       // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw payload this test reads; `Launch` has no tag default on purpose (`ExtensionStatusScope`)
       expect(sessionNamedBy({ payload: { scope: { _tag: "Launch" } } })).toEqual(Option.none())
-      expect(sessionNamedBy({ payload: { parentSessionId: sessionId } })).toEqual(Option.none())
       expect(sessionNamedBy({ payload: {} })).toEqual(Option.none())
+      // A child create runs in its parent's workspace.
+      expect(sessionNamedBy({ payload: { parentSessionId: sessionId } })).toEqual(
+        Option.some(sessionId),
+      )
     }),
   )
 
