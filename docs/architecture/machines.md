@@ -446,8 +446,8 @@
     rows that need the owner in this session (`accounts.lanes`, of the
     rows `gent ctl lanes --line` prints: a lane of the session's provider
     that a refusal holds or that waits for a reset, a lost login there, the
-    Sabbath, and the peer while it acts on this server: silent with its
-    last runs still counted, or a link down while the peer is `counted`
+    Sabbath, and each peer while it acts on this server: silent with its
+    last runs still counted, or a link down while that peer is `counted`
     inside the hold), then each active run as `<machine> <state> r<visits>
     <age>`, with `· wait <clock>` while its round waits for its account.
     `/status` lists every lanes row. The band hides when no row needs the

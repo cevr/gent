@@ -2,7 +2,9 @@
  * A link's far end for the link tests, run as the link's command: it speaks
  * the frames `gent ctl link` relays (one JSON frame per line each way) with
  * no server behind it. argv: the contract its hello names, the mode, a log
- * file, and for `serve` the pool facts it streams (JSON). Each run logs
+ * file, and the pool facts it streams on `serve` (JSON); its hello names the
+ * facts' `host` as its machine, as a server names one machine in both, and
+ * `far` with none. Each run logs
  * `start`, then each request's tag and `x-gent-link` header, and each
  * `accounts.notePeer` payload, one line each.
  *
@@ -30,6 +32,8 @@ const Frame = Schema.Struct({
   headers: Schema.optionalKey(Schema.Array(Schema.Tuple([Schema.String, Schema.String]))),
 })
 const decodeFrame = Schema.decodeUnknownOption(Schema.fromJsonString(Frame))
+/** The machine the facts name. */
+const decodeHost = Schema.decodeUnknownOption(Schema.Struct({ host: Schema.String }))
 
 /** A frame this end answers with, as the server's JSON serialization writes it. */
 const Success = Schema.TaggedStruct("Success", { value: Schema.Unknown })
@@ -71,6 +75,10 @@ const main = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio
   const [contract = "", mode = "serve", log = "/dev/null", factsText = "{}"] = yield* stdio.args
   const facts = yield* Schema.decodeEffect(Json)(factsText)
+  const machine = Option.match(decodeHost(facts), {
+    onNone: () => "far",
+    onSome: (named) => named.host,
+  })
   const note = (line: string) => fs.writeFileString(log, `${line}\n`, { flag: "a" })
   const exitOf = (
     requestId: typeof RequestId.Type,
@@ -96,7 +104,7 @@ const main = Effect.gen(function* () {
         if (mode === "nohello")
           return say(exitOf(id, Failure.make({ cause: [Die.make({ defect: "no link.hello" })] })))
         if (mode === "garbage") return say("not a frame")
-        const hello = exitOf(id, Success.make({ value: { machine: "far", contract } }))
+        const hello = exitOf(id, Success.make({ value: { machine, contract } }))
         return { lines: [hello], exit: mode === "exit" }
       }
       if (mode !== "serve") return say()

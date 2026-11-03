@@ -18,6 +18,7 @@ import {
   GentConnectionError,
   GentRpcError,
   type AuthProviderInfo,
+  type LanePeer,
   type LaneReport,
   type LaneWindow,
   lineCount,
@@ -719,19 +720,19 @@ const keepChoices = (count: number): ReadonlyArray<ReadonlyArray<boolean>> => {
 }
 
 /**
- * The peer row: `peer <host> 2 runs · 12s` while its facts come, `peer
- * <host> unread 3m` once it is silent (`· 2 runs held` while its last runs
- * still count in the hold), `peer unread` before its first line. A link
- * down marks it `peer!` and names the link: `own link down` (this server's
- * command), `peer link down` (the peer's), `links down`; this server's
- * link names its own state first: `incompatible` (the peer runs another
- * contract), `silent` (no frame for 90 s). The host is the link's machine
- * name, else the host the facts name. Each width shows the most useful
- * facts that fit, in rank: the held runs, then the link down, then the age,
- * then the host. The mark and the runs or `unread` always stay, and a row
- * narrower than those truncates.
+ * A peer's row: `peer <machine> 2 runs · 12s` while its facts come, `peer
+ * <machine> unread 3m` once it is silent (`· 2 runs held` while its last
+ * runs still count in the hold), `peer <machine> unread` before its first
+ * line. A link down marks it `peer!` and names the link: `own link down`
+ * (this server's command), `peer link down` (the peer's), `links down`;
+ * this server's link names its own state first: `incompatible` (the peer
+ * runs another contract or answers as another machine), `silent` (no frame
+ * for 90 s). Each width shows the most useful facts that fit, in rank: the
+ * held runs, then the link down, then the age, then the machine. The mark
+ * and the runs or `unread` always stay, and a row narrower than those
+ * truncates.
  */
-const peerRow = (peer: NonNullable<LaneReport["peer"]>, now: number, width: number): LaneRow => {
+const peerRow = (peer: LanePeer, now: number, width: number): LaneRow => {
   let reason = Option.map(Option.fromUndefinedOr(peer.down[0]), (link) => `${link} link down`)
   if (peer.down.length > 1) reason = Option.some("links down")
   const link = Option.fromUndefinedOr(peer.link)
@@ -742,16 +743,12 @@ const peerRow = (peer: NonNullable<LaneReport["peer"]>, now: number, width: numb
   if (Option.isSome(reason)) mark = "peer!"
   let runs = `${peer.runs} runs`
   if (peer.runs === 1) runs = "1 run"
-  const heard = Option.fromUndefinedOr(peer.heard)
   const held = Option.map(
     Option.liftPredicate(peer, (silent) => silent.silent && silent.runs > 0),
     () => `${runs} held`,
   )
-  const age = Option.map(heard, (last) => formatAge(now - last.at))
-  const host = Option.orElse(
-    Option.map(link, (own) => own.machine),
-    () => Option.map(heard, (last) => last.host),
-  )
+  const age = Option.map(Option.fromUndefinedOr(peer.heardAt), (at) => formatAge(now - at))
+  const host = Option.some(peer.machine)
   const kept = (fact: Option.Option<string>, keep: boolean) => Option.filter(fact, () => keep)
   const forms = keepChoices(4).map(
     ([keepHeld = false, keepReason = false, keepAge = false, keepHost = false]) => {
@@ -792,8 +789,8 @@ const sabbathRow = (end: number, now: number, width: number, zone: DateTime.Time
  * quota window or banked resets of or lost a login on, `lanes unknown`
  * when there is none (and no Sabbath row). Each provider's row is followed
  * by a `login!` row per account whose sign-in is lost, then a `resets` row
- * when an account holds a live banked reset. The peer's row comes last,
- * while the server reports a peer (`peerRow`).
+ * when an account holds a live banked reset. A row per peer the server
+ * reports comes last, by machine (`peerRow`).
  */
 export const laneRows = (
   report: LaneReport,
@@ -808,9 +805,7 @@ export const laneRows = (
   return [
     ...Option.toArray(rest),
     ...providerRows(report, now, width, zone, Option.isSome(rest)),
-    ...Option.toArray(
-      Option.map(Option.fromUndefinedOr(report.peer), (peer) => peerRow(peer, now, width)),
-    ),
+    ...(report.peers ?? []).map((peer) => peerRow(peer, now, width)),
   ]
 }
 

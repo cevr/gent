@@ -432,7 +432,7 @@ interface LinkRecord {
   readonly lastFrame: number
   /** The current run's hello named this server's contract. */
   readonly connected: boolean
-  /** The last hello named another contract (or none); a matching hello clears it. */
+  /** The last hello named another contract or machine (or none); a matching hello clears it. */
   readonly incompatible: boolean
 }
 
@@ -537,6 +537,16 @@ export class Links extends Context.Service<
                 )
                 return `${machine} runs another RPC contract (${hello.value.contract})`
               }
+              // The machine is the peer's identity on both links: this
+              // link's name, and the origin the peer's own link sends. A
+              // command that reaches another machine, or this one, would
+              // count one server under two names.
+              if (hello.value.machine !== machine) {
+                yield* Effect.sync(() =>
+                  MutableRef.update(record, (kept) => ({ ...kept, incompatible: true })),
+                )
+                return `${machine} answers as machine ${hello.value.machine}`
+              }
               yield* Effect.sync(() =>
                 MutableRef.update(record, (kept) => ({
                   ...kept,
@@ -548,7 +558,9 @@ export class Links extends Context.Service<
               // server's go to the peer as its link's.
               const pull = run.client.accounts
                 .pool()
-                .pipe(Stream.runForEach((facts) => placement.notePeer(facts, scopeOf, "own")))
+                .pipe(
+                  Stream.runForEach((facts) => placement.notePeer(facts, scopeOf, machine, "own")),
+                )
               const push = placement.pool.pipe(
                 Stream.runForEach((facts) => run.client.accounts.notePeer(facts)),
               )
@@ -571,7 +583,7 @@ export class Links extends Context.Service<
         const follow = (machine: string, record: MutableRef.MutableRef<LinkRecord>) =>
           Effect.scoped(
             Effect.gen(function* () {
-              yield* placement.runsLink
+              yield* placement.runsLink(machine)
               let wait = LINK_RETRY_FIRST
               while (true) {
                 const command = Option.fromUndefinedOr((yield* config.linkMachines)[machine])

@@ -14,6 +14,7 @@ import {
   Layer,
   Logger,
   Option,
+  Order,
   Path,
   Predicate,
   Ref,
@@ -41,6 +42,7 @@ import {
   type ModelCatalogView,
   type ModelDriverContribution,
   modelFromCatalog,
+  type PeerLink,
   type PendingRotation,
   type PoolFacts,
   PoolFacts as PoolFactsSchema,
@@ -9020,7 +9022,7 @@ describe("account lanes", () => {
     /** `from`'s facts now, noted on `to` as its peer's line, over `to`'s pool. */
     const relay = (from: Fixture, to: Fixture, pool: Scope = [a, b]) =>
       Effect.flatMap(factsOf(from.placement), (facts) =>
-        to.placement.notePeer(facts, scopeOf(pool), "peer"),
+        to.placement.notePeer(facts, scopeOf(pool), facts.host, "peer"),
       )
     /** A line of the peer's on `plan`, written by hand. */
     const peerLine = (
@@ -9282,14 +9284,14 @@ describe("account lanes", () => {
       Effect.gen(function* () {
         const fixture = yield* accounts()
         const line = peerLine(boot, 1, [], [spentOn(a, 0)])
-        yield* fixture.placement.notePeer(line, scopeOf([a]), "peer")
+        yield* fixture.placement.notePeer(line, scopeOf([a]), "peer-host", "peer")
         yield* fixture.read(a, fiveHour(0.1, resetAt))
         // The heartbeat: the reading that opened the segment held no peer spend.
-        yield* fixture.placement.notePeer(line, scopeOf([a]), "peer")
+        yield* fixture.placement.notePeer(line, scopeOf([a]), "peer-host", "peer")
         return fixture
       })
     const noted = (fixture: Fixture, line: PoolFacts, pool: Scope = [a]) =>
-      fixture.placement.notePeer(line, scopeOf(pool), "peer")
+      fixture.placement.notePeer(line, scopeOf(pool), "peer-host", "peer")
     const resetIn = (hours: number) =>
       Effect.map(Clock.currentTimeMillis, (now) => now + hours * HOUR)
 
@@ -9484,6 +9486,42 @@ describe("account lanes", () => {
           expect(logged.named("credential-placement.peer.silent")).toHaveLength(1)
         }).pipe(Effect.scoped, Effect.provide(Layer.merge(placementLayer, logged.layer)))
       },
+    )
+
+    it.effect(
+      "one of two peers goes silent: this server keeps to a third of the pace in its hold, and the live peer's runs still count",
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* rollingPool
+          const { pool } = fixture
+          const send = (machine: string, seq: number, count: number) =>
+            fixture.placement.notePeer(
+              { ...peerLine(`${machine}-boot`, seq, [{ accounts: [a], count }]), host: machine },
+              scopeOf(pool),
+              machine,
+              "peer",
+            )
+          const admitted = Effect.gen(function* () {
+            const keys = yield* admitAll(fixture, pool, "run")
+            yield* freeAll(fixture, keys)
+            return keys.length
+          })
+          yield* send("p", 1, 2)
+          yield* send("q", 1, 1)
+          // 9 lanes, 2 of them p's and 1 q's.
+          expect(yield* admitted).toBe(6)
+          yield* TestClock.adjust("60 seconds")
+          yield* send("q", 2, 1)
+          yield* TestClock.adjust("31 seconds")
+          // p is silent, q is not: min(9 - 3, floor(9.27 / 3)), one share for each machine.
+          expect(yield* admitted).toBe(3)
+          // q's lines keep coming past p's hold: q's run alone counts, and no share holds.
+          for (let seq = 3; seq < 35; seq += 1) {
+            yield* TestClock.adjust("60 seconds")
+            yield* send("q", seq, 1)
+          }
+          expect(yield* admitted).toBe(8)
+        }).pipe(Effect.scoped, Effect.provide(placementLayer)),
     )
 
     it.effect(
@@ -9694,6 +9732,7 @@ describe("account lanes", () => {
           yield* placement.notePeer(
             peerLine("peer", 1, [{ accounts: [a], count: 1 }]),
             scopeOf([a, b]),
+            "peer-host",
             "peer",
           )
           expect(yield* admit([a, b], "second")).not.toBe("admitted")
@@ -9704,17 +9743,19 @@ describe("account lanes", () => {
     const decodeFacts = Schema.decodeUnknownSync(Schema.fromJsonString(PoolFactsSchema))
     /** The peer as `fixture`'s lanes report it. */
     const reportedPeer = (fixture: Fixture) =>
-      Effect.map(fixture.placement.lanes(scopeOf([a, b]), Option.none()), (report) => report.peer)
+      Effect.map(fixture.placement.lanes(scopeOf([a, b]), Option.none()), (report) =>
+        report.peers?.find((peer) => peer.machine === "peer-host"),
+      )
 
     it.effect(
-      "the lanes name the peer by its host, count its runs on this pool, and turn it silent after 90 s",
+      "the lanes name the peer by its machine, count its runs on this pool, and turn it silent after 90 s",
       () =>
         Effect.gen(function* () {
           const fixture = yield* accounts()
           expect((yield* factsOf(fixture.placement)).host).toBe("test-host")
           expect(yield* reportedPeer(fixture)).toBeUndefined()
           yield* TestClock.adjust("1 hour")
-          const heard = { host: "peer-host", at: yield* Clock.currentTimeMillis }
+          const heardAt = yield* Clock.currentTimeMillis
           // Two runs on a, five on z: z is no account of this pool.
           yield* fixture.placement.notePeer(
             peerLine("peer", 1, [
@@ -9722,10 +9763,12 @@ describe("account lanes", () => {
               { accounts: [z], count: 5 },
             ]),
             scopeOf([a, b]),
+            "peer-host",
             "peer",
           )
           expect(yield* reportedPeer(fixture)).toEqual({
-            heard,
+            machine: "peer-host",
+            heardAt,
             runs: 2,
             silent: false,
             counted: true,
@@ -9734,7 +9777,8 @@ describe("account lanes", () => {
           // Silent: its runs count through the hold, and its link is down.
           yield* TestClock.adjust("90 seconds")
           expect(yield* reportedPeer(fixture)).toEqual({
-            heard,
+            machine: "peer-host",
+            heardAt,
             runs: 2,
             silent: true,
             counted: true,
@@ -9743,7 +9787,8 @@ describe("account lanes", () => {
           // The hold's last moment: still reported, its runs still count.
           yield* TestClock.adjust(Duration.minutes(30).pipe(Duration.subtract(Duration.millis(1))))
           expect(yield* reportedPeer(fixture)).toEqual({
-            heard,
+            machine: "peer-host",
+            heardAt,
             runs: 2,
             silent: true,
             counted: true,
@@ -9753,7 +9798,12 @@ describe("account lanes", () => {
           yield* TestClock.adjust("1 millis")
           expect(yield* reportedPeer(fixture)).toBeUndefined()
           // Its next line brings it back.
-          yield* fixture.placement.notePeer(peerLine("peer", 2, []), scopeOf([a, b]), "peer")
+          yield* fixture.placement.notePeer(
+            peerLine("peer", 2, []),
+            scopeOf([a, b]),
+            "peer-host",
+            "peer",
+          )
           expect(yield* reportedPeer(fixture)).toMatchObject({
             runs: 0,
             silent: false,
@@ -9770,16 +9820,18 @@ describe("account lanes", () => {
           const fixture = yield* accounts()
           yield* TestClock.adjust("1 hour")
           const link = yield* Scope.make()
-          yield* fixture.placement.runsLink.pipe(Scope.provide(link))
-          const heard = { host: "peer-host", at: yield* Clock.currentTimeMillis }
+          yield* fixture.placement.runsLink("peer-host").pipe(Scope.provide(link))
+          const heardAt = yield* Clock.currentTimeMillis
           yield* fixture.placement.notePeer(
             peerLine("peer", 1, [{ accounts: [a], count: 2 }]),
             scopeOf([a, b]),
+            "peer-host",
             "peer",
           )
           yield* TestClock.adjust("2 hours")
           expect(yield* reportedPeer(fixture)).toEqual({
-            heard,
+            machine: "peer-host",
+            heardAt,
             runs: 0,
             silent: true,
             counted: false,
@@ -9823,9 +9875,10 @@ describe("account lanes", () => {
           const own = yield* factsOf(fixture.placement)
           yield* TestClock.adjust("1 hour")
           const link = yield* Scope.make()
-          yield* fixture.placement.runsLink.pipe(Scope.provide(link))
+          yield* fixture.placement.runsLink("peer-host").pipe(Scope.provide(link))
           // Its first 90 s: no line yet, and not down.
           expect(yield* reportedPeer(fixture)).toEqual({
+            machine: "peer-host",
             runs: 0,
             silent: true,
             counted: false,
@@ -9833,18 +9886,25 @@ describe("account lanes", () => {
           })
           yield* TestClock.adjust("60 seconds")
           // A line of this server's own boot (a link that reached itself) is no peer line.
-          yield* fixture.placement.notePeer(own, scopeOf([a, b]), "own")
+          yield* fixture.placement.notePeer(own, scopeOf([a, b]), "peer-host", "own")
           yield* TestClock.adjust("30 seconds")
           expect(yield* reportedPeer(fixture)).toEqual({
+            machine: "peer-host",
             runs: 0,
             silent: true,
             counted: false,
             down: ["own"],
           })
-          const heard = { host: "peer-host", at: yield* Clock.currentTimeMillis }
-          yield* fixture.placement.notePeer(peerLine("peer", 1, []), scopeOf([a, b]), "own")
+          const heardAt = yield* Clock.currentTimeMillis
+          yield* fixture.placement.notePeer(
+            peerLine("peer", 1, []),
+            scopeOf([a, b]),
+            "peer-host",
+            "own",
+          )
           expect(yield* reportedPeer(fixture)).toEqual({
-            heard,
+            machine: "peer-host",
+            heardAt,
             runs: 0,
             silent: false,
             counted: true,
@@ -9852,7 +9912,8 @@ describe("account lanes", () => {
           })
           yield* TestClock.adjust("90 seconds")
           expect(yield* reportedPeer(fixture)).toEqual({
-            heard,
+            machine: "peer-host",
+            heardAt,
             runs: 0,
             silent: true,
             counted: true,
@@ -9861,13 +9922,225 @@ describe("account lanes", () => {
           // The link stopped: the peer's last facts stay, and no link is down.
           yield* Scope.close(link, Exit.void)
           expect(yield* reportedPeer(fixture)).toEqual({
-            heard,
+            machine: "peer-host",
+            heardAt,
             runs: 0,
             silent: true,
             counted: true,
             down: [],
           })
         }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    it.effect("two peers' fuel on a shared account both land in the point they moved", () =>
+      Effect.gen(function* () {
+        yield* TestClock.adjust("1 hour")
+        const resetAt = yield* resetIn(4)
+        const fixture = yield* accounts()
+        const line = (machine: string, seq: number, fuel: number): PoolFacts => ({
+          ...peerLine(`${machine}-boot`, seq, [], [spentOn(a, fuel)]),
+          host: machine,
+        })
+        const both = (seq: number, fuel: number) =>
+          Effect.forEach(
+            ["p", "q"],
+            (machine) =>
+              fixture.placement.notePeer(line(machine, seq, fuel), scopeOf([a]), machine, "peer"),
+            { discard: true },
+          )
+        yield* both(1, 0)
+        yield* fixture.read(a, fiveHour(0.1, resetAt))
+        yield* both(1, 0)
+        // The point closes before either line: it waits for both, and takes 1 M from each.
+        yield* fixture.read(a, fiveHour(0.11, resetAt))
+        yield* both(2, 1_000_000)
+        // This server's own 2 M moves the next point; both heartbeats follow.
+        yield* fixture.spend(a, Option.some(10))
+        yield* fixture.read(a, fiveHour(0.12, resetAt))
+        yield* both(2, 1_000_000)
+        const window = yield* fixture.windowOf([a], a, "5h")
+        expect(window.samples).toBe(2)
+        expect(window.fuelPerPct).toBeCloseTo(2_000_000, -3)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+    )
+
+    /** A seeded generator (mulberry32): the same seed, the same sequences. */
+    const seeded = (seed: number) => {
+      let state = seed >>> 0
+      return (below: number) => {
+        state = (state + 0x6d2b79f5) >>> 0
+        let t = Math.imul(state ^ (state >>> 15), 1 | state)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4294967296) * below)
+      }
+    }
+    type Random = ReturnType<typeof seeded>
+    const PEER_SILENT = 90_000
+    const PEER_COUNTED = PEER_SILENT + 30 * 60_000
+    /** What the model holds of one peer machine: its facts, its lines and this server's links to it. */
+    interface PeerModel {
+      readonly machine: string
+      boots: number
+      seq: number
+      runs: number
+      elsewhere: number
+      heardAt: Option.Option<number>
+      readonly heard: Map<PeerLink, number>
+      readonly ownLinks: Array<Scope.Closeable>
+      ownSince: number
+    }
+    const PEER_SECONDS = [1, 30, 60, 89, 90, 91, 600, 1_710, 1_800, 1_801]
+    const PEER_LINKS: ReadonlyArray<PeerLink> = ["own", "peer"]
+    const PEER_NAMES = ["bite-cristian", "b", "workbox", "c-2"]
+    const newPeerModel = (machine: string): PeerModel => ({
+      machine,
+      boots: 0,
+      seq: 0,
+      runs: 0,
+      elsewhere: 0,
+      heardAt: Option.none(),
+      heard: new Map(),
+      ownLinks: [],
+      ownSince: 0,
+    })
+    /** The facts the peer sends now: its runs on a, and `elsewhere` on z, no account of this pool. */
+    const peerFacts = (model: PeerModel): PoolFacts => ({
+      boot: `${model.machine}-${model.boots}`,
+      host: model.machine,
+      seq: model.seq,
+      providers: [
+        {
+          provider: "plan",
+          runs: [
+            { accounts: [a], count: model.runs },
+            { accounts: [z], count: model.elsewhere },
+          ],
+          accounts: [],
+        },
+      ],
+    })
+    const heardWithin = (model: PeerModel, now: number, span: number) =>
+      Option.exists(model.heardAt, (at) => now - at < span)
+    /** The lanes report of one peer the model expects at `now`. */
+    const expectedPeer = (model: PeerModel, now: number) => {
+      const counted = heardWithin(model, now, PEER_COUNTED)
+      const down: Array<PeerLink> = []
+      const ownLast = Math.max(model.ownSince, model.heard.get("own") ?? model.ownSince)
+      if (model.ownLinks.length > 0 && now - ownLast >= PEER_SILENT) down.push("own")
+      const peerLast = model.heard.get("peer")
+      if (Predicate.isNotUndefined(peerLast) && now - peerLast >= PEER_SILENT) down.push("peer")
+      let runs = 0
+      if (counted) runs = model.runs
+      return {
+        machine: model.machine,
+        ...omitUndefined({ heardAt: Option.getOrUndefined(model.heardAt) }),
+        runs,
+        counted,
+        silent: !heardWithin(model, now, PEER_SILENT),
+        down,
+      }
+    }
+    /** Every peer the lanes report at `now`: one this server links to, or whose facts count. */
+    const expectedPeers = (models: ReadonlyArray<PeerModel>, now: number) =>
+      models
+        .filter((model) => model.ownLinks.length > 0 || heardWithin(model, now, PEER_COUNTED))
+        .toSorted((left, right) => Order.String(left.machine, right.machine))
+        .map((model) => expectedPeer(model, now))
+    /** The peer's line on `link`, noted now: the model takes it as heard. */
+    const sendLine = (fixture: Fixture, model: PeerModel, facts: PoolFacts, link: PeerLink) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        yield* fixture.placement.notePeer(facts, scopeOf([a, b]), model.machine, link)
+        model.heardAt = Option.some(now)
+        model.heard.set(link, now)
+      })
+    /** A new line: a new boot now and then, its seq restarted. */
+    const newLine = (fixture: Fixture, model: PeerModel, link: PeerLink, random: Random) => {
+      if (model.seq === 0 || random(4) === 0) {
+        model.boots += 1
+        model.seq = 0
+      }
+      model.seq += 1
+      model.runs = random(5)
+      model.elsewhere = random(3)
+      return Effect.as(
+        sendLine(fixture, model, peerFacts(model), link),
+        `${model.machine} line ${model.boots}/${model.seq} with ${model.runs} runs on ${link}`,
+      )
+    }
+    const openLink = (fixture: Fixture, model: PeerModel) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const scope = yield* Scope.make()
+        yield* fixture.placement.runsLink(model.machine).pipe(Scope.provide(scope))
+        if (model.ownLinks.length === 0) model.ownSince = now
+        model.ownLinks.push(scope)
+        return `${model.machine} own link opens`
+      })
+    const closeLink = (model: PeerModel) =>
+      Effect.as(
+        Effect.forEach(model.ownLinks.splice(-1), (scope) => Scope.close(scope, Exit.void)),
+        `${model.machine} own link closes`,
+      )
+    const wait = (random: Random) => {
+      const seconds = PEER_SECONDS[random(PEER_SECONDS.length)] ?? 1
+      return Effect.as(TestClock.adjust(Duration.seconds(seconds)), `${seconds} s pass`)
+    }
+    /** One generated step on `model`'s machine, or of the clock: what it did. */
+    const peerStep = (fixture: Fixture, model: PeerModel, random: Random, now: number) => {
+      const link = PEER_LINKS[random(2)] ?? "peer"
+      const roll = random(12)
+      if (roll < 4 || model.seq === 0) return newLine(fixture, model, link, random)
+      // The same line again, as the other link brings it: it counts once.
+      if (roll < 6)
+        return Effect.as(
+          sendLine(fixture, model, peerFacts(model), link),
+          `${model.machine} echo on ${link}`,
+        )
+      // An older line of a live peer comes late: it changes no fact, and still is a line.
+      if (roll < 7 && model.seq > 1 && heardWithin(model, now, PEER_SILENT)) {
+        const older = peerFacts({ ...model, seq: model.seq - 1, runs: model.runs + 7 })
+        return Effect.as(sendLine(fixture, model, older, link), `${model.machine} stale on ${link}`)
+      }
+      if (roll < 8) return openLink(fixture, model)
+      if (roll < 9 && model.ownLinks.length > 0) return closeLink(model)
+      return wait(random)
+    }
+    /** One generated sequence of 40 steps on 2 to 4 peers; after each, the lanes match the model. */
+    const peerSequence = (sequence: number) =>
+      Effect.gen(function* () {
+        const random = seeded(20_261_104 + sequence)
+        const fixture = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const start = yield* Clock.currentTimeMillis
+        yield* fixture.read(a, [{ window: "7d", utilization: 0.1, resetAt: start + 160 * HOUR }])
+        const models = PEER_NAMES.slice(0, 2 + random(PEER_NAMES.length - 1)).map(newPeerModel)
+        const steps: Array<string> = []
+        for (let step = 0; step < 40; step += 1) {
+          const model = models[random(models.length)] ?? newPeerModel("b")
+          steps.push(yield* peerStep(fixture, model, random, yield* Clock.currentTimeMillis))
+          const now = yield* Clock.currentTimeMillis
+          const report = yield* fixture.placement.lanes(scopeOf([a, b]), Option.none())
+          const expected = expectedPeers(models, now)
+          const load = report.providers.find((lanes) => lanes.provider === "plan")?.load
+          expect({ sequence, steps, peers: report.peers ?? [], load }).toEqual({
+            sequence,
+            steps,
+            peers: expected,
+            load: expected.reduce((sum, peer) => sum + peer.runs, 0),
+          })
+        }
+        yield* Effect.forEach(models, closeLink, { discard: true })
+      })
+
+    it.effect(
+      "generated peer sets: each machine keeps its own facts, boots, links and silence, and the lanes sum their runs",
+      () =>
+        Effect.forEach(Arr.range(0, 119), peerSequence, { discard: true }).pipe(
+          Effect.scoped,
+          Effect.provide(placementLayer),
+        ),
+      60_000,
     )
 
     bunTest("a peer line with a count or fuel below 0 does not decode", () => {

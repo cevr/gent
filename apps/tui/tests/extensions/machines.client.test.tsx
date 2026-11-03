@@ -17,6 +17,7 @@ import {
   AgentEvent,
   CredentialSlot,
   EventEnvelope,
+  type LanePeer,
   type LaneReport,
   Model,
   ModelId,
@@ -194,15 +195,16 @@ const run = (fields: Record<string, Schema.Json>): MachineRunView =>
     ),
   )
 
-/** `measured` with the peer `peer` reports. */
-const withPeer = (peer: NonNullable<LaneReport["peer"]>, report = measured): LaneReport => ({
+/** `measured` with the one peer `peer` reports. */
+const withPeer = (peer: LanePeer, report = measured): LaneReport => ({
   ...report,
-  peer,
+  peers: [peer],
 })
 
 /** The peer `workbox`, its last line 12 s ago, two runs on this pool, both links up. */
-const linked: NonNullable<LaneReport["peer"]> = {
-  heard: { host: "workbox", at: NOW - 12_000 },
+const linked: LanePeer = {
+  machine: "workbox",
+  heardAt: NOW - 12_000,
   runs: 2,
   silent: false,
   counted: true,
@@ -210,16 +212,16 @@ const linked: NonNullable<LaneReport["peer"]> = {
 }
 
 /** `linked` fallen silent 3 min ago, inside the hold: its two last runs still count. */
-const holding: NonNullable<LaneReport["peer"]> = {
+const holding: LanePeer = {
   ...linked,
-  heard: { host: "workbox", at: NOW - 3 * MINUTE },
+  heardAt: NOW - 3 * MINUTE,
   silent: true,
 }
 
 /** `linked` silent for 3 h, past the hold: none of its runs count. */
-const gone: NonNullable<LaneReport["peer"]> = {
+const gone: LanePeer = {
   ...linked,
-  heard: { host: "workbox", at: NOW - 3 * HOUR },
+  heardAt: NOW - 3 * HOUR,
   runs: 0,
   silent: true,
   counted: false,
@@ -564,12 +566,11 @@ describe("the lanes band rows", () => {
   })
 
   test("a silent peer reads unread and its age; a link down marks peer! and names the link", () => {
-    const row = (peer: NonNullable<LaneReport["peer"]>, width = 120) =>
-      laneRows(withPeer(peer), NOW, width, utc)[1]
+    const row = (peer: LanePeer, width = 120) => laneRows(withPeer(peer), NOW, width, utc)[1]
     // Past the hold: silent, and none of its runs count.
     const silent = {
       ...linked,
-      heard: { host: "workbox", at: NOW - 3 * MINUTE },
+      heardAt: NOW - 3 * MINUTE,
       runs: 0,
       silent: true,
       counted: false,
@@ -594,15 +595,15 @@ describe("the lanes band rows", () => {
     expect(row({ ...silent, down: ["own", "peer"] })?.text).toBe(
       "peer! workbox unread 3m · links down",
     )
-    // No line yet: unread, and marked once this server's link has run 90 s.
-    const unheard = { runs: 0, silent: true, counted: false }
+    // No line yet: unread under its machine, and marked once this server's link has run 90 s.
+    const unheard = { machine: "workbox", runs: 0, silent: true, counted: false }
     expect(row({ ...unheard, down: [] })).toEqual({
-      text: "peer unread",
+      text: "peer workbox unread",
       provider: Option.none(),
       state: "unlinked",
     })
-    expect(row({ ...unheard, down: ["own"] })?.text).toBe("peer! unread · own link down")
-    expect(row({ ...unheard, down: ["own"] }, 27)?.text).toBe("peer! unread")
+    expect(row({ ...unheard, down: ["own"] })?.text).toBe("peer! workbox unread · own link down")
+    expect(row({ ...unheard, down: ["own"] }, 27)?.text).toBe("peer! workbox unread")
     // A narrow row keeps the link down over the age, and the age over the host; `peer!` stays.
     const at = (width: number) => row({ ...silent, down: ["peer"] }, width)?.text
     expect(at(40)).toBe("peer! workbox unread 3m · peer link down")
@@ -627,16 +628,19 @@ describe("the lanes band rows", () => {
   })
 
   test("this server's link names the peer row: its machine as the host, and silent or incompatible as its reason", () => {
-    const row = (peer: NonNullable<LaneReport["peer"]>, width = 120) =>
-      laneRows(withPeer(peer), NOW, width, utc)[1]
-    // Connected: the link's machine name, not the host the facts name.
-    expect(row({ ...linked, link: { machine: "bite-cristian", state: "connected" } })?.text).toBe(
-      "peer bite-cristian 2 runs · 12s",
-    )
+    const row = (peer: LanePeer, width = 120) => laneRows(withPeer(peer), NOW, width, utc)[1]
+    // Connected: the row names the machine the link reaches.
+    expect(
+      row({
+        ...linked,
+        machine: "bite-cristian",
+        link: { machine: "bite-cristian", state: "connected" },
+      })?.text,
+    ).toBe("peer bite-cristian 2 runs · 12s")
     // Silent: no frame for 90 s, and the link is down.
     const silent = {
       ...linked,
-      heard: { host: "workbox", at: NOW - 3 * MINUTE },
+      heardAt: NOW - 3 * MINUTE,
       runs: 0,
       silent: true,
       counted: false,
@@ -648,7 +652,13 @@ describe("the lanes band rows", () => {
       state: "unlinked",
     })
     // Incompatible: the peer runs another contract, and no facts crossed.
-    const unheard = { runs: 0, silent: true, counted: false, down: ["own" as const] }
+    const unheard = {
+      machine: "workbox",
+      runs: 0,
+      silent: true,
+      counted: false,
+      down: ["own" as const],
+    }
     expect(row({ ...unheard, link: { machine: "workbox", state: "incompatible" } })).toEqual({
       text: "peer! workbox unread · incompatible",
       provider: Option.none(),
@@ -665,8 +675,7 @@ describe("the lanes band rows", () => {
   })
 
   test("a silent peer's held runs show on its row: they outlive the link down, the age and the host", () => {
-    const row = (peer: NonNullable<LaneReport["peer"]>, width = 120) =>
-      laneRows(withPeer(peer), NOW, width, utc)[1]?.text
+    const row = (peer: LanePeer, width = 120) => laneRows(withPeer(peer), NOW, width, utc)[1]?.text
     // In the hold: silent, its two last runs still count against this pool.
     const held = { ...holding, down: ["peer" as const] }
     expect(row(held)).toBe("peer! workbox unread 3m · 2 runs held · peer link down")
@@ -773,8 +782,7 @@ describe("the lanes band rows", () => {
   })
 
   test("the peer row shows on the band only while the peer acts on this server, and hides after the hold", () => {
-    const band = (peer: NonNullable<LaneReport["peer"]>) =>
-      texts({ lanes: Option.some(withPeer(peer)), runs: [] }, 120)
+    const band = (peer: LanePeer) => texts({ lanes: Option.some(withPeer(peer)), runs: [] }, 120)
     // Inside the hold: silent, its last runs count, so this server keeps to half the pace.
     expect(band(holding)).toEqual(["⇄ peer workbox unread 3m · 2 runs held"])
     // A link went down while the peer was heard inside the hold.
@@ -788,7 +796,9 @@ describe("the lanes band rows", () => {
     expect(band({ ...gone, down: ["own"] })).toEqual([])
     expect(band(gone)).toEqual([])
     // Never heard: nothing it did counted.
-    expect(band({ runs: 0, silent: true, counted: false, down: ["own"] })).toEqual([])
+    expect(
+      band({ machine: "workbox", runs: 0, silent: true, counted: false, down: ["own"] }),
+    ).toEqual([])
     // A live peer's runs, and an idle linked peer, change nothing here.
     expect(band(linked)).toEqual([])
     expect(band({ ...linked, runs: 0 })).toEqual([])
@@ -1018,7 +1028,7 @@ describe("the lanes band reads", () => {
           const serverNow = DateTime.toEpochMillis(DateTime.nowUnsafe()) + offset
           const report = withPeer({
             ...holding,
-            heard: { host: "workbox", at: serverNow - 5 * MINUTE },
+            heardAt: serverNow - 5 * MINUTE,
           })
           const options = {
             serverClockOffset: () => Option.some(offset),

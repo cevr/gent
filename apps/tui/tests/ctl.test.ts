@@ -962,13 +962,9 @@ describe("gent ctl against a running server", () => {
           // The lanes name the peer: its record in the JSON, its row last in --line.
           const lanes = yield* Effect.flatMap(runCtl(seeded.home, ["lanes"]), resultAs("Lanes"))
           expect(lanes.providers.find((lane) => lane.provider === "anthropic")?.load).toBe(2)
-          expect(lanes.peer).toMatchObject({
-            heard: { host: "peer-host" },
-            runs: 2,
-            silent: false,
-            counted: true,
-            down: [],
-          })
+          expect(lanes.peers).toMatchObject([
+            { machine: "peer-host", runs: 2, silent: false, counted: true, down: [] },
+          ])
           const line = yield* runCtl(seeded.home, ["lanes", "--line"])
           expect(line.stdout.trimEnd().split("\n").at(-1)).toMatch(/^peer peer-host 2 runs · \d+s$/)
           // The relay runs while its stdin stays open.

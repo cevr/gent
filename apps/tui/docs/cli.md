@@ -224,20 +224,19 @@ credential), then a row `resets <provider> <slot> <count>, … · next lapses
 <clock>` when its accounts hold banked resets (Claude's reset grants,
 Codex's reset credits; a lapsed grant counts none, an account with none or
 out of the provider's `scope` is not named, and a count goes 30 minutes
-after the read that listed it). With a peer (`link.machines`, below) the last
-row is the peer: `peer <host> <n> runs · <age>` while its lines come (its runs
-on this server's accounts, the age of its last line), `peer <host> unread
+after the read that listed it). With peers (`link.machines`, below) the last
+rows are the peers, one per machine: `peer <machine> <n> runs · <age>` while its lines come (its runs
+on this server's accounts, the age of its last line), `peer <machine> unread
 <age>` after 90 s with no line (with `· <n> runs held` while its last runs
-still count, for 30 minutes), and `peer unread` before its first line. It
+still count, for 30 minutes), and `peer <machine> unread` before its first line. It
 reads `peer! … · own link down` when this server's link brought no facts
 for 90 s, `· peer link down` when the peer's link was heard and then went
 quiet 90 s, and `· links down` for both. While this server links to the
-peer, the row names the link's machine as the host, and its state in place
-of the link down: `· silent` (no frame for 90 s) or `· incompatible` (the
+peer, the row names the link's state in place of the link down: `· silent` (no frame for 90 s) or `· incompatible` (the
 peer runs another build's RPC contract; no facts cross). A narrow row keeps
-the held runs, then the link down, then the age, then the host. With no link
+the held runs, then the link down, then the age, then the machine. With no link
 of this server's own, the row goes 30 minutes after the peer went silent. The
-JSON holds it as `peer`: `heard` (`host`, `at`, epoch ms), `runs`, `silent`,
+JSON holds them as `peers`, sorted by machine: `machine`, `heardAt` (epoch ms, none before its first line), `runs`, `silent`,
 `down` (`own`, `peer`), `counted` (its facts still count, inside the
 30-minute hold) and `link` (`machine`, `state`: `connecting`, `connected`,
 `silent`, `incompatible`), and `serverNow` (epoch ms) is the server's clock as

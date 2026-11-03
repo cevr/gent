@@ -9,9 +9,10 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
+import type { LaneReport } from "@gent/core/protocol"
 import { makeTempDirectoryScoped, serveModelCatalogFixture } from "@gent/core/test-utils"
 import { Gent } from "@gent/sdk"
-import { ConfigProvider, Effect, FileSystem, Path, Schedule, Schema } from "effect"
+import { ConfigProvider, Effect, FileSystem, Path, Predicate, Schedule, Schema } from "effect"
 
 /** A server on a scratch home named `machine`, with `config` as its user file. */
 const serveMachine = (machine: string, config: Schema.Json) =>
@@ -86,24 +87,19 @@ describe("linked machines", () => {
             machine: "a",
             links: [{ machine: "b", state: "connected" }],
           })
-          // A pulled B's facts: its peer is B, over its own link.
-          const aPeer = yield* until(
-            a.client.accounts.lanes(),
-            (report) => report.peer?.heard?.host === "b",
-          )
-          expect(aPeer.peer).toMatchObject({
-            heard: { host: "b" },
-            silent: false,
-            down: [],
-            link: { machine: "b", state: "connected" },
-          })
-          // A pushed its facts to B: B's peer is A, and B runs no link of its own.
-          const bPeer = yield* until(
-            b.client.accounts.lanes(),
-            (report) => report.peer?.heard?.host === "a",
-          )
-          expect(bPeer.peer).toMatchObject({ heard: { host: "a" }, silent: false })
-          expect(bPeer.peer?.link).toBeUndefined()
+          // A pulled B's facts: its one peer is B, over its own link.
+          const heard = (report: LaneReport, machine: string) =>
+            report.peers?.some(
+              (peer) => peer.machine === machine && Predicate.isNotUndefined(peer.heardAt),
+            ) ?? false
+          const aPeer = yield* until(a.client.accounts.lanes(), (report) => heard(report, "b"))
+          expect(aPeer.peers).toMatchObject([
+            { machine: "b", silent: false, down: [], link: { machine: "b", state: "connected" } },
+          ])
+          // A pushed its facts to B: B's one peer is A, and B runs no link of its own.
+          const bPeer = yield* until(b.client.accounts.lanes(), (report) => heard(report, "a"))
+          expect(bPeer.peers).toMatchObject([{ machine: "a", silent: false }])
+          expect(bPeer.peers?.[0]?.link).toBeUndefined()
           expect((yield* b.client.link.machines()).machine).toBe("b")
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("40 seconds")),
       ),

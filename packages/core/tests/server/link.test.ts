@@ -30,18 +30,33 @@ import {
 } from "../../src/runtime/config"
 import { GentPlatform, runProcess } from "../../src/runtime/gent-platform"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { PoolFacts } from "../../src/domain/driver"
-import { CredentialPlacement, makeCredentialPlacement } from "../../src/runtime/provider"
+import { type LaneReport, PoolFacts } from "../../src/domain/driver"
+import { ProviderId } from "../../src/domain/agent"
+import { CredentialSlot } from "../../src/domain/ids"
+import {
+  CredentialPlacement,
+  type LaneScopeOf,
+  makeCredentialPlacement,
+} from "../../src/runtime/provider"
 import { Links, linkContract, rpcContract } from "../../src/server/link"
-import { BunTestServices, makeTempDirectoryScoped } from "../../src/test-utils/harness"
+import {
+  BunTestServices,
+  createRpcHarness,
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+} from "../../src/test-utils/harness"
+import { e2ePreset } from "../helpers/test-preset"
 
 /** The test platform's host name: this server's machine name. */
 const OWN = "test-host"
 const encodeFacts = Schema.encodeSync(Schema.fromJsonString(PoolFacts))
-const FAR_FACTS = encodeFacts({ boot: "far-boot", host: "far-host", seq: 0, providers: [] })
+const FAR_FACTS = encodeFacts({ boot: "far-boot", host: "far", seq: 0, providers: [] })
 
-/** The far end's argv: this bun running the fixture, as `gent ctl link` would be run. */
-const farEnd = (contract: string, mode: string, log: string) =>
+/**
+ * The far end's argv: this bun running the fixture, as `gent ctl link` would
+ * be run; its hello names the machine `facts` name.
+ */
+const farEnd = (contract: string, mode: string, log: string, facts = FAR_FACTS) =>
   Effect.map(
     Effect.flatMap(Path.Path, (path) =>
       path.fromFileUrl(new URL("./link-far-end.ts", import.meta.url)),
@@ -52,7 +67,7 @@ const farEnd = (contract: string, mode: string, log: string) =>
       contract,
       mode,
       log,
-      FAR_FACTS,
+      facts,
     ],
   )
 
@@ -83,15 +98,15 @@ const ends = () => {
 }
 
 /**
- * This server's links over `machines`, with a placement of its own, until
- * the scope closes.
+ * This server's links over `machines`, with a placement of its own that
+ * reads each provider's pool as `scopeOf` names it, until the scope closes.
  */
-const linksOver = (machines: LinkMachines) =>
+const linksOver = (machines: LinkMachines, scopeOf: LaneScopeOf = () => Effect.succeedNone) =>
   Effect.gen(function* () {
     const dir = yield* makeTempDirectoryScoped("gent-link-")
     const placement = yield* makeCredentialPlacement(Option.none())
     const context = yield* Layer.build(
-      Links.Live(() => Effect.succeedNone).pipe(
+      Links.Live(scopeOf).pipe(
         Layer.provide(
           Layer.mergeAll(
             ConfigService.Test(new UserConfig({ link: { machines } })),
@@ -185,12 +200,13 @@ describe("links", () => {
         ])
         // The far end's facts reached this server's lanes, on this server's own link.
         let report = yield* placement.lanes(() => Effect.succeedNone, Option.none())
-        for (let tries = 0; tries < 250 && Predicate.isUndefined(report.peer?.heard); tries++) {
+        const far = () => report.peers?.find((peer) => peer.machine === "far")
+        for (let tries = 0; tries < 250 && Predicate.isUndefined(far()?.heardAt); tries++) {
           yield* wallSleep(20)
           report = yield* placement.lanes(() => Effect.succeedNone, Option.none())
         }
-        const peer = report.peer
-        expect(peer).toMatchObject({ heard: { host: "far-host" }, down: [] })
+        expect(report.peers).toMatchObject([{ machine: "far", down: [] }])
+        expect(far()?.heardAt).toBeDefined()
         // This server's facts reached the far end, and each call names this machine.
         const lines = yield* logUntil(log, (found) =>
           found.some((line) => line.startsWith("note ")),
@@ -225,7 +241,7 @@ describe("links", () => {
         expect(yield* links.view).toEqual([{ machine: "far", state: "silent" }])
         // The lanes name this server's own link down.
         const report = yield* placement.lanes(() => Effect.succeedNone, Option.none())
-        expect(report.peer).toMatchObject({ down: ["own"] })
+        expect(report.peers).toMatchObject([{ machine: "far", down: ["own"] }])
         // The pings went unanswered: the run ended, and the next one connects.
         yield* secondsUntil(Effect.map(logged(log), (lines) => starts(lines) === 2))
         expect(yield* viewUntil(links, (view) => view[0]?.state === "connected")).toEqual([
@@ -256,33 +272,42 @@ describe("links", () => {
   )
 
   it.live(
-    "a far end on another contract, or with no hello, is incompatible and gets no facts",
+    "a far end on another contract, with no hello, or answering as another machine is incompatible and gets no facts",
     () =>
       Effect.gen(function* () {
         const contract = yield* linkContract
         const dir = yield* makeTempDirectoryScoped("gent-link-far-")
         const otherLog = `${dir}/other.log`
         const olderLog = `${dir}/older.log`
+        const elsewhereLog = `${dir}/elsewhere.log`
         const { links, placement } = yield* linksOver({
           other: yield* farEnd(`${contract}-other`, "serve", otherLog),
           older: yield* farEnd(contract, "nohello", olderLog),
+          // Its hello names machine `far`: a command that reaches another machine.
+          elsewhere: yield* farEnd(contract, "serve", elsewhereLog),
         })
         expect(
           yield* viewUntil(links, (view) => view.every((link) => link.state === "incompatible")),
         ).toEqual([
           { machine: "other", state: "incompatible" },
           { machine: "older", state: "incompatible" },
+          { machine: "elsewhere", state: "incompatible" },
         ])
         // Past the first retry: each run asked for the hello and nothing else.
         yield* logUntil(otherLog, (lines) => starts(lines) >= 2)
-        for (const log of [otherLog, olderLog]) {
+        for (const log of [otherLog, olderLog, elsewhereLog]) {
           const lines = yield* logged(log)
           expect(lines.filter((line) => line !== "start")).toEqual(
             lines.filter((line) => line !== "start").map(() => `request link.hello origin=${OWN}`),
           )
         }
         const report = yield* placement.lanes(() => Effect.succeedNone, Option.none())
-        expect(report.peer?.heard).toBeUndefined()
+        // No line came from any of them: each is a link of this server, never heard.
+        expect(report.peers?.map((peer) => Predicate.isUndefined(peer.heardAt))).toEqual([
+          true,
+          true,
+          true,
+        ])
       }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   )
 
@@ -309,6 +334,95 @@ describe("links", () => {
         expect(view.get("garbage")).toBe("connecting")
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(platformLayer, logs.layer)))
     },
+  )
+})
+
+// ── linked machines: each its own peer ──────────────────────────────────────
+
+const DEFAULT = CredentialSlot.make("default")
+/** The facts machine `host` streams: `count` runs on this server's account `default`. */
+const runsOn = (host: string, count: number) =>
+  encodeFacts({
+    boot: `${host}-boot`,
+    host,
+    seq: 1,
+    providers: [{ provider: "anthropic", runs: [{ accounts: [DEFAULT], count }], accounts: [] }],
+  })
+
+describe("linked machines", () => {
+  it.live(
+    "two linked machines keep their own facts: the lanes report each one's runs, and they add up",
+    () =>
+      Effect.gen(function* () {
+        const contract = yield* linkContract
+        const dir = yield* makeTempDirectoryScoped("gent-link-far-")
+        const scopeOf: LaneScopeOf = () =>
+          Effect.succeedSome([{ provider: ProviderId.make("anthropic"), slot: DEFAULT }])
+        const { links, placement } = yield* linksOver(
+          {
+            b: yield* farEnd(contract, "serve", `${dir}/b.log`, runsOn("b", 2)),
+            c: yield* farEnd(contract, "serve", `${dir}/c.log`, runsOn("c", 3)),
+          },
+          scopeOf,
+        )
+        yield* viewUntil(links, (view) => view.every((link) => link.state === "connected"))
+        let report = yield* placement.lanes(scopeOf, Option.none())
+        const heard = () =>
+          (report.peers ?? []).filter((peer) => Predicate.isNotUndefined(peer.heardAt))
+        for (let tries = 0; tries < 250 && heard().length < 2; tries++) {
+          yield* wallSleep(20)
+          report = yield* placement.lanes(scopeOf, Option.none())
+        }
+        expect(report.peers).toMatchObject([
+          { machine: "b", runs: 2, silent: false, counted: true, down: [] },
+          { machine: "c", runs: 3, silent: false, counted: true, down: [] },
+        ])
+        expect((report.peers ?? []).reduce((sum, peer) => sum + peer.runs, 0)).toBe(5)
+      }).pipe(Effect.scoped, Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.live(
+    "the server's lanes name each peer's own link: the link to the machine it is",
+    () =>
+      Effect.gen(function* () {
+        // The server runs the Bun platform: its contract names this checkout's source.
+        const contract = yield* linkContract.pipe(Effect.provide(BunGentPlatformLive))
+        const dir = yield* makeTempDirectoryScoped("gent-link-far-")
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          configServiceLayer: ConfigService.Test(
+            new UserConfig({
+              link: {
+                machines: {
+                  // The first link of the view: a peer of another contract.
+                  c: yield* farEnd(`${contract}-other`, "serve", `${dir}/c.log`, runsOn("c", 0)),
+                  b: yield* farEnd(contract, "serve", `${dir}/b.log`, runsOn("b", 0)),
+                },
+              },
+            }),
+          ),
+        })
+        const linked = (report: LaneReport) =>
+          report.peers?.some(
+            (peer) =>
+              peer.machine === "b" &&
+              Predicate.isNotUndefined(peer.heardAt) &&
+              peer.link?.state === "connected",
+          ) ?? false
+        let report = yield* client.accounts.lanes()
+        for (let tries = 0; tries < 400 && !linked(report); tries++) {
+          yield* wallSleep(20)
+          report = yield* client.accounts.lanes()
+        }
+        expect(report.peers).toMatchObject([
+          { machine: "b", link: { machine: "b", state: "connected" } },
+          { machine: "c", link: { machine: "c", state: "incompatible" } },
+        ])
+      }).pipe(Effect.scoped, Effect.provide(platformLayer)),
+    30_000,
   )
 })
 

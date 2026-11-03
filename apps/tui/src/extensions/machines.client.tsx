@@ -28,7 +28,7 @@
 import { Config, DateTime, Effect, Option, Order, Predicate, Schema, Stream } from "effect"
 import { createEffect, createRoot, For, on, Show } from "solid-js"
 import { omitUndefined, ref } from "@gent/core/extensions/api"
-import { cleanReviewText, type LaneReport } from "@gent/core/protocol"
+import { cleanReviewText, type LanePeer, type LaneReport } from "@gent/core/protocol"
 import { type MachineRunView, MachinesRpc, ReviewRound, RoleScore } from "@gent/extensions/client"
 import {
   ClientContext,
@@ -147,19 +147,19 @@ const laneBandRow = (row: LaneRow): BandRow => ({
 })
 
 /**
- * Whether the peer changes what this server does now: it fell silent while
- * its last runs still count in the hold (the server keeps to half the
- * pace), or a link went down while the peer was heard inside the hold.
+ * Whether a peer changes what this server does now: it fell silent while
+ * its last runs still count in the hold (the server keeps to its share of
+ * the pace), or a link to it went down while it was heard inside the hold.
  * A live peer's runs, an idle linked peer and a peer silent past the hold
  * are `/status` detail.
  */
-const peerActs = (peer: NonNullable<LaneReport["peer"]>): boolean =>
+const peerActs = (peer: LanePeer): boolean =>
   (peer.silent && peer.runs > 0) || (peer.counted && peer.down.length > 0)
 
 /**
  * The lanes rows that need the owner in this session: a refusal or a
  * usage-limit wait on the session's provider, a lost login there, the
- * Sabbath holding every run, and the peer's row while the peer acts on this
+ * Sabbath holding every run, and the row of each peer that acts on this
  * server ({@link peerActs}). `provider` is the session's model's provider;
  * none while the session names no model the catalog knows, and then every
  * provider's rows count. Every lane held by the owner's own runs (`full`),
@@ -173,15 +173,15 @@ const lanesNeedingOwner = (
   provider: Option.Option<string>,
   zone: DateTime.TimeZone,
 ): ReadonlyArray<LaneRow> => {
-  const peer = Option.exists(Option.fromUndefinedOr(report.peer), peerActs)
+  const acting = { ...report, peers: (report.peers ?? []).filter(peerActs) }
   const ours = (row: LaneRow) =>
     Option.isNone(provider) ||
     Option.match(row.provider, {
       onNone: () => true,
       onSome: (name) => Option.contains(provider, name),
     })
-  return laneRows(report, now, width, zone).filter((row) => {
-    if (row.state === "linked" || row.state === "unlinked") return peer
+  return laneRows(acting, now, width, zone).filter((row) => {
+    if (row.state === "linked" || row.state === "unlinked") return true
     return row.state === "none" && ours(row)
   })
 }
@@ -189,7 +189,7 @@ const lanesNeedingOwner = (
 /**
  * The band: the lanes rows that need the owner, then one row per active
  * run, oldest first, up to four and a count of the rest. Empty while no
- * lane of the session's provider is refused or waits, the peer does not act
+ * lane of the session's provider is refused or waits, no peer acts
  * on this server, and no run is active, so the band hides. `width` is the
  * text's columns; `provider` is the session's provider ({@link lanesNeedingOwner}).
  */

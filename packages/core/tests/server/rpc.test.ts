@@ -5539,10 +5539,12 @@ describe("AccountsRpcs", () => {
           ],
         })
         expect(yield* loadOf).toBe(2)
-        // The lanes name the peer, its runs on this server's accounts, and no link down.
-        const { peer } = yield* client.accounts.lanes()
-        expect(peer).toMatchObject({
-          heard: { host: "peer-host" },
+        // The lanes name the peer by the machine its facts name (a call with no
+        // link origin), its runs on this server's accounts, and no link down.
+        const { peers } = yield* client.accounts.lanes()
+        expect(peers).toHaveLength(1)
+        expect(peers?.[0]).toMatchObject({
+          machine: "peer-host",
           runs: 2,
           silent: false,
           counted: true,
@@ -5566,10 +5568,12 @@ describe("AccountsRpcs", () => {
             seq: 1,
             providers: [],
           })
-          expect((yield* client.accounts.lanes()).peer).toMatchObject({ silent: false, down: [] })
+          expect((yield* client.accounts.lanes()).peers).toMatchObject([
+            { silent: false, down: [] },
+          ])
           yield* TestClock.adjust("90 seconds")
-          expect((yield* client.accounts.lanes()).peer).toMatchObject({
-            heard: { host: "peer-host" },
+          expect((yield* client.accounts.lanes()).peers?.[0]).toMatchObject({
+            machine: "peer-host",
             silent: true,
             counted: true,
             down: ["peer"],

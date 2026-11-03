@@ -5,6 +5,7 @@ export {
   AuthPrompt,
   authMethodAppliesTo,
   type CredentialReceipt,
+  type LanePeer,
   LaneReport,
   liveResets,
   roundLanes,

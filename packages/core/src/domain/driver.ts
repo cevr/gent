@@ -902,19 +902,19 @@ export const ProviderLanes = Schema.Struct({
 })
 
 /**
- * A peer link, as this server sees it: `own`, the link this server runs
- * (`link.machines`, the peer's `accounts.pool` facts); `peer`, the link the
- * peer runs (its facts through `accounts.notePeer`).
+ * A link to a peer, as this server sees it: `own`, the link this server
+ * runs (`link.machines`, the peer's `accounts.pool` facts); `peer`, the
+ * link the peer runs (its facts through `accounts.notePeer`).
  */
 const PeerLink = Schema.Literals(["own", "peer"])
 export type PeerLink = typeof PeerLink.Type
 
 /**
  * A link's state (server/link.ts): `connecting` until the peer's
- * `link.hello` names this server's contract, then `connected`; `silent` once
- * no frame came for 90 s (since the link started, before its first);
- * `incompatible` while the peer's last hello named another contract, when
- * nothing else runs over it.
+ * `link.hello` names this server's contract and the link's machine, then
+ * `connected`; `silent` once no frame came for 90 s (since the link
+ * started, before its first); `incompatible` while the peer's last hello
+ * named another contract or another machine, when nothing else runs over it.
  */
 const LinkState = Schema.Literals(["connecting", "connected", "silent", "incompatible"])
 
@@ -923,19 +923,21 @@ export const LinkView = Schema.Struct({ machine: Schema.String, state: LinkState
 export type LinkView = typeof LinkView.Type
 
 /**
- * The server on the other machine that shares the pool (`notePeer`), as this
- * server last heard it. `heard`: its host and this server's clock at its
- * last line from either link; absent before its first line. `runs`: its
- * runs on the labels of this server's pools, while its facts count. `silent`:
- * no line for 90 s, or none yet. `counted`: its facts still count, within
- * 90 s of its last line or in the 30-minute hold after it, so it changes
- * this server's pace and lanes. `down`: each link that runs or ran and
- * brought no line for 90 s: `own` while this server runs its link, `peer`
- * once the peer's link sent a line. `link`: this server's own link to the
- * peer (`link.machines`), absent while it runs none.
+ * A server on another machine that shares the pool (`notePeer`), as this
+ * server last heard it. `machine`: the machine it is, as the links name
+ * it; every other field is that machine's alone. `heardAt`: this server's
+ * clock at its last line from either link; absent before its first line.
+ * `runs`: its runs on the labels of this server's pools, while its facts
+ * count. `silent`: no line for 90 s, or none yet. `counted`: its facts
+ * still count, within 90 s of its last line or in the 30-minute hold after
+ * it, so it changes this server's pace and lanes. `down`: each link that
+ * runs or ran and brought no line for 90 s: `own` while this server runs
+ * its link to it, `peer` once its link here sent a line. `link`: this
+ * server's own link to it (`link.machines`), absent while it runs none.
  */
 const LanePeer = Schema.Struct({
-  heard: Schema.optionalKey(Schema.Struct({ host: Schema.String, at: Schema.Finite })),
+  machine: Schema.String,
+  heardAt: Schema.optionalKey(Schema.Finite),
   runs: Schema.Int,
   silent: Schema.Boolean,
   counted: Schema.Boolean,
@@ -946,20 +948,22 @@ const LanePeer = Schema.Struct({
 /**
  * `accounts.lanes`: every provider gent read a quota window of or lost a
  * login on. Labels and numbers only. `sabbathEnd`: the end of the owner's
- * Sabbath while it holds every start (epoch ms); absent outside it. `peer`:
- * the other machine's server, once a line of it came or this server runs
- * its link. `serverNow`: the server's clock as it built the report, the
- * clock its times are on (a reset, an expiry, the peer's `heard.at`): a
+ * Sabbath while it holds every start (epoch ms); absent outside it. `peers`:
+ * each other machine's server, by machine, once a line of it came or this
+ * server runs its link to it; absent while there is none. `serverNow`: the
+ * server's clock as it built the report, the clock its times are on (a
+ * reset, an expiry, a peer's `heardAt`): a
  * caller with no connection clock reads their ages against it, never
  * against its own clock. Absent from a server older than the field.
  */
 export const LaneReport = Schema.Struct({
   providers: Schema.Array(ProviderLanes),
   sabbathEnd: Schema.optional(Schema.Finite),
-  peer: Schema.optionalKey(LanePeer),
+  peers: Schema.optionalKey(Schema.Array(LanePeer)),
   serverNow: Schema.optional(Schema.Finite),
 })
 export type LaneReport = typeof LaneReport.Type
+export type LanePeer = typeof LanePeer.Type
 export type LaneAccount = typeof LaneAccount.Type
 export type LaneWindow = typeof LaneWindow.Type
 export type LaneModel = typeof LaneModel.Type

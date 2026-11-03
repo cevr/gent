@@ -84,6 +84,7 @@ import {
   type ProviderResolution,
   type LaneAccount,
   type LaneModel,
+  type LanePeer,
   type LaneReport,
   LaneAdmission,
   LaneUnavailable,
@@ -4168,22 +4169,29 @@ interface CredentialPlacementService {
    */
   readonly noteFuel: (fuel: PlacementFuel) => Effect.Effect<void>
   /**
-   * A line of the peer's pool facts came, from this server's link or from
-   * the peer's (`accounts.notePeer`): one cache, the newest `seq` of a
-   * `boot`. Its runs count as load and its live sessions in the ranking,
-   * and each rise of its spend adds to the open (or pending) segments of
-   * the account. Labels are the identity: a peer label `scopeOf` does not
-   * name in this server's pool counts nothing. A line of this server's own
-   * `boot` is ignored. A line serves the lane queue. `link` names the link
-   * it came on, for the lanes report.
+   * A line of peer `machine`'s pool facts came, from this server's link to
+   * it or from its link here (`accounts.notePeer`): one cache per machine,
+   * the newest `seq` of a `boot`, so a line that came on both links counts
+   * once. Each peer's runs count as load and its live sessions in the
+   * ranking, added to every other peer's, and each rise of its spend adds
+   * to the open (or pending) segments of the account. Labels are the
+   * identity: a peer label `scopeOf` does not name in this server's pool
+   * counts nothing. A line of this server's own `boot` is ignored. A line
+   * serves the lane queue. `link` names the link it came on, for the
+   * lanes report.
    */
-  readonly notePeer: (facts: PoolFacts, scopeOf: LaneScopeOf, link: PeerLink) => Effect.Effect<void>
+  readonly notePeer: (
+    facts: PoolFacts,
+    scopeOf: LaneScopeOf,
+    machine: string,
+    link: PeerLink,
+  ) => Effect.Effect<void>
   /**
-   * This server's own link to the peer runs while the scope is open
-   * (`Links`, server/link.ts): the lanes report the peer, and the link down
-   * when no facts came on it for 90 s.
+   * This server's own link to peer `machine` runs while the scope is open
+   * (`Links`, server/link.ts): the lanes report that peer, and its link
+   * down when no facts came on it for 90 s.
    */
-  readonly runsLink: Effect.Effect<void, never, Scope.Scope>
+  readonly runsLink: (machine: string) => Effect.Effect<void, never, Scope.Scope>
   /**
    * The lanes of every provider gent read a quota window or banked resets
    * of, or lost a login on: each account's windows, fuel per percent,
@@ -5441,10 +5449,10 @@ export const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(f
   return { load: load(), save } satisfies PlacementLedgerStore
 })
 
-/** What placement holds of the peer's pool facts (`notePeer`). */
+/** What placement holds of one peer's pool facts (`notePeer`). */
 interface PeerView {
   readonly facts: PoolFacts
-  /** This server's clock at the last line from either source. */
+  /** This server's clock at the last line from either link. */
   readonly heardAt: number
   /** When the first line of `facts.boot` came. */
   readonly firstAt: number
@@ -5455,18 +5463,50 @@ interface PeerView {
 }
 
 /**
- * A reading that began a segment on an account the peer shares: the peer's
- * next line, if it comes by `until`, counts before that reading. `segment`
- * is the one the reading closed, which that line's rise joins; none when it
- * closed none, or one of unknown fuel, and the rise drops. Each boundary
- * puts the same lag on the same side, so a segment loses at its start what
- * it gains at its end.
+ * What placement holds of one peer machine: the links name it (`notePeer`,
+ * `runsLink`), and both links to it fill one entry, so a line that came
+ * on both counts once. Each peer's facts, boot, links, notices and silence
+ * are its own; its runs and spend add to every other peer's.
+ */
+interface PeerState {
+  /** Its last pool facts: the newest `seq` of a `boot`; none before its first line. */
+  readonly view: Option.Option<PeerView>
+  /** Each link → this server's clock at the last line that came on it. */
+  readonly heard: ReadonlyMap<PeerLink, number>
+  /** The open scopes of this server's own link to it (`runsLink`), and when the first opened. */
+  readonly ownLinks: number
+  readonly ownSince: number
+  /** The notices logged for its boot: each unmatched label, the own-label check, a week mismatch. */
+  readonly logged: ReadonlySet<string>
+  /** The armed serve 90 s after its last line: it turns the peer silent (`trimPeer`). */
+  readonly silenceWatch: Option.Option<Fiber.Fiber<void>>
+}
+
+/** A peer machine before its first line or link. */
+const emptyPeer: PeerState = {
+  view: Option.none(),
+  heard: new Map(),
+  ownLinks: 0,
+  ownSince: 0,
+  logged: new Set(),
+  silenceWatch: Option.none(),
+}
+
+/**
+ * A reading that began a segment on an account peers share: the next line
+ * of each peer in `awaiting`, if it comes by `until`, counts before that
+ * reading. `segment` is the one the reading closed, which those lines'
+ * rises join; none when it closed none, or one of unknown fuel, and the
+ * rises drop. Each boundary puts the same lag on the same side, so a
+ * segment loses at its start what it gains at its end.
  */
 interface PendingSegment {
   readonly segment: Option.Option<FuelSegment>
   /** The one model the window meters (`QuotaReading.model`). */
   readonly model: Option.Option<ModelId>
   readonly until: number
+  /** The peer machines that shared the account at the reading and sent no line since. */
+  readonly awaiting: ReadonlySet<string>
 }
 
 /** A bucket as the placement state keeps it: its sessions as a set. */
@@ -5704,34 +5744,40 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         (modelFuelPerHourOf(provider, named) / fuelPerHourOf(provider)) *
         (models.find((entry) => entry.model === named)?.weight ?? 1),
     })
-  /**
-   * The peer's last pool facts (`notePeer`), none before its first line.
-   * One cache for both links.
-   */
-  let peer = Option.none<PeerView>()
-  /** Each link → this server's clock at the last peer line that came on it. */
-  const linkHeard = new Map<PeerLink, number>()
-  /** The open scopes of this server's own link (`runsLink`), and when the first opened. */
-  let ownLinks = 0
-  let ownSince = 0
-  /** The notices logged for the peer's boot: each unmatched label, the own-label check, a week mismatch. */
-  const peerLogged = new Set<string>()
+  /** machine → what placement holds of that peer (`PeerState`). */
+  const peers = new Map<string, PeerState>()
+  const peerOf = (machine: string) => peers.get(machine) ?? emptyPeer
+  const updatePeer = (machine: string, change: (state: PeerState) => PeerState) =>
+    peers.set(machine, change(peerOf(machine)))
   /**
    * provider, slot, window (`windowKey`) → the segments closed on an account
-   * the peer shares, oldest first: the peer's next line adds its rise to the
-   * newest and keeps them; none in 60 s drops them (`PEER_PENDING_MS`).
+   * peers share, oldest first: each awaited peer's next line adds its rise
+   * to the newest that waits for it; once none waits, they keep what they
+   * hold; none in 60 s drops them (`PEER_PENDING_MS`).
    */
   const pendingSegments = new Map<string, ReadonlyArray<PendingSegment>>()
   /** Providers whose counted load passed their capacity (`pool-overshoot`), until it falls back. */
   const overshot = new Set<string>()
   /** Logs a step under the lock asked for: written once the lock is let go (`locked`). */
   const notices: Array<Effect.Effect<void>> = []
-  /** The peer's facts while they count: within 90 s of its last line, or in the 30-minute hold after. */
-  const peerCounted = (now: number) =>
-    Option.filter(peer, (view) => now - view.heardAt < PEER_SILENT_MS + PEER_HOLD_MS)
-  /** The peer is silent and held: its last runs count, and this server keeps to half the pace. */
-  const peerHolding = (now: number) =>
-    Option.exists(peerCounted(now), (view) => now - view.heardAt >= PEER_SILENT_MS)
+  /** A peer's facts while they count: within 90 s of its last line, or in the 30-minute hold after. */
+  const viewCounted = (view: PeerView, now: number) =>
+    now - view.heardAt < PEER_SILENT_MS + PEER_HOLD_MS
+  /** Each peer machine whose facts count, with its view, by machine. */
+  const countedPeers = (now: number) =>
+    [...peers]
+      .flatMap(([machine, state]) =>
+        Option.toArray(
+          Option.map(
+            Option.filter(state.view, (view) => viewCounted(view, now)),
+            (view) => [machine, view] as const,
+          ),
+        ),
+      )
+      .toSorted(([left], [right]) => Order.String(left, right))
+  /** A peer silent and held: its last runs count, and this server keeps to half the pace. */
+  const viewHolding = (view: PeerView, now: number) =>
+    viewCounted(view, now) && now - view.heardAt >= PEER_SILENT_MS
   /** `provider`'s entry of `facts`. */
   const providerFacts = (facts: PoolFacts, provider: string) =>
     Option.fromUndefinedOr(facts.providers.find((entry) => entry.provider === provider))
@@ -5747,19 +5793,24 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         entry.runs.some((run) => run.accounts.includes(slot)),
     )
   /**
-   * Whether the peer shares `slot` now: its counted facts list spend or a
+   * The peers that share `slot` now: their counted facts list spend or a
    * run on it, under a label of this server's pool. A segment closed there
-   * waits for the peer's next line.
+   * waits for each one's next line.
    */
-  const peerShares = (provider: string, slot: CredentialSlot, now: number) =>
-    Option.exists(
-      peerCounted(now),
-      (view) => peerMatched(view, provider, slot) && usesAccount(view.facts, provider, slot),
+  const peerSharers = (provider: string, slot: CredentialSlot, now: number) =>
+    new Set(
+      countedPeers(now)
+        .filter(
+          ([, view]) =>
+            peerMatched(view, provider, slot) && usesAccount(view.facts, provider, slot),
+        )
+        .map(([machine]) => machine),
     )
   /**
-   * The peer's runs on `provider` that share an account of this server's
-   * pool with `scope`, of `model` alone when one is named, sized as
-   * `laneLoad` sizes this server's own; 0 once its facts no longer count.
+   * The runs of every counted peer on `provider` that share an account of
+   * this server's pool with `scope`, of `model` alone when one is named,
+   * sized as `laneLoad` sizes this server's own: each peer's own runs, so
+   * the peers' runs add up; 0 once no peer's facts count.
    */
   const peerLoad = (
     provider: string,
@@ -5767,77 +5818,79 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     model: Option.Option<ModelId>,
     models: ReadonlyArray<LaneModel>,
     now: number,
-  ) =>
-    Option.match(peerCounted(now), {
-      onNone: () => 0,
-      onSome: (view) => {
-        let load = 0
-        const runs = Option.match(providerFacts(view.facts, provider), {
-          onNone: () => [],
-          onSome: (entry) => entry.runs,
-        })
-        for (const run of runs) {
-          const runModel = Option.fromUndefinedOr(run.model)
-          if (
-            !run.accounts.some((slot) => peerMatched(view, provider, slot) && scope.includes(slot))
-          )
-            continue
-          if (Option.isSome(model) && !Option.contains(runModel, model.value)) continue
-          load +=
-            run.count *
-            Option.match(model, {
-              onNone: () => runShare(provider, models, runModel),
-              onSome: () => 1,
-            })
-        }
-        return load
-      },
-    })
-  /**
-   * The peer as the lanes report it (`LaneReport.peer`): none while this
-   * server runs no link of its own and the peer's facts do not count (before
-   * its first line, or once its hold ended: an owner who removed the
-   * peer's `link.machines` entry sees the band forget it). While this
-   * server runs its own link, the peer stays, so the band names that link
-   * down. Its runs are
-   * those that hold a label of this server's pools, while its facts count.
-   * A link is down when it brought no line for 90 s: this server's own
-   * while it runs (counted from its start before its first line), the
-   * peer's once a line came on it. Under the lock.
-   */
-  const peerReport = (now: number): Option.Option<NonNullable<LaneReport["peer"]>> => {
-    if (Option.isNone(peerCounted(now)) && ownLinks === 0) return Option.none()
-    const down: Array<PeerLink> = []
-    const ownLast = Math.max(ownSince, linkHeard.get("own") ?? ownSince)
-    if (ownLinks > 0 && now - ownLast >= PEER_SILENT_MS) down.push("own")
-    const peerLast = linkHeard.get("peer")
-    if (Predicate.isNotUndefined(peerLast) && now - peerLast >= PEER_SILENT_MS) down.push("peer")
-    const runs = Option.match(peerCounted(now), {
-      onNone: () => 0,
-      onSome: (view) =>
-        view.facts.providers
-          .flatMap((entry) =>
-            entry.runs.filter((run) =>
-              run.accounts.some((slot) => peerMatched(view, entry.provider, slot)),
-            ),
-          )
-          .reduce((sum, run) => sum + run.count, 0),
-    })
-    return Option.some({
-      ...omitUndefined({
-        heard: Option.getOrUndefined(
-          Option.map(peer, (view) => ({ host: view.facts.host, at: view.heardAt })),
-        ),
-      }),
-      runs,
-      counted: Option.isSome(peerCounted(now)),
-      silent: Option.match(peer, {
-        onNone: () => true,
-        onSome: (view) => now - view.heardAt >= PEER_SILENT_MS,
-      }),
-      down,
-    })
+  ) => {
+    let load = 0
+    for (const [, view] of countedPeers(now)) {
+      const runs = Option.match(providerFacts(view.facts, provider), {
+        onNone: () => [],
+        onSome: (entry) => entry.runs,
+      })
+      for (const run of runs) {
+        const runModel = Option.fromUndefinedOr(run.model)
+        if (!run.accounts.some((slot) => peerMatched(view, provider, slot) && scope.includes(slot)))
+          continue
+        if (Option.isSome(model) && !Option.contains(runModel, model.value)) continue
+        load +=
+          run.count *
+          Option.match(model, {
+            onNone: () => runShare(provider, models, runModel),
+            onSome: () => 1,
+          })
+      }
+    }
+    return load
   }
+  /**
+   * The peers as the lanes report them (`LaneReport.peers`), by machine: a
+   * peer while this server runs its own link to it or its facts count
+   * (before its first line, or once its hold ended, it is gone: an owner
+   * who removed its `link.machines` entry sees the band forget it). Each
+   * names its own machine, its own runs on the labels of this server's
+   * pools while its facts count, and its own links down: a link is down
+   * when it brought no line for 90 s, this server's own while it runs
+   * (counted from its start before its first line), the peer's once a line
+   * came on it. Under the lock.
+   */
+  const peerReports = (now: number): Array<LanePeer> =>
+    [...peers]
+      .filter(
+        ([, state]) =>
+          state.ownLinks > 0 || Option.exists(state.view, (view) => viewCounted(view, now)),
+      )
+      .toSorted(([left], [right]) => Order.String(left, right))
+      .map(([machine, state]) => {
+        const counted = Option.filter(state.view, (view) => viewCounted(view, now))
+        const down: Array<PeerLink> = []
+        const ownLast = Math.max(state.ownSince, state.heard.get("own") ?? state.ownSince)
+        if (state.ownLinks > 0 && now - ownLast >= PEER_SILENT_MS) down.push("own")
+        const peerLast = state.heard.get("peer")
+        if (Predicate.isNotUndefined(peerLast) && now - peerLast >= PEER_SILENT_MS)
+          down.push("peer")
+        const runs = Option.match(counted, {
+          onNone: () => 0,
+          onSome: (view) =>
+            view.facts.providers
+              .flatMap((entry) =>
+                entry.runs.filter((run) =>
+                  run.accounts.some((slot) => peerMatched(view, entry.provider, slot)),
+                ),
+              )
+              .reduce((sum, run) => sum + run.count, 0),
+        })
+        return {
+          machine,
+          ...omitUndefined({
+            heardAt: Option.getOrUndefined(Option.map(state.view, (view) => view.heardAt)),
+          }),
+          runs,
+          counted: Option.isSome(counted),
+          silent: Option.match(state.view, {
+            onNone: () => true,
+            onSome: (view) => now - view.heardAt >= PEER_SILENT_MS,
+          }),
+          down,
+        }
+      })
   /**
    * The runs holding a lane on `provider` that share an account with
    * `scope`, of `model` alone when one is named: this server's own
@@ -6290,31 +6343,52 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     trimPeer(now)
   }
   /**
-   * A pending segment that saw no peer line in 60 s goes: its fuel is
-   * unknown, never zero. A peer with no line for 90 s turns silent once: the
-   * open and pending segments of the accounts it shares go, and the hold
-   * begins. Under the lock.
+   * A pending segment that saw not every awaited peer's line in 60 s goes:
+   * its fuel is unknown, never zero. Each peer with no line for 90 s turns
+   * silent once: the open and pending segments of the accounts it shares
+   * go, and its hold begins. Under the lock.
    */
   const trimPeer = (now: number) => {
-    for (const [key, list] of pendingSegments) {
+    for (const [key, list] of [...pendingSegments]) {
       const kept = list.filter((pending) => pending.until > now)
       if (kept.length === list.length) continue
-      if (kept.length === 0) pendingSegments.delete(key)
-      else pendingSegments.set(key, kept)
+      pendingSegments.set(key, kept)
+      settlePending(key)
     }
-    if (Option.isNone(peer)) return
-    const view = peer.value
-    if (view.silent || now - view.heardAt < PEER_SILENT_MS) return
-    peer = Option.some({ ...view, silent: true })
-    for (const [provider, pool] of view.pools)
-      for (const slot of pool)
-        if (usesAccount(view.facts, provider, slot))
-          dropAccountSegments(provider, slot, Option.none())
-    notices.push(
-      Effect.logWarning("credential-placement.peer.silent").pipe(
-        Effect.annotateLogs({ boot: view.facts.boot, silentMs: now - view.heardAt }),
-      ),
-    )
+    for (const [machine, state] of peers) {
+      if (Option.isNone(state.view)) continue
+      const view = state.view.value
+      if (view.silent || now - view.heardAt < PEER_SILENT_MS) continue
+      peers.set(machine, { ...state, view: Option.some({ ...view, silent: true }) })
+      for (const [provider, pool] of view.pools)
+        for (const slot of pool)
+          if (usesAccount(view.facts, provider, slot))
+            dropAccountSegments(provider, slot, Option.none())
+      notices.push(
+        Effect.logWarning("credential-placement.peer.silent").pipe(
+          Effect.annotateLogs({ machine, boot: view.facts.boot, silentMs: now - view.heardAt }),
+        ),
+      )
+    }
+  }
+  /**
+   * The pending segments of `key` that wait for no peer, from the oldest
+   * up to the first that still waits, keep what they hold; the window's
+   * closed segments stay oldest first. Under the lock.
+   */
+  const settlePending = (key: string) => {
+    const list = pendingSegments.get(key) ?? []
+    const waits = list.findIndex((pending) => pending.awaiting.size > 0)
+    let done = list
+    if (waits >= 0) done = list.slice(0, waits)
+    const closed = done.flatMap((pending) => Option.toArray(pending.segment))
+    if (closed.length > 0) {
+      segments.set(key, [...(segments.get(key) ?? []), ...closed])
+      version += 1
+    }
+    const rest = list.slice(done.length)
+    if (rest.length === 0) pendingSegments.delete(key)
+    else pendingSegments.set(key, rest)
   }
   /**
    * The open and pending segments of `provider`'s `slot` go: the account-wide
@@ -6664,7 +6738,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   })
   /**
    * The live sessions on `slot` but `except`, each at its model's share of a
-   * mean run: this server's own, and the peer's while its facts count.
+   * mean run: this server's own, and each peer's while its facts count.
    */
   const liveOn = (
     provider: string,
@@ -6681,15 +6755,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         key !== placementKey(provider, except)
       )
         load += runShare(provider, models, Option.some(entry.model))
-    const view = Option.filter(peerCounted(now), (found) => peerMatched(found, provider, slot))
-    if (Option.isNone(view)) return load
-    for (const account of Option.match(providerFacts(view.value.facts, provider), {
-      onNone: () => [],
-      onSome: (entry) => entry.accounts,
-    }))
-      if (account.slot === slot)
-        for (const entry of account.live)
-          load += entry.sessions * runShare(provider, models, Option.some(entry.model))
+    for (const [, view] of countedPeers(now)) {
+      if (!peerMatched(view, provider, slot)) continue
+      for (const account of Option.match(providerFacts(view.facts, provider), {
+        onNone: () => [],
+        onSome: (entry) => entry.accounts,
+      }))
+        if (account.slot === slot)
+          for (const entry of account.live)
+            load += entry.sessions * runShare(provider, models, Option.some(entry.model))
+    }
     return load
   }
   /**
@@ -6726,14 +6801,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       opened: Option.none<number>(),
     }
     const open = Option.fromUndefinedOr(openSegments.get(key))
-    // On an account the peer shares, the peer's next line may bring spend
-    // from before this reading: a reading that begins a segment leaves it
-    // that line's rise (`PendingSegment`, `notePeer`).
-    const shared = peerShares(provider, slot, now)
+    // On an account peers share, each one's next line may bring spend from
+    // before this reading: a reading that begins a segment leaves it those
+    // lines' rises (`PendingSegment`, `notePeer`).
+    const sharers = peerSharers(provider, slot, now)
+    const shared = sharers.size > 0
     const waitForPeer = (segment: Option.Option<FuelSegment>) =>
       pendingSegments.set(key, [
         ...(pendingSegments.get(key) ?? []),
-        { segment, model: fresh.model, until: now + PEER_PENDING_MS },
+        { segment, model: fresh.model, until: now + PEER_PENDING_MS, awaiting: sharers },
       ])
     const continues = Option.exists(
       last,
@@ -7233,11 +7309,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         })
         // A silent peer in its hold may still run what it last held and
         // admit on its own side: this server keeps its own pool load under
-        // half the capacity, so the two stay at or under it.
-        const halved =
-          Option.isNone(model) &&
-          peerHolding(now) &&
-          Option.exists(peer, (view) => Option.isSome(providerFacts(view.facts, request.provider)))
+        // its share of the capacity, one share for each machine whose facts
+        // name the provider, so together they stay at or under it.
+        const sharing = countedPeers(now).filter(([, view]) =>
+          Option.isSome(providerFacts(view.facts, request.provider)),
+        )
+        const holding = Option.isNone(model) && sharing.some(([, view]) => viewHolding(view, now))
+        const share = 1 / (1 + sharing.length)
         return Option.filter(
           Option.some({
             lanes,
@@ -7250,7 +7328,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           }),
           (check) =>
             check.load + check.size > check.supply + 1e-9 ||
-            (halved && own + check.size > check.supply / 2 + 1e-9),
+            (holding && own + check.size > check.supply * share + 1e-9),
         )
       },
     )
@@ -7434,12 +7512,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           Option.map(waiter.request.sabbath, (place) => sabbathAround(now, place).start),
         ).flatMap(Option.toArray)
         // A silent peer's runs stop counting at its hold's end.
-        const peerRelease = Option.map(peer, (view) => view.heardAt + PEER_SILENT_MS + PEER_HOLD_MS)
+        const peerRelease = [...peers.values()].flatMap((state) =>
+          Option.toArray(
+            Option.map(state.view, (view) => view.heardAt + PEER_SILENT_MS + PEER_HOLD_MS),
+          ),
+        )
         const times = [
           ...Array.from(readings.values(), (reading) => reading.resetAt),
           ...held.values(),
           ...sabbaths,
-          ...Option.toArray(peerRelease),
+          ...peerRelease,
         ].filter((at) => at > now)
         return Option.liftPredicate(Math.min(...times), () => times.length > 0)
       })
@@ -7540,16 +7622,18 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         },
       ),
     )
-  /** The armed serve 90 s after the peer's last line: it turns the peer silent (`trimPeer`). */
-  let silenceWatch = Option.none<Fiber.Fiber<void>>()
   /**
    * Logs `credential-placement.pool-overshoot` once per crossing: a provider
-   * whose counted load, this server's and the peer's, passed its capacity
-   * over this server's pool. Under the lock.
+   * whose counted load, this server's and every peer's, passed its
+   * capacity over this server's pool. Under the lock.
    */
   const checkOvershoot = (now: number) => {
-    if (Option.isNone(peer)) return
-    for (const [provider, pool] of peer.value.pools) {
+    const pools = new Map<string, Set<CredentialSlot>>()
+    for (const state of peers.values())
+      for (const view of Option.toArray(state.view))
+        for (const [provider, pool] of view.pools)
+          pools.set(provider, new Set([...(pools.get(provider) ?? []), ...pool]))
+    for (const [provider, pool] of pools) {
       const { lanes, supply } = providerLanes(
         provider,
         [...pool],
@@ -7576,24 +7660,31 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }
   }
   /**
-   * The peer spent `rise` more fuel on `model` of `slot`: in each window it
-   * reaches, the newest reading that waits for it (`PendingSegment`) takes
-   * it, into the segment it closed or dropped with none; else the open
-   * segment does.
+   * Peer `machine` spent `rise` more fuel on `model` of `slot`: in each
+   * window it reaches, the newest reading that waits for that peer
+   * (`PendingSegment`) takes it, into the segment it closed or dropped with
+   * none; else the open segment does.
    */
-  const addPeerFuel = (provider: string, slot: CredentialSlot, model: ModelId, rise: number) => {
+  const addPeerFuel = (
+    machine: string,
+    provider: string,
+    slot: CredentialSlot,
+    model: ModelId,
+    rise: number,
+  ) => {
     for (const [key, open] of openSegments) {
       if (!ofLabel(key, provider, slot)) continue
       // Another model's spend never moves a model's window.
       if (Option.isSome(open.model) && open.model.value !== model) continue
       const pending = pendingSegments.get(key) ?? []
-      const newest = pending.at(-1)
+      const at = pending.findLastIndex((entry) => entry.awaiting.has(machine))
+      const newest = pending[at]
       if (Predicate.isNotUndefined(newest)) {
         if (Option.isNone(newest.segment)) continue
         const segment = newest.segment.value
         const models = segment.models ?? []
         pendingSegments.set(key, [
-          ...pending.slice(0, -1),
+          ...pending.slice(0, at),
           {
             ...newest,
             segment: Option.some({
@@ -7609,6 +7700,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               edges: { ...segment.edges, close: (segment.edges?.close ?? 0) + rise },
             }),
           },
+          ...pending.slice(at + 1),
         ])
         continue
       }
@@ -7621,11 +7713,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }
   }
   /**
-   * The rise of each matched account's spend from `before` to `facts`, per
-   * model: a priced rise adds to its segments (`addPeerFuel`), a rise of the
-   * unpriced count drops them, as an unpriced own request does.
+   * The rise of each matched account's spend from `before` to `facts` of
+   * peer `machine`, per model: a priced rise adds to its segments
+   * (`addPeerFuel`), a rise of the unpriced count drops them, as an
+   * unpriced own request does.
    */
   const addPeerRise = (
+    machine: string,
     before: PoolFacts,
     facts: PoolFacts,
     pools: ReadonlyMap<string, ReadonlySet<CredentialSlot>>,
@@ -7646,17 +7740,18 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             continue
           }
           const rise = spent.fuel - (old?.fuel ?? 0)
-          if (rise > 0) addPeerFuel(entry.provider, account.slot, spent.model, rise)
+          if (rise > 0) addPeerFuel(machine, entry.provider, account.slot, spent.model, rise)
         }
       }
     }
   }
   /**
-   * A notice for each matched label of `entry` whose weekly reset differs
-   * from this server's by more than 60 s, once per boot (`once`). Under the
-   * lock.
+   * A notice for each matched label of `entry` of peer `machine` whose
+   * weekly reset differs from this server's by more than 60 s, once per
+   * boot (`once`). Under the lock.
    */
   const checkPeerWeeks = (
+    machine: string,
     entry: PoolFacts["providers"][number],
     pool: ReadonlySet<CredentialSlot>,
     once: (...key: ReadonlyArray<string>) => boolean,
@@ -7671,6 +7766,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       notices.push(
         Effect.logWarning("credential-placement.peer.week-mismatch").pipe(
           Effect.annotateLogs({
+            machine,
             provider: entry.provider,
             slot: account.slot,
             differenceMs: Math.abs(own.resetAt - week),
@@ -7680,23 +7776,24 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }
   }
   /**
-   * Each label notice of the peer's boot, once: a peer label no account of
-   * this server's pool holds, an own pool label the peer does not list
-   * (60 s after its boot's first line, once its sweep read its accounts),
-   * and a matched label whose weekly reset differs from this server's by
-   * more than 60 s, which still counts. Under the lock.
+   * Each label notice of peer `machine`'s boot, once: a peer label no
+   * account of this server's pool holds, an own pool label the peer does
+   * not list (60 s after its boot's first line, once its sweep read its
+   * accounts), and a matched label whose weekly reset differs from this
+   * server's by more than 60 s, which still counts. Under the lock.
    */
-  const checkPeerLabels = (view: PeerView, now: number) => {
+  const checkPeerLabels = (machine: string, view: PeerView, now: number) => {
+    const logged = new Set(peerOf(machine).logged)
     const once = (...key: ReadonlyArray<string>) => {
       const entry = placementKey(...key)
-      if (peerLogged.has(entry)) return false
-      peerLogged.add(entry)
+      if (logged.has(entry)) return false
+      logged.add(entry)
       return true
     }
     const unmatched = (provider: string, side: string, labels: ReadonlyArray<CredentialSlot>) =>
       notices.push(
         Effect.logWarning("credential-placement.peer.label-unmatched").pipe(
-          Effect.annotateLogs({ provider, side, labels: labels.toSorted().join(", ") }),
+          Effect.annotateLogs({ machine, provider, side, labels: labels.toSorted().join(", ") }),
         ),
       )
     for (const entry of view.facts.providers) {
@@ -7713,8 +7810,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         const ownOnly = [...pool].filter((slot) => !listed.has(slot))
         if (ownOnly.length > 0) unmatched(entry.provider, "own", ownOnly)
       }
-      checkPeerWeeks(entry, pool, once)
+      checkPeerWeeks(machine, entry, pool, once)
     }
+    updatePeer(machine, (state) => ({ ...state, logged }))
   }
   /**
    * A peer line with no base gives no rise: the open and pending segments of
@@ -7736,45 +7834,56 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         )
           dropAccountSegments(provider, slot, Option.none())
   }
-  /** A peer line came after each pending segment's reading: each keeps what it holds. Under the lock. */
-  const commitPending = () => {
-    if (pendingSegments.size === 0) return
-    for (const [key, list] of pendingSegments) {
-      const closed = list.flatMap((pending) => Option.toArray(pending.segment))
-      if (closed.length > 0) segments.set(key, [...(segments.get(key) ?? []), ...closed])
+  /**
+   * A line of peer `machine` came after each pending segment's reading:
+   * none waits for that peer any more, and each that waits for no peer
+   * keeps what it holds (`settlePending`). Under the lock.
+   */
+  const commitPending = (machine: string) => {
+    for (const [key, list] of [...pendingSegments]) {
+      pendingSegments.set(
+        key,
+        list.map((pending) => ({
+          ...pending,
+          awaiting: new Set([...pending.awaiting].filter((awaited) => awaited !== machine)),
+        })),
+      )
+      settlePending(key)
     }
-    pendingSegments.clear()
-    version += 1
   }
   /**
-   * The peer's line `facts` at `now`, `pools` this server's own pool per
-   * provider. A lower `seq` of the cached boot only refreshes the time. A
-   * higher or equal one adds its spend's rise and replaces the cache. A
-   * line with no base (the first, a new boot, or the first after silence)
-   * gives no rise: the open and pending segments of the accounts the old
-   * facts used or the new ones list spend on go. Then each pending segment
-   * keeps what it holds: this line came after its reading. Under the lock.
+   * Peer `machine`'s line `facts` at `now`, `pools` this server's own pool
+   * per provider. A lower `seq` of its cached boot only refreshes the time.
+   * A higher or equal one adds its spend's rise and replaces its cache. A
+   * line with no base (its first, a new boot, or its first after silence)
+   * gives no rise: the open and pending segments of the accounts its old
+   * facts used or the new ones list spend on go. Then no pending segment
+   * waits for it: this line came after their readings. Another peer's
+   * facts, boot and notices stay as they were. Under the lock.
    */
   const takePeerLine = (
+    machine: string,
     facts: PoolFacts,
     pools: ReadonlyMap<string, ReadonlySet<CredentialSlot>>,
     now: number,
   ) => {
-    const sameBoot = Option.filter(peer, (view) => view.facts.boot === facts.boot)
+    const cached = peerOf(machine).view
+    const sameBoot = Option.filter(cached, (view) => view.facts.boot === facts.boot)
     const base = Option.filter(sameBoot, (view) => !view.silent)
     if (Option.isSome(base) && facts.seq < base.value.facts.seq) {
-      peer = Option.some({ ...base.value, heardAt: now })
+      const refreshed = { ...base.value, heardAt: now }
+      updatePeer(machine, (state) => ({ ...state, view: Option.some(refreshed) }))
       return
     }
-    if (Option.isSome(base)) addPeerRise(base.value.facts, facts, pools)
+    if (Option.isSome(base)) addPeerRise(machine, base.value.facts, facts, pools)
     else
       dropPeerBase(
-        Option.map(peer, (view) => view.facts),
+        Option.map(cached, (view) => view.facts),
         facts,
         pools,
       )
-    commitPending()
-    if (Option.isNone(sameBoot)) peerLogged.clear()
+    commitPending(machine)
+    if (Option.isNone(sameBoot)) updatePeer(machine, (state) => ({ ...state, logged: new Set() }))
     const view: PeerView = {
       facts,
       heardAt: now,
@@ -7782,8 +7891,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       silent: false,
       pools,
     }
-    peer = Option.some(view)
-    checkPeerLabels(view, now)
+    updatePeer(machine, (state) => ({ ...state, view: Option.some(view) }))
+    checkPeerLabels(machine, view, now)
   }
   return {
     place: Effect.fn("CredentialPlacement.place")(function* (request: PlacementRequest) {
@@ -8230,6 +8339,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     notePeer: Effect.fn("CredentialPlacement.notePeer")(function* (
       facts: PoolFacts,
       scopeOf: LaneScopeOf,
+      machine: string,
       link: PeerLink,
     ) {
       // A link that reached this server itself.
@@ -8254,33 +8364,39 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       const now = yield* Clock.currentTimeMillis
       const grants = yield* locked(() => {
         trim(now)
-        linkHeard.set(link, now)
-        takePeerLine(facts, pools, now)
+        updatePeer(machine, (state) => ({ ...state, heard: new Map(state.heard).set(link, now) }))
+        takePeerLine(machine, facts, pools, now)
         checkOvershoot(now)
         return serve(now)
       })
       yield* afterServe(grants)
-      // 90 s with no other line: a serve turns the peer silent and holds it.
+      // 90 s with no other line from this peer: a serve turns it silent and holds it.
       const watch = yield* Effect.forkIn(
         Effect.andThen(Effect.sleep(Duration.millis(PEER_SILENT_MS)), serveNow),
         scope,
       )
-      const before = silenceWatch
-      silenceWatch = Option.some(watch)
+      const before = yield* locked(() => {
+        const armed = peerOf(machine).silenceWatch
+        updatePeer(machine, (state) => ({ ...state, silenceWatch: Option.some(watch) }))
+        return armed
+      })
       if (Option.isSome(before)) yield* Fiber.interrupt(before.value)
     }),
-    runsLink: Effect.acquireRelease(
-      Effect.flatMap(Clock.currentTimeMillis, (now) =>
-        locked(() => {
-          if (ownLinks === 0) ownSince = now
-          ownLinks += 1
-        }),
-      ),
-      () =>
-        locked(() => {
-          ownLinks -= 1
-        }),
-    ),
+    runsLink: (machine: string) =>
+      Effect.acquireRelease(
+        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          locked(() => {
+            const state = peerOf(machine)
+            let ownSince = state.ownSince
+            if (state.ownLinks === 0) ownSince = now
+            peers.set(machine, { ...state, ownLinks: state.ownLinks + 1, ownSince })
+          }),
+        ),
+        () =>
+          locked(() =>
+            updatePeer(machine, (state) => ({ ...state, ownLinks: state.ownLinks - 1 })),
+          ),
+      ).pipe(Effect.asVoid),
     lanes: Effect.fn("CredentialPlacement.lanes")(function* (
       scopeOf: LaneScopeOf,
       sabbath: Option.Option<Sabbath>,
@@ -8308,7 +8424,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             sabbathEnd: Option.getOrUndefined(
               Option.map(sabbathAt(sabbath, now), (window) => window.end),
             ),
-            peer: Option.getOrUndefined(peerReport(now)),
+            peers: Option.getOrUndefined(
+              Option.liftPredicate(peerReports(now), (found) => found.length > 0),
+            ),
           }),
           providers: scopes.map(([provider, scope]) => {
             const lanes = providerLanes(

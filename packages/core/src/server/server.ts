@@ -2329,8 +2329,8 @@ const RpcHandlers = GentRpcs.toLayer(
 
       // The accounts are the server's: each provider's lanes run over the
       // pool its unpinned runs share, as the launch profile's config names it.
-      // The peer row names this server's own link to it: the first of
-      // `link.machines` (the pool shares with one peer).
+      // Each peer row names this server's own link to that machine, the
+      // `link.machines` entry of the same name, when it runs one.
       "accounts.lanes": () =>
         Effect.gen(function* () {
           const profile = yield* profileForCwd(Option.none())
@@ -2338,9 +2338,15 @@ const RpcHandlers = GentRpcs.toLayer(
             poolScopeOf(profile.registryService, modelRegistry),
             yield* configService.sabbath,
           )
-          const link = Option.fromUndefinedOr((yield* links.view)[0])
-          if (Predicate.isUndefined(report.peer) || Option.isNone(link)) return report
-          return { ...report, peer: { ...report.peer, link: link.value } }
+          if (Predicate.isUndefined(report.peers)) return report
+          const views = yield* links.view
+          return {
+            ...report,
+            peers: report.peers.map((peer) => ({
+              ...peer,
+              ...omitUndefined({ link: views.find((view) => view.machine === peer.machine) }),
+            })),
+          }
         }).pipe(Effect.scoped),
 
       // Own state alone: a server on another machine reads it to share the pool.
@@ -2356,14 +2362,18 @@ const RpcHandlers = GentRpcs.toLayer(
           Stream.provideService(EventStorage, eventStorage),
         ),
 
-      // The peer server's link pushes its facts in here: counted as this
-      // server's own link counts them.
+      // A peer server's link pushes its facts in here: counted as this
+      // server's own link to that machine counts them. The link names its
+      // machine (`x-gent-link`), as this server's link names the peer; a
+      // call with no link origin names the machine its facts name.
       "accounts.notePeer": (facts) =>
         Effect.gen(function* () {
           const profile = yield* profileForCwd(Option.none())
+          const origin = yield* CurrentLinkOrigin
           yield* placement.notePeer(
             facts,
             poolScopeOf(profile.registryService, modelRegistry),
+            Option.getOrElse(origin, () => facts.host),
             "peer",
           )
         }).pipe(Effect.scoped),
