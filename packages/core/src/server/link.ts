@@ -17,6 +17,7 @@ import {
   Effect,
   Exit,
   Layer,
+  MutableRef,
   Option,
   Predicate,
   Pull,
@@ -93,10 +94,35 @@ const frameBytes = (chunk: Uint8Array | string) => {
 }
 
 /**
+ * `RpcSerialization.ndjson`, with `onFrame` at each read that decodes a whole
+ * frame, as the RPC client's pinger counts one (`RpcClient.ts`
+ * `processData`): a partial line, an empty line or a line the decode refuses
+ * counts none. Synchronous, as the parser is.
+ */
+const ndjsonNotingFrames = (onFrame: () => void) =>
+  RpcSerialization.RpcSerialization.of({
+    contentType: RpcSerialization.ndjson.contentType,
+    includesFraming: RpcSerialization.ndjson.includesFraming,
+    codecFor: RpcSerialization.ndjson.codecFor,
+    makeUnsafe: () => {
+      const parser = RpcSerialization.ndjson.makeUnsafe()
+      return {
+        encode: parser.encode,
+        decode: (data) => {
+          const frames = parser.decode(data)
+          if (frames.length > 0) onFrame()
+          return frames
+        },
+      }
+    },
+  })
+
+/**
  * One run of a link's command, as an RPC client of `GentRpcs`: the client's
  * frames go to its stdin, its stdout gives the server's (ndjson, the frames
  * `gent ctl link` relays), and each call carries `headers`. `onFrame` runs
- * at each read from its stdout. Scoped: the command stops with the scope,
+ * at each read from its stdout that completes a frame (`ndjsonNotingFrames`).
+ * Scoped: the command stops with the scope,
  * killed first when the scope does not close in success, since a command
  * that stopped reading holds a full pipe the stdin feed's stop would wait on
  * for good (Effect-TS/effect#10314). A transport failure (the stdout ends,
@@ -106,7 +132,7 @@ const frameBytes = (chunk: Uint8Array | string) => {
 const runLinkCommand = Effect.fn("Link.runCommand")(function* (
   command: readonly [string, ...Array<string>],
   headers: Headers.Input,
-  onFrame: Effect.Effect<void>,
+  onFrame: () => void,
 ) {
   const input = yield* Queue.unbounded<Uint8Array, Cause.Done>()
   const handle = yield* ChildProcess.make(command[0], command.slice(1), {
@@ -129,7 +155,6 @@ const runLinkCommand = Effect.fn("Link.runCommand")(function* (
   const socket = Socket.make({
     reader: Effect.map(Stream.toPull(handle.stdout), (pull) => ({
       pull: pull.pipe(
-        Effect.tap(() => onFrame),
         Pull.catchDone(() => Effect.fail(closed)),
         Effect.catchTag("PlatformError", (cause) =>
           Effect.fail(new Socket.SocketError({ reason: new Socket.SocketReadError({ cause }) })),
@@ -152,7 +177,7 @@ const runLinkCommand = Effect.fn("Link.runCommand")(function* (
     retryPolicy: Schedule.recurs(0),
   }).pipe(
     Effect.provideService(Socket.Socket, socket),
-    Effect.provideService(RpcSerialization.RpcSerialization, RpcSerialization.ndjson),
+    Effect.provideService(RpcSerialization.RpcSerialization, ndjsonNotingFrames(onFrame)),
   )
   const flat = yield* RpcClient.make(GentRpcs).pipe(
     Effect.provideService(RpcClient.Protocol, protocol),
@@ -229,12 +254,12 @@ export class Links extends Context.Service<
           linkContract.pipe(Effect.provideService(GentPlatform, yield* GentPlatform)),
         )
         const started = yield* Clock.currentTimeMillis
-        const records = new Map<string, Ref.Ref<LinkRecord>>()
+        const records = new Map<string, MutableRef.MutableRef<LinkRecord>>()
         for (const machine of Object.keys(yield* config.linkMachines)) {
           if (machine === own) continue
           records.set(
             machine,
-            yield* Ref.make<LinkRecord>({
+            MutableRef.make<LinkRecord>({
               lastFrame: started,
               connected: false,
               incompatible: false,
@@ -254,13 +279,16 @@ export class Links extends Context.Service<
         const runOnce = (
           machine: string,
           command: readonly [string, ...Array<string>],
-          record: Ref.Ref<LinkRecord>,
+          record: MutableRef.MutableRef<LinkRecord>,
         ) =>
           Effect.scoped(
             Effect.gen(function* () {
-              const noteFrame = Effect.flatMap(Clock.currentTimeMillis, (now) =>
-                Ref.update(record, (kept) => ({ ...kept, lastFrame: now })),
-              )
+              const clock = yield* Clock.Clock
+              const noteFrame = () =>
+                MutableRef.update(record, (kept) => ({
+                  ...kept,
+                  lastFrame: clock.currentTimeMillisUnsafe(),
+                }))
               const run = yield* runLinkCommand(command, headers, noteFrame)
               const ended = (reason: string) =>
                 Effect.gen(function* () {
@@ -280,18 +308,24 @@ export class Links extends Context.Service<
                 if (Option.exists(error, (failure) => failure._tag === "RpcClientError"))
                   return yield* ended(Cause.pretty(hello.cause))
                 // A peer with no `link.hello` (an older build) answers a defect.
-                yield* Ref.update(record, (kept) => ({ ...kept, incompatible: true }))
+                yield* Effect.sync(() =>
+                  MutableRef.update(record, (kept) => ({ ...kept, incompatible: true })),
+                )
                 return `${machine} has no link.hello this server reads: ${causeMessage(Cause.squash(hello.cause))}`
               }
               if (hello.value.contract !== (yield* contract)) {
-                yield* Ref.update(record, (kept) => ({ ...kept, incompatible: true }))
+                yield* Effect.sync(() =>
+                  MutableRef.update(record, (kept) => ({ ...kept, incompatible: true })),
+                )
                 return `${machine} runs another RPC contract (${hello.value.contract})`
               }
-              yield* Ref.update(record, (kept) => ({
-                ...kept,
-                connected: true,
-                incompatible: false,
-              }))
+              yield* Effect.sync(() =>
+                MutableRef.update(record, (kept) => ({
+                  ...kept,
+                  connected: true,
+                  incompatible: false,
+                })),
+              )
               // The peer's facts count as this server's own link's; this
               // server's go to the peer as its link's.
               const pull = run.client.accounts
@@ -316,7 +350,7 @@ export class Links extends Context.Service<
          * with none, the loop stops. The lanes count this server's link to
          * the peer while the loop runs (`runsLink`).
          */
-        const follow = (machine: string, record: Ref.Ref<LinkRecord>) =>
+        const follow = (machine: string, record: MutableRef.MutableRef<LinkRecord>) =>
           Effect.scoped(
             Effect.gen(function* () {
               yield* placement.runsLink
@@ -332,10 +366,9 @@ export class Links extends Context.Service<
                 yield* Effect.logWarning("link.ended").pipe(
                   Effect.annotateLogs({ machine, command: command.value[0], error: reason }),
                 )
-                const ran = yield* Ref.getAndUpdate(record, (kept) => ({
-                  ...kept,
-                  connected: false,
-                }))
+                const ran = yield* Effect.sync(() =>
+                  MutableRef.getAndUpdate(record, (kept) => ({ ...kept, connected: false })),
+                )
                 const lived = (yield* Clock.currentTimeMillis) - startedRun
                 if (ran.connected && lived >= LINK_STEADY_MS) wait = LINK_RETRY_FIRST
                 yield* Effect.sleep(wait)
@@ -352,7 +385,7 @@ export class Links extends Context.Service<
             const now = yield* Clock.currentTimeMillis
             const views: Array<LinkView> = []
             for (const [machine, record] of records)
-              views.push({ machine, state: stateOf(yield* Ref.get(record), now) })
+              views.push({ machine, state: stateOf(MutableRef.get(record), now) })
             return views
           }),
         })

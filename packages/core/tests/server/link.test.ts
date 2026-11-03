@@ -428,8 +428,20 @@ const modelEventsNow = (model: Model) => {
   else run.awaiting = true
 }
 
-/** A step the far end, or time, takes. `seconds` is read by `idle` only. */
-type LinkStep = "hello-ok" | "hello-other" | "hello-none" | "frame" | "exit" | "idle" | "backoff"
+/**
+ * A step the far end, or time, takes. `seconds` is read by `idle` only.
+ * `fragment` writes bytes that complete no frame: empty lines, or a part of
+ * the next frame short of its newline, which the next frame's write ends.
+ */
+type LinkStep =
+  | "hello-ok"
+  | "hello-other"
+  | "hello-none"
+  | "frame"
+  | "fragment"
+  | "exit"
+  | "idle"
+  | "backoff"
 interface LinkCommand {
   readonly step: LinkStep
   readonly seconds: number
@@ -444,7 +456,7 @@ const stepsFor = (model: Model): ReadonlyArray<readonly [LinkStep, number]> => {
   const live = liveRun(model)
   if (Option.exists(live, (run) => run.helloPending))
     steps.push(["hello-ok", 4], ["hello-other", 1], ["hello-none", 1])
-  if (Option.isSome(live)) steps.push(["frame", 3])
+  if (Option.isSome(live)) steps.push(["frame", 3], ["fragment", 3])
   if (Option.isSome(model.run)) steps.push(["exit", 2])
   if (Option.isNone(model.run)) steps.push(["backoff", 5])
   return steps
@@ -595,8 +607,11 @@ interface Trial {
   readonly model: Model
   readonly done: Array<string>
   readonly reached: Reached
-  /** This server's clock at the far end's last frame, on any run. */
+  readonly random: (below: number) => number
+  /** This server's clock at the far end's last whole frame, on any run. */
   lastWrite: number
+  /** The rest of a frame the far end began on a run's stdout: the next frame's write ends it. */
+  pending: Option.Option<{ readonly run: FakeRun; readonly rest: string }>
 }
 
 const trialFail = (trial: Trial, why: string) =>
@@ -692,12 +707,57 @@ const advanceTrial = (trial: Trial, target: number) =>
     }
   })
 
-/** The far end writes `frame` on the run's stdout. */
+/** Empty lines the far end may write between two frames: no frame. */
+const NOISE = ["", "\n", "\r\n", "\n\n"]
+
+/** The rest of a frame the run's stdout began, none on another run. */
+const pendingOn = (trial: Trial, run: FakeRun) =>
+  Option.match(
+    Option.filter(trial.pending, (pending) => pending.run === run),
+    { onNone: () => "", onSome: (pending) => pending.rest },
+  )
+
+/** Writes `text` on the run's stdout in one to three chunks, cut anywhere. */
+const writeChunks = (trial: Trial, run: FakeRun, text: string) =>
+  Effect.gen(function* () {
+    const cuts = Array.from({ length: trial.random(3) }, () => trial.random(text.length + 1))
+    const edges = [0, ...cuts.toSorted((left, right) => left - right), text.length]
+    for (let index = 1; index < edges.length; index++) {
+      const chunk = text.slice(edges[index - 1], edges[index])
+      if (chunk.length > 0) yield* Queue.offer(run.out, frameEncoder.encode(chunk))
+    }
+    yield* settleLong
+  })
+
+/** The far end writes `frame` on the run's stdout: it ends the frame it began first. */
 const writeFrame = (trial: Trial, run: FakeRun, frame: typeof ServerFrame.Type) =>
   Effect.gen(function* () {
+    const before = pendingOn(trial, run) || (NOISE[trial.random(NOISE.length)] ?? "")
+    trial.pending = Option.none()
     trial.lastWrite = trial.model.now
-    yield* Queue.offer(run.out, frameEncoder.encode(`${encodeServerFrame(frame)}\n`))
-    yield* settleLong
+    yield* writeChunks(trial, run, `${before}${encodeServerFrame(frame)}\n`)
+  })
+
+/**
+ * The far end writes bytes that complete no frame: empty lines and the start
+ * of a frame, or more of the frame it began, short of its newline.
+ */
+const writeFragment = (trial: Trial, run: FakeRun) =>
+  Effect.gen(function* () {
+    const begun = pendingOn(trial, run)
+    if (begun.length > 0) {
+      // At least the newline stays unwritten.
+      const cut = 1 + trial.random(begun.length - 1)
+      if (begun.length > 1) yield* writeChunks(trial, run, begun.slice(0, cut))
+      trial.pending = Option.some({ run, rest: begun.slice(Math.min(cut, begun.length - 1)) })
+      return
+    }
+    const frame = `${encodeServerFrame(Pong.make({}))}\n`
+    // 0: empty lines alone; at most the whole frame but its newline.
+    const cut = trial.random(frame.length)
+    const noise = NOISE[1 + trial.random(NOISE.length - 1)] ?? "\n"
+    yield* writeChunks(trial, run, `${noise}${frame.slice(0, cut)}`)
+    if (cut > 0) trial.pending = Option.some({ run, rest: frame.slice(cut) })
   })
 
 /** The hello's answer for `step`: this contract, another, or the defect of a build with none. */
@@ -748,6 +808,7 @@ const applyStep = (trial: Trial, command: LinkCommand) =>
       yield* writeFrame(trial, real, Pong.make({}))
       modelFrame(model, run)
     }
+    if (command.step === "fragment") yield* writeFragment(trial, real)
     if (command.step.startsWith("hello-")) yield* answerHello(trial, real, run, command.step)
   })
 
@@ -772,7 +833,9 @@ const runSequence = (
       model,
       done: [],
       reached,
+      random,
       lastWrite: model.now,
+      pending: Option.none(),
     }
     yield* settleLong
     yield* checkTrial(trial)
@@ -798,6 +861,34 @@ const STEPS = 40
 const SEED = 20_261_102
 
 describe("the link's state machine", () => {
+  it.effect("a part of a frame at 89 s leaves the link silent at 90 s", () =>
+    Effect.gen(function* () {
+      const contract = yield* linkContract
+      const runs: Array<FakeRun> = []
+      const { links } = yield* linksOver({ far: ["far-end"] }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fakeSpawner(runs)),
+      )
+      yield* settleLong
+      const run = runs[0]
+      const hello = run?.requests.find((request) => request.tag === "link.hello")
+      if (Predicate.isUndefined(run) || Predicate.isUndefined(hello))
+        return yield* Effect.die("the run sent no hello")
+      const reply = ExitReply.make({ requestId: hello.id, exit: helloExit("hello-ok", contract) })
+      yield* Queue.offer(run.out, frameEncoder.encode(`${encodeServerFrame(reply)}\n`))
+      yield* settleLong
+      yield* TestClock.adjust("89 seconds")
+      yield* Queue.offer(run.out, frameEncoder.encode('\n{"_tag":'))
+      yield* settleLong
+      expect((yield* links.view)[0]?.state).toBe("connected")
+      yield* TestClock.adjust("1 second")
+      yield* settleLong
+      expect((yield* links.view)[0]?.state).toBe("silent")
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(platformLayer, Layer.succeed(References.MinimumLogLevel, "None"))),
+    ),
+  )
+
   it.effect(
     `${SEQUENCES} generated sequences (seed ${SEED}) keep the link's state on the model's`,
     () =>

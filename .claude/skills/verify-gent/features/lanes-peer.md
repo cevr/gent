@@ -22,7 +22,7 @@ With a peer link (`link.machines`: a server on another machine that spends from 
 
 - **Preconditions:** two runs launched with `--link` naming each other: `verify:launch` writes `link.machines` before the server starts, and a machine added while a server runs takes a restart.
 - **States:** default (heard), loading (`peer unread` before the first line), error (`peer!`, a link down). Empty is no peer: no row. Focus and open are `n/a`.
-- **Regression:** `apps/tui/tests/extensions/machines.client.test.tsx` (the peer row), `packages/core/tests/runtime/provider.test.ts` (`the peer`), `packages/core/tests/server/rpc.test.ts` (`notePeer`), `packages/core/tests/server/link.test.ts` (the link states; `generated sequences`: 150 seeded sequences against a reference model of the states, the waits and the hello), `apps/tui/tests/ctl.test.ts` (`pool`, `link`), `apps/tui/integration/link.test.ts` (two servers).
+- **Regression:** `apps/tui/tests/extensions/machines.client.test.tsx` (the peer row), `packages/core/tests/runtime/provider.test.ts` (`the peer`), `packages/core/tests/server/rpc.test.ts` (`notePeer`), `packages/core/tests/server/link.test.ts` (the link states; `generated sequences`: 150 seeded sequences against a reference model of the states, the waits and the hello, with the far end's bytes cut anywhere and parts of frames that only a whole frame ends), `apps/tui/tests/ctl.test.ts` (`pool`, `link`), `apps/tui/integration/link.test.ts` (two servers).
 
 Recipe (one Mac, two runs; 2026-11-02):
 
