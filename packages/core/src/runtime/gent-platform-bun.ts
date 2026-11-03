@@ -22,6 +22,7 @@ import { Database } from "bun:sqlite"
 import {
   Duration,
   Effect,
+  Fiber,
   FileSystem,
   Layer,
   Match,
@@ -104,6 +105,9 @@ const RELEASE_TIMEOUT = Duration.seconds(10)
 /** Leave room to reap a stubborn git within the deadline plus one second. */
 const RELEASE_FORCE_KILL_AFTER = Duration.millis(500)
 
+/** Bounded acknowledgement: git can reap, an uninterruptible OS read cannot hold the caller. */
+const RELEASE_CLEANUP_TIMEOUT = Duration.millis(750)
+
 /** How many files of a checkout one capture reads at once. */
 const TREE_READS = 16
 
@@ -149,8 +153,10 @@ const hashFile = (file: string) =>
  * only names them: every tracked file, and every untracked file it does not
  * ignore. Gent reads each one's bytes itself, so no git filter, diff driver
  * or line-ending conversion touches them, and no git config changes the
- * tree. Each UTF-8 path contributes one sorted line: `<path>\0file\0<digest>\n`,
- * `<path>\0link\0<target>\n`, or `<path>\0deleted\n`. lstat never follows
+ * tree. Each UTF-8 path contributes one sorted, NUL-terminated record:
+ * `<path>\0file\0<digest>\0`, `<path>\0link\0<target>\0`, or `<path>\0deleted\0`.
+ * Neither a path nor a link target can hold NUL, so newlines in either
+ * cannot shift record boundaries. lstat never follows
  * links; a dangling link names its target too. Other entry types and paths
  * that cannot be decoded losslessly fail closed. The commit is a separate
  * fact: identical listed entries on one commit name one release.
@@ -184,11 +190,11 @@ const captureTree = (top: string) =>
               () => Effect.succeedNone,
             ),
           )
-          if (Option.isNone(info)) return `${file}\0${DELETED_FILE}\n`
+          if (Option.isNone(info)) return `${file}\0${DELETED_FILE}\0`
           if (info.value.type === "SymbolicLink") {
-            return `${file}\0link\0${yield* fs.readLink(full)}\n`
+            return `${file}\0link\0${yield* fs.readLink(full)}\0`
           }
-          if (info.value.type === "File") return `${file}\0file\0${yield* hashFile(full)}\n`
+          if (info.value.type === "File") return `${file}\0file\0${yield* hashFile(full)}\0`
           return yield* new NoRelease({ reason: `${file}: unsupported ${info.value.type} entry` })
         }).pipe(
           Effect.catchTag("PlatformError", (error) =>
@@ -226,29 +232,45 @@ export const captureRelease = (
   NoRelease,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
-  Effect.gen(function* () {
-    const [top = "", commit = ""] = (yield* releaseGit(directory, [
-      "rev-parse",
-      "--show-toplevel",
-      "HEAD",
-    ])).stdout
-      .trim()
-      .split("\n")
-    if (top.length === 0 || commit.length === 0) {
-      return yield* new NoRelease({ reason: "git names no checkout" })
-    }
-    const tree = yield* captureTree(top)
-    if ((yield* releaseGit(top, ["rev-parse", "HEAD"])).stdout.trim() !== commit) {
-      return yield* new NoRelease({ reason: "the commit moved while it was read" })
-    }
-    const lock = yield* hashFile(`${top}/bun.lock`).pipe(
-      Effect.mapError((error) => new NoRelease({ reason: `no bun.lock: ${error.message}` })),
-    )
-    return { commit, tree, lock, bun: Bun.version }
-  }).pipe(
-    Effect.timeoutOrElse({
-      duration: RELEASE_TIMEOUT,
-      orElse: () => Effect.fail(new NoRelease({ reason: "release capture exceeded 10 seconds" })),
+  Effect.scoped(
+    Effect.gen(function* () {
+      // The caller owns cancellation without awaiting an OS acquisition that
+      // may not acknowledge it. When that acquisition returns, the cancelled
+      // fiber runs its resource finalizers before any further read or git.
+      const reading = yield* Effect.forkDetach(
+        Effect.gen(function* () {
+          const [top = "", commit = ""] = (yield* releaseGit(directory, [
+            "rev-parse",
+            "--show-toplevel",
+            "HEAD",
+          ])).stdout
+            .trim()
+            .split("\n")
+          if (top.length === 0 || commit.length === 0) {
+            return yield* new NoRelease({ reason: "git names no checkout" })
+          }
+          const tree = yield* captureTree(top)
+          if ((yield* releaseGit(top, ["rev-parse", "HEAD"])).stdout.trim() !== commit) {
+            return yield* new NoRelease({ reason: "the commit moved while it was read" })
+          }
+          const lock = yield* hashFile(`${top}/bun.lock`).pipe(
+            Effect.mapError((error) => new NoRelease({ reason: `no bun.lock: ${error.message}` })),
+          )
+          return { commit, tree, lock, bun: Bun.version }
+        }),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(() => reading.interruptUnsafe()))
+      return yield* Fiber.join(reading).pipe(
+        Effect.timeoutOrElse({
+          duration: RELEASE_TIMEOUT,
+          orElse: () =>
+            Effect.gen(function* () {
+              yield* Effect.sync(() => reading.interruptUnsafe())
+              yield* Fiber.await(reading).pipe(Effect.timeoutOption(RELEASE_CLEANUP_TIMEOUT))
+              return yield* new NoRelease({ reason: "release capture exceeded 10 seconds" })
+            }),
+        }),
+      )
     }),
   )
 

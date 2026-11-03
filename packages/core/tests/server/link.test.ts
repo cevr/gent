@@ -1862,11 +1862,11 @@ const modelTree = (directory: string, files: ReadonlyMap<string, ModelFile>) =>
           () => Effect.succeedNone,
         ),
       )
-      if (Option.isNone(stat)) lines.push(`${file}\0${DELETED_FILE}\n`)
+      if (Option.isNone(stat)) lines.push(`${file}\0${DELETED_FILE}\0`)
       else if (stat.value.type === "SymbolicLink")
-        lines.push(`${file}\0link\0${yield* fs.readLink(full)}\n`)
+        lines.push(`${file}\0link\0${yield* fs.readLink(full)}\0`)
       else if (stat.value.type === "File")
-        lines.push(`${file}\0file\0${sha256Hex(yield* fs.readFile(full))}\n`)
+        lines.push(`${file}\0file\0${sha256Hex(yield* fs.readFile(full))}\0`)
       else return Option.none<string>()
     }
     return Option.some(sha256Hex(lines.join("")))
@@ -1905,8 +1905,14 @@ const TRACKED_PATHS = [
   "notes/crlf.txt",
   "blob/data.dat",
   "top.ts",
+  "notes/line\nbreak.ts",
 ]
-const UNTRACKED_PATHS = ["src/added.ts", "notes/new.txt", "fresh/deep/file.dat"]
+const UNTRACKED_PATHS = [
+  "src/added.ts",
+  "notes/new.txt",
+  "fresh/deep/file.dat",
+  "fresh/new\nentry.ts",
+]
 /** Files an edit leaves alone: the lock a release reads, and the ignore rules the model keeps. */
 const FIXED_PATHS = new Set(["bun.lock", ".gitignore"])
 
@@ -2026,7 +2032,8 @@ const generateEdit = (
     if (edit === "an ignored file written") {
       yield* writeBytes(directory, `cache/${String(random(3))}.js`, generateBytes(random))
     }
-    if (edit === "a tracked link repointed") yield* link("linked.ts", true, "src/old.ts")
+    if (edit === "a tracked link repointed")
+      yield* link("linked.ts", true, pick(random, ["src/old.ts", "missing\nzz/b"]))
     if (edit === "an untracked link added") yield* link("fresh/link.ts", false, "../src/main.ts")
     if (edit === "an untracked link repointed") yield* link("fresh/link.ts", false, "../src/old.ts")
     if (edit === "a tracked link made dangling") yield* link("linked.ts", true, "missing-one.ts")
@@ -2103,6 +2110,27 @@ const listedBytes = (bytes: Uint8Array) =>
   )
 
 describe("the tree a release names", () => {
+  it.live("newlines in a link target and the next listed path cannot hide an entry change", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* treeDirectory
+        yield* checkout(directory, "one")
+        yield* fs.makeDirectory(`${directory}/zz`)
+        yield* fs.symlink("missing\nzz/b", `${directory}/zz/a`)
+        yield* writeBytes(directory, "zz/c", new Uint8Array())
+        const before = yield* captureRelease(directory)
+        yield* fs.remove(`${directory}/zz/a`)
+        yield* fs.symlink("missing", `${directory}/zz/a`)
+        yield* fs.makeDirectory(`${directory}/zz/b\nzz`)
+        yield* fs.rename(`${directory}/zz/c`, `${directory}/zz/b\nzz/c`)
+        const after = yield* captureRelease(directory)
+        expect(after.commit).toBe(before.commit)
+        expect(after.tree).not.toBe(before.tree)
+      }),
+    ).pipe(Effect.provide(bunPlatformLayer)),
+  )
+
   it.live(
     "a non-UTF-8 path from git names no release; a valid leading BOM in a path is preserved",
     () =>
@@ -2123,7 +2151,7 @@ describe("the tree a release names", () => {
           const tree = yield* treeOf(directory).pipe(
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, valid),
           )
-          expect(tree).toBe(sha256Hex(`${file}\0file\0${sha256Hex("content\n")}\n`))
+          expect(tree).toBe(sha256Hex(`${file}\0file\0${sha256Hex("content\n")}\0`))
         }),
       ).pipe(Effect.provide(bunPlatformLayer)),
   )
@@ -2226,15 +2254,24 @@ describe("the tree a release names", () => {
           const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
           const directory = yield* treeDirectory
           yield* checkout(directory, "one")
-          for (const phase of ["lstat", "file", "lock"] as const) {
+          for (const phase of ["lstat", "file", "lock", "uninterruptible"] as const) {
             const children: Array<string> = []
             let lockReads = 0
             const held = yield* Deferred.make<boolean>()
+            const release = yield* Deferred.make<boolean>()
             const never = Deferred.succeed(held, true).pipe(Effect.andThen(Effect.never))
             const boundary = FileSystem.FileSystem.of({
               ...fs,
               lstat: (file) => {
                 if (phase === "lstat" && file.endsWith("/src/main.ts")) return never
+                if (phase === "uninterruptible" && file.endsWith("/src/main.ts")) {
+                  return Effect.uninterruptible(
+                    Deferred.succeed(held, true).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.andThen(fs.lstat(file)),
+                    ),
+                  )
+                }
                 return fs.lstat(file)
               },
               stream: (file, options) => {
@@ -2264,7 +2301,12 @@ describe("the tree a release names", () => {
               Effect.forkChild,
             )
             yield* Deferred.await(held).pipe(Effect.timeout("2 seconds"))
-            const failed = yield* Fiber.join(capture).pipe(Effect.timeout("11 seconds"))
+            const failed = yield* Fiber.join(capture).pipe(
+              Effect.timeout("11 seconds"),
+              // Release even a broken capture, so its uninterruptible
+              // acquisition can acknowledge cancellation and clean up.
+              Effect.ensuring(Deferred.succeed(release, true)),
+            )
             expect(failed._tag, phase).toBe("Failure")
             if (failed._tag === "Failure") {
               expect(failed.failure._tag, phase).toBe("NoRelease")
@@ -2277,7 +2319,7 @@ describe("the tree a release names", () => {
           }
         }),
       ).pipe(Effect.provide(bunPlatformLayer)),
-    40_000,
+    50_000,
   )
 
   it.live(
@@ -2362,7 +2404,13 @@ describe("the tree a release names", () => {
         yield* Deferred.succeed(gitContinue, true)
         yield* Deferred.await(treeEntered)
         yield* TestClock.adjust("4 seconds")
-        expect(yield* Deferred.isDone(completed)).toBe(true)
+        // Real file-descriptor closes may still be acknowledging the
+        // interrupt after the virtual deadline; allow the specified 1s.
+        const acknowledged = yield* Deferred.await(completed).pipe(
+          Effect.timeoutOption("1 second"),
+          Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
+        )
+        expect(Option.isSome(acknowledged)).toBe(true)
         const failed = yield* Fiber.join(capture)
         expect(failed._tag).toBe("Failure")
         if (failed._tag === "Failure") expect(failed.failure._tag).toBe("NoRelease")
