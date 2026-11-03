@@ -1136,15 +1136,15 @@ const LEAF_CHANGES: ReadonlyArray<(random: (below: number) => number) => CodecCh
     const bound = random(100)
     return {
       name: "lower bound",
-      before: Schema.Number.check(Schema.isGreaterThan(bound)),
-      after: Schema.Number.check(Schema.isGreaterThan(bound + 1)),
+      before: Schema.Finite.check(Schema.isGreaterThan(bound)),
+      after: Schema.Finite.check(Schema.isGreaterThan(bound + 1)),
       witness: bound + 1,
     }
   },
   () => ({
     name: "integer check",
-    before: Schema.Number,
-    after: Schema.Number.check(Schema.isInt()),
+    before: Schema.Finite,
+    after: Schema.Finite.check(Schema.isInt()),
     witness: 1.5,
   }),
   () => ({
@@ -1153,7 +1153,7 @@ const LEAF_CHANGES: ReadonlyArray<(random: (below: number) => number) => CodecCh
     after: Schema.Literal("b"),
     witness: "a",
   }),
-  () => ({ name: "keyword", before: Schema.String, after: Schema.Number, witness: "s" }),
+  () => ({ name: "keyword", before: Schema.String, after: Schema.Finite, witness: "s" }),
   () => ({
     name: "optional key",
     before: Schema.Struct({ key: Schema.String }),
@@ -1227,7 +1227,7 @@ const payloadContract = (payload: Schema.Top) =>
   rpcContract([Rpc.make("probe", { payload, success: Schema.Void })])
 
 const decodes = (schema: PlainCodec, value: Schema.Json) =>
-  Exit.isSuccess(Schema.decodeUnknownExit(Schema.toCodecJson(schema))(value))
+  Exit.isSuccess(Schema.decodeExit(Schema.toCodecJson(schema))(value))
 
 /** The test platform with `source` as its source: a checkout's name, or none. */
 const withSource = (source: Option.Option<string>) =>
@@ -1283,7 +1283,7 @@ describe("the link's contract", () => {
     () =>
       Effect.gen(function* () {
         // A transformation is code: only the source names it.
-        const coded = Schema.Struct({ count: Schema.NumberFromString })
+        const coded = Schema.Struct({ count: Schema.FiniteFromString })
         const atA = yield* payloadContract(coded).pipe(withSource(Option.some("a")))
         const atAAgain = yield* payloadContract(coded).pipe(withSource(Option.some("a")))
         const atB = yield* payloadContract(coded).pipe(withSource(Option.some("b")))

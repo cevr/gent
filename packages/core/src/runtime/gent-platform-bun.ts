@@ -34,6 +34,7 @@ import {
   Schema,
   Scope,
 } from "effect"
+import type { ChildProcessSpawner } from "effect/process"
 import { SqlClient } from "effect/sql"
 import { causeMessage } from "../domain/guards.js"
 import { storageError, type StorageError } from "../domain/errors.js"
@@ -91,15 +92,16 @@ const thisBuild: GentBuild = Option.match(compiledDefine, {
  * name of the checkout this file sits in, read once. A compiled build with
  * no embedded name has none: its embedded file path is no checkout.
  */
-const thisSource: Effect.Effect<Option.Option<string>> = Option.match(compiledDefine, {
+const thisSource: Effect.Effect<
+  Option.Option<string>,
+  never,
+  Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> = Option.match(compiledDefine, {
   onNone: () =>
     Effect.gen(function* () {
       const path = yield* Path.Path
       return yield* checkoutSource(yield* path.fromFileUrl(new URL(".", import.meta.url)))
-    }).pipe(
-      Effect.orElseSucceed(() => Option.none<string>()),
-      Effect.provide(BunServices.layer),
-    ),
+    }).pipe(Effect.orElseSucceed(() => Option.none<string>())),
   onSome: (define) => Effect.succeed(Option.fromUndefinedOr(define.source)),
 })
 
@@ -294,7 +296,9 @@ const transcodeBunImage = (bytes: Uint8Array, options: ImageTranscode) =>
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.effect(
   GentPlatform,
   Effect.gen(function* () {
-    const source = yield* Effect.cached(thisSource)
+    // The services the layer was built with: the source is read on the first ask.
+    const services = yield* Effect.context<Path.Path | ChildProcessSpawner.ChildProcessSpawner>()
+    const source = yield* Effect.cached(Effect.provideContext(thisSource, services))
     return GentPlatform.of({
       bindModules: bindBunModules,
 
@@ -338,7 +342,7 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.effect(
       loopbackServer: (port) => BunHttpServer.layerServer({ port, hostname: "127.0.0.1" }),
     })
   }),
-)
+).pipe(Layer.provide(BunServices.layer))
 
 /**
  * The modules the Bun host binds beside the shipped set

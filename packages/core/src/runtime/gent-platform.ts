@@ -243,7 +243,7 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           pid: Effect.succeed(1),
           execPath: Effect.succeed("/usr/bin/node"),
           build: Effect.succeed(GentBuild.cases.Source.make({})),
-          source: Effect.succeed(Option.some("test-source")),
+          source: Effect.succeedSome("test-source"),
           homeDirectory: Effect.succeed("/nonexistent/gent-test-home"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.
