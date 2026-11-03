@@ -5456,7 +5456,7 @@ describe("loop inbox", () => {
       readonly queue: Effect.Effect<LoopQueueStateType>
       readonly inbox: Effect.Success<ReturnType<typeof makeLoopInbox>>
       readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
-      /** The queue row the inbox last stored. */
+      /** The queue row as stored: the initial queue, until the inbox writes one. */
       readonly stored: Effect.Effect<LoopQueueStateType>
     }) => Effect.Effect<A, AgentLoopError | FollowUpQueueFull>,
     initial: AgentLoopState = buildInitialAgentLoopState({
@@ -5467,7 +5467,7 @@ describe("loop inbox", () => {
   ) =>
     Effect.gen(function* () {
       const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(initial)
-      const rows = yield* Ref.make(emptyLoopQueueState())
+      const rows = yield* Ref.make<LoopQueueStateType>(initial.queue)
       const inbox = yield* makeLoopInbox({
         sessionId: wakeSessionId,
         branchId: wakeBranchId,
@@ -5757,6 +5757,76 @@ describe("loop inbox", () => {
               },
             }),
             grants,
+          ),
+      )
+    }
+  })
+
+  // An explicit wake is acknowledged when its send returns, and its start
+  // may not have run yet (the actor forks it). So the wake lives on the held
+  // item, in the write that admits the retry, through every later retry of
+  // the id until the take that starts it: a restart with no new send starts
+  // the item from the stored row. Behind a running turn, so nothing starts at
+  // admission; then the loop goes idle and takes it.
+  describe("a held item retried under its own id keeps its acknowledged wake", () => {
+    const places = ["follow-up", "steer"] as const
+    const cases = places.flatMap((place) =>
+      (["follow-up", "steer"] as const)
+        .filter((retry) => retry === "follow-up" || place === "steer")
+        .flatMap((retry) =>
+          [false, true].flatMap((heldWake) =>
+            [false, true].map((retryWake) => ({ place, retry, heldWake, retryWake })),
+          ),
+        ),
+    )
+    const withOrNo = { true: "with", false: "no" } as const
+    for (const each of cases) {
+      const id = `woken-${each.place}`
+      const wake = each.heldWake || each.retryWake
+      const heldItem: QueuedTurnItem = { message: queuedMessage(id, "held"), wake: each.heldWake }
+      it.effect(
+        `held ${each.place}, ${withOrNo[`${each.heldWake}`]} wake, retried as ${each.retry}, ${withOrNo[`${each.retryWake}`]} wake`,
+        () =>
+          withInbox(
+            ({ inbox, stored }) =>
+              Effect.gen(function* () {
+                const retry: QueuedTurnItem = {
+                  message: queuedMessage(id, "retry"),
+                  wake: each.retryWake,
+                }
+                if (each.retry === "steer") yield* inbox.steer(retry)
+                if (each.retry === "follow-up") yield* inbox.admit(retry, { queueOnly: false })
+                // The stored row, as a restart reads it before any start ran.
+                const row = yield* stored
+                const holding = [...row.steering, ...row.followUp].filter(
+                  (item) => String(item.message.id) === id,
+                )
+                expect(holding.map((item) => item.wake === true)).toEqual([wake])
+                expect(
+                  Option.map(wantsWakeOnRecovery(row), (wakes) => wakes.unconditional),
+                ).toEqual(Option.some(wake))
+                yield* inbox.moveToPhase(buildIdleState())
+                const taken = yield* inbox.takeIfIdle
+                expect(Option.map(taken, (item) => String(item.message.id))).toEqual(
+                  Option.some(id),
+                )
+                // The take is the start the wake asked for: its own write
+                // clears the wake, and leaves nothing that wakes twice.
+                const slot = (yield* stored).inFlight
+                expect(slot?.message.id).toBe(MessageId.make(id))
+                expect(slot?.wake).toBeUndefined()
+                expect(Option.map(taken, (item) => "wake" in item)).toEqual(Option.some(false))
+              }),
+            buildInitialAgentLoopState({
+              state: buildRunningState(
+                { message: queuedMessage("busy", "busy") },
+                { startedAtMs: 0 },
+              ),
+              queue: {
+                steering: [heldItem].filter(() => each.place === "steer"),
+                followUp: [heldItem].filter(() => each.place === "follow-up"),
+              },
+            }),
           ),
       )
     }

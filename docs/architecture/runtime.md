@@ -170,7 +170,11 @@ Shape:
   branch with no prior history keeps the item queued until a real turn arrives.
   A retry of an id the loop already holds stays one item; its explicit `wake`
   starts the held item on an idle branch, and a retry without one leaves it
-  queued.
+  queued. The wake is acknowledged before its start runs (the actor forks
+  it), so the write that admits the retry stores it on the held item, a
+  follow-up or a waiting steer, and a later retry without one keeps it. A
+  restart that finds a stored wake starts the item with no new send
+  (`wantsWakeOnRecovery`); the take that starts the item clears it.
 - Orphan reconciliation: a stored tool result that has no terminal tool event
   (a recovered cell, a binding replay failure, a host that died mid-call) gets
   its `ToolCallSucceeded`/`ToolCallFailed` event from `reconcileToolProjections`

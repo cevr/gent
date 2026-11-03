@@ -850,15 +850,17 @@ describe("SessionRuntime", () => {
 //
 // A branch holds an item in its queue: a follow-up its source queued, or a
 // steer that waits. The source sends it again under the same id: to the warm
-// loop that holds it, or as the first operation of a new process over the
-// same store; while the branch is idle with no history, or while another
-// turn runs; with an explicit wake or without. The loop keeps one copy of the
-// id. An explicit wake, or a turn that ends with the item queued, runs it
-// once; with neither, the idle branch keeps it queued.
+// loop that holds it, as the first operation of a new process over the same
+// store, or as the warm loop's last operation (its process closes as the
+// retry returns, and a new process opens the store and sends nothing); while
+// the branch is idle with no history, or while another turn runs; with an
+// explicit wake or without. The loop keeps one copy of the id. An explicit
+// wake, once its send returns, or a turn that ends with the item queued, runs
+// it once; with neither, the idle branch keeps it queued.
 describe("a held item retried under its own id", () => {
   interface RetryCase {
     readonly held: "follow-up" | "steer"
-    readonly temperature: "warm" | "cold"
+    readonly temperature: "warm" | "cold" | "closing"
     readonly activity: "idle" | "running"
     readonly wake: boolean
   }
@@ -866,7 +868,7 @@ describe("a held item retried under its own id", () => {
   const HELD = "the held item"
   const SOURCE = "held-source"
   const cases: ReadonlyArray<RetryCase> = (["follow-up", "steer"] as const).flatMap((held) =>
-    (["warm", "cold"] as const).flatMap((temperature) =>
+    (["warm", "cold", "closing"] as const).flatMap((temperature) =>
       (["idle", "running"] as const).flatMap((activity) =>
         [false, true].map((wake) => ({ held, temperature, activity, wake })),
       ),
@@ -953,11 +955,10 @@ describe("a held item retried under its own id", () => {
         return id
       })
 
-      /** Retry, let the busy turn end, and read what ran. */
-      const retryAndCheck = (heldId: MessageId) =>
+      /** Let the busy turn end, and read what ran. */
+      const check = (heldId: MessageId) =>
         Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
-          yield* send(each.wake)
           yield* Deferred.succeed(gate, void 0)
           const seen = Effect.all({
             calls: Ref.get(calls),
@@ -991,17 +992,25 @@ describe("a held item retried under its own id", () => {
           expect(yield* messageStorage.getMessage(heldId)).toBeUndefined()
         })
 
+      const retryAndCheck = (heldId: MessageId) =>
+        send(each.wake).pipe(Effect.andThen(check(heldId)))
+
       // A warm case holds and retries in one process. A cold case retries as
-      // a new process's first operation; its busy turn, cut by the restart,
-      // resumes there.
+      // a new process's first operation; a closing case retries as the first
+      // process's last, so the actor's forked start may never run there. In
+      // both, a busy turn the restart cut short resumes in the new process,
+      // which answers its model at once.
       const first = makeRuntimeLayer(model(true), { storage })
+      const next = makeRuntimeLayer(model(false), { storage })
       if (each.temperature === "warm") {
         return yield* hold.pipe(Effect.flatMap(retryAndCheck), Effect.provide(first))
       }
-      const heldId = yield* hold.pipe(Effect.provide(first))
-      return yield* retryAndCheck(heldId).pipe(
-        Effect.provide(makeRuntimeLayer(model(false), { storage })),
-      )
+      if (each.temperature === "cold") {
+        const heldId = yield* hold.pipe(Effect.provide(first))
+        return yield* retryAndCheck(heldId).pipe(Effect.provide(next))
+      }
+      const heldId = yield* hold.pipe(Effect.tap(send(each.wake)), Effect.provide(first))
+      return yield* check(heldId).pipe(Effect.provide(next))
     })
 
   for (const each of cases) {

@@ -345,17 +345,32 @@ const FOLLOW_UP_QUEUE_MAX = 10
 const retriedLane = (held: QueuedTurnItem, retry: QueuedTurnItem): Option.Option<TurnLane> =>
   Option.orElse(Option.fromUndefinedOr(retry.lane), () => Option.fromUndefinedOr(held.lane))
 
-const withLane = (item: QueuedTurnItem, lane: Option.Option<TurnLane>): QueuedTurnItem =>
-  Option.match(lane, {
+/**
+ * The promises a held item keeps once a retry of its id is admitted, on
+ * `item` (the retry for a follow-up replaced in place, the held item for a
+ * waiting steer): its lane (`retriedLane`), and an explicit wake either send
+ * asked for. An acknowledged wake is stored on the item in the write that
+ * admits the retry, so a restart starts the item though the wake's own start
+ * never ran (`wantsWakeOnRecovery`); the take that starts it clears it.
+ */
+const keepRetryPromises = (
+  item: QueuedTurnItem,
+  held: QueuedTurnItem,
+  retry: QueuedTurnItem,
+): QueuedTurnItem => {
+  const kept = Option.match(retriedLane(held, retry), {
     onNone: () => item,
-    onSome: (kept): QueuedTurnItem => ({ ...item, lane: kept }),
+    onSome: (lane): QueuedTurnItem => ({ ...item, lane }),
   })
+  if (held.wake === true || retry.wake === true) return { ...kept, wake: true }
+  return kept
+}
 
 /**
  * Each follow-up stays its own item with its own id, parts, and turn. A
  * repeat of a queued id replaces that item in place, so a retry neither
- * duplicates nor drops content, and keeps the lane the item was admitted
- * to (`retriedLane`).
+ * duplicates nor drops content, and keeps what the item was promised
+ * (`keepRetryPromises`).
  */
 const appendFollowUpItem = (
   queue: ReadonlyArray<QueuedTurnItem>,
@@ -363,24 +378,21 @@ const appendFollowUpItem = (
 ): QueuedTurnItem[] => {
   const held = queue.find((queued) => queued.message.id === item.message.id)
   if (Predicate.isUndefined(held)) return [...queue, item]
-  return queue.with(queue.indexOf(held), withLane(item, retriedLane(held, item)))
+  return queue.with(queue.indexOf(held), keepRetryPromises(item, held, item))
 }
 
 /**
- * A retry of a waiting steer's id leaves the steer as it is, with the lane
- * the retry's own grant admits it to (`retriedLane`). Returns the same queue
- * when the retry holds no grant, so the caller stores only a change.
+ * A retry of a waiting steer's id, by either verb, leaves the steer as it
+ * is, with the lane the retry's own grant admits it to and the wake the
+ * retry asked for (`keepRetryPromises`). Returns the same queue when the
+ * retry promises nothing new, so the caller stores only a change.
  */
-const laneOntoWaitingSteer = (queue: LoopQueueState, retry: QueuedTurnItem): LoopQueueState => {
+const promisesOntoWaitingSteer = (queue: LoopQueueState, retry: QueuedTurnItem): LoopQueueState => {
   const held = queue.steering.find((queued) => queued.message.id === retry.message.id)
-  if (Predicate.isUndefined(held) || Predicate.isUndefined(retry.lane)) return queue
-  return {
-    ...queue,
-    steering: queue.steering.with(
-      queue.steering.indexOf(held),
-      withLane(held, retriedLane(held, retry)),
-    ),
-  }
+  if (Predicate.isUndefined(held)) return queue
+  const kept = keepRetryPromises(held, held, retry)
+  if (kept.lane === held.lane && kept.wake === held.wake) return queue
+  return { ...queue, steering: queue.steering.with(queue.steering.indexOf(held), kept) }
 }
 
 const toQueueEntry = (
@@ -451,11 +463,9 @@ const removeQueuedFollowUp = (queue: LoopQueueState, messageId: MessageId): Loop
 
 const appendSteeringItem = (queue: LoopQueueState, item: QueuedTurnItem): LoopQueueState => {
   const inFlight = Option.fromUndefinedOr(queue.inFlight)
-  if (
-    (Option.isSome(inFlight) && inFlight.value.message.id === item.message.id) ||
-    queue.steering.some((existing) => existing.message.id === item.message.id)
-  ) {
-    return queue
+  if (Option.isSome(inFlight) && inFlight.value.message.id === item.message.id) return queue
+  if (queue.steering.some((existing) => existing.message.id === item.message.id)) {
+    return promisesOntoWaitingSteer(queue, item)
   }
   return {
     ...queue,
@@ -489,7 +499,15 @@ const restampQueuedMessage = (message: Message, createdAt: Date): Message => {
   return Message.cases.regular.make(fields)
 }
 
-const restampQueuedTurnItem = (item: QueuedTurnItem, createdAt: Date): QueuedTurnItem => ({
+/**
+ * The item a take moves into flight. The take is the start its wake asked
+ * for, so the wake goes in the take's own write; the in-flight slot starts on
+ * recovery without one (`wantsWakeOnRecovery`).
+ */
+const restampQueuedTurnItem = (
+  { wake: _started, ...item }: QueuedTurnItem,
+  createdAt: Date,
+): QueuedTurnItem => ({
   ...item,
   message: restampQueuedMessage(item.message, createdAt),
 })
@@ -972,10 +990,12 @@ export const makeLoopInbox = (
         // A retry of a queued id keeps the first send's decision: the loop
         // holds the id in one place, and the queue starts it. A queued
         // follow-up takes the retry in place; a waiting steer stays as it is.
-        // Either keeps the lane its admission promised (`retriedLane`).
+        // Either keeps the lane its admission promised and stores the wake
+        // the retry asked for, before the caller hears back
+        // (`keepRetryPromises`).
         const sameId = (queued: QueuedTurnItem) => queued.message.id === item.message.id
         if (current.queue.steering.some(sameId)) {
-          const queue = laneOntoWaitingSteer(current.queue, item)
+          const queue = promisesOntoWaitingSteer(current.queue, item)
           if (queue === current.queue) {
             return { value: Option.none(), next: current, persist: false }
           }
