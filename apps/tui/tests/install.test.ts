@@ -15,7 +15,7 @@ import {
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { runProcess } from "@gent/core/extensions/api"
 import { GentPlatform } from "@gent/core/host"
-import { BunGentPlatformLive, GentBuild, makeTempDirectoryScoped } from "@gent/core/test-utils"
+import { BunGentPlatformTest, GentBuild, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import { formatUpgradeOutcome, markVersionInUse, UpgradeOutcome, upgradeInstall } from "../src/ops"
 
 // ── a release host on loopback ──────────────────────────────────────────────
@@ -169,7 +169,7 @@ const layout = (home: string) =>
     }
   })
 
-const services = Layer.merge(BunServices.layer, BunGentPlatformLive)
+const services = Layer.merge(BunServices.layer, BunGentPlatformTest)
 
 /**
  * A directory to put first on PATH whose `mv` runs the real one, but fails
@@ -605,7 +605,7 @@ const upgradeAs = (
               build: Effect.succeed(build),
             })
           }),
-        ).pipe(Layer.provide(BunGentPlatformLive)),
+        ).pipe(Layer.provide(BunGentPlatformTest)),
         FetchHttpClient.layer,
       ),
     ),
@@ -819,7 +819,7 @@ const markedAs = (executable: string, build: GentBuild) =>
               build: Effect.succeed(build),
             })
           }),
-        ).pipe(Layer.provide(BunGentPlatformLive)),
+        ).pipe(Layer.provide(BunGentPlatformTest)),
       ),
     )
     return { whileOpen, after: yield* list }

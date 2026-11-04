@@ -30,7 +30,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { type AgentEvent, messagePartsText } from "@gent/core/protocol"
-import { BunPlatformLive } from "@gent/core/host-bun"
+
 import {
   ApprovalService,
   collectTestContributions,
@@ -44,6 +44,7 @@ import {
   testTurnExtension,
   textStep,
   toolCallStep,
+  BunPlatformTest,
 } from "@gent/core/test-utils"
 import { callSubjects, callText, floorVerdict, makeGuardExtension } from "../src/guard.js"
 import { encodeExternalJson } from "./helpers/external-wire.js"
@@ -261,7 +262,7 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
     // The server reads the config files as they are, as the guard does.
     configServiceLayer: ConfigService.Live.pipe(
       Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
-      Layer.provide(BunPlatformLive),
+      Layer.provide(BunPlatformTest),
     ),
   })
   const { client, sessionId, branchId } = harness

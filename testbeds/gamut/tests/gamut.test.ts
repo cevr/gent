@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { BunServices } from "@effect/platform-bun"
 import {
-  BunGentPlatformLive,
+  BunGentPlatformTest,
   makeTempDirectoryScoped,
   testSqliteStorage,
   UserConfig,
@@ -1051,7 +1051,7 @@ describe("gamut CLI with a stopped host", () => {
             expect(result.stderr).toContain(path.join(root, "host.log"))
           }
         }).pipe(
-          Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
+          Effect.provide(Layer.mergeAll(BunGentPlatformTest, BunServices.layer)),
           Effect.timeout("25 seconds"),
         ),
       30_000,
@@ -1109,7 +1109,7 @@ describe("gamut CLI with another run's host", () => {
         expect(yield* fs.exists(statePath)).toBe(false)
         expect(yield* running(other)).toBe(true)
       }).pipe(
-        Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
+        Effect.provide(Layer.mergeAll(BunGentPlatformTest, BunServices.layer)),
         Effect.timeout("25 seconds"),
       ),
     30_000,
@@ -1141,7 +1141,7 @@ describe("gamut CLI with another run's host", () => {
         expect(result.stderr).toContain("did not answer within")
         expect(Duration.toMillis(took)).toBeLessThan(10_000)
       }).pipe(
-        Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
+        Effect.provide(Layer.mergeAll(BunGentPlatformTest, BunServices.layer)),
         Effect.timeout("20 seconds"),
       ),
     25_000,
@@ -1202,7 +1202,7 @@ describe("gamut CLI ownership", () => {
           expect(yield* fs.readFileString(statePath)).toBe(state)
           expect(yield* fs.readFileString(marker)).toBe("foreign scratch tree")
         }).pipe(
-          Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
+          Effect.provide(Layer.mergeAll(BunGentPlatformTest, BunServices.layer)),
           Effect.timeout("8 seconds"),
         ),
       10_000,
@@ -1330,7 +1330,7 @@ describe("gamut CLI on a live host", () => {
         expect(
           (yield* runProcess("ps", ["-p", String(state.hostPid), "-o", "pid="])).exitCode,
         ).toBe(1)
-      }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer))),
+      }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformTest, BunServices.layer))),
     40_000,
   )
 
@@ -1349,7 +1349,7 @@ describe("gamut CLI on a live host", () => {
         const up = yield* gamut(["up", "sol", "--no-build"])
         expect(up.exitCode).toBe(1)
         yield* pollUntil(hostsUnder(scratch), (hosts) => hosts.length === 0, "the host's stop")
-      }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer))),
+      }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformTest, BunServices.layer))),
     40_000,
   )
 
@@ -1376,7 +1376,7 @@ describe("gamut CLI on a live host", () => {
         expect(late.exitCode).toBe(1)
         expect(late.stderr).toContain("the program exited")
         expect((yield* gamut(["down"])).exitCode).toBe(0)
-      }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer))),
+      }).pipe(Effect.provide(Layer.mergeAll(BunGentPlatformTest, BunServices.layer))),
     40_000,
   )
 })
@@ -1499,7 +1499,7 @@ describe("gamut CLI offline catalog", () => {
             ),
           ).toEqual([])
         }).pipe(
-          Effect.provide(Layer.mergeAll(testSqliteStorage, BunGentPlatformLive, BunServices.layer)),
+          Effect.provide(Layer.mergeAll(testSqliteStorage, BunGentPlatformTest, BunServices.layer)),
           Effect.timeout("10 seconds"),
         ),
       15_000,

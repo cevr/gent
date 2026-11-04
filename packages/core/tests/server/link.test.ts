@@ -1727,9 +1727,9 @@ describe("the release a contract names", () => {
           const read = yield* Deferred.make<boolean>()
           const captures = yield* Ref.make(0)
           const source = yield* Effect.cached(
-            sourceRelease(root).pipe(
+            Deferred.succeed(read, true).pipe(
+              Effect.andThen(sourceRelease(root)),
               Effect.tap(() => Ref.update(captures, (count) => count + 1)),
-              Effect.tap(() => Deferred.succeed(read, true)),
               Effect.provideContext(
                 yield* Effect.context<
                   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem

@@ -6,8 +6,13 @@
  */
 import { BunRuntime } from "@effect/platform-bun"
 import { Config, Effect, Layer } from "effect"
-import { BunSqlite, BunPlatformLive } from "@gent/core/host-bun"
-import { runToolWithCtx, SqliteStorage, testToolContext } from "@gent/core/test-utils"
+import { BunSqlite } from "@gent/core/host-bun"
+import {
+  runToolWithCtx,
+  SqliteStorage,
+  testToolContext,
+  BunPlatformTest,
+} from "@gent/core/test-utils"
 import { ToolCallId } from "@gent/core/protocol"
 import { BackgroundBashLayer, BashTool } from "../../src/exec-tools.js"
 
@@ -17,7 +22,7 @@ BunRuntime.runMain(
     const home = yield* Config.String("BG_HOME")
     const command = yield* Config.String("BG_COMMAND")
     const storage = SqliteStorage.WithSql(BunSqlite.file(storagePath)).pipe(
-      Layer.provide(BunPlatformLive),
+      Layer.provide(BunPlatformTest),
     )
     const ctx = testToolContext({
       toolCallId: ToolCallId.make("crashed-host-job"),
@@ -27,7 +32,7 @@ BunRuntime.runMain(
     return yield* runToolWithCtx(BashTool, { command, run_in_background: true }, ctx).pipe(
       Effect.andThen(Effect.never),
       Effect.provide(
-        BackgroundBashLayer.pipe(Layer.provideMerge(Layer.merge(storage, BunPlatformLive))),
+        BackgroundBashLayer.pipe(Layer.provideMerge(Layer.merge(storage, BunPlatformTest))),
       ),
     )
   }),

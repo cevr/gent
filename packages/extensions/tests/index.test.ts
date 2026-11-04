@@ -7,7 +7,7 @@ import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { extensionEntryModules, GentPlatform } from "@gent/core/host"
-import { BunPlatformLive } from "@gent/core/host-bun"
+
 import {
   BunTestServices,
   collectTestContributions,
@@ -15,6 +15,7 @@ import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
   textStep,
+  BunPlatformTest,
 } from "@gent/core/test-utils"
 
 // ── builtin peer modules ────────────────────────────────────────────────────
@@ -156,7 +157,7 @@ const runFresh = (
   )
 
 const freshProcessLayer = Layer.mergeAll(
-  BunPlatformLive,
+  BunPlatformTest,
   BunChildProcessSpawner.layer.pipe(Layer.provide(BunTestServices)),
 )
 

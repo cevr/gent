@@ -15,8 +15,9 @@ import {
   ToolCallSucceeded,
   TurnCompleted,
   TEST_MODEL_ID,
+  BunPlatformTest,
 } from "@gent/core/test-utils"
-import { BunPlatformLive } from "@gent/core/host-bun"
+
 import { BuiltinExtensions } from "@gent/extensions"
 import { BunServices } from "@effect/platform-bun"
 import { describe, it, expect, test } from "effect-bun-test"
@@ -863,7 +864,7 @@ describe("headless extension admin", () => {
         modelId: TEST_MODEL_ID,
         configServiceLayer: ConfigService.Live.pipe(
           Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
-          Layer.provide(BunPlatformLive),
+          Layer.provide(BunPlatformTest),
         ),
       })
       yield* runHeadless(client, sessionId, branchId, "turn the agents off", {

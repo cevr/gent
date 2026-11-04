@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Clock, Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ExtensionId, ExtensionStatus, resolveDataDir } from "@gent/core/extensions/api"
-import { BunPlatformLive } from "@gent/core/host-bun"
+
 import { ExtensionStatusScope, messagePartsText, decodeRequestReply } from "@gent/core/protocol"
 import {
   ApprovalService,
@@ -14,6 +14,7 @@ import {
   textStep,
   toolCallStep,
   TEST_MODEL_ID,
+  BunPlatformTest,
 } from "@gent/core/test-utils"
 import { AgentsExtension } from "../src/agents.js"
 import { ExtensionAdminExtension } from "../src/extension-admin.js"
@@ -255,7 +256,7 @@ const adminServer = (params: {
       // The verbs write the config files; the server reads them as they are.
       configServiceLayer: ConfigService.Live.pipe(
         Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
-        Layer.provide(BunPlatformLive),
+        Layer.provide(BunPlatformTest),
       ),
     })
     // The last event a run read: the next run reads from after it.

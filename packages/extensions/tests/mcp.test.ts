@@ -29,7 +29,7 @@ import {
 import type * as Prompt from "effect/ai/Prompt"
 import { Base64 } from "effect/encoding"
 import {
-  BunGentPlatformLive,
+  BunGentPlatformTest,
   BunTestServices,
   collectTestContributions,
   createRpcHarness,
@@ -280,7 +280,7 @@ process.stdin.on("data", (chunk) => {
 })
 `
 
-const platformLayer = Layer.merge(BunTestServices, BunGentPlatformLive)
+const platformLayer = Layer.merge(BunTestServices, BunGentPlatformTest)
 
 /** The shipped extensions without `@gent/mcp`: a test's inline servers stand in for it, and both would claim `/mcp`. */
 const shippedWithoutMcp = shippedPreset.extensionInputs.filter(

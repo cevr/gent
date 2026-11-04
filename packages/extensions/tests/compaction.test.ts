@@ -45,6 +45,7 @@ import {
   testToolContext,
   windowMarkerMessage,
   SqliteStorage,
+  BunPlatformTest,
 } from "@gent/core/test-utils"
 import {
   type CompactionTrigger,
@@ -55,7 +56,7 @@ import {
   partToText,
   planWindow,
 } from "@gent/core/extensions/branch-tools"
-import { BunPlatformLive, BunSqlite } from "@gent/core/host-bun"
+import { BunSqlite } from "@gent/core/host-bun"
 import {
   compactModelContext,
   ContextWindows,
@@ -1690,7 +1691,7 @@ describe("role windows", () => {
         }).pipe(
           Effect.provide(
             SqliteStorage.WithSql(BunSqlite.file(storagePath)).pipe(
-              Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+              Layer.provide(Layer.merge(BunServices.layer, BunPlatformTest)),
             ),
           ),
           Effect.scoped,

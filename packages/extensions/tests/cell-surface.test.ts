@@ -16,7 +16,7 @@ import {
   Stream,
 } from "effect"
 import { GentPlatform, MessageStorage } from "@gent/core/host"
-import { BunPlatformLive } from "@gent/core/host-bun"
+
 import {
   ApprovalService,
   BunTestServices,
@@ -48,6 +48,7 @@ import {
   turnRequestText,
   waitFor,
   WorkspaceId,
+  BunPlatformTest,
 } from "@gent/core/test-utils"
 import { FetchHttpClient } from "effect/http"
 import { Base64 } from "effect/encoding"
@@ -1125,7 +1126,7 @@ describe("shipped model surface", () => {
           modelId: TEST_MODEL_ID,
           configServiceLayer: ConfigService.Live.pipe(
             Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
-            Layer.provide(BunPlatformLive),
+            Layer.provide(BunPlatformTest),
           ),
         })
         const turn = (content: string) =>

@@ -4,7 +4,8 @@ import { Effect, FileSystem, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { runProcess } from "@gent/core/extensions/api"
 import { GentPlatform } from "@gent/core/host"
-import { BunPlatformLive } from "@gent/core/host-bun"
+
+import { BunPlatformTest } from "@gent/core/test-utils"
 import * as RuntimePublicSdk from "../src/index"
 
 describe("SDK public surface", () => {
@@ -70,7 +71,7 @@ const runFresh = (lines: ReadonlyArray<string>) =>
   )
 
 const freshProcessLayer = Layer.mergeAll(
-  BunPlatformLive,
+  BunPlatformTest,
   BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
 )
 

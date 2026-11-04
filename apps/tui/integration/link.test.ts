@@ -39,7 +39,6 @@ const encodeBuild = Schema.encodeSync(
  */
 const mainOf = Effect.gen(function* () {
   const appDir = yield* appDirectory
-  const path = yield* Path.Path
   return [
     "--define",
     `__GENT_BUILD__:${encodeBuild({
@@ -48,7 +47,7 @@ const mainOf = Effect.gen(function* () {
       release: {
         commit: "link-integration-commit",
         clean: true,
-        checkout: path.resolve(appDir, "../.."),
+        checkout: "/nonexistent/link-integration-checkout",
       },
     })}`,
     "--preload",

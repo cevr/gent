@@ -3,8 +3,8 @@ import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { Clock, Config, Effect, FileSystem, Layer, Path } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
 import { GentPlatform } from "@gent/core/host"
-import { BunPlatformLive } from "@gent/core/host-bun"
-import { makeTempDirectoryScoped } from "@gent/core/test-utils"
+
+import { makeTempDirectoryScoped, BunPlatformTest } from "@gent/core/test-utils"
 
 /** Run `file` under the source preload, `env` over the test's own; its stdout, trimmed. */
 const runUnderPreload = (file: string, env: Record<string, string>) =>
@@ -152,6 +152,6 @@ describe("source run preload", () => {
 })
 
 const preloadLayer = Layer.mergeAll(
-  BunPlatformLive,
+  BunPlatformTest,
   BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
 )

@@ -5,8 +5,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { GentPlatform } from "@gent/core/host"
-import { BunPlatformLive } from "@gent/core/host-bun"
-import { makeTempDirectoryScoped } from "@gent/core/test-utils"
+import { BunPlatformTest, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
   Clock,
   Effect,
@@ -323,7 +322,7 @@ describe("verify helpers", () => {
         const defect = yield* runVerifyCli(["doctor", "--dir", dir]).pipe(
           Effect.provide(
             Layer.mergeAll(
-              BunPlatformLive,
+              BunPlatformTest,
               Stdio.layerTest({
                 stdout: () => Sink.die("stdout closed"),
                 stderr: () =>
@@ -455,7 +454,7 @@ describe("verify helpers", () => {
         expect(error.message).toContain("real home's .gent")
         expect(yield* fs.exists(`${parent}/run/pids.json`)).toBe(false)
       }
-    }).pipe(Effect.timeout("30 seconds"), Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.timeout("30 seconds"), Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("a scratch directory inside the checkout is refused, under any name", () =>

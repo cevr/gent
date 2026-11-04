@@ -9,6 +9,7 @@ export {
   baseLocalLayerWithProvider,
   BunTestServices,
   BunGentPlatformTest,
+  BunPlatformTest,
   BunServerTestServices,
   plainArgs,
   captureTurnTools,
@@ -81,7 +82,7 @@ export {
 } from "../runtime/model-context.js"
 export { type LoadedExtension } from "../domain/extension.js"
 export { ApprovalService } from "../runtime/extension-host.js"
-export { BunGentPlatformLive, BunProviderLockLive } from "../runtime/gent-platform-bun.js"
+export { BunProviderLockLive } from "../runtime/gent-platform-bun.js"
 export { GentBuild } from "../runtime/gent-platform.js"
 export { ConfigService, RuntimeEnvironment, UserConfig } from "../runtime/config.js"
 export { newestCatalogRelease } from "../runtime/provider.js"

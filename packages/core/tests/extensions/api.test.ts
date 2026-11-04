@@ -1492,7 +1492,7 @@ describe("Effect-purity locks (compile-time)", () => {
     // extension; the layers that build it are not.
     type _GentPlatform = typeof PublicExtensionApi.GentPlatform
     // @ts-expect-error -- platform live layers are composition-root plumbing
-    type _BadBunGentPlatformLive = typeof PublicExtensionApi.BunGentPlatformTest
+    type _BadBunGentPlatformLive = typeof PublicExtensionApi.BunGentPlatformLive
     // @ts-expect-error -- no extension reads a signal error by name: an export needs a consumer
     type _BadSignalError = typeof PublicExtensionApi.SignalError
     // @ts-expect-error -- durable message metadata schema is storage/runtime internals

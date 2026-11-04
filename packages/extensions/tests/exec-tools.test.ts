@@ -64,12 +64,13 @@ import {
   toolCallStep,
   turnRequestText,
   waitFor,
+  BunPlatformTest,
 } from "@gent/core/test-utils"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem } from "@effect/platform-bun"
 import { GentPlatform } from "@gent/core/host"
-import { BunSqlite, BunPlatformLive } from "@gent/core/host-bun"
+import { BunSqlite } from "@gent/core/host-bun"
 import {
   defineExtension,
   defineResource,
@@ -91,7 +92,7 @@ import * as AiError from "effect/ai/AiError"
 /** SQLite storage in the file at `path`, so a later layer reads what an earlier one wrote. */
 const fileStorage = (path: string) =>
   SqliteStorage.WithSql(BunSqlite.file(path)).pipe(
-    Layer.provide(Layer.merge(BunTestServices, BunPlatformLive)),
+    Layer.provide(Layer.merge(BunTestServices, BunPlatformTest)),
   )
 
 /** The storage and the platform services a background supervisor needs. */
@@ -138,7 +139,7 @@ const liveBytes = Effect.sync(() => {
 })
 
 const makePlatformLayer = () =>
-  makeProcessLayer(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)))
+  makeProcessLayer(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformTest)))
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) => Effect.provide(e, makePlatformLayer())
 
 const processTestTimeout = 5_000
@@ -667,7 +668,7 @@ describe("BashTool summary", () => {
 describe("BashTool execution", () => {
   // `trap '' TERM` leaves SIGTERM ignored for the whole group, so only the
   // SIGKILL three seconds later ends it. The call must not wait for that.
-  it.scopedLive.layer(BunPlatformLive)(
+  it.scopedLive.layer(BunPlatformTest)(
     "a command that ignores SIGTERM returns at its timeout, not after the kill",
     () =>
       Effect.gen(function* () {
@@ -840,7 +841,7 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.scopedLive.layer(BunPlatformLive)(
+  it.scopedLive.layer(BunPlatformTest)(
     "closing the supervisor scope stops the job's process group, and no notice is sent",
     () =>
       Effect.gen(function* () {
@@ -1276,7 +1277,7 @@ describe("BashTool execution", () => {
       ])
       expect(unread.after).toEqual([])
     }).pipe(
-      Effect.provide(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive))),
+      Effect.provide(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformTest))),
     ),
   )
 
@@ -1806,7 +1807,7 @@ describe("a command's recorded process", () => {
       )
     })
 
-  it.scopedLive.layer(BunPlatformLive)(
+  it.scopedLive.layer(BunPlatformTest)(
     "a later server's stop ends a group whose leader exited, by the token its child inherited",
     () =>
       Effect.gen(function* () {
@@ -1829,7 +1830,7 @@ describe("a command's recorded process", () => {
     30_000,
   )
 
-  it.scopedLive.layer(BunPlatformLive)(
+  it.scopedLive.layer(BunPlatformTest)(
     "a later server stops a group whose leader exited at once from its receipt alone, when the server died before it kept the process",
     () =>
       Effect.gen(function* () {
@@ -1856,7 +1857,7 @@ describe("a command's recorded process", () => {
     30_000,
   )
 
-  it.scopedLive.layer(BunPlatformLive)(
+  it.scopedLive.layer(BunPlatformTest)(
     "a restart stops a stale job's group from its receipt when the server died before it kept the process",
     () =>
       Effect.gen(function* () {
@@ -1903,7 +1904,7 @@ describe("a command's recorded process", () => {
     30_000,
   )
 
-  it.scopedLive.layer(BunPlatformLive)(
+  it.scopedLive.layer(BunPlatformTest)(
     "a launch whose launcher never wrote its receipt ran nothing, and a later server finds nothing to stop",
     () =>
       Effect.gen(function* () {
@@ -1915,7 +1916,7 @@ describe("a command's recorded process", () => {
     15_000,
   )
 
-  it.scopedLive.layer(BunPlatformLive)(
+  it.scopedLive.layer(BunPlatformTest)(
     "a later server's stop that cannot list the processes leaves the group as it may still run",
     () =>
       Effect.gen(function* () {
@@ -1947,7 +1948,7 @@ describe("a command's recorded process", () => {
     15_000,
   )
 
-  it.scopedLive.layer(BunPlatformLive)(
+  it.scopedLive.layer(BunPlatformTest)(
     "a later server's stop leaves alone the children an unrelated leader left in the job's reused pid",
     () =>
       Effect.gen(function* () {
@@ -2665,7 +2666,7 @@ describe("a background job the server stopped", () => {
     },
   ]
   for (const crashCase of crashCases) {
-    it.scopedLive.layer(BunPlatformLive)(
+    it.scopedLive.layer(BunPlatformTest)(
       crashCase.name,
       () =>
         Effect.gen(function* () {
@@ -2699,7 +2700,7 @@ describe("a background job the server stopped", () => {
           // A red run must not leave the job's group behind.
           yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-pid, "SIGKILL")))
           const storageLayer = SqliteStorage.WithSql(BunSqlite.file(storagePath)).pipe(
-            Layer.provide(BunPlatformLive),
+            Layer.provide(BunPlatformTest),
           )
           // The host names the job's process in the row before it crashes.
           yield* waitFor(
@@ -2750,7 +2751,7 @@ describe("a background job the server stopped", () => {
     )
   }
 
-  it.scopedLive.layer(BunPlatformLive)(
+  it.scopedLive.layer(BunPlatformTest)(
     "a restart leaves alone a process that took a stale job's pid",
     () =>
       Effect.gen(function* () {
@@ -2763,7 +2764,7 @@ describe("a background job the server stopped", () => {
           stderr: "ignore",
         })
         const storageLayer = SqliteStorage.WithSql(BunSqlite.file(`${directory}/gent.db`)).pipe(
-          Layer.provide(BunPlatformLive),
+          Layer.provide(BunPlatformTest),
         )
         yield* Effect.gen(function* () {
           yield* BackgroundBashStorage
@@ -3291,7 +3292,7 @@ describe("bash named permits", () => {
           expect(yield* ctx.Permits.list).toEqual([])
         })
         yield* provideBun(body)
-      }).pipe(Effect.provide(BunPlatformLive), Effect.timeout("8 seconds")),
+      }).pipe(Effect.provide(BunPlatformTest), Effect.timeout("8 seconds")),
     10_000,
   )
 })

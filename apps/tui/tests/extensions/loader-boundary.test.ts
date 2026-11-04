@@ -14,7 +14,7 @@ import {
   Schema,
 } from "effect"
 import { GentPlatform } from "@gent/core/host"
-import { BunPlatformLive } from "@gent/core/host-bun"
+
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
@@ -57,7 +57,7 @@ import { writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuil
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
 import { BunChildProcessSpawner } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
-import { BunTestServices, collectTestContributions } from "@gent/core/test-utils"
+import { BunTestServices, collectTestContributions, BunPlatformTest } from "@gent/core/test-utils"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
@@ -1893,7 +1893,7 @@ const runFresh = (
   )
 
 const freshProcessLayer = Layer.mergeAll(
-  BunPlatformLive,
+  BunPlatformTest,
   BunChildProcessSpawner.layer.pipe(Layer.provide(BunTestServices)),
 )
 

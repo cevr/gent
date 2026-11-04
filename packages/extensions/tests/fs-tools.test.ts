@@ -39,8 +39,9 @@ import {
   toolCallStep,
   waitFor,
   TEST_MODEL_ID,
+  BunPlatformTest,
 } from "@gent/core/test-utils"
-import { BunPlatformLive } from "@gent/core/host-bun"
+
 import {
   AgentName,
   defineExtension,
@@ -2508,7 +2509,7 @@ describe("agent paths", () => {
           admission: { agent: AgentName.make("painter") },
           configServiceLayer: ConfigService.Live.pipe(
             Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
-            Layer.provide(BunPlatformLive),
+            Layer.provide(BunPlatformTest),
           ),
         })
         yield* client.message.send({ sessionId, branchId, content: "Paint the scene." })
@@ -2629,7 +2630,7 @@ const narrowedHarness = (
       admission,
       configServiceLayer: ConfigService.Live.pipe(
         Layer.provide(RuntimeEnvironment.Live(dirs)),
-        Layer.provide(BunPlatformLive),
+        Layer.provide(BunPlatformTest),
       ),
     })
     return { ...harness, controls }
