@@ -1577,6 +1577,11 @@ const assertReason = (reason: string, local: LinkHello, far: LinkHello, kind: nu
   expect(reason).toContain(expected.phrase)
   const one = local.release
   const two = far.release
+  if (two._tag === "Released" && !two.clean) {
+    expect(reason).toContain(`uncommitted changes in ${far.checkout}`)
+  } else if (one._tag === "Released" && !one.clean) {
+    expect(reason).toContain(`uncommitted changes in ${local.checkout}`)
+  }
   if (one._tag === "Released" && two._tag === "Released" && one.commit !== two.commit) {
     expect(reason).toContain(one.commit.slice(0, 8))
     expect(reason).toContain(two.commit.slice(0, 8))

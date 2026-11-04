@@ -171,11 +171,27 @@ stage_release() {
 }
 
 stage_local() {
-  [ -f "$1/gent" ] && [ -f "$1/gent-cell" ] || fail "$1 does not hold a gent and gent-cell pair; build first (bun run build)"
-  digest="$(sha256 "$1/gent")"
+  local_parent="$(CDPATH= cd "$(dirname "$1")" && pwd -P)" || fail "no directory at $1"
+  local_pair="$local_parent/$(basename "$1")"
+  source_root="$(CDPATH= cd "$(dirname "$local_pair")/../.." && pwd -P)"
+  # Keep the source path when bin itself points outside the checkout. An
+  # alias elsewhere that points into a checkout is recognized by its target.
+  if [ "$local_pair" != "$source_root/apps/tui/bin" ] && [ -d "$1" ]; then
+    local_pair="$(CDPATH= cd "$1" && pwd -P)"
+    source_root="$(CDPATH= cd "$(dirname "$local_pair")/../.." && pwd -P)"
+  fi
+  # A checkout's bin is a build output, never an artifact to reuse. This
+  # also covers a direct installer invocation and a bin not built yet.
+  if [ "$local_pair" = "$source_root/apps/tui/bin" ]; then
+    need bun
+    say "building the source pair in $source_root"
+    (cd "$source_root" && bun run build) || fail "source build failed; no pair installed"
+  fi
+  [ -f "$local_pair/gent" ] && [ -f "$local_pair/gent-cell" ] || fail "$1 does not hold a gent and gent-cell pair; build first (bun run build)"
+  digest="$(sha256 "$local_pair/gent")"
   version="dev-$(printf '%s' "$digest" | cut -c1-12)"
   mkdir "$work/pair"
-  cp "$1/gent" "$1/gent-cell" "$work/pair/"
+  cp "$local_pair/gent" "$local_pair/gent-cell" "$work/pair/"
   check_pair "$work/pair"
 }
 

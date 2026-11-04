@@ -897,6 +897,80 @@ const RootScripts = Schema.fromJsonString(
 )
 
 describe("bun run install:global", () => {
+  it.scopedLive("a source pair is rebuilt before copying; a failed build installs nothing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const platform = yield* GentPlatform
+      for (const fixture of [
+        { exists: true, fails: false, missing: false, linked: false },
+        { exists: false, fails: false, missing: false, linked: false },
+        { exists: true, fails: true, missing: false, linked: false },
+        { exists: true, fails: true, missing: true, linked: false },
+        { exists: true, fails: false, missing: false, linked: true },
+      ]) {
+        const home = yield* makeTempDirectoryScoped("gent-source-install-")
+        const source = path.join(home, "source checkout")
+        const pair = path.join(source, "apps/tui/bin")
+        yield* fs.makeDirectory(path.join(source, "apps/tui"), { recursive: true })
+        if (fixture.linked) {
+          const target = path.join(home, "redirected binaries")
+          yield* fs.makeDirectory(target)
+          yield* fs.symlink(target, pair)
+        } else if (fixture.exists) yield* fs.makeDirectory(pair)
+        yield* fs.makeDirectory(path.join(source, "fresh"))
+        yield* fs.writeFileString(
+          path.join(source, "package.json"),
+          yield* Schema.encodeEffect(RootScripts)({ scripts: { build: "sh build.sh" } }),
+        )
+        let build = "mkdir -p apps/tui/bin\ncp fresh/gent fresh/gent-cell apps/tui/bin/\n"
+        if (fixture.fails) build = "exit 19\n"
+        if (!fixture.missing) yield* fs.writeFileString(path.join(source, "build.sh"), build)
+        for (const [directory, version] of [
+          [pair, "0.1.0"],
+          [path.join(source, "fresh"), "0.2.0"],
+        ] as const) {
+          if (directory === pair && !fixture.exists) continue
+          yield* fs.writeFileString(
+            path.join(directory, "gent"),
+            `#!/bin/sh\necho "gent v${version}"\n`,
+          )
+          yield* fs.writeFileString(
+            path.join(directory, "gent-cell"),
+            `#!/bin/sh\necho "cell ${version}"\n`,
+          )
+          yield* fs.chmod(path.join(directory, "gent"), 0o755)
+          yield* fs.chmod(path.join(directory, "gent-cell"), 0o755)
+        }
+        let from = pair
+        if (fixture.exists && !fixture.linked) from = `${pair}/../bin/`
+        const result = yield* install(
+          home,
+          "http://127.0.0.1:9/releases",
+          ["--from", from, "--no-modify-path"],
+          {
+            PATH: `${path.dirname(yield* platform.execPath)}:/usr/bin:/bin`,
+          },
+        )
+        if (fixture.fails) {
+          expect(result.exitCode).not.toBe(0)
+          expect((yield* layout(home)).current).toEqual(Option.none())
+          expect((yield* layout(home)).versions).toEqual([])
+        } else {
+          expect(result.exitCode, result.stderr).toBe(0)
+          expect(yield* currentVersion(home)).toEqual({ exitCode: 0, stdout: "gent v0.2.0" })
+          const installed = yield* layout(home)
+          const current = Option.getOrElse(installed.current, () => "")
+          const cell = yield* runProcess(
+            path.join(installed.root, path.dirname(current), "gent-cell"),
+            [],
+          )
+          expect(cell.stdout.trim()).toBe("cell 0.2.0")
+        }
+      }
+    }).pipe(Effect.timeout("15 seconds"), Effect.provide(services)),
+  )
+
   it.scopedLive(
     "installs the packages the lockfile names, and nothing else, before it builds: a link's contract names the lockfile",
     () =>
