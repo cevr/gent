@@ -15,3 +15,6 @@ bin/
 .gent/prompts/
 .claude/scheduled_tasks.lock
 .alchemy/
+
+# Claude Code per-machine settings
+.claude/settings.local.json
