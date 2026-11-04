@@ -17,15 +17,19 @@ import {
   Scope,
 } from "effect"
 import * as ChildProcessSpawnerNs from "effect/process/ChildProcessSpawner"
+import { ChildProcess } from "effect/process"
 import { FetchHttpClient, HttpClient } from "effect/http"
 import { dateFromMillis, type GentConnectionError } from "@gent/core/protocol"
 import {
-  BunGentPlatformLive,
   interruptAtEachStep,
   freePort,
   GentBuild,
   makeTempDirectoryScoped,
+  BunServerTestServices as PlatformLayer,
   serveModelCatalogFixture,
+  recordGitCalls,
+  createE2ELayer,
+  LanguageModelLayers,
 } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import {
@@ -36,7 +40,6 @@ import {
   ServerLockEntry,
   type GentServer,
 } from "../src/discovery"
-import { BunServices } from "@effect/platform-bun"
 import { homedir, hostname, networkInterfaces } from "node:os"
 import { Gent } from "../src/client"
 import { buildLogPaths } from "../src/logger"
@@ -69,26 +72,6 @@ const makeCountingFs = (
         }),
       ),
   })
-
-/** Point git at no repository for the scope, so a source run cannot name its build. */
-const gitFindsNoRepository = Effect.acquireRelease(
-  Effect.sync(() => {
-    // oxlint-disable-next-line effect/noGlobals -- git reads GIT_DIR from the environment the server's child process inherits
-    const previous = Option.fromUndefinedOr(Bun.env["GIT_DIR"])
-    // oxlint-disable-next-line effect/noGlobals -- git reads GIT_DIR from the environment the server's child process inherits
-    Bun.env["GIT_DIR"] = "/nonexistent/gent-probe-x"
-    return previous
-  }),
-  (previous) =>
-    Effect.sync(() =>
-      Option.match(previous, {
-        // oxlint-disable-next-line effect/noGlobals -- git reads GIT_DIR from the environment the server's child process inherits
-        onNone: () => Reflect.deleteProperty(Bun.env, "GIT_DIR"),
-        // oxlint-disable-next-line effect/noGlobals -- git reads GIT_DIR from the environment the server's child process inherits
-        onSome: (value) => Reflect.set(Bun.env, "GIT_DIR", value),
-      }),
-    ),
-)
 
 /**
  * The services of a compiled gent of build `id` at version 0.1.0, over a
@@ -148,7 +131,43 @@ describe("buildFingerprint", () => {
 
 // ── server lock ─────────────────────────────────────────────────────────────
 
-const PlatformLayer = Layer.mergeAll(BunServices.layer, BunGentPlatformLive)
+describe("test release isolation", () => {
+  it.scopedLive("SDK session and server roots never run git outside test directories", () =>
+    Effect.gen(function* () {
+      const git = yield* recordGitCalls
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              cwd: git.directory,
+              home: git.directory,
+              agents: [],
+              extensionInputs: [],
+              providerLayer: LanguageModelLayers.debug(),
+            }),
+          )
+          yield* client.session.create({ cwd: git.directory })
+          yield* client.link.hello()
+        }),
+      )
+      expect(yield* git.calls, "Gent.test").toEqual([])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* Gent.server({
+            cwd: git.directory,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+            extensions: [],
+          })
+          const { client } = yield* Gent.client(server)
+          yield* client.session.create({ cwd: git.directory })
+          yield* client.link.hello()
+        }),
+      )
+      expect(yield* git.calls, "Gent.server").toEqual([])
+    }).pipe(Effect.provide(PlatformLayer), Effect.timeout("15 seconds")),
+  )
+})
 
 const provideFs = <A, E>(
   effect: Effect.Effect<
@@ -899,12 +918,24 @@ describe("Server Lock Ownership", () => {
             makeEntry({ dbPath, buildFingerprint: "unknown" }),
             {},
           )
-          yield* gitFindsNoRepository
           const { result, signals } = yield* Gent.server({
             cwd: home,
             state: Gent.state.sqlite({ home }),
             provider: Gent.provider.mock(),
-          }).pipe(Effect.flip, withSignalTrap)
+          }).pipe(
+            Effect.updateService(ChildProcessSpawnerNs.ChildProcessSpawner, (spawner) =>
+              ChildProcessSpawnerNs.make((command) => {
+                if (ChildProcess.isStandardCommand(command) && command.command === "git") {
+                  return spawner.spawn(
+                    ChildProcess.make("/usr/bin/false", [], { ...command.options, cwd: home }),
+                  )
+                }
+                return spawner.spawn(command)
+              }),
+            ),
+            Effect.flip,
+            withSignalTrap,
+          )
           expect(result._tag).toBe("@gent/core/GentConnectionError")
           expect(result.message).toContain(`PID ${holder.pid}`)
           expect(result.message).toContain("gent server stop")

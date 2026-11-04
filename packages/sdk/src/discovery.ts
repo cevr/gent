@@ -4,6 +4,7 @@ import {
   Exit,
   Fiber,
   FileSystem,
+  Layer,
   Match,
   Option,
   Path,
@@ -11,7 +12,6 @@ import {
   Schema,
   Scope,
 } from "effect"
-import type { Layer } from "effect"
 import { join as pathJoin, resolve as pathResolve } from "node:path"
 import { Database } from "bun:sqlite"
 import type { ChildProcessSpawner } from "effect/process"
@@ -679,12 +679,17 @@ const holderBlocksMessage = (
 
 export const resolveServer = (
   options: GentServerOptions,
-): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> => {
-  // @effect-diagnostics-next-line strictEffectProvide:off -- the public entry point provides the local platform it resolves on.
-  const construct = Effect.provide(resolveServerInternal(options), LocalPlatformLayer)
-  return Effect.flatMap(Effect.context<Scope.Scope>(), (services) =>
+): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> =>
+  Effect.flatMap(Effect.context<Scope.Scope>(), (services) =>
     Effect.callback<GentServer, GentConnectionError>((resume) => {
       const scope = Scope.forkUnsafe(Context.get(services, Scope.Scope))
+      // The entry supplies host defaults; an embedding or test root can provide
+      // its platform explicitly. Startup and the listener use the same context.
+      const construct = Effect.flatMap(Layer.build(LocalPlatformLayer), (defaults) =>
+        resolveServerInternal(options).pipe(
+          Effect.provideContext(Context.add(Context.merge(defaults, services), Scope.Scope, scope)),
+        ),
+      )
       // Yield before startup so the callback's canceler is installed first.
       // It owns startup until delivery, with no masked success callback after it.
       const startup = Effect.runForkWith(services)(
@@ -702,7 +707,6 @@ export const resolveServer = (
       return Fiber.interrupt(startup).pipe(Effect.andThen(Scope.close(scope, Exit.interrupt())))
     }),
   )
-}
 
 const resolveServerInternal = (
   options: GentServerOptions,

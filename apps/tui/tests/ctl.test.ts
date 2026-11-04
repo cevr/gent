@@ -23,8 +23,9 @@ import {
 } from "@gent/core/protocol"
 import { workspaceHeadersForCwd } from "@gent/core/host"
 import {
-  BunGentPlatformLive,
+  BunServerTestServices,
   makeTempDirectoryScoped,
+  recordGitCalls,
   serveModelCatalogFixture,
   TEST_MODEL_ID,
 } from "@gent/core/test-utils"
@@ -111,7 +112,7 @@ const runCtl = (
         Layer.mergeAll(
           BunServices.layer,
           BunSocket.layerWebSocketConstructor,
-          BunGentPlatformLive,
+          BunServerTestServices,
           Stdio.layerTest({
             stdout: () => {
               if (options.brokenStdout === true) return Sink.die("stdout closed")
@@ -324,8 +325,11 @@ const serveScratchHomeWith = Effect.fn("serveScratchHome")(function* (
     extensions: options.extensions ?? BuiltinExtensions,
   }).pipe(
     Effect.provide(
-      ConfigProvider.layer(
-        ConfigProvider.fromEnv({ env: { HOME: home, GENT_MODEL_CATALOG_URL: catalogOrigin } }),
+      Layer.mergeAll(
+        BunServerTestServices,
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { HOME: home, GENT_MODEL_CATALOG_URL: catalogOrigin } }),
+        ),
       ),
     ),
   )
@@ -333,6 +337,26 @@ const serveScratchHomeWith = Effect.fn("serveScratchHome")(function* (
 })
 
 const serveScratchHome = serveScratchHomeWith()
+
+it.scopedLive("ctl server root never captures the developer checkout", () =>
+  Effect.gen(function* () {
+    const git = yield* recordGitCalls
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const { home } = yield* serveScratchHomeWith({ extensions: [] })
+        const stdout = yield* Ref.make("")
+        const relay = yield* runCtl(home, ["link"], {
+          stdin: `${helloFrame("1", home)}\n`,
+          stdout,
+          holdStdin: true,
+        }).pipe(Effect.forkScoped)
+        expect((yield* repliesUntil(stdout, 1)).has("1")).toBe(true)
+        yield* Fiber.interrupt(relay)
+      }),
+    )
+    expect(yield* git.calls).toEqual([])
+  }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+)
 
 /**
  * The miner's line types, field for field: `Message` and `Session` in

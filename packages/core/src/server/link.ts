@@ -13,6 +13,7 @@ import {
   Cause,
   Clock,
   Context,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -548,9 +549,8 @@ export class Links extends Context.Service<
         const placement = yield* CredentialPlacement
         const environment = yield* RuntimeEnvironment
         const own = yield* machineName
-        // Read as the server starts, on its own fiber, so the start waits
-        // for no git: a source run names the release it started on, and a
-        // commit made later names another. A hello waits for it.
+        // Idle servers never read their checkout. The first hello (outgoing
+        // or incoming) starts one read; every hello and contract shares it.
         //
         // The read is the layer's. Its close interrupts the read, so no git
         // starts after it, and `runProcess` kills the git child it holds
@@ -560,8 +560,10 @@ export class Links extends Context.Service<
         // server still runs records a step in that gap (the recovered-turn
         // tests in turn.test.ts). A fiber in the layer's scope
         // (`forkScoped`) would make the close await it.
+        const needed = yield* Deferred.make<void>()
         const reading = yield* Effect.forkDetach(
           Effect.gen(function* () {
+            yield* Deferred.await(needed)
             const platform = yield* GentPlatform
             const release = yield* platform.source
             const checkout = yield* platform.checkout
@@ -577,7 +579,7 @@ export class Links extends Context.Service<
           }).pipe(Effect.provideService(GentPlatform, yield* GentPlatform)),
         )
         yield* Effect.addFinalizer(() => Effect.sync(() => reading.interruptUnsafe()))
-        const hello = Fiber.join(reading)
+        const hello = Deferred.succeed(needed, void 0).pipe(Effect.andThen(Fiber.join(reading)))
         const contract = Effect.map(hello, (value) => value.contract)
         const started = yield* Clock.currentTimeMillis
         const records = new Map<string, MutableRef.MutableRef<LinkRecord>>()

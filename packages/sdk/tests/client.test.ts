@@ -14,12 +14,17 @@ import { BuiltinExtensions } from "@gent/extensions"
 import {
   freePort,
   makeTempDirectoryScoped,
+  BunServerTestServices,
   serveModelCatalogFixture,
   waitFor,
   TEST_MODEL_ID,
 } from "@gent/core/test-utils"
 import { SessionStorage } from "@gent/core/host"
 import { Gent } from "../src/client"
+import type { GentServerOptions } from "../src/discovery"
+
+const testServer = (options: GentServerOptions) =>
+  Gent.server(options).pipe(Effect.provide(BunServerTestServices))
 import {
   Session,
   SessionId,
@@ -65,7 +70,7 @@ describe("Gent.server options", () => {
         Effect.gen(function* () {
           const dataDir = yield* makeTempDirectoryScoped("gent-server-options-")
           const port = yield* freePort
-          const server = yield* Gent.server({
+          const server = yield* testServer({
             cwd: dataDir,
             port,
             state: Gent.state.memory(),
@@ -125,7 +130,7 @@ describe("Gent.server extension setup", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* makeTempDirectoryScoped("gent-server-crypto-")
-          const server = yield* Gent.server({
+          const server = yield* testServer({
             cwd,
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
@@ -162,7 +167,7 @@ describe("Gent.server seed", () => {
               }),
             )
           }).pipe(Effect.orDie)
-          const server = yield* Gent.server({
+          const server = yield* testServer({
             cwd,
             seed,
             state: Gent.state.memory(),
@@ -185,7 +190,7 @@ describe("Gent.server workspace isolation", () => {
         Effect.gen(function* () {
           const cwdA = yield* makeTempDirectoryScoped("gent-server-options-")
           const cwdB = yield* makeTempDirectoryScoped("gent-server-options-")
-          const server = yield* Gent.server({
+          const server = yield* testServer({
             cwd: cwdA,
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
@@ -244,7 +249,7 @@ describe("Gent.server workspace isolation", () => {
         Effect.gen(function* () {
           const cwdA = yield* makeTempDirectoryScoped("gent-url-client-")
           const cwdB = yield* makeTempDirectoryScoped("gent-url-client-")
-          const server = yield* Gent.server({
+          const server = yield* testServer({
             cwd: cwdA,
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
@@ -278,7 +283,7 @@ describe("Gent.provider.mock tool scenario", () => {
           // A turn reads its model's catalog entry: the server reads the
           // fixture catalog from a loopback listener, never models.dev.
           const catalogOrigin = yield* serveModelCatalogFixture
-          const server = yield* Gent.server({
+          const server = yield* testServer({
             cwd,
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
@@ -343,7 +348,7 @@ describe("Gent.provider.mock tool scenario", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* makeTempDirectoryScoped("gent-debug-offline-")
-          const server = yield* Gent.server({
+          const server = yield* testServer({
             cwd,
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
@@ -432,7 +437,7 @@ describe("Gent.server transports", () => {
             const fs = yield* FileSystem.FileSystem
             const project = yield* makeTempDirectoryScoped("gent-transport-login-")
             const home = yield* makeTempDirectoryScoped("gent-transport-login-home-")
-            const server = yield* Gent.server({
+            const server = yield* testServer({
               cwd: project,
               state: Gent.state.sqlite({ home }),
               provider: Gent.provider.mock(),

@@ -9,7 +9,7 @@ import {
   Effect,
   type Exit,
   Fiber,
-  type FileSystem,
+  FileSystem,
   HashMap,
   Layer,
   Option,
@@ -28,7 +28,7 @@ import {
   TxRef,
 } from "effect"
 import type { Digest, SecureRandom } from "effect/crypto"
-import type { CommandLine } from "effect/process"
+import { ChildProcess, ChildProcessSpawner, type CommandLine } from "effect/process"
 import type { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import {
@@ -171,7 +171,11 @@ import {
   isTransientEvent,
 } from "../domain/event.js"
 import { LanguageModel, Model as AiModel } from "effect/ai"
-import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
+import {
+  extensionPlatformServicesLive,
+  GentPlatform,
+  GentRelease,
+} from "../runtime/gent-platform.js"
 import { BunCrypto, BunHttpServer, BunServices } from "@effect/platform-bun"
 import {
   BunGentPlatformLive,
@@ -462,8 +466,47 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
   }
 }
 
+/** Only the release differs: every other host capability is the production Bun one. */
+const testRelease = Layer.effect(
+  GentPlatform,
+  Effect.map(GentPlatform, (platform) =>
+    GentPlatform.of({
+      ...platform,
+      source: Effect.succeed(GentRelease.cases.Unreleased.make({ process: "gent-test" })),
+      checkout: Effect.succeedNone,
+    }),
+  ),
+)
+
+export const BunGentPlatformTest = testRelease.pipe(Layer.provide(BunGentPlatformLive))
+const BunPlatformTest = testRelease.pipe(Layer.provideMerge(BunPlatformLive))
+
+/** Source-run server services; only discovery's fingerprint process gets a fixture answer. */
+export const BunServerTestServices = Layer.effect(
+  ChildProcessSpawner.ChildProcessSpawner,
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    const directory = yield* makeTempDirectoryScoped("gent-build-fixture-")
+    return ChildProcessSpawner.make((command) => {
+      if (
+        ChildProcess.isStandardCommand(command) &&
+        command.command === "git" &&
+        plainArgs(command.args).join(" ") === "rev-parse --short HEAD"
+      ) {
+        return spawner.spawn(
+          ChildProcess.make("/bin/sh", ["-c", "printf '%s\\n' gent-test"], {
+            ...command.options,
+            cwd: directory,
+          }),
+        )
+      }
+      return spawner.spawn(command)
+    })
+  }),
+).pipe(Layer.provideMerge(BunPlatformTest))
+
 /** The platform a tool body yields in production, built on the Bun platform the roots run. */
-const toolTestPlatform = extensionPlatformServicesLive.pipe(Layer.provide(BunPlatformLive))
+const toolTestPlatform = extensionPlatformServicesLive.pipe(Layer.provide(BunPlatformTest))
 
 /**
  * Runs a tool's effect over a stub host context, wired through
@@ -2014,7 +2057,7 @@ export const createE2ELayer = (config: E2ELayerConfig) =>
       })
       return e2eDependencies(config, { cwd, home })
     }),
-  ).pipe(Layer.provide(BunPlatformLive))
+  ).pipe(Layer.provide(BunPlatformTest))
 
 /** The test registry `config` asks for; none for `"catalog"`, which keeps the production one. */
 const testModelRegistry = (
@@ -2216,7 +2259,7 @@ export const BunTestServices = Layer.mergeAll(
  */
 export const bunDriverHostServices: Effect.Effect<
   Context.Context<Digest.Digest | SecureRandom.SecureRandom | GentPlatform>
-> = Effect.scoped(Layer.build(Layer.merge(BunCrypto.layer, BunGentPlatformLive)))
+> = Effect.scoped(Layer.build(Layer.merge(BunCrypto.layer, BunGentPlatformTest)))
 
 /**
  * The language model a turn resolves for `modelId` through the production
@@ -2430,6 +2473,57 @@ export const captureProviderReport = <A, E, R>(
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
+/** Record git's process boundary without letting a test read an ambient checkout. */
+export const recordGitCalls = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const directory = yield* fs.realPath(yield* makeTempDirectoryScoped("gent-git-boundary-"))
+  const calls = `${directory}/calls`
+  yield* fs.writeFileString(calls, "")
+  yield* fs.writeFileString(
+    `${directory}/git`,
+    [
+      "#!/bin/sh",
+      `printf '%s\\t' "$PWD" "$@" >> '${calls}'`,
+      `printf '\\n' >> '${calls}'`,
+      "exit 1",
+      "",
+    ].join("\n"),
+  )
+  yield* fs.chmod(`${directory}/git`, 0o755)
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      // oxlint-disable-next-line effect/noGlobals -- the scoped process fixture controls executable lookup for children
+      const previous = Option.fromUndefinedOr(Bun.env["PATH"])
+      // oxlint-disable-next-line effect/noGlobals -- the scoped process fixture controls executable lookup for children
+      Bun.env["PATH"] = `${directory}:${Option.getOrElse(previous, () => "")}`
+      return previous
+    }),
+    (previous) =>
+      Effect.sync(() => {
+        Option.match(previous, {
+          // oxlint-disable-next-line effect/noGlobals -- restore the exact environment when the process fixture closes
+          onNone: () => Reflect.deleteProperty(Bun.env, "PATH"),
+          // oxlint-disable-next-line effect/noGlobals -- restore the exact environment when the process fixture closes
+          onSome: (value) => Reflect.set(Bun.env, "PATH", value),
+        })
+      }),
+  )
+  return {
+    directory,
+    calls: fs.readFileString(calls).pipe(
+      Effect.map((text) =>
+        text
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => {
+            const [cwd = "", ...args] = line.split("\t")
+            return { cwd, args: args.slice(0, -1) }
+          }),
+      ),
+    ),
+  }
+})
+
 /** Create a temp directory that is removed when the test scope closes. */
 export const makeTempDirectoryScoped = (prefix: string) =>
   Effect.acquireRelease(
@@ -2486,7 +2580,7 @@ export const GENT_START_BOUND_MS = 10_000
  */
 export const seedAuthKeys = (directory: string) =>
   Effect.gen(function* () {
-    const services = yield* Layer.build(Auth.Live(directory).pipe(Layer.provide(BunPlatformLive)))
+    const services = yield* Layer.build(Auth.Live(directory).pipe(Layer.provide(BunPlatformTest)))
     const auth = Context.get(services, Auth)
     yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
     yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))

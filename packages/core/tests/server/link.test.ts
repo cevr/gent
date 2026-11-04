@@ -16,6 +16,7 @@ import {
   Path,
   Predicate,
   Queue,
+  Ref,
   References,
   Result,
   Schema,
@@ -38,11 +39,7 @@ import {
   GentReleaseFacts,
   runProcess,
 } from "../../src/runtime/gent-platform"
-import {
-  BunGentPlatformLive,
-  captureRelease,
-  sourceRelease,
-} from "../../src/runtime/gent-platform-bun"
+import { captureRelease, sourceRelease } from "../../src/runtime/gent-platform-bun"
 import { type LaneReport, PoolFacts } from "../../src/domain/driver"
 import { ProviderId } from "../../src/domain/agent"
 import { CredentialSlot } from "../../src/domain/ids"
@@ -54,6 +51,7 @@ import {
 import { Links, linkContract, rpcContract, linkMismatch } from "../../src/server/link"
 import {
   BunTestServices,
+  BunGentPlatformTest,
   createRpcHarness,
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -476,7 +474,7 @@ describe("linked machines", () => {
     () =>
       Effect.gen(function* () {
         // The server runs the Bun platform: its contract names this checkout's source.
-        const contract = yield* linkContract.pipe(Effect.provide(BunGentPlatformLive))
+        const contract = yield* linkContract.pipe(Effect.provide(BunGentPlatformTest))
         const dir = yield* makeTempDirectoryScoped("gent-link-far-")
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
         const { client } = yield* createRpcHarness({
@@ -1439,7 +1437,7 @@ const commitText = (directory: string, text: string) =>
   })
 
 /** The Bun platform: its `hash` is the real SHA-256 a process of its own runs. */
-const bunPlatformLayer = Layer.mergeAll(BunTestServices, BunGentPlatformLive)
+const bunPlatformLayer = Layer.mergeAll(BunTestServices, BunGentPlatformTest)
 
 /** A stopped child's force-kill window (`runProcess`), plus 1 s. */
 const AFTER_CLOSE = Duration.seconds(3)
@@ -1719,17 +1717,18 @@ describe("the release a contract names", () => {
   )
 
   it.live(
-    "a source run reads its release as the server starts: an edit and a commit made after the start do not change its contract",
+    "an idle server captures no release; its first hello and contract share one capture",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
           const root = yield* makeTempDirectoryScoped("gent-release-")
           yield* checkout(root, "one")
-          const started = yield* captureRelease(root)
           const read = yield* Deferred.make<boolean>()
+          const captures = yield* Ref.make(0)
           const source = yield* Effect.cached(
             sourceRelease(root).pipe(
+              Effect.tap(() => Ref.update(captures, (count) => count + 1)),
               Effect.tap(() => Deferred.succeed(read, true)),
               Effect.provideContext(
                 yield* Effect.context<
@@ -1739,15 +1738,23 @@ describe("the release a contract names", () => {
             ),
           )
           const { links } = yield* linksOver({}).pipe(withSource(source))
-          // Nothing asked for the contract: the start read the release.
-          yield* Deferred.await(read).pipe(Effect.timeout("10 seconds"))
+          yield* settle
+          expect(yield* Deferred.isDone(read)).toBe(false)
           yield* fs.writeFileString(`${root}/src/main.ts`, sourceText("edited"))
           expect((yield* captureRelease(root)).clean).toBe(false)
           yield* commitText(root, "two")
+          const started = yield* captureRelease(root)
+          const [hello, contract] = yield* Effect.all([links.hello, links.contract], {
+            concurrency: 2,
+          })
+          expect(hello.release).toEqual(releasedOf(started))
+          expect(contract).toBe(hello.contract)
+          yield* commitText(root, "three")
           expect((yield* captureRelease(root)).commit).not.toBe(started.commit)
           expect(yield* links.contract).toBe(
             yield* linkContract.pipe(withRelease(releasedOf(started))),
           )
+          expect(yield* Ref.get(captures)).toBe(1)
         }),
       ).pipe(Effect.provide(bunPlatformLayer)),
     30_000,
@@ -1769,7 +1776,8 @@ describe("the release a contract names", () => {
         )
         const server = yield* Effect.scoped(
           Effect.gen(function* () {
-            yield* linksOver({}).pipe(withSource(held))
+            const { links } = yield* linksOver({}).pipe(withSource(held))
+            yield* links.hello.pipe(Effect.forkScoped)
             yield* Deferred.await(reading).pipe(Effect.timeout("10 seconds"))
           }),
         ).pipe(Effect.forkChild)
@@ -1814,7 +1822,8 @@ describe("the release a contract names", () => {
               ),
             )
             const server = yield* Scope.make()
-            yield* linksOver({}).pipe(withSource(source), Scope.provide(server))
+            const { links } = yield* linksOver({}).pipe(withSource(source), Scope.provide(server))
+            yield* links.hello.pipe(Effect.forkScoped)
             // The read waits in its first git call.
             yield* logUntil(calls, (lines) => lines.length > 0)
             const closing = yield* Clock.currentTimeMillis

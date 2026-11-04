@@ -4,16 +4,19 @@ import { Cause, Context, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema, St
 import { LanguageModel } from "effect/ai"
 import type * as Response from "effect/ai/Response"
 import { AgentDefinition, AgentName, ModelId } from "../../src/domain/agent"
-import { GentPlatform } from "../../src/runtime/gent-platform"
+import { GentPlatform, runProcess } from "../../src/runtime/gent-platform"
 import { TestClock } from "effect/testing"
 import {
   advanceUntil,
+  baseLocalLayer,
+  bunDriverHostServices,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
   type E2ELayerConfig,
   hostProfileRegistry,
   LanguageModelLayers,
+  recordGitCalls,
   runToolWithCtx,
   testToolContext,
   type SequenceStep,
@@ -30,6 +33,68 @@ import {
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
 import { defineExtension, defineResource, ExtensionHost, tool } from "@gent/core/extensions/api"
+
+// ── release isolation ───────────────────────────────────────────────────────
+
+describe("test release isolation", () => {
+  it.scopedLive("session roots never run git outside directories the test created", () =>
+    Effect.gen(function* () {
+      const git = yield* recordGitCalls
+      yield* runProcess("git", ["fixture-probe"], { cwd: git.directory })
+      expect(yield* git.calls).toEqual([{ cwd: git.directory, args: ["fixture-probe"] }])
+      const config = { agents: [], extensionInputs: [], providerLayer: LanguageModelLayers.debug() }
+      const roots = [
+        { name: "createE2ELayer", layer: createE2ELayer(config) },
+        { name: "baseLocalLayer", layer: baseLocalLayer({ agents: [] }) },
+      ]
+      for (const { name, layer } of roots) {
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layer)
+            yield* client.session.create({ cwd: git.directory })
+            yield* client.link.hello()
+          }),
+        )
+        expect(
+          (yield* git.calls).filter(({ cwd }) => cwd !== git.directory),
+          name,
+        ).toEqual([])
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* createRpcHarness({ ...config, cwd: git.directory })
+          yield* client.link.hello()
+        }),
+      )
+      expect(
+        (yield* git.calls).filter(({ cwd }) => cwd !== git.directory),
+        "createRpcHarness",
+      ).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+
+  it.scopedLive("tool and driver roots never capture an ambient checkout", () =>
+    Effect.gen(function* () {
+      const git = yield* recordGitCalls
+      const releaseTool = tool({
+        id: "release",
+        description: "Read the host release",
+        params: Schema.Struct({}),
+        output: Schema.String,
+        execute: () =>
+          GentPlatform.pipe(
+            Effect.flatMap((platform) => platform.source),
+            Effect.map((release) => release._tag),
+          ),
+      })
+      yield* runToolWithCtx(releaseTool, {}, testToolContext({ cwd: git.directory }))
+      expect(yield* git.calls, "runToolWithCtx").toEqual([])
+      const services = yield* bunDriverHostServices
+      yield* Context.get(services, GentPlatform).source
+      expect(yield* git.calls, "bunDriverHostServices").toEqual([])
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+})
 
 /** The server root with the stub tool runner, the scripted model, and no agents. */
 const toolLayer = (config: {

@@ -3648,10 +3648,6 @@ const approvedComment = (entry: ApprovedSuppressionEntry): string =>
 const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
     file: "packages/sdk/src/discovery.ts",
-    text: "strictEffectProvide:off -- the public entry point provides the local platform it resolves on.",
-  },
-  {
-    file: "packages/sdk/src/discovery.ts",
     text: "strictEffectProvide:off -- self-contained probe, no scope lifetime",
   },
   {

@@ -55,7 +55,7 @@ import { TestClock } from "effect/testing"
 import { Base64Url } from "effect/encoding"
 import { ChildProcessSpawner } from "effect/process"
 import {
-  BunGentPlatformLive,
+  BunGentPlatformTest,
   BunProviderLockLive,
   BunTestServices,
   captureProviderReport,
@@ -6610,7 +6610,7 @@ const linkCommitRig = (sharedDirectory: Option.Option<string> = Option.none<stri
     const basePlatform = yield* Layer.build(
       Layer.mergeAll(
         BunTestServices,
-        BunGentPlatformLive,
+        BunGentPlatformTest,
         BunProviderLockLive.pipe(Layer.provide(BunTestServices)),
       ),
     )

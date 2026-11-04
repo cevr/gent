@@ -3,12 +3,16 @@ import { Effect, Layer, Logger, Option, References } from "effect"
 import { RpcClient, RpcTest } from "effect/rpc"
 import { Headers } from "effect/http"
 import { textStep } from "../../src/runtime/provider"
-import { createE2ELayer, LanguageModelLayers, waitFor } from "../../src/test-utils/harness"
+import {
+  BunGentPlatformTest,
+  createE2ELayer,
+  LanguageModelLayers,
+  waitFor,
+} from "../../src/test-utils/harness"
 import { ExtensionStatusScope, GentRpcs } from "../../src/server/rpc"
 import { SteerCommand } from "../../src/domain/message"
 import { RpcHandlersLive } from "../../src/server/server"
 import { linkContract } from "../../src/server/link"
-import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   CurrentLinkOrigin,
   LINK_ORIGIN_HEADER,
@@ -79,7 +83,7 @@ describe("workspace RPC middleware", () => {
           }),
         )
         // The contract is this build's: the hash of its RPC schemas, as a far end on this build reads it.
-        expect(hello.contract).toBe(yield* linkContract.pipe(Effect.provide(BunGentPlatformLive)))
+        expect(hello.contract).toBe(yield* linkContract.pipe(Effect.provide(BunGentPlatformTest)))
         expect(hello.machine.length).toBeGreaterThan(0)
         yield* client["link.hello"]().pipe(
           RpcClient.withHeaders({ [WORKSPACE_ID_HEADER]: validWorkspaceId }),
