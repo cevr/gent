@@ -30,6 +30,7 @@ import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
   waitFor,
+  BunPlatformTest,
 } from "../../src/test-utils/harness"
 import { e2ePreset } from "../helpers/test-preset"
 import { type LanguageModel } from "effect/ai"
@@ -42,7 +43,7 @@ import {
 } from "@gent/core/extensions/api"
 import { ApprovalService } from "../../src/runtime/extension-host"
 import { InteractionStorage, SqliteStorage } from "../../src/storage/storage"
-import { BunSqlite, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/domain/interaction.js"
 import { EventStoreError } from "../../src/domain/event"
 import { type Message, SteerCommand } from "../../src/domain/message"
@@ -536,7 +537,7 @@ describe("interaction.respondInteraction", () => {
         const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
         const dbPath = `${tempDir}/gent-decision.db`
         const storageLayer = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
-          Layer.provide(BunPlatformLive),
+          Layer.provide(BunPlatformTest),
         )
         const finalReply = "approval resumed from stored decision"
         const firstProvider = yield* LanguageModelLayers.sequence([
@@ -1722,7 +1723,7 @@ describe("interaction.respondInteraction", () => {
           return yield* (yield* InteractionStorage).listOpen(session)
         }).pipe(
           Effect.provide(
-            SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(Layer.provide(BunPlatformTest)),
           ),
           Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(dbPath)),
         )
@@ -2447,7 +2448,7 @@ describe("interaction.respondInteraction", () => {
             }).pipe(
               Effect.provide(
                 SqliteStorage.WithSql(BunSqlite.file(first.dbPath)).pipe(
-                  Layer.provide(BunPlatformLive),
+                  Layer.provide(BunPlatformTest),
                 ),
               ),
               Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(first.dbPath)),

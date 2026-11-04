@@ -22,12 +22,14 @@ import {
   toolImageDirectory,
 } from "../../src/runtime/tool-image"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
+
 import {
   BunTestServices,
   runToolWithCtx,
   testLeafContext,
   testToolContext,
+  BunGentPlatformTest,
+  BunPlatformTest,
 } from "../../src/test-utils/harness"
 
 /** A 1x1 PNG, base64. */
@@ -110,7 +112,7 @@ describe("tool image sweep", () => {
 
         expect(yield* readToolImage(directory, image)).toEqual(Option.some(DOT_PNG))
         expect(yield* fs.readDirectory(directory)).toEqual([`${image.sha256}.png`])
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunPlatformTest)),
     )
   }
 
@@ -131,7 +133,7 @@ describe("tool image sweep", () => {
       yield* fs.utimes(file, twoDaysAgo, twoDaysAgo)
       yield* sweepToolImages(home, () => Effect.succeed(false))
       expect(yield* fs.readDirectory(directory)).toEqual([])
-    }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive(
@@ -153,7 +155,7 @@ describe("tool image sweep", () => {
         }
         yield* sweepToolImages(home, (sha256) => Effect.succeed(sha256 === kept))
         expect(yield* fs.readDirectory(directory)).toEqual([`${kept}.png`])
-      }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(BunPlatformTest)),
   )
 })
 
@@ -226,7 +228,7 @@ const countingCodec = (count: Ref.Ref<number>) =>
           ),
       })
     }),
-  ).pipe(Layer.provide(BunGentPlatformLive))
+  ).pipe(Layer.provide(BunGentPlatformTest))
 
 /**
  * The real codec, except that each encode to a side over `side` comes out
@@ -249,7 +251,7 @@ const codecPastTheLimitAbove = (side: number) =>
           ),
       })
     }),
-  ).pipe(Layer.provide(BunGentPlatformLive))
+  ).pipe(Layer.provide(BunGentPlatformTest))
 
 describe("tool image scaling", () => {
   it.scopedLive(

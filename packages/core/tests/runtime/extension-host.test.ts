@@ -57,13 +57,11 @@ import {
   testTurnExtension,
   turnRequestText,
   waitFor,
+  BunGentPlatformTest,
+  BunPlatformTest,
 } from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
-import {
-  BunSqlite,
-  BunGentPlatformLive,
-  BunPlatformLive,
-} from "../../src/runtime/gent-platform-bun"
+import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import {
   defineExtension,
   defineRequests,
@@ -782,7 +780,7 @@ const makeCacheLayer = (params: {
     Layer.provide(
       Layer.mergeAll(
         BunServices.layer,
-        SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformTest)),
         // A later layer's service wins: the wrapped file system, when given.
         Option.match(Option.fromUndefinedOr(params.wrapFileSystem), {
           onNone: () => Layer.empty,
@@ -1105,7 +1103,7 @@ export default { manifest: { id: "profile-trust" }, setup: Effect.void };`,
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("a revoke that also breaks the user config stops project extensions", () =>
@@ -1151,7 +1149,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive(
@@ -1219,7 +1217,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           Effect.provide(makeCacheLayer({ cwd: first, home, extensions: [shared] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // An interrupt can land at any step of a resolve. Wherever it lands (the
@@ -1344,7 +1342,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           Effect.provide(makeCacheLayer({ cwd: place("held"), home, extensions: [extension] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("a".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
     60_000,
   )
 
@@ -1428,7 +1426,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [reader] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("b".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // An extension runs whole or not at all. One whose process Resource fails
@@ -1503,7 +1501,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("c".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A new version whose process Resource fails runs its last good version
@@ -1560,7 +1558,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("d".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A pass a later pass replaced closes after the place's lock is let go, as
@@ -1652,7 +1650,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("f".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // What a resolve lets go of closes scope by scope: a finalizer that dies
@@ -1740,7 +1738,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A strict root reports a finalizer that dies at retire as it reports a
@@ -1783,7 +1781,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [closing.extension] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A lenient root goes on past a close that fails, and its log names the
@@ -1844,7 +1842,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A resolve interrupted while it waits on a build only it holds lets go of
@@ -1909,7 +1907,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [waiting] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // Server builds share by key, not by a lock: a place whose profile needs
@@ -2053,7 +2051,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("e".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("a user tool's binding names its file version: an edit changes it", () =>
@@ -2090,7 +2088,7 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
       )
-    }).pipe(Effect.provide(Layer.merge(BunPlatformLive, BunGentPlatformLive))),
+    }).pipe(Effect.provide(Layer.merge(BunPlatformTest, BunGentPlatformTest))),
   )
 
   // An in-place save sets the file's mtime before it copies the bytes, and
@@ -2153,7 +2151,7 @@ export default defineExtension({
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("an edited extension file builds its process resource again", () =>
@@ -2209,7 +2207,7 @@ export default defineExtension({
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("6".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // An extension's version is the content of every file it builds from: an
@@ -2288,7 +2286,7 @@ export default defineExtension({
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // An editor can save while a build reads the files. The build then holds
@@ -2344,7 +2342,7 @@ export default defineExtension({
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A new version that fails to load, set up or start keeps the last good
@@ -2457,7 +2455,7 @@ export default defineExtension({
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A Resource built over a last good version depends on that version. A
@@ -2510,7 +2508,7 @@ export default defineExtension({
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("1".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A profile a turn still holds may run an older last good version. A
@@ -2558,7 +2556,7 @@ export default defineExtension({
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("2".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A last good version runs only in a set it is valid in. Its tool may
@@ -2599,7 +2597,7 @@ export default defineExtension({
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("3".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A version that failed to start, whose last good version was rejected,
@@ -2648,7 +2646,7 @@ export default defineExtension({
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("4".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A user and a project extension may share an id and their code. Two
@@ -2724,7 +2722,7 @@ export default defineExtension({
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("5".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A branch's loop closes while one of its fibers resolves: the lease lands
@@ -2749,7 +2747,7 @@ export default defineExtension({
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("5".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
     5_000,
   )
 
@@ -2784,7 +2782,7 @@ export default defineExtension({
         expect(profileA.generationId).toBe(profileB.generationId)
         expect(yield* Ref.get(setups)).toBe(2)
       }).pipe(Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [counted] })))
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive(
@@ -2826,7 +2824,7 @@ export default defineExtension({
             }),
           ),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("suspends only the extension whose process resource fails to start", () =>
@@ -2870,7 +2868,7 @@ export default defineExtension({
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("e".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("a project-only disabledExtensions entry keeps that extension out", () =>
@@ -2901,7 +2899,7 @@ export default defineExtension({
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept, dropped] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("d".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A profile is derived from its cwd and the config's disabled list; an edit
@@ -2943,7 +2941,7 @@ export default defineExtension({
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept, toggled] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("f".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // An extension reads its own config keys at setup, which core does not
@@ -2976,7 +2974,7 @@ export default defineExtension({
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A profile is built from one read of the config: an edit that lands
@@ -3031,7 +3029,7 @@ export default defineExtension({
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A config file that cannot be read has no content to name: the profile
@@ -3078,7 +3076,7 @@ export default defineExtension({
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // Each edit to the list derives a new profile. The one it replaces holds
@@ -3162,7 +3160,7 @@ export default defineExtension({
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [tracked, ...toggles] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("2".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // Interrupting registration must preserve both the new lease and cleanup
@@ -3252,7 +3250,7 @@ export default defineExtension({
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("3".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
     )
   }
 
@@ -3317,7 +3315,7 @@ export default defineExtension({
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("4".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A profile is keyed on the extension files on disk as well as the config:
@@ -3378,7 +3376,7 @@ export default defineExtension({
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("5".repeat(64))),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   // A profile rebuilt for a config edit shares the process resources it
@@ -3478,7 +3476,7 @@ export default defineExtension({
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("6".repeat(64))),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("releases a partially built profile when its build is interrupted", () =>
@@ -3540,7 +3538,7 @@ export default defineExtension({
         ),
         Deferred.succeed(releaseStart, void 0).pipe(Effect.asVoid),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 })
 
@@ -3581,13 +3579,13 @@ describe("resolveTurnProfile", () => {
           Layer.mergeAll(
             BunServices.layer,
             configServiceLive,
-            SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformTest)),
           ),
         ),
       )
       const testLayer = Layer.mergeAll(
         BunServices.layer,
-        SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformTest)),
         emptyRegistryLayer,
         runtimeEnvironmentLive,
         sessionProfileCacheLive,
@@ -3618,7 +3616,7 @@ describe("resolveTurnProfile", () => {
         })
         expect(resolved.turnHostCtx.cwd).toBe(secondary)
       }).pipe(Effect.provide(testLayer), Effect.scoped)
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
   it.scopedLive("a session with no stored cwd runs in the host cwd's profile", () =>
     Effect.gen(function* () {
@@ -4059,14 +4057,14 @@ const fsLayer = Layer.provideMerge(
     Path.layer,
     BunCrypto.layer,
     EffectHttpEntry.FetchHttpClient.layer,
-    BunGentPlatformLive,
+    BunGentPlatformTest,
   ),
   childProcessSpawnerLive,
 )
 
 /** The session database every Resource build reads, in memory. */
 const profileStorageLayer = SqliteStorage.WithSql(BunSqlite.memory).pipe(
-  Layer.provide(BunPlatformLive),
+  Layer.provide(BunPlatformTest),
 )
 
 /**
@@ -7542,7 +7540,7 @@ describe("a queue sent on a condition", () => {
           QueueSnapshot.make({ steering: [], followUp: [] }),
         )
         yield* controls.assertDone
-      }).pipe(Effect.provide(BunPlatformLive), Effect.timeout("15 seconds")),
+      }).pipe(Effect.provide(BunPlatformTest), Effect.timeout("15 seconds")),
     20_000,
   )
 
@@ -8355,7 +8353,7 @@ describe("extensions facet via RPC", () => {
             cwd: project,
             configServiceLayer: ConfigService.Live.pipe(
               Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
-              Layer.provide(BunPlatformLive),
+              Layer.provide(BunPlatformTest),
             ),
             // This test is about the failure report, so the turn must survive it.
             allowFailedExtensions: true,
@@ -8565,7 +8563,7 @@ describe("profile revision via RPC", () => {
             cwd: project,
             configServiceLayer: ConfigService.Live.pipe(
               Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
-              Layer.provide(BunPlatformLive),
+              Layer.provide(BunPlatformTest),
             ),
           })
           const turn = (content: string) =>

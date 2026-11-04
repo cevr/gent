@@ -43,6 +43,7 @@ import {
   makeTempDirectoryScoped,
   testToolContext,
   waitFor,
+  BunGentPlatformTest,
 } from "../../src/test-utils/harness"
 import {
   BranchId,
@@ -56,7 +57,6 @@ import { test } from "bun:test"
 import { omitUndefined } from "../../src/domain/guards"
 import { multiToolCallStep, textStep, toolCallStep } from "../../src/runtime/provider"
 import { messagePartsText } from "../../src/domain/message"
-import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 
 // ── tool runner ──────────────────────────────────────────────────────────────
 
@@ -512,7 +512,7 @@ describe("tool execution", () => {
       yield* controls.assertDone
     }).pipe(
       Effect.timeout("4 seconds"),
-      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformTest)),
     ),
   )
   liveTest("re-raises interaction pending instead of converting it to a tool result", () =>
@@ -935,7 +935,7 @@ describe("extension model surface over RPC", () => {
         yield* controls.assertDone
       }).pipe(
         Effect.timeout("4 seconds"),
-        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformTest)),
       ),
     )
   }
@@ -1008,7 +1008,7 @@ describe("extension model surface over RPC", () => {
       yield* controls.assertDone
     }).pipe(
       Effect.timeout("4 seconds"),
-      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformTest)),
     ),
   )
 
@@ -1090,7 +1090,7 @@ describe("extension model surface over RPC", () => {
       yield* controls.assertDone
     }).pipe(
       Effect.timeout("4 seconds"),
-      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformTest)),
     ),
   )
 
@@ -1154,7 +1154,7 @@ describe("extension model surface over RPC", () => {
       yield* controls.assertDone
     }).pipe(
       Effect.timeout("4 seconds"),
-      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformTest)),
     ),
   )
 })
@@ -1265,7 +1265,7 @@ const presentedTexts = (events: ReadonlyArray<AgentEvent>) =>
     return [event.text]
   })
 
-const gatePlatform = Layer.merge(BunServices.layer, BunGentPlatformLive)
+const gatePlatform = Layer.merge(BunServices.layer, BunGentPlatformTest)
 
 describe("toolCall hook", () => {
   it.scopedLive(

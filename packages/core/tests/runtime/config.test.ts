@@ -47,10 +47,10 @@ import {
   systemTextOf,
   TEST_MODEL_ID,
   waitFor,
+  BunPlatformTest,
 } from "../../src/test-utils/harness"
 import { textStep } from "../../src/runtime/provider"
 import { messagePartsText } from "../../src/domain/message"
-import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 
 // ── user configuration ──────────────────────────────────────────────────────
 
@@ -2063,7 +2063,7 @@ const runOneTurn = (params: {
       home,
       configServiceLayer: ConfigService.Live.pipe(
         Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
-        Layer.provide(BunPlatformLive),
+        Layer.provide(BunPlatformTest),
       ),
       ...Option.match(params.agent, {
         onNone: () => ({}),
@@ -2131,7 +2131,7 @@ describe("agents from config over RPC", () => {
       )
       expect(listed?.description).toBe("Paints one scene")
       expect(listed?.tools).toEqual(["film.*", "!film.check", "read"])
-    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("the JSON agent in the extension guide runs as written", () =>
@@ -2155,7 +2155,7 @@ describe("agents from config over RPC", () => {
         { path: "apps/animations/src/films", access: "write" },
         { path: ".claude/skills/film", access: "read" },
       ])
-    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("an old project deny list takes tools away from the user's allow list", () =>
@@ -2174,7 +2174,7 @@ describe("agents from config over RPC", () => {
           assertOptions: (options) => expect(advertised(options)).toEqual(["film__look", "read"]),
         },
       })
-    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive(
@@ -2211,7 +2211,7 @@ describe("agents from config over RPC", () => {
             },
           },
         })
-      }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformTest)),
   )
 })
 
@@ -2251,7 +2251,7 @@ describe("a config file that does not load", () => {
         allowFailedExtensions: true,
         configServiceLayer: ConfigService.Live.pipe(
           Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
-          Layer.provide(BunPlatformLive),
+          Layer.provide(BunPlatformTest),
         ),
       })
       return { ...harness, controls, home, cwd }
@@ -2315,7 +2315,7 @@ describe("a config file that does not load", () => {
       const file = path.join(root.cwd, ".gent", "config.json")
       expect(errors.some((error) => error.includes(file) && error.includes("toolz"))).toBe(true)
       yield* fixedTurnRuns(root, root.cwd)
-    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive("a user file that breaks after it loaded stops the turn until it is fixed", () =>
@@ -2332,6 +2332,6 @@ describe("a config file that does not load", () => {
       const file = path.join(root.home, ".gent", "config.json")
       expect(errors.some((error) => error.includes(file) && error.includes("toolz"))).toBe(true)
       yield* fixedTurnRuns(root, root.home)
-    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformTest)),
   )
 })

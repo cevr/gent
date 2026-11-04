@@ -85,6 +85,7 @@ import {
   testTurnExtension,
   TEST_MODEL_ID,
   waitFor,
+  BunPlatformTest,
 } from "../../src/test-utils/harness"
 import { e2ePreset, testAgent } from "../helpers/test-preset"
 import { Model as AiModel, type LanguageModel } from "effect/ai"
@@ -130,7 +131,7 @@ import {
 } from "../../src/runtime/extension-host"
 import { SessionStorage, SqliteStorage } from "../../src/storage/storage"
 import { StorageError } from "../../src/domain/errors"
-import { BunSqlite, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import { MinimumLogLevel } from "effect/References"
 import { type Message, messagePartsText } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment, UserConfig } from "../../src/runtime/config"
@@ -1558,7 +1559,7 @@ describe("provider login", () => {
               authLayer: Layer.succeed(Auth, auth),
               configServiceLayer: ConfigService.Live.pipe(
                 Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
-                Layer.provide(BunPlatformLive),
+                Layer.provide(BunPlatformTest),
               ),
               home,
             }),
@@ -1753,7 +1754,7 @@ describe("provider login", () => {
             authLayer: Layer.succeed(Auth, auth),
             configServiceLayer: ConfigService.Live.pipe(
               Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
-              Layer.provide(BunPlatformLive),
+              Layer.provide(BunPlatformTest),
             ),
           }),
         )
@@ -1981,7 +1982,7 @@ describe("provider login", () => {
             extensionInputs: [loginDriver, toggle],
             configServiceLayer: ConfigService.Live.pipe(
               Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
-              Layer.provide(BunPlatformLive),
+              Layer.provide(BunPlatformTest),
             ),
           }),
         )
@@ -2070,7 +2071,7 @@ describe("provider login", () => {
             extensionInputs: [loginDriver],
             configServiceLayer: ConfigService.Live.pipe(
               Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
-              Layer.provide(BunPlatformLive),
+              Layer.provide(BunPlatformTest),
             ),
           }),
         )
@@ -2131,9 +2132,9 @@ const liveSessionProfiles = (
       }).pipe(
         Layer.provide(
           Layer.mergeAll(
-            BunPlatformLive,
+            BunPlatformTest,
             ConfigService.Test(),
-            SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformTest)),
           ),
         ),
         Layer.orDie,
@@ -3071,7 +3072,7 @@ describe("extension health", () => {
           providerLayer,
           configServiceLayer: ConfigService.Live.pipe(
             Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
-            Layer.provide(BunPlatformLive),
+            Layer.provide(BunPlatformTest),
           ),
           // This test is about the failure report, so the load must survive it.
           allowFailedExtensions: true,
@@ -3097,7 +3098,7 @@ describe("extension health", () => {
           ),
         ).toEqual([])
       }).pipe(Effect.timeout("4 seconds"))
-    }).pipe(Effect.scoped, Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.scoped, Effect.provide(BunPlatformTest)),
   )
 
   it.live("a failing driver catalog leaves model.list working and shows in extension health", () =>
@@ -3639,7 +3640,7 @@ describe("extension resources", () => {
           expect(yield* decodeRequestReply(Schema.String)(result)).toBe(`live:${profileCwd}`)
         }).pipe(Effect.timeout("4 seconds")),
       )
-    }).pipe(Effect.provide(BunPlatformLive)),
+    }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scoped(
@@ -3701,7 +3702,7 @@ describe("extension resources", () => {
             expect(yield* decodeRequestReply(Schema.String)(result)).toBe(`branch:${profileCwd}`)
           }).pipe(Effect.timeout("4 seconds")),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 
   it.scopedLive(
@@ -3935,7 +3936,7 @@ export default defineExtension({
             expect(dependentNotices[0]).toMatchObject({ notice: true })
           }).pipe(Effect.timeout("8 seconds")),
         )
-      }).pipe(Effect.provide(BunPlatformLive)),
+      }).pipe(Effect.provide(BunPlatformTest)),
   )
 })
 

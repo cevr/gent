@@ -479,7 +479,7 @@ const testRelease = Layer.effect(
 )
 
 export const BunGentPlatformTest = testRelease.pipe(Layer.provide(BunGentPlatformLive))
-const BunPlatformTest = testRelease.pipe(Layer.provideMerge(BunPlatformLive))
+export const BunPlatformTest = testRelease.pipe(Layer.provideMerge(BunPlatformLive))
 
 /** Source-run server services; only discovery's fingerprint process gets a fixture answer. */
 export const BunServerTestServices = Layer.effect(
